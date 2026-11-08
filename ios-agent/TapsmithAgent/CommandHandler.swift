@@ -132,6 +132,21 @@ class CommandHandler {
         return false
     }
 
+    /// Wait between polls by running the main RunLoop rather than blocking
+    /// it: XCTest delivers its accessibility (XPC) replies on this RunLoop,
+    /// so a `Thread.sleep` here can hold back the very update a poll is
+    /// waiting to see. Falls back to sleeping when the RunLoop has no input
+    /// source to run (it would otherwise return at once and spin).
+    private static func pollWait(_ seconds: TimeInterval) {
+        let until = Date(timeIntervalSinceNow: seconds)
+        while Date() < until {
+            if !RunLoop.current.run(mode: .default, before: until) {
+                Thread.sleep(until: until)
+                return
+            }
+        }
+    }
+
     private func safeAppState(_ app: XCUIApplication) -> XCUIApplication.State {
         var state: XCUIApplication.State = .unknown
         _ = ObjCExceptionCatcher.catchException {
@@ -228,23 +243,25 @@ class CommandHandler {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
-                // Dialog accepted — re-check on the next iteration.
-            } else {
-                var acknowledged = false
-                _ = ObjCExceptionCatcher.catchException {
-                    guard let snapshot = try? app.snapshot(),
-                          let marker = self.hooksMarker(in: snapshot),
-                          let nav = marker.nav else { return }
-                    if let bootBefore, let boot = marker.boot, boot != bootBefore {
-                        acknowledged = nav >= 1
-                    } else {
-                        acknowledged = nav > navBefore
-                    }
+            // Read the marker first: a warm delivery is almost always
+            // acknowledged by the time `open(url)` returns, and the
+            // SpringBoard query for the "Open in" prompt costs ~70 ms that
+            // only a delivery the prompt is still gating needs to pay.
+            var acknowledged = false
+            _ = ObjCExceptionCatcher.catchException {
+                guard let snapshot = try? app.snapshot(),
+                      let marker = self.hooksMarker(in: snapshot),
+                      let nav = marker.nav else { return }
+                if let bootBefore, let boot = marker.boot, boot != bootBefore {
+                    acknowledged = nav >= 1
+                } else {
+                    acknowledged = nav > navBefore
                 }
-                if acknowledged { return true }
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            if acknowledged { return true }
+            // Dialog accepted: re-check at once.
+            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            Self.pollWait(0.2)
         }
         return false
     }
@@ -271,26 +288,26 @@ class CommandHandler {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
-                // Dialog accepted — re-check on the next iteration.
-            } else {
-                var outcome: HooksEpochOutcome?
-                _ = ObjCExceptionCatcher.catchException {
-                    guard let snapshot = try? app.snapshot(),
-                          let marker = self.hooksMarker(in: snapshot),
-                          self.hooksAcknowledged(
-                              epoch: marker.epoch, boot: marker.boot,
-                              epochBefore: epochBefore, bootBefore: bootBefore
-                          ) else { return }
-                    if let err = marker.err {
-                        outcome = .hookError(err)
-                    } else {
-                        outcome = .acknowledged(marker.epoch)
-                    }
+            // Marker first, the "Open in" prompt only when it has not
+            // acknowledged yet (see waitForHooksNav).
+            var outcome: HooksEpochOutcome?
+            _ = ObjCExceptionCatcher.catchException {
+                guard let snapshot = try? app.snapshot(),
+                      let marker = self.hooksMarker(in: snapshot),
+                      self.hooksAcknowledged(
+                          epoch: marker.epoch, boot: marker.boot,
+                          epochBefore: epochBefore, bootBefore: bootBefore
+                      ) else { return }
+                if let err = marker.err {
+                    outcome = .hookError(err)
+                } else {
+                    outcome = .acknowledged(marker.epoch)
                 }
-                if let outcome { return outcome }
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            if let outcome { return outcome }
+            // Dialog accepted: re-check at once.
+            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            Self.pollWait(0.2)
         }
         return .timedOut
     }
@@ -924,9 +941,16 @@ class CommandHandler {
         // A row's element bound by its place among others is read again
         // here, and the table can have reused its cells since getElement
         // checked it: plan on this read only if it is still where the match
-        // was found (RowBinding, PILOT-952).
+        // was found (RowBinding, PILOT-952). Nor on a read its own query
+        // could not have returned: the element changed while XCTest read it
+        // (React Native relabelling a reused view as the element that
+        // replaced it), and touching it would touch the replacement
+        // (LiveQueryPin, PILOT-1065).
         if let snap = try? xcElem?.snapshot(),
-           snapshotFinder.isFoundElement(element.elementId, liveFrame: snap.frame) {
+           snapshotFinder.isFoundElement(
+               element.elementId, liveFrame: snap.frame, liveLabel: snap.label, liveIdentifier: snap.identifier,
+               livePlaceholder: snap.placeholderValue ?? ""
+           ) {
             target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
         } else {
             // The live element can't be read (it unmounted, or an iOS 26 live
@@ -1188,6 +1212,18 @@ class CommandHandler {
         }
     }
 
+    /// How long clearText gives the field to show it emptied after its
+    /// select-all and backspace were played.
+    private static let clearShowsWait: TimeInterval = 0.3
+
+    /// Leave a field clearText emptied with the keyboard focus, as it is now
+    /// (the first focusing tap can have moved it): tapped again only when it
+    /// no longer has the focus. Best effort.
+    private func refocusUnlessFocused(_ element: ElementInfo) {
+        if isLiveFocused(element) { return }
+        try? refocusForTyping(element, settleTime: 0.1)
+    }
+
     /// Refocus a field mid-command (a typeText retry, clearText's refocuses),
     /// planned against the element as it is now: the first focusing tap can
     /// have moved it (a KeyboardAvoidingView lifting it above the keyboard),
@@ -1359,127 +1395,434 @@ class CommandHandler {
         }
     }
 
-    /// Type through EventSynthesizer, but don't advance to the next grapheme
-    /// until the target field's snapshot reflects the current one. This fixes
-    /// slow CI simulators dropping an in-string character (e.g. "test" ->
-    /// "tet"), which suffix-only verification cannot repair.
-    private func typeTextWithPerGraphemeVerification(
+    /// Type `text` with a typing delay, checking that it arrives
+    /// (PILOT-1012; the rules are in `TypingCheck`). The first key goes
+    /// alone and is waited for: a field just focused can drop keys while the
+    /// keyboard reacts to the first one (a slow CI simulator turned "test"
+    /// into "tet"). The rest goes as one burst of key events at the delay's
+    /// rate, and the field is read back once it holds the text, or holds
+    /// still short of it. A field showing the keys short or out of order (a
+    /// React Native controlled input falling behind) is emptied and typed
+    /// again a key at a time, each waited for; one showing something the
+    /// keys cannot have produced fails the action.
+    private func typeTextChecked(
         _ text: String,
         selectorParams: [String: Any],
         initialElement: ElementInfo,
         delayMs: Int
     ) throws {
-        let isSecureField = initialElement.className == "XCUIElementTypeSecureTextField"
-        var expectedValue = initialElement.text ?? ""
-        var expectedLength = expectedValue.count
-        let timeoutPerGrapheme = max(1.0, TimeInterval(delayMs) / 1000.0 * 5.0)
-        let pollInterval = 0.02
-        let maxAttempts = 3
-
-        for grapheme in text {
-            let next = String(grapheme)
-
-            // Single-line UITextField treats Return as submit/blur. After that
-            // the original field no longer receives trailing input, so preserve
-            // the existing iOS behavior tested by locator-regressions.
-            if next == "\n" && initialElement.className != "XCUIElementTypeTextView" {
-                if !actionExecutor.typeViaEventSynthesizer(next) {
-                    throw AgentError.actionFailed("typeText failed to synthesize Return key")
-                }
-                Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
-                return
-            }
-
-            let beforeValue = expectedValue
-            let beforeLength = expectedLength
-            expectedValue += next
-            expectedLength += 1
-
-            var delivered = false
-            var lastObserved = beforeValue
-
-            for attempt in 1...maxAttempts {
-                if !actionExecutor.typeViaEventSynthesizer(next) {
-                    NSLog("[typeText] EventSynthesizer returned false for grapheme '\(next)'")
-                }
-
-                let deadline = Date(timeIntervalSinceNow: timeoutPerGrapheme)
-                while Date() < deadline {
-                    let fresh = try resolveElement(selectorParams)
-                    let current = fresh.text ?? ""
-                    lastObserved = current
-
-                    if isSecureField {
-                        if current.count == expectedLength {
-                            delivered = true
-                            break
-                        }
-                        if current.count > expectedLength {
-                            throw AgentError.actionFailed(
-                                "typeText produced extra secure-field input: " +
-                                    "expected length \(expectedLength), got \(current.count)"
-                            )
-                        }
-                    } else {
-                        if current == expectedValue {
-                            delivered = true
-                            break
-                        }
-                        if current != beforeValue && !expectedValue.hasPrefix(current) {
-                            throw AgentError.actionFailed(
-                                "typeText diverged after grapheme '\(next)': " +
-                                    "expected prefix '\(expectedValue)', got '\(current)'"
-                            )
-                        }
-                    }
-
-                    RunLoop.current.run(
-                        mode: .default,
-                        before: Date(timeIntervalSinceNow: pollInterval)
-                    )
-                }
-
-                if delivered { break }
-                NSLog(
-                    "[typeText] Retry \(attempt) for grapheme '\(next)': " +
-                        "expected '\(expectedValue)', got '\(lastObserved)'"
+        let secure = initialElement.className == "XCUIElementTypeSecureTextField"
+        let plan = TypingCheck.plan(text, multiline: initialElement.className == "XCUIElementTypeTextView")
+        let before = initialElement.text ?? ""
+        if let first = plan.keys.first {
+            // From the first key on, part of the text can be in the field: no
+            // error may read as a stale element (`TypingCheck.notStale`).
+            do {
+                let field = try typeFirstKey(
+                    String(first), before: before, secure: secure, selectorParams: selectorParams
                 )
-                if lastObserved == beforeValue {
-                    let refreshed = try resolveElement(selectorParams)
-                    do {
-                        try refocusForTyping(refreshed, settleTime: 0.25)
-                    } catch let error as AgentError {
-                        // Part of the text is already in the field: never let
-                        // this read as a stale element, which the SDK would
-                        // answer by typing the whole text again. The type
-                        // alone names the cause without echoing a cover's
-                        // label (which could contain anything).
-                        // No typed text in the message either: the SDK
-                        // spots a stale element by matching "stale" in it.
+                let rest = String(plan.keys.dropFirst())
+                // Wait out the delay before the focus check: an app can move
+                // the focus on a while after the key shows (a React Native
+                // field moves it from its JavaScript change handler), and
+                // the next key goes no sooner anyway.
+                let firstShownAt = Date()
+                if !rest.isEmpty {
+                    Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(
+                        lastSentAt: firstShownAt, delayMs: delayMs, now: Date()
+                    ))
+                }
+                if !rest.isEmpty, focusMovedOn(from: field) {
+                    // A field that moves the focus on by itself (one box per
+                    // digit): keys sent while the focus moves are lost, and
+                    // the text ends up spread over several fields.
+                    NSLog("[typeText] the focus moved on after the first key: typing the rest a key at a time")
+                    try typeFollowingFocus(rest, from: field, before: before, typedBefore: String(first),
+                                           delayMs: delayMs, lastSentAt: firstShownAt)
+                } else {
+                    if !rest.isEmpty && !sendRest(rest, delayMs: delayMs, lastSentAt: firstShownAt) {
+                        NSLog("[typeText] the burst of \(rest.count) key(s) could not be synthesized")
+                    }
+                    try checkTyped(plan.keys, before: before, secure: secure, delayMs: delayMs,
+                                   selectorParams: selectorParams)
+                }
+            } catch let error as AgentError where TypingCheck.readsAsStale(error.message) {
+                throw AgentError.actionFailed(TypingCheck.notStale(error.message))
+            }
+        }
+        // Return submits a single-line field, which then usually gives up
+        // focus: nothing after it reaches the field, so nothing is checked.
+        if plan.submit {
+            if !actionExecutor.typeViaEventSynthesizer("\n") {
+                throw AgentError.actionFailed("typeText failed to synthesize Return key")
+            }
+            Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
+        }
+    }
+
+    /// Send the keys after the first, `delayMs` apart: one burst of key
+    /// events, or, for a delay over a second, a key at a time
+    /// (`TypingCheck.burstsAtOnce`).
+    /// The delay counts from `lastSentAt` (when the first key showed).
+    private func sendRest(_ keys: String, delayMs: Int, lastSentAt: Date) -> Bool {
+        var lastSentAt = lastSentAt
+        if TypingCheck.burstsAtOnce(delayMs: delayMs) {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            return EventSynthesizer.typeKeys(keys, charactersPerSecond: TypingCheck.charactersPerSecond(delayMs: delayMs))
+        }
+        var sent = true
+        for key in keys {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            sent = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond) && sent
+            lastSentAt = Date()
+        }
+        return sent
+    }
+
+    /// Send the first key and wait for the field to show it, sending it again
+    /// (after refocusing the field) when nothing arrived.
+    /// The field as read when it showed the key.
+    @discardableResult
+    private func typeFirstKey(
+        _ key: String, before: String, secure: Bool, selectorParams: [String: Any]
+    ) throws -> ElementInfo {
+        var shown = before
+        var field: ElementInfo?
+        func landed() throws -> Bool {
+            let fresh = try resolveElement(selectorParams)
+            field = fresh
+            shown = fresh.text ?? ""
+            switch TypingCheck.read(shown, before: before, typed: key, secure: secure) {
+            case .complete:
+                return true
+            case .changed where secure && shown.count < before.count:
+                throw AgentError.actionFailed(
+                    "typeText: the secure field dropped the \(before.count) character(s) it held as the first key " +
+                        "went in (iOS empties a secure field typed into after it takes focus); use clearAndType() to replace its text"
+                )
+            case .changed:
+                throw AgentError.actionFailed(
+                    "typeText: after the first key the field shows \(TypingCheck.describe(shown, secure: secure)), " +
+                        "not \(TypingCheck.describe(before + key, secure: secure)): it changed what was typed"
+                )
+            case .short, .scrambled:
+                return false
+            }
+        }
+        for attempt in 1...TypingCheck.firstKeyTries {
+            if !EventSynthesizer.typeKeys(key, charactersPerSecond: TypingCheck.maxCharactersPerSecond) {
+                NSLog("[typeText] the first key could not be synthesized")
+            }
+            let deadline = Date(timeIntervalSinceNow: TypingCheck.firstKeyWait)
+            repeat {
+                if try landed(), let field { return field }
+                Thread.sleep(forTimeInterval: 0.02)
+            } while Date() < deadline
+            guard TypingCheck.resendsFirstKey(before: before, secure: secure) else {
+                throw AgentError.actionFailed(
+                    "typeText: the secure field still shows \(before.count) character(s) after the first key: " +
+                        "iOS may have emptied it as the key went in (it empties a secure field typed into after it " +
+                        "takes focus); use clearAndType() to replace its text"
+                )
+            }
+            guard attempt < TypingCheck.firstKeyTries else { break }
+            NSLog("[typeText] the first key did not arrive (try \(attempt)); refocusing the field and sending it again")
+            let refreshed = try resolveElement(selectorParams)
+            do {
+                try refocusForTyping(refreshed, settleTime: 0.25)
+            } catch let error as AgentError {
+                // The type alone names the cause without echoing a cover's
+                // label (which could contain anything).
+                throw AgentError.actionFailed("typeText could not refocus the field to type into it (\(error.type))")
+            }
+        }
+        throw AgentError.actionFailed(
+            "typeText could not deliver the first key: the field still shows " +
+                "\(TypingCheck.describe(shown, secure: secure)) after \(TypingCheck.firstKeyTries) tries"
+        )
+    }
+
+    /// Whether `field` lost the keyboard focus to another text input as it
+    /// took the first key.
+    private func focusMovedOn(from field: ElementInfo) -> Bool {
+        guard !isLiveFocused(field) else { return false }
+        return snapshotFinder.liveFocusedInputState() != nil
+    }
+
+    /// Type `keys` a key at a time into whichever input has the focus, as it
+    /// moves on by itself: each key once the focused input holds still (keys
+    /// sent while the focus moves are lost), then waited for until the
+    /// focused input shows a change or the focus moves on. A key that changed
+    /// nothing is sent again (a field just focused can drop keys for a
+    /// while). A key that changed the input it went to is given the moment
+    /// the app takes to move the focus on (a React Native field moves it from
+    /// its JavaScript change handler, after the value shows), so the next key
+    /// is not sent to the input being left. Each input the focus reaches is
+    /// emptied first with `clearing` (typing the text again after a burst
+    /// went astray), once: a field that takes several keys keeps the ones
+    /// typed into it. Keys go at least `delayMs` apart, counting from
+    /// `lastSentAt`. The inputs the focus went through, `field` first, are
+    /// read back at the end: in the order the focus reached them they must
+    /// hold `before`, `typedBefore` (already typed into `field`) and `keys`.
+    private func typeFollowingFocus(
+        _ keys: String, from field: ElementInfo, before: String, typedBefore: String, clearing: Bool = false,
+        delayMs: Int, lastSentAt: Date?
+    ) throws {
+        func now() -> TypingCheck.FocusedInput? { snapshotFinder.liveFocusedInputState() }
+        let b = field.bounds
+        var visited = [CGRect(x: b.left, y: b.top, width: b.width, height: b.height)]
+        var typedKeys = 0
+        var lastSentAt = lastSentAt
+        // The inputs emptied (or found empty) so far, when `clearing`.
+        var cleared: [CGRect] = []
+        for key in keys {
+            // The delay first, so the focus is read just before the key goes.
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            var at = now()
+            let stillBy = Date(timeIntervalSinceNow: TypingCheck.focusStillWait)
+            while Date() < stillBy {
+                Thread.sleep(forTimeInterval: 0.015)
+                let again = now()
+                if again == at { break }
+                at = again
+            }
+            // Each input once, when the focus first reaches it, even one
+            // found empty: what is in it later was typed here.
+            if clearing, let input = at, !TypingCheck.contains(cleared, input.frame) {
+                cleared.append(input.frame)
+                if !input.value.isEmpty {
+                    _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+                    _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                    let emptyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+                    repeat {
+                        at = now()
+                        if at?.value.isEmpty == true { break }
+                        Thread.sleep(forTimeInterval: 0.01)
+                    } while Date() < emptyBy
+                    // Keys typed after what is left would read back wrong.
+                    if let left = at, !left.value.isEmpty {
                         throw AgentError.actionFailed(
-                            "typeText could not refocus the field after \(expectedValue.count) character(s) (\(error.type))"
+                            "typeText could not empty a field the focus moved on to, to type into it again: it still shows " +
+                                TypingCheck.describe(left.value, secure: false)
                         )
                     }
                 }
             }
-
-            guard delivered else {
-                let expectedDescription = isSecureField
-                    ? "length \(expectedLength)"
-                    : "'\(expectedValue)'"
-                let observedDescription = isSecureField
-                    ? "length \(lastObserved.count)"
-                    : "'\(lastObserved)'"
+            // Keys sent with no text input focused go nowhere.
+            guard let focused = at else {
                 throw AgentError.actionFailed(
-                    "typeText could not deliver grapheme '\(next)': " +
-                        "expected \(expectedDescription), got \(observedDescription) " +
-                        "(previous length \(beforeLength))"
+                    "typeText: the focus moved on by itself while typing, then left the text fields " +
+                        "with \(keys.count - typedKeys) key(s) still to type"
                 )
             }
-
-            if delayMs > 0 {
-                Thread.sleep(forTimeInterval: TimeInterval(delayMs) / 1000.0)
+            visited.append(focused.frame)
+            // A change to the focused input, or the focus moving on: to
+            // another input, or out of them all (an app that blurs or submits
+            // on its last digit).
+            var after: TypingCheck.FocusedInput??
+            for attempt in 0..<TypingCheck.keyTries {
+                if attempt > 0 {
+                    // Sending it again: keep the delay, and take a change
+                    // that came meanwhile as the last send arriving late.
+                    Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+                    let read = now()
+                    if read != focused { after = .some(read); break }
+                }
+                _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                lastSentAt = Date()
+                let keyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+                repeat {
+                    let read = now()
+                    if read != focused { after = .some(read); break }
+                    Thread.sleep(forTimeInterval: 0.01)
+                } while Date() < keyBy
+                if after != nil { break }
             }
+            guard let after else {
+                throw AgentError.actionFailed(
+                    "typeText: the focus moved on by itself while typing, and a key changed nothing " +
+                        "after \(TypingCheck.keyTries) tries"
+                )
+            }
+            typedKeys += 1
+            // The key changed the input it went to, which still has the
+            // focus: give the app its moment to move the focus on.
+            if let after, after.frame == focused.frame {
+                let handOffBy = Date(timeIntervalSinceNow: TypingCheck.focusHandOffWait)
+                while Date() < handOffBy, now()?.frame == focused.frame {
+                    Thread.sleep(forTimeInterval: 0.015)
+                }
+            }
+        }
+        try checkTypedAcross(TypingCheck.inVisitOrder(visited), before: before, typed: typedBefore + keys)
+    }
+
+    /// Read back the inputs at `frames` (the inputs typing went through, in
+    /// order) until together they hold `before` + `typed`, or hold still
+    /// short of it. Skipped, with a log line, when one of them can no longer
+    /// be found where the focus met it (the layout moved).
+    private func checkTypedAcross(_ frames: [CGRect], before: String, typed: String) throws {
+        let deadline = Date(timeIntervalSinceNow: TypingCheck.burstWait)
+        var last: String?
+        var since = Date()
+        while true {
+            guard let inputs = textInputs(at: frames) else {
+                NSLog("[typeText] an input the focus went through moved; not reading the text back")
+                return
+            }
+            let secure = inputs.contains { $0.secure }
+            let shown = inputs.map(\.value).joined()
+            let reading = TypingCheck.read(shown, before: before, typed: typed, secure: secure)
+            if reading == .complete { return }
+            if shown != last {
+                last = shown
+                since = Date()
+            }
+            if Date().timeIntervalSince(since) >= TypingCheck.stillWait || Date() >= deadline {
+                throw AgentError.actionFailed(
+                    "typeText: the focus moved on by itself while typing, and the \(frames.count) fields it went " +
+                        "through show \(TypingCheck.describe(shown, secure: secure)) together, " +
+                        "not \(TypingCheck.describe(before + typed, secure: secure))"
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
+    /// The value of the text input at each of `frames`, from one snapshot (an
+    /// empty field's placeholder reads as empty). Nil when any is missing.
+    private func textInputs(at frames: [CGRect]) -> [(value: String, secure: Bool)]? {
+        guard let root = try? app.snapshot() else { return nil }
+        let types: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .textView, .searchField]
+        var inputs: [XCUIElementSnapshot] = []
+        func walk(_ node: XCUIElementSnapshot) {
+            if types.contains(node.elementType) { inputs.append(node) }
+            node.children.forEach(walk)
+        }
+        walk(root)
+        var values: [(value: String, secure: Bool)] = []
+        for frame in frames {
+            guard let input = inputs.first(where: { OcclusionAnalyzer.framesMatch($0.frame, frame, tolerance: 1.5) })
+            else { return nil }
+            let value = TypingCheck.shownValue(input.value as? String ?? "", placeholder: input.placeholderValue)
+            values.append((value, input.elementType == .secureTextField))
+        }
+        return values
+    }
+
+    /// Read the field back once the burst is in, and repair a short or
+    /// scrambled result by typing the text again a key at a time.
+    private func checkTyped(
+        _ keys: String, before: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]
+    ) throws {
+        let window = TypingCheck.burstWait + TypingCheck.typingDuration(count: keys.count, delayMs: delayMs)
+        var (reading, shown) = try waitForTyped(keys, before: before, secure: secure,
+                                                selectorParams: selectorParams, within: window)
+        var tries = 0
+        while reading != .complete {
+            guard TypingCheck.retypes(reading, before: before, secure: secure), tries < TypingCheck.retypeTries else {
+                throw AgentError.actionFailed(
+                    "typeText: the field shows \(TypingCheck.describe(shown, secure: secure)), " +
+                        "not \(TypingCheck.describe(before + keys, secure: secure))" +
+                        (reading == .changed ? ": it changed what was typed" : " after typing it \(tries + 1) time(s)")
+                )
+            }
+            tries += 1
+            let target = try resolveElement(selectorParams)
+            if focusMovedOn(from: target) {
+                // The field moved the focus on by itself after the first key
+                // was checked (its app was slow to): the burst went astray
+                // across the fields. Type it again following the focus,
+                // emptying each field first.
+                NSLog("[typeText] the focus moved on during the burst: typing it again following the focus")
+                do {
+                    try refocusForTyping(target, settleTime: 0.25)
+                } catch let error as AgentError {
+                    throw AgentError.actionFailed("typeText could not refocus the field to type into it again (\(error.type))")
+                }
+                try typeFollowingFocus(before + keys, from: target, before: "", typedBefore: "", clearing: true,
+                                       delayMs: delayMs, lastSentAt: nil)
+                return
+            }
+            NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: secure)) after typing: typing it again a key at a time (try \(tries))")
+            try retypeKeyByKey(before + keys, secure: secure, delayMs: delayMs, selectorParams: selectorParams)
+            (reading, shown) = try waitForTyped(keys, before: before, secure: secure, selectorParams: selectorParams,
+                                                within: TypingCheck.keyWait + TypingCheck.stillWait)
+        }
+    }
+
+    /// Read the field until it shows the text, or holds the same value for
+    /// `TypingCheck.stillWait`, or `window` ends: the last reading, and the
+    /// value it was taken from.
+    private func waitForTyped(
+        _ keys: String, before: String, secure: Bool, selectorParams: [String: Any], within window: TimeInterval
+    ) throws -> (TypingCheck.Reading, String) {
+        let deadline = Date(timeIntervalSinceNow: window)
+        var last: String?
+        var since = Date()
+        while true {
+            let shown = try resolveElement(selectorParams).text ?? ""
+            let reading = TypingCheck.read(shown, before: before, typed: keys, secure: secure)
+            if reading == .complete { return (reading, shown) }
+            if shown != last {
+                last = shown
+                since = Date()
+            } else if Date().timeIntervalSince(since) >= TypingCheck.stillWait {
+                return (reading, shown)
+            }
+            if Date() >= deadline { return (reading, shown) }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+    }
+
+    /// Empty the field and type `value` into it a key at a time, each key
+    /// sent once the one before shows. Select-all and delete, so it does not
+    /// matter where the caret is (scrambled keys can leave it mid-text); a
+    /// field that does not take select-all is emptied a delete at a time.
+    /// Keys go at least `delayMs` apart.
+    private func retypeKeyByKey(_ value: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]) throws {
+        let field = try resolveElement(selectorParams)
+        // ⌘A and delete go to whichever input has focus.
+        if !isLiveFocused(field) {
+            do {
+                try refocusForTyping(field, settleTime: 0.25)
+            } catch let error as AgentError {
+                throw AgentError.actionFailed("typeText could not refocus the field to type into it again (\(error.type))")
+            }
+        }
+        func shown() throws -> String { try resolveElement(selectorParams).text ?? "" }
+        func waitUntilShown(_ expected: String) throws -> String {
+            let deadline = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+            var current = try shown()
+            while TypingCheck.read(current, before: "", typed: expected, secure: secure) != .complete,
+                  Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+                current = try shown()
+            }
+            return current
+        }
+        _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+        _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+        var left = try waitUntilShown("")
+        if !left.isEmpty {
+            _ = EventSynthesizer.typeKeys(String(repeating: "\u{8}", count: left.count),
+                                          charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+            left = try waitUntilShown("")
+        }
+        guard left.isEmpty else {
+            throw AgentError.actionFailed(
+                "typeText could not empty the field to type into it again: it still shows " +
+                    TypingCheck.describe(left, secure: secure)
+            )
+        }
+        var typed = ""
+        var lastSentAt: Date?
+        for key in value {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+            lastSentAt = Date()
+            typed.append(key)
+            _ = try waitUntilShown(typed)
         }
     }
 
@@ -1515,6 +1858,90 @@ class CommandHandler {
             }
             let elements = try elementFinder.findElements(selector, parentId: parentId)
             return ["elements": elements.map { $0.toDict() }]
+
+        case "scrollStepPoints":
+            // An iOS scroll step's drag (PILOT-998), before the daemon makes
+            // it: its points in the app's interface space, mapped into the
+            // HID helper's native portrait space as a tap's point is. nil when
+            // the way the screen is turned cannot be told (no drag is made).
+            let raw = params["points"] as? [[NSNumber]] ?? []
+            let screen = snapshotFinder.lastSnapshotFrameSize() ?? snapshotFinder.screenSize
+            let turn = Self.deviceTurn(XCUIDevice.shared.orientation)
+            var mapped: [[Double]] = []
+            for p in raw {
+                guard p.count == 2,
+                      let native = HidTouch.nativePoint(
+                          CGPoint(x: p[0].doubleValue, y: p[1].doubleValue), screen: screen, device: turn
+                      )
+                else { return ["points": NSNull()] }
+                mapped.append([Double(native.x), Double(native.y)])
+            }
+            return ["points": mapped]
+
+        case "scrollStepFind":
+            // The find half of an iOS scroll step (PILOT-998), after the
+            // daemon's HID drag: wait for the list to stop re-laying out when
+            // the element is near, find, and say whether the list moved since
+            // the snapshot before the drag.
+            let selector = SelectorParser.parse(params["selector"] as? [String: Any] ?? [:])
+            guard let r = params["region"] as? [String: Any] else {
+                throw AgentError.invalidSelector("scrollStepFind needs a region")
+            }
+            func coord(_ key: String) -> CGFloat { CGFloat((r[key] as? NSNumber)?.doubleValue ?? 0) }
+            let region = CGRect(
+                x: coord("left"),
+                y: coord("top"),
+                width: coord("right") - coord("left"),
+                height: coord("bottom") - coord("top")
+            )
+            let before = snapshotFinder.lastSnapshotFingerprint(in: region)
+            let beforeSnapshot = snapshotFinder.lastSnapshotTaken()
+            var elements = try snapshotFinder.findElements(selector)
+            let matches = elements.map { e in
+                (frame: CGRect(
+                    x: CGFloat(e.bounds.left),
+                    y: CGFloat(e.bounds.top),
+                    width: CGFloat(e.bounds.right - e.bounds.left),
+                    height: CGFloat(e.bounds.bottom - e.bounds.top)
+                ), visible: e.isVisible)
+            }
+            var waited = "far, no wait"
+            // Whether the list's tree can be compared with the one before the
+            // drag: not while it is still moving, as a list bouncing back from
+            // an overscroll at its end is (after the 0.9 s cap, or caught at
+            // once on the far path below).
+            var settled = true
+            if ScrollStepWatch.isFar(matches, region: region) {
+                // No wait: the list may be mid-motion, so it moved only if the
+                // element itself moved about a step's length.
+                let beforeFrames = beforeSnapshot.map { snapshotFinder.matchFrames(selector, in: $0) } ?? []
+                settled = ScrollStepWatch.movedFar(before: beforeFrames, after: matches.map(\.frame), region: region)
+            } else {
+                let band = ScrollStepWatch.band(of: region)
+                let native = HidTouch.nativeRect(
+                    band,
+                    screen: snapshotFinder.screenSize,
+                    device: Self.deviceTurn(XCUIDevice.shared.orientation)
+                ) ?? band
+                var deadline = Date().addingTimeInterval(ScrollStepWatch.maxWaitSeconds)
+                if let read = commandReadDeadline {
+                    // Leave the find after the wait its time before the daemon gives up.
+                    deadline = min(deadline, read.addingTimeInterval(-(TouchPlanClock.readDeadlineMarginSeconds + 0.5)))
+                }
+                let started = Date()
+                let outcome = actionExecutor.waitUntilStill(region: native, deadline: deadline)
+                if case .still = outcome {} else { settled = false }
+                waited = "\(outcome) in \(Int(Date().timeIntervalSince(started) * 1000)) ms"
+                elements = try snapshotFinder.findElements(selector)
+            }
+            var out: [String: Any] = ["elements": elements.map { $0.toDict() }]
+            // Unknown otherwise: the SDK then judges the step by a screen read
+            // (PILOT-929), so an end of the list is still found.
+            if settled, let before, let after = snapshotFinder.lastSnapshotFingerprint(in: region) {
+                out["moved"] = before != after
+            }
+            NSLog("[TapsmithScrollStep] \(waited); \(elements.count) match(es), moved=\(String(describing: out["moved"]))")
+            return out
 
         case "evaluateSelectors":
             // PILOT-848: one snapshot, every selector matched by the walk
@@ -1719,7 +2146,7 @@ class CommandHandler {
                 }
                 if delayMs > 0 {
                     let focused = isFocusedOnlySelector ? element : try resolveElement(selectorParams)
-                    try typeTextWithPerGraphemeVerification(
+                    try typeTextChecked(
                         text,
                         selectorParams: selectorParams,
                         initialElement: focused,
@@ -1823,11 +2250,12 @@ class CommandHandler {
                 )
             }
 
-            // Fast path: Cmd+A then a single backspace. Works on native
-            // UITextField and on simulators with a hardware-keyboard
-            // mapping; silently no-ops on RN-wrapped controls (which
-            // typically don't honor Cmd+A) where we fall through to the
-            // per-character loop.
+            // Fast path: Cmd+A then a single backspace, both as key events
+            // (PILOT-1012). The backspace used to go through
+            // `_XCT_sendString`, after which a React Native field kept its
+            // text (the select-all seemed not to take, so every clear fell to
+            // the loop below); as a key event it deletes the selection there
+            // too.
             //
             // We deliberately use `\u{8}` (backspace) instead of
             // `XCUIKeyboardKey.delete` because:
@@ -1840,12 +2268,16 @@ class CommandHandler {
             // forward-delete (data loss past the cursor) or no-op
             // depending on the IME, hence the safer backspace.
             if EventSynthesizer.keyPress(key: "a", modifiers: .command) {
-                Thread.sleep(forTimeInterval: 0.1)
-                actionExecutor.typeTextWithoutFocus("\u{8}")
-                Thread.sleep(forTimeInterval: 0.15)
-                let afterSelectAll = (try? resolveElement(params)) ?? element
+                _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                // The field shows the change a moment after the key is played.
+                var afterSelectAll = (try? resolveElement(params)) ?? element
+                let emptyBy = Date(timeIntervalSinceNow: Self.clearShowsWait)
+                while !(afterSelectAll.text ?? "").isEmpty, Date() < emptyBy {
+                    Thread.sleep(forTimeInterval: 0.03)
+                    afterSelectAll = (try? resolveElement(params)) ?? afterSelectAll
+                }
                 if (afterSelectAll.text ?? "").isEmpty {
-                    try? refocusForTyping(afterSelectAll, settleTime: 0.1)
+                    refocusUnlessFocused(afterSelectAll)
                     return ["success": true]
                 }
                 // Cmd+A didn't take (or deleted only one char). Fall
@@ -1903,7 +2335,10 @@ class CommandHandler {
                 // String.count counts grapheme clusters — matches keyboard
                 // backspace granularity for ASCII and composed emoji.
                 let count = min(displayed.count, perIterationCap)
-                actionExecutor.typeTextWithoutFocus(String(repeating: "\u{8}", count: count))
+                _ = EventSynthesizer.typeKeys(
+                    String(repeating: "\u{8}", count: count),
+                    charactersPerSecond: TypingCheck.maxCharactersPerSecond
+                )
                 // EventSynthesizer returns when events are queued, not when
                 // RN has committed the resulting text update. Without a short
                 // settle, CI can read the pre-backspace snapshot and report a
@@ -1931,7 +2366,7 @@ class CommandHandler {
                 )
             }
             // As it is now: the first focusing tap can have moved it.
-            try? refocusForTyping((try? resolveElement(params)) ?? element, settleTime: 0.1)
+            refocusUnlessFocused((try? resolveElement(params)) ?? element)
             return ["success": true]
 
         // ─── Interactive Mirror Live-Drag (buffered touch path) ───
@@ -2421,7 +2856,7 @@ class CommandHandler {
             let ackNavGreaterThan = (params["ackNavGreaterThan"] as? NSNumber)?.uint64Value
             let ackBootBefore = params["ackBootBefore"] as? String
             let targetApp = XCUIApplication(bundleIdentifier: bundleId)
-            _ = safeAppState(targetApp)
+            let stateBefore = safeAppState(targetApp)
             QuiescenceDisabler.disable(for: targetApp)
 
             if deliverInProcess {
@@ -2452,7 +2887,13 @@ class CommandHandler {
 
                 _ = ObjCExceptionCatcher.catchException {
                     targetApp.activate()
-                    Thread.sleep(forTimeInterval: 0.15)
+                    // Let an app brought back from the background settle
+                    // before the URL arrives. One that was already in front
+                    // (every per-test reset and in-test link) has nothing to
+                    // settle: activate() returns at once for it.
+                    if stateBefore != .runningForeground {
+                        Thread.sleep(forTimeInterval: 0.15)
+                    }
                     targetApp.open(url)
                 }
 
@@ -2686,7 +3127,10 @@ class CommandHandler {
             // keyboard that has not started moving looks the same, and calling
             // it gone would report success with a keyboard about to come up.
             _ = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace), stopWhenParked: false)
-            Thread.sleep(forTimeInterval: 0.3)
+            // On screen, but possibly still sliding up: plan around where it
+            // comes to rest. Usually it has long since (PILOT-1012: this was
+            // a fixed 0.3 s).
+            waitForKeyboardToHoldStill(within: Self.keyboardRestWait)
             do {
                 try dismissKeyboard()
             } catch {
@@ -2695,6 +3139,7 @@ class CommandHandler {
             }
             settleAfterKeyboardDismissed()
             return ["success": true]
+
 
         // ─── Color Scheme ───
 
@@ -2900,6 +3345,22 @@ class CommandHandler {
     private static func clipped(_ wait: TimeInterval, to deadline: Date?) -> TimeInterval {
         guard let deadline else { return wait }
         return max(0, min(wait, deadline.timeIntervalSinceNow))
+    }
+
+    /// How long hideKeyboard gives an on-screen keyboard to come to rest.
+    private static let keyboardRestWait: TimeInterval = 0.3
+
+    /// Wait, at most `within`, until two reads of the keyboard's frames a
+    /// moment apart agree.
+    private func waitForKeyboardToHoldStill(within wait: TimeInterval) {
+        let deadline = Date(timeIntervalSinceNow: wait)
+        var frames = keyboardReading()?.frames
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+            let again = keyboardReading()?.frames
+            if let again, again == frames, !again.isEmpty { return }
+            frames = again
+        }
     }
 
     /// How long a keyboard element with no on-screen area gets to slide in

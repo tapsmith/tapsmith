@@ -434,6 +434,37 @@ pub enum AgentCommand {
         selector: Value,
         timeout_ms: Option<u64>,
     },
+    /// One scrollIntoView() step on the Android agent (PILOT-998): drag in
+    /// `region` (or a container the agent picks), wait for quiet, find
+    /// `selector`, and report whether the list under the finger scrolled.
+    ScrollStep {
+        selector: Value,
+        /// The way the finger moves.
+        direction: String,
+        /// `{"left","top","right","bottom"}`; None: the agent picks one.
+        region: Option<Value>,
+        distance: f32,
+        /// Wait for quiet and find first; drag only when it is not on screen.
+        find_first: bool,
+    },
+    /// An iOS scroll step's drag points (PILOT-998), in the app's interface
+    /// space, for the agent to map into the HID helper's native portrait
+    /// space, as it maps a tap's point. It answers `{"points": null}` when the
+    /// way the screen is turned cannot be told.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    ScrollStepPoints {
+        points: Vec<[f64; 2]>,
+    },
+    /// The find half of an iOS scroll step (PILOT-998), after the daemon's
+    /// HID drag: wait for `region` to stop changing (unless the element is
+    /// still far off), find `selector`, and report whether the tree inside
+    /// `region` changed since the agent's previous snapshot.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    ScrollStepFind {
+        selector: Value,
+        /// `{"left","top","right","bottom"}`, in points.
+        region: Value,
+    },
     /// Evaluate several selectors against one UI snapshot, without waiting
     /// and without caching the matches (PILOT-848).
     EvaluateSelectors {
@@ -485,6 +516,9 @@ pub enum AgentCommand {
         /// Screen bounds to swipe inside instead of the whole screen:
         /// `{"left","top","right","bottom"}`.
         region: Option<Value>,
+        /// End without momentum: a drag that rests before it lifts, so
+        /// nothing flings (scrollIntoView, PILOT-973). Sent only when true.
+        drag: bool,
     },
     TapCoordinates {
         x: f32,
@@ -667,6 +701,9 @@ impl AgentCommand {
         match self {
             AgentCommand::FindElement { .. } => "findElement",
             AgentCommand::FindElements { .. } => "findElements",
+            AgentCommand::ScrollStep { .. } => "scrollStep",
+            AgentCommand::ScrollStepPoints { .. } => "scrollStepPoints",
+            AgentCommand::ScrollStepFind { .. } => "scrollStepFind",
             AgentCommand::EvaluateSelectors { .. } => "evaluateSelectors",
             AgentCommand::Tap { .. } => "tap",
             AgentCommand::ResolveActionPoint { .. } => "resolveActionPoint",
@@ -737,6 +774,33 @@ impl AgentCommand {
                 }
                 ("findElements", p)
             }
+            AgentCommand::ScrollStep {
+                selector,
+                direction,
+                region,
+                distance,
+                find_first,
+            } => {
+                let mut p = json!({
+                    "selector": selector,
+                    "direction": direction,
+                    "distance": distance,
+                });
+                if let Some(r) = region {
+                    p["region"] = r.clone();
+                }
+                if *find_first {
+                    p["findFirst"] = json!(true);
+                }
+                ("scrollStep", p)
+            }
+            AgentCommand::ScrollStepPoints { points } => {
+                ("scrollStepPoints", json!({ "points": points }))
+            }
+            AgentCommand::ScrollStepFind { selector, region } => (
+                "scrollStepFind",
+                json!({"selector": selector, "region": region}),
+            ),
             AgentCommand::EvaluateSelectors { selectors } => {
                 ("evaluateSelectors", json!({ "selectors": selectors }))
             }
@@ -821,8 +885,12 @@ impl AgentCommand {
                 distance,
                 timeout_ms,
                 region,
+                drag,
             } => {
                 let mut p = json!({"direction": direction});
+                if *drag {
+                    p["drag"] = json!(true);
+                }
                 if let Some(se) = start_element {
                     p["startElement"] = se.clone();
                 }
@@ -1714,6 +1782,18 @@ mod tests {
                 selector: json!({}),
                 timeout_ms: None,
             },
+            AgentCommand::ScrollStep {
+                selector: json!({}),
+                direction: "up".into(),
+                region: None,
+                distance: 0.8,
+                find_first: false,
+            },
+            AgentCommand::ScrollStepFind {
+                selector: json!({}),
+                region: json!({}),
+            },
+            AgentCommand::ScrollStepPoints { points: vec![] },
             AgentCommand::Tap {
                 selector: json!({}),
                 timeout_ms: None,
@@ -1986,6 +2066,7 @@ mod tests {
             distance: Some(0.8),
             timeout_ms: Some(5000),
             region: None,
+            drag: false,
         };
         let j = cmd.to_json("sw1");
         assert_eq!(j["method"], "swipe");
@@ -2005,6 +2086,7 @@ mod tests {
             distance: None,
             timeout_ms: None,
             region: None,
+            drag: false,
         };
         let j = cmd.to_json("sw2");
         assert_eq!(j["params"]["direction"], "down");
@@ -2022,6 +2104,7 @@ mod tests {
             distance: Some(0.6),
             timeout_ms: None,
             region: Some(json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})),
+            drag: false,
         };
         let j = cmd.to_json("sw3");
         assert_eq!(j["method"], "swipe");
@@ -2029,6 +2112,67 @@ mod tests {
             j["params"]["region"],
             json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})
         );
+        assert!(j["params"].get("drag").is_none());
+    }
+
+    #[test]
+    fn to_json_scroll_step() {
+        // The selector travels nested, beside the step's own fields, so a
+        // selector key can never collide with them.
+        let cmd = AgentCommand::ScrollStep {
+            selector: json!({"text": "Row 60"}),
+            direction: "up".into(),
+            region: Some(json!({"left": 0, "top": 200, "right": 1080, "bottom": 1800})),
+            distance: 0.8,
+            find_first: true,
+        };
+        let j = cmd.to_json("ss1");
+        assert_eq!(j["method"], "scrollStep");
+        assert_eq!(j["params"]["selector"], json!({"text": "Row 60"}));
+        assert_eq!(j["params"]["direction"], "up");
+        assert_eq!(j["params"]["region"]["top"], 200);
+        assert!((j["params"]["distance"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+        assert_eq!(j["params"]["findFirst"], json!(true));
+
+        let bare = AgentCommand::ScrollStep {
+            selector: json!({}),
+            direction: "down".into(),
+            region: None,
+            distance: 0.3,
+            find_first: false,
+        }
+        .to_json("ss2");
+        assert!(bare["params"].get("region").is_none());
+        assert!(bare["params"].get("findFirst").is_none());
+    }
+
+    #[test]
+    fn to_json_scroll_step_find() {
+        let j = AgentCommand::ScrollStepFind {
+            selector: json!({"text": "Row 60"}),
+            region: json!({"left": 0, "top": 100, "right": 390, "bottom": 800}),
+        }
+        .to_json("sf1");
+        assert_eq!(j["method"], "scrollStepFind");
+        assert_eq!(j["params"]["selector"], json!({"text": "Row 60"}));
+        assert_eq!(j["params"]["region"]["bottom"], 800);
+    }
+
+    #[test]
+    fn to_json_swipe_drag() {
+        // scrollIntoView's drags (PILOT-973): sent only when asked for, so
+        // every other swipe keeps the agent's fling-and-settle swipe.
+        let cmd = AgentCommand::Swipe {
+            direction: "up".into(),
+            start_element: None,
+            speed: Some(2000.0),
+            distance: Some(0.6),
+            timeout_ms: None,
+            region: None,
+            drag: true,
+        };
+        let j = cmd.to_json("sw4");
+        assert_eq!(j["params"]["drag"], json!(true));
     }
 
     #[test]

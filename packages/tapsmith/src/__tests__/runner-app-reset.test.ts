@@ -95,6 +95,7 @@ function makeOpts(d: ReturnType<typeof makeDevice>, config: TapsmithConfig, extr
     device: d.device as unknown as SessionPreflightContext['device'],
     client: d.client as unknown as SessionPreflightContext['client'],
     notices: [],
+    relaunches: { count: 0 },
   };
   return {
     config,
@@ -104,6 +105,7 @@ function makeOpts(d: ReturnType<typeof makeDevice>, config: TapsmithConfig, extr
     runMode: 'test',
     // runTestFile creates this per file; these tests drive runSuiteContext directly.
     _applied: {},
+    _startRoute: {},
     ...extra,
   };
 }
@@ -219,6 +221,46 @@ describe('runner app reset (declared isolation)', () => {
     expect(d.device._setForceColdDeepLinks).toHaveBeenCalledWith(true);
     // The retry attempt asks for a cold delivery explicitly.
     expect(d.device._resetApp.mock.calls.map((c) => c[1].forceCold)).toEqual([false, true, false]);
+  });
+
+  describe('a readiness check that relaunches the app after a routed reset (appResetRoute)', () => {
+    // The embedder's beforeEachTest readiness check runs after the reset and
+    // can relaunch the app (an iOS app launched out of process by simctl
+    // openurl reads as not running), putting it back on its launch screen.
+    function routedRun(relaunchIn: (fullName: string) => boolean) {
+      const d = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => { d.calls.push('body:first'); });
+      tapsmithTest('second', async () => { d.calls.push('body:second'); });
+      const ctx = popContext();
+      const opts = makeOpts(d, makeConfig({ appReset: 'restart', appResetScope: 'test', appResetRoute: 'app:///settings' }));
+      const session = opts.devices[0].sessionContext!;
+      opts.beforeEachTest = async (fullName) => {
+        d.calls.push('beforeEachTest');
+        if (relaunchIn(fullName)) session.relaunches.count++;
+      };
+      return { d, run: () => runSuiteContext(ctx, '', [], [], opts) };
+    }
+
+    it('opens the route again before the test runs', async () => {
+      const { d, run } = routedRun((name) => name === 'first');
+      const result = await run();
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed', 'passed']);
+      const seq = d.calls.filter((c) => ['resetApp:restart', 'openDeepLink', 'beforeEachTest', 'body:first', 'body:second'].includes(c));
+      expect(seq).toEqual([
+        'resetApp:restart', 'openDeepLink', 'beforeEachTest', 'openDeepLink', 'body:first',
+        'resetApp:restart', 'openDeepLink', 'beforeEachTest', 'body:second',
+      ]);
+      expect(d.device.openDeepLink).toHaveBeenCalledWith('app:///settings');
+    });
+
+    it('leaves the app alone when the check did not relaunch it', async () => {
+      const { d, run } = routedRun(() => false);
+      await run();
+
+      expect(d.device.openDeepLink).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('retries under a file-scoped policy (PILOT-715)', () => {

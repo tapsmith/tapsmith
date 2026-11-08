@@ -12,10 +12,9 @@ import { openScreen } from "../utils/app-reset.js"
 // getByRole inline because the role name itself is what they test: a loop over
 // every description-only role, and the "radio" alias.
 describe("getByRole for React Native's generic-view roles", () => {
-  test.use({ appResetScope: "test" })
+  test.use({ appResetScope: "test", appResetRoute: "/roles" })
 
   test.beforeEach(async ({ device, rolesScreen }) => {
-    await openScreen(device, "/roles")
     await expect(rolesScreen.status).toHaveText("Last action: none, bold off")
   })
 

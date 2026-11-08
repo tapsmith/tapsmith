@@ -61,6 +61,37 @@ describe("keychain app state", () => {
     await expect(device.getByTestId("keychain-value")).toHaveText(SECRET)
   })
 
+  test("restoreAppState of a state saved with an empty keychain wipes keychain items", async ({
+    device,
+    projectName,
+  }) => {
+    const suffix = projectName ? `-${projectName.replace(/[^a-zA-Z0-9]/g, "-")}` : ""
+    const statePath = path.join(
+      process.cwd(),
+      "tapsmith-results",
+      `empty-keychain-state${suffix}.tar.gz`,
+    )
+
+    // Save a state with nothing in the keychain (PILOT-1069: restoring it
+    // clears the keychain instead of swapping files and restarting securityd)
+    await device.clearAppData(PKG)
+    await device.saveAppState(PKG, statePath)
+
+    await device.launchApp(PKG)
+    await openKeychainScreen(device)
+    await device.getByTestId("keychain-input").clearAndType(SECRET)
+    await device.hideKeyboard()
+    await device.getByTestId("keychain-save-button").tap()
+    await loadStoredValue(device)
+    await expect(device.getByTestId("keychain-value")).toHaveText(SECRET)
+
+    await device.restoreAppState(PKG, statePath)
+    await device.launchApp(PKG)
+    await openKeychainScreen(device)
+    await loadStoredValue(device)
+    await expect(device.getByTestId("keychain-value")).toHaveText("(empty)")
+  })
+
   test("clearAppData wipes keychain items", async ({ device }) => {
     await openKeychainScreen(device)
     await device.getByTestId("keychain-input").clearAndType(SECRET)

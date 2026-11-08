@@ -1,5 +1,4 @@
 import { describe, expect, test } from "../fixtures.js"
-import { openScreen } from "../utils/app-reset.js"
 import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 // PILOT-223 (iOS) / PILOT-362 (Android): a tap on an element that is on
@@ -18,10 +17,9 @@ import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 // is gone.
 
 describe("Occlusion", () => {
-  test.use({ appResetScope: "test" })
+  test.use({ appResetScope: "test", appResetRoute: "/occlusion" })
 
   test.beforeEach(async ({ device, occlusionScreen }) => {
-    await openScreen(device, "/occlusion")
     await expect(occlusionScreen.counts).toBeVisible()
   })
 
@@ -127,11 +125,17 @@ describe("Occlusion", () => {
       await occlusionScreen.coverAndReplaceButton.tap()
       await expect(occlusionScreen.overlay).toBeVisible()
 
-      // The cover goes after 1.5 s, and "Covered action" goes with it.
-      expect(await failureOf(occlusionScreen.coveredAction.tap())).toMatch(/not found|no element/i)
+      // The cover goes after 1.5 s, and "Covered action" goes with it. React
+      // keeps the same native view and relabels it as "Replacement action",
+      // so a read of the target that straddles the swap must not be taken
+      // for the target (PILOT-1065).
+      const failure = await failureOf(occlusionScreen.coveredAction.tap())
 
+      // Where any touch went first, so a tap that wrongly succeeds shows
+      // which element took it.
       await expect(occlusionScreen.replacementAction).toBeVisible()
       await expect(occlusionScreen.counts).toHaveText(counts({}))
+      expect(failure).toMatch(/not found|no element/i)
     })
   })
 

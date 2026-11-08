@@ -65,6 +65,12 @@ xcrun swiftc -sdk "$SDK" \
 "$OUT/touch-plan-clock-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/ScrollStepWatchTests/main.swift \
+  TapsmithAgent/ScrollStepWatch.swift \
+  -o "$OUT/scroll-step-watch-tests"
+"$OUT/scroll-step-watch-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/LaunchAccessibilityCheckTests/main.swift \
   TapsmithAgent/LaunchAccessibilityCheck.swift \
   -o "$OUT/launch-accessibility-check-tests"
@@ -125,6 +131,12 @@ xcrun swiftc -sdk "$SDK" \
   -o "$OUT/typing-focus-tests"
 "$OUT/typing-focus-tests"
 
+xcrun swiftc -sdk "$SDK" \
+  Tests/TypingCheckTests/main.swift \
+  TapsmithAgent/TypingCheck.swift \
+  -o "$OUT/typing-check-tests"
+"$OUT/typing-check-tests"
+
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/CellFramesTests/main.swift \
@@ -155,6 +167,12 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/RowBinding.swift \
   -o "$OUT/row-binding-tests"
 "$OUT/row-binding-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/LiveQueryPinTests/main.swift \
+  TapsmithAgent/LiveQueryPin.swift \
+  -o "$OUT/live-query-pin-tests"
+"$OUT/live-query-pin-tests"
 
 xcrun swiftc -sdk "$SDK" \
   Tests/DoubleTapRouteTests/main.swift \

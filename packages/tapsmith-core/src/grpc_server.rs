@@ -32,6 +32,7 @@ use crate::screenshot;
 mod android_backend;
 mod device_backend;
 mod ios_backend;
+mod scroll_step;
 
 use device_backend::{DeviceBackend, PermissionChange};
 
@@ -127,6 +128,12 @@ const IOS_RENDER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const IOS_RENDER_READY_TRANSPORT_SLACK_MS: u64 = 5_000;
 /// Pause before re-asking an iOS agent whose `waitForAppReady` call failed.
 const IOS_RENDER_READY_RETRY: Duration = Duration::from_millis(250);
+/// Bound on the host-side `simctl terminate` that stops a simulator app
+/// before a relaunch or a cold deep link (PILOT-1062). It normally returns in
+/// about 0.3 s. Only a wedged CoreSimulator reaches the bound, and then the
+/// agent's terminate runs after it with its own full budget, so that
+/// (rare) path is up to this much slower than the agent terminate alone.
+const IOS_SIMCTL_TERMINATE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long StartAgent waits for a freshly launched Android agent to answer
 /// its first ping. UIAutomator's accessibility bootstrap on a cold
@@ -989,24 +996,105 @@ impl TapsmithServiceImpl {
         }
     }
 
+    /// Stop the iOS app and report whether it is confirmed dead — the step
+    /// before an in-runner relaunch and before a cold `simctl openurl`, both
+    /// of which misbehave against a still-running app.
+    ///
+    /// On a simulator this is `simctl terminate` (about 0.3 s) instead of the
+    /// agent's own terminate (`XCUIApplication.terminate()` plus its state
+    /// poll, about 1 s on CI): PILOT-1062. simctl's exit status is the
+    /// confirmation — it exits 0 once launchd has reaped the app, and says
+    /// "found nothing to terminate" when it was not running. The agent's
+    /// `XCUIApplication.state` is no substitute: it misreads an app XCTest did
+    /// not launch (one `simctl openurl` started) as not running. Any other
+    /// simctl result, or a simctl that hangs, falls back to the agent's
+    /// terminate, which verifies and retries itself. A physical device has no
+    /// simctl and always uses the agent.
+    pub(super) async fn terminate_ios_app_confirmed(
+        &self,
+        serial: &str,
+        package_name: &str,
+        agent_timeout_ms: u64,
+    ) -> bool {
+        let is_physical = self.is_active_ios_physical().await;
+        self.terminate_ios_app_confirmed_with(
+            is_physical,
+            package_name,
+            agent_timeout_ms,
+            IOS_SIMCTL_TERMINATE_TIMEOUT,
+            || ios::device::terminate_app_reporting(serial, package_name),
+        )
+        .await
+    }
+
+    /// [`Self::terminate_ios_app_confirmed`] with the simctl step injected.
+    async fn terminate_ios_app_confirmed_with<F, Fut>(
+        &self,
+        is_physical: bool,
+        package_name: &str,
+        agent_timeout_ms: u64,
+        simctl_timeout: Duration,
+        simctl_terminate: F,
+    ) -> bool
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ios::device::SimTerminate>,
+    {
+        let started = std::time::Instant::now();
+        if !is_physical {
+            let outcome = tokio::time::timeout(simctl_timeout, simctl_terminate())
+                .await
+                .unwrap_or_else(|_| {
+                    ios::device::SimTerminate::Failed(format!(
+                        "timed out after {} ms (CoreSimulator under pressure?)",
+                        simctl_timeout.as_millis()
+                    ))
+                });
+            if outcome.app_is_stopped() {
+                crate::timing::timing_log!(
+                    "kind=terminate name=simctl dur_ms={} ok=true",
+                    started.elapsed().as_millis()
+                );
+                return true;
+            }
+            warn!(
+                package_name,
+                ?outcome,
+                "simctl terminate did not confirm the app stopped; terminating it through the agent"
+            );
+        }
+        let confirmed = matches!(
+            self.send_agent_command_with_timeout(
+                &AgentCommand::TerminateApp {
+                    package: package_name.to_string(),
+                },
+                agent_timeout_ms,
+            )
+            .await,
+            Ok(resp) if resp.success
+        );
+        crate::timing::timing_log!(
+            "kind=terminate name=agent dur_ms={} ok={}",
+            started.elapsed().as_millis(),
+            confirmed
+        );
+        confirmed
+    }
+
     async fn relaunch_ios_app_via_agent(
         &self,
+        serial: &str,
         package_name: &str,
         wait_for_idle: bool,
         idle_timeout_ms: u64,
     ) -> Result<(), String> {
-        let terminated = self
-            .send_agent_command_with_timeout(
-                &AgentCommand::TerminateApp {
-                    package: package_name.to_string(),
-                },
-                4_000,
-            )
-            .await;
-        // The agent answers success only once the app reads as not running,
-        // so a confirmed terminate needs no pause (PILOT-976). An unconfirmed
-        // one keeps the old fixed pause before the launch.
-        if !matches!(terminated, Ok(ref resp) if resp.success) {
+        // A confirmed terminate needs no pause (PILOT-976). An unconfirmed
+        // one keeps the old fixed pause before the launch. The launch stays
+        // the agent's own, so the runner keeps its binding to the app.
+        if !self
+            .terminate_ios_app_confirmed(serial, package_name, 4_000)
+            .await
+        {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
 
@@ -1171,7 +1259,7 @@ impl TapsmithServiceImpl {
         let reset_start = std::time::Instant::now();
         let t0 = std::time::Instant::now();
         match self
-            .relaunch_ios_app_via_agent(package_name, wait_for_idle, idle_timeout_ms)
+            .relaunch_ios_app_via_agent(serial, package_name, wait_for_idle, idle_timeout_ms)
             .await
         {
             Ok(()) => {
@@ -2513,6 +2601,148 @@ impl TapsmithServiceImpl {
         }
     }
 
+    /// An iOS scroll step's drag through the simulator's HID helper
+    /// (PILOT-998): the samples of [`scroll_step::hid_drag_path`] on their
+    /// timeline, then the lift. `NotHandled` when the active device is not a
+    /// simulator or the helper is unavailable (nothing was touched);
+    /// `Refused` when the helper failed mid-drag (the touch is cancelled) or
+    /// is required (`TAPSMITH_REQUIRE_IOS_HID`) but unavailable.
+    #[cfg(target_os = "macos")]
+    async fn hid_scroll_drag(&self, path: &[scroll_step::DragSample]) -> HidOutcome {
+        let udid = {
+            let dm = self.device_manager.read().await;
+            match dm.active_device() {
+                Some(d) if d.platform == Platform::Ios && d.is_emulator => d.serial.clone(),
+                _ => return HidOutcome::NotHandled,
+            }
+        };
+        if let Err(e) = self.hid_injector.ensure(&udid).await {
+            return hid_unavailable(&udid, "scroll drag", &e);
+        }
+        let Some((first, rest)) = path.split_first() else {
+            return HidOutcome::NotHandled;
+        };
+        let Some(last) = rest.last().copied() else {
+            return HidOutcome::NotHandled;
+        };
+        let line = |op: &str, s: &scroll_step::DragSample| format!("{op} {:.1} {:.1}", s.x, s.y);
+        if let Err(e) = self.hid_injector.send(&udid, &line("d", first)).await {
+            return hid_unavailable(&udid, "scroll drag", &e);
+        }
+        let started = tokio::time::Instant::now();
+        let failed = |e: anyhow::Error| {
+            HidOutcome::Refused(AgentResponse {
+                success: false,
+                error: Some(format!(
+                    "scrollIntoView: the iOS simulator's HID helper failed mid-drag: {e}"
+                )),
+                error_type: Some("ACTION_FAILED".to_string()),
+                data: Value::Null,
+            })
+        };
+        for sample in rest {
+            tokio::time::sleep_until(
+                started + Duration::from_micros((sample.at_ms * 1000.0) as u64),
+            )
+            .await;
+            if let Err(e) = self.hid_injector.send(&udid, &line("m", sample)).await {
+                let _ = self.hid_injector.send(&udid, "c").await;
+                return failed(e);
+            }
+        }
+        // The lift waits for the helper's answer, and then for the app to have
+        // it, as a HID tap does: the step's find must not read the list while
+        // the finger is still down, or before the helper has caught up.
+        if let Err(e) = self
+            .hid_injector
+            .send_and_wait(&udid, &line("u", &last), hid_tap_reply_deadline(None))
+            .await
+        {
+            let _ = self.hid_injector.send(&udid, "c").await;
+            return failed(anyhow::anyhow!("{e}"));
+        }
+        tokio::time::sleep(HID_TAP_BARRIER).await;
+        debug!(
+            ms = started.elapsed().as_millis() as u64,
+            "scroll step: HID drag injected"
+        );
+        HidOutcome::Injected
+    }
+
+    /// An iOS scroll step (PILOT-998): the HID drag, then the agent's
+    /// `scrollStepFind`. Unsupported — the SDK scrolls the old way — without
+    /// a region, off a simulator, or when the helper is unavailable.
+    async fn ios_scroll_step(
+        &self,
+        request_id: String,
+        req: &proto::ScrollStepRequest,
+        selector: Value,
+        deadline_ms: u64,
+    ) -> proto::ScrollStepResponse {
+        let Some(region) = req.region.filter(|b| b.right > b.left && b.bottom > b.top) else {
+            return scroll_step::unsupported(request_id);
+        };
+        #[cfg(target_os = "macos")]
+        {
+            let on_simulator = matches!(
+                self.device_manager.read().await.active_device(),
+                Some(d) if d.platform == Platform::Ios && d.is_emulator
+            );
+            if !on_simulator {
+                return scroll_step::unsupported(request_id);
+            }
+            let Some(path) = scroll_step::hid_drag_path(&req.direction, &region, req.distance)
+            else {
+                return scroll_step::unsupported(request_id);
+            };
+            // The helper places points in the device's native portrait space;
+            // the region is in the app's interface space. The agent maps them
+            // as it maps a tap's point, before anything is touched, so an agent
+            // that predates scroll steps answers before a drag is made.
+            let mapped = self
+                .send_agent_command_with_timeout(
+                    &AgentCommand::ScrollStepPoints {
+                        points: scroll_step::drag_points(&path),
+                    },
+                    deadline_ms,
+                )
+                .await;
+            let path = match mapped {
+                Ok(resp) if resp.success => match scroll_step::native_path(&path, &resp.data) {
+                    Some(native) => native,
+                    // The way the screen is turned cannot be told.
+                    None => return scroll_step::unsupported(request_id),
+                },
+                other => {
+                    return scroll_step::step_response(request_id, "scrollStepPoints", other, None)
+                }
+            };
+            match self.hid_scroll_drag(&path).await {
+                HidOutcome::Injected => {}
+                HidOutcome::NotHandled => return scroll_step::unsupported(request_id),
+                HidOutcome::Refused(resp) => {
+                    return scroll_step::step_response(request_id, "scrollStepFind", Ok(resp), None)
+                }
+            }
+            let command = AgentCommand::ScrollStepFind {
+                selector,
+                region: json!({
+                    "left": region.left, "top": region.top,
+                    "right": region.right, "bottom": region.bottom,
+                }),
+            };
+            let result = self
+                .send_agent_command_with_timeout(&command, deadline_ms)
+                .await;
+            scroll_step::step_response(request_id, "scrollStepFind", result, Some(region))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (selector, deadline_ms, region);
+            scroll_step::unsupported(request_id)
+        }
+    }
+
     /// Coordinate-addressed variant of [`try_hid_long_press`]: same device
     /// and helper gating, no element resolution.
     #[cfg(target_os = "macos")]
@@ -2830,10 +3060,14 @@ pub(crate) fn action_target(
     }
 }
 
-/// Extract the reserved keychain member from an app-state archive and swap
-/// it into the simulator's device-level keychain (restarting securityd so
-/// the swapped db is picked up).
-async fn restore_simulator_keychain(udid: &str, container: &str, archive_path: &str) -> Result<()> {
+/// Extract the reserved keychain member from an app-state archive and put it
+/// back into the simulator's device-level keychain (see
+/// [`ios::device::restore_keychain`]).
+async fn restore_simulator_keychain(
+    udid: &str,
+    container: &str,
+    archive_path: &str,
+) -> Result<ios::device::KeychainRestore> {
     use anyhow::{bail, Context};
 
     let keychain_dir = ios::device::simulator_keychain_dir(container).ok_or_else(|| {
@@ -2872,7 +3106,7 @@ async fn restore_simulator_keychain(udid: &str, container: &str, archive_path: &
         );
     }
     let src_dir = scratch.path().join(ios::device::KEYCHAIN_ARCHIVE_MEMBER);
-    ios::device::swap_keychain_files(udid, &keychain_dir, &src_dir).await
+    ios::device::restore_keychain(udid, &keychain_dir, &src_dir).await
 }
 
 #[tonic::async_trait]
@@ -2968,6 +3202,49 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_message: status.message().to_string(),
             })),
         }
+    }
+
+    #[instrument(skip_all, fields(request_id))]
+    async fn scroll_step(
+        &self,
+        request: Request<proto::ScrollStepRequest>,
+    ) -> Result<Response<proto::ScrollStepResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+        let selector = selector_to_json(
+            req.selector
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("selector is required"))?,
+        );
+        let deadline_ms = req.timeout_ms + scroll_step::SCROLL_STEP_WORK_MS;
+        let platform = self
+            .device_manager
+            .read()
+            .await
+            .active_device()
+            .map(|d| d.platform);
+        if platform == Some(Platform::Ios) {
+            return Ok(Response::new(
+                self.ios_scroll_step(request_id, &req, selector, deadline_ms)
+                    .await,
+            ));
+        }
+        let command = AgentCommand::ScrollStep {
+            selector,
+            direction: req.direction.clone(),
+            region: req.region.as_ref().and_then(swipe_region_to_json),
+            distance: req.distance,
+            find_first: req.find_first,
+        };
+        let result = self
+            .send_agent_command_with_timeout(&command, deadline_ms)
+            .await;
+        Ok(Response::new(scroll_step::step_response(
+            request_id,
+            "scrollStep",
+            result,
+            None,
+        )))
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -3208,6 +3485,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             },
             timeout_ms: opt_timeout(req.timeout_ms),
             region: req.region.as_ref().and_then(swipe_region_to_json),
+            drag: req.drag,
         };
 
         let result = self
@@ -4193,6 +4471,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             },
             wait_for_idle: req.wait_for_idle,
             idle_timeout_ms,
+            target_reached: std::sync::atomic::AtomicBool::new(false),
         };
         let consumes_streak = plan.consumes_warm_failure_streak;
         let outcome = app_reset::run_ladder(&ops, plan, req.allow_fallback).await;
@@ -4257,6 +4536,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             // silently downgrading whole files to clear resets under load).
             // Only markers with a reset hook count — the deep-link nav probe
             // may have remembered an empty-`url=` marker.
+            target_reached: outcome.error.is_none()
+                && outcome.mode_used == app_reset::ResetMode::Warm
+                && ops
+                    .target_reached
+                    .load(std::sync::atomic::Ordering::Relaxed),
             hooks_detected: marker.is_some()
                 || self
                     .last_hooks_marker
@@ -6656,6 +6940,10 @@ struct ServiceResetOps<'a> {
     target_path: String,
     wait_for_idle: bool,
     idle_timeout_ms: u64,
+    /// Set when the warm-hooks rung was acknowledged on `target_path` itself,
+    /// not on the root route it re-delivers to when the target hides the
+    /// marker (`ResetAppResponse.target_reached`).
+    target_reached: std::sync::atomic::AtomicBool,
 }
 
 impl ServiceResetOps<'_> {
@@ -6803,10 +7091,14 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
                 *self.svc.last_hooks_marker.write().await = Some(after.clone());
                 match after.err {
                     Some(err) => Err(format!("in-app reset reported an error: {err}")),
-                    None => Ok(app_reset::WarmAck {
-                        epoch: after.epoch,
-                        process_recreated: recreated,
-                    }),
+                    None => {
+                        self.target_reached
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        Ok(app_reset::WarmAck {
+                            epoch: after.epoch,
+                            process_recreated: recreated,
+                        })
+                    }
                 }
             }
             Some(_) => Err("in-app reset did not advance its epoch".to_string()),
@@ -6829,6 +7121,8 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
                     remembered.epoch += 1;
                     *self.svc.last_hooks_marker.write().await = Some(remembered);
                 }
+                self.target_reached
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 // The boot token is unknown here; `cold` already says whether
                 // the plan relaunched.
                 Ok(app_reset::WarmAck {
@@ -8329,10 +8623,173 @@ mod tests {
         (svc, seen)
     }
 
+    use crate::ios::device::SimTerminate;
+
+    /// A stand-in for `simctl terminate` that records that it ran.
+    fn fake_simctl(
+        ran: &Arc<std::sync::atomic::AtomicBool>,
+        outcome: SimTerminate,
+    ) -> impl FnOnce() -> std::future::Ready<SimTerminate> {
+        let ran = ran.clone();
+        move || {
+            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(outcome)
+        }
+    }
+
+    async fn terminate_with(
+        svc: &TapsmithServiceImpl,
+        is_physical: bool,
+        outcome: SimTerminate,
+    ) -> (bool, bool) {
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let confirmed = svc
+            .terminate_ios_app_confirmed_with(
+                is_physical,
+                "com.example.app",
+                4_000,
+                Duration::from_secs(3),
+                fake_simctl(&ran, outcome),
+            )
+            .await;
+        (confirmed, ran.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    // PILOT-1062: on a simulator, a `simctl terminate` that reports the app
+    // gone (or never running) replaces the agent's ~1 s terminate outright.
+    #[tokio::test]
+    async fn simulator_terminate_trusts_simctl_when_it_reports_the_app_stopped() {
+        for outcome in [SimTerminate::Terminated, SimTerminate::NotRunning] {
+            let (svc, seen) =
+                service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
+            assert_eq!(
+                terminate_with(&svc, false, outcome.clone()).await,
+                (true, true),
+                "{outcome:?}"
+            );
+            assert!(seen.lock().unwrap().is_empty(), "{outcome:?}");
+        }
+    }
+
+    // Any other simctl result leaves the app's state unknown, so the agent's
+    // verifying terminate decides — and its answer is the result.
+    #[tokio::test]
+    async fn simulator_terminate_that_simctl_cannot_confirm_falls_back_to_the_agent() {
+        let (svc, seen) =
+            service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
+        assert_eq!(
+            terminate_with(&svc, false, SimTerminate::Failed("boom".into())).await,
+            (true, true)
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
+
+        let (svc, seen) = service_with_mock_agent(
+            |_, _| json!({"error": {"type": "ACTION_FAILED", "message": "still running"}}),
+        )
+        .await;
+        assert_eq!(
+            terminate_with(&svc, false, SimTerminate::Failed("boom".into())).await,
+            (false, true)
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
+    }
+
+    #[tokio::test]
+    async fn simulator_terminate_bounds_a_hung_simctl_and_falls_back_to_the_agent() {
+        let (svc, seen) =
+            service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
+        let started = std::time::Instant::now();
+        assert!(
+            svc.terminate_ios_app_confirmed_with(
+                false,
+                "com.example.app",
+                4_000,
+                Duration::from_millis(200),
+                || async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    SimTerminate::Terminated
+                },
+            )
+            .await
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
+    }
+
+    #[tokio::test]
+    async fn physical_device_terminate_goes_through_the_agent_only() {
+        let (svc, seen) =
+            service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
+        assert_eq!(
+            terminate_with(&svc, true, SimTerminate::Terminated).await,
+            (true, false)
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
+    }
+
     const SPLASH_XML: &str =
         r#"<hierarchy><node package="com.example.app" text="" content-desc=""/></hierarchy>"#;
     const RENDERED_XML: &str =
         r#"<hierarchy><node package="com.example.app" text="Home"/></hierarchy>"#;
+
+    fn scroll_step_request(region: Option<proto::Bounds>) -> proto::ScrollStepRequest {
+        proto::ScrollStepRequest {
+            request_id: "s1".into(),
+            selector: Some(proto::Selector {
+                selector: Some(proto::selector::Selector::Text("Row 60".into())),
+                ..Default::default()
+            }),
+            timeout_ms: 250,
+            direction: "up".into(),
+            region,
+            distance: 0.8,
+            find_first: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_android_scroll_step_is_one_agent_command() {
+        use proto::tapsmith_service_server::TapsmithService;
+        let (svc, seen) = service_with_mock_agent(|_, _| {
+            json!({"result": {"elements": [], "moved": true,
+                "region": {"left": 0, "top": 200, "right": 1080, "bottom": 1800}}})
+        })
+        .await;
+        let resp = svc
+            .scroll_step(Request::new(scroll_step_request(None)))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(*seen.lock().unwrap(), vec!["scrollStep"]);
+        assert_eq!(resp.moved, proto::scroll_step_response::Moved::Yes as i32);
+        assert_eq!(resp.region.unwrap().bottom, 1800);
+        assert!(resp.swiped && !resp.unsupported);
+    }
+
+    #[tokio::test]
+    async fn a_scroll_step_on_an_agent_without_it_is_unsupported() {
+        use proto::tapsmith_service_server::TapsmithService;
+        let (svc, _) = service_with_mock_agent(|_, _| {
+            json!({"error": {"type": "ACTION_FAILED", "message": "Unknown method: scrollStep"}})
+        })
+        .await;
+        let resp = svc
+            .scroll_step(Request::new(scroll_step_request(None)))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(resp.unsupported);
+    }
+
+    #[tokio::test]
+    async fn a_scroll_step_needs_a_selector() {
+        use proto::tapsmith_service_server::TapsmithService;
+        let (svc, _) = service_with_mock_agent(|_, _| json!({"result": {}})).await;
+        let mut req = scroll_step_request(None);
+        req.selector = None;
+        let err = svc.scroll_step(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
 
     #[tokio::test]
     async fn rendered_content_wait_asks_the_agent_and_pulls_no_dump() {

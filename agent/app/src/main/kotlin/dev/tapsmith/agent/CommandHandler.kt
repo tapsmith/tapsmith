@@ -54,6 +54,7 @@ class CommandHandler(
                 "findElement",
                 "findElements",
                 "waitForElement",
+                "scrollStep",
                 // Input.
                 "tap",
                 "longPress",
@@ -282,6 +283,65 @@ class CommandHandler(
                 )
             }
 
+            // One scrollIntoView() step (PILOT-998): drag, let the list go
+            // quiet, find, and say whether the list under the finger moved.
+            "scrollStep" -> {
+                val selector = parseSelectorParams(params.getJSONObject("selector"))
+                val direction = params.getString("direction")
+                val distance = params.optDouble("distance", 0.8)
+                val region =
+                    params.optJSONObject("region")?.let { r ->
+                        HierarchyAttributes.Box(r.getInt("left"), r.getInt("top"), r.getInt("right"), r.getInt("bottom"))
+                    }
+                var dragged: HierarchyAttributes.Box? = null
+                val device =
+                    object : ScrollStepDevice<ElementInfo> {
+                        override fun now() = SystemClock.uptimeMillis()
+
+                        override fun waitForQuiet(
+                            quietMs: Long,
+                            capMs: Long,
+                        ) = actionExecutor.waitForQuiet(quietMs, capMs)
+
+                        override fun find() = elementFinder.findElements(selector)
+
+                        override fun dragList() {
+                            // Picked only once the step drags: a first step
+                            // that finds its element on screen needs none.
+                            val box = region ?: actionExecutor.pickScrollContainer()
+                            dragged = box
+                            actionExecutor.scrollStepDrag(box ?: actionExecutor.screenBox(), direction, distance)
+                        }
+
+                        override fun lastChangeAt() = actionExecutor.lastChangeAt
+
+                        override fun scrolledUnderFingerSince(since: Long) = actionExecutor.stepScrolledSince(since)
+                    }
+                val result =
+                    try {
+                        ScrollStep.run(device, params.optBoolean("findFirst", false)) { it.isVisible }
+                    } finally {
+                        actionExecutor.endScrollStep()
+                    }
+                val out =
+                    JSONObject()
+                        .put("elements", org.json.JSONArray(result.elements.map { it.toJson() }))
+                        .put("swiped", result.swiped)
+                result.moved?.let { out.put("moved", it) }
+                dragged?.let { b ->
+                    out.put(
+                        "region",
+                        JSONObject()
+                            .put("left", b.left)
+                            .put("top", b.top)
+                            .put("right", b.right)
+                            .put("bottom", b.bottom),
+                    )
+                }
+                Log.d(TAG, "scrollStep swiped=${result.swiped} moved=${result.moved} refinds=${result.refinds} region=$dragged")
+                out
+            }
+
             "evaluateSelectors" -> {
                 val raw = params.optJSONArray("selectors") ?: org.json.JSONArray()
                 val selectors =
@@ -402,6 +462,9 @@ class CommandHandler(
                     val direction = params.getString("direction")
                     val speed = params.optInt("speed", 5000)
                     val distance = params.optDouble("distance", 0.5)
+                    // A drag that leaves no fling (scrollIntoView, PILOT-973);
+                    // only for a region or screen swipe.
+                    val drag = params.optBoolean("drag", false)
                     val elementId = params.optString("elementId", null)
                     if (elementId != null) {
                         actionExecutor.swipe(elementFinder.getElement(elementId), direction, speed, distance)
@@ -418,9 +481,9 @@ class CommandHandler(
                                 r.getInt("right"),
                                 r.getInt("bottom"),
                             )
-                        actionExecutor.swipeRegion(region, direction, speed, distance)
+                        actionExecutor.swipeRegion(region, direction, speed, distance, drag)
                     } else {
-                        actionExecutor.swipeScreen(direction, speed, distance)
+                        actionExecutor.swipeScreen(direction, speed, distance, drag)
                     }
                 }
                 JSONObject().put("success", true)

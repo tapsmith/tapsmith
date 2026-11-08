@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
-import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
+import { appResetAction, parseHooksMarker, routeDeepLink, satisfies, warmResetTarget, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
 import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
@@ -52,6 +52,14 @@ export interface SessionPreflightContext {
    * reference, like `capabilities`.
    */
   notices: PreflightNotice[]
+  /**
+   * How many times {@link ensureSessionReady} has (re)launched the app this
+   * session. One object per device session, shared by reference like
+   * `notices`: the runner reads it around an embedder's own readiness check
+   * (`beforeEachTest`), which knows nothing of the start route, to see whether
+   * that check took the app off the route the reset just delivered.
+   */
+  relaunches: { count: number }
 }
 
 /** A system ANR/crash dialog the Android preflight (or, mid-test, the agent)
@@ -189,7 +197,9 @@ async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?:
     // app whose startup dumps all failed.
     if (options.strict && (h.errorMessage || !h.hierarchyXml)) return undefined;
     const marker = parseHooksMarker(h.hierarchyXml);
-    return !!marker && marker.urlPrefix.length > 0;
+    if (!marker?.urlPrefix) return false;
+    (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
+    return true;
   } catch {
     return undefined;
   }
@@ -207,6 +217,7 @@ async function readHooksMarkerAndContent(ctx: SessionPreflightContext): Promise<
     return undefined;
   }
   const marker = parseHooksMarker(xml);
+  if (marker?.urlPrefix) (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
   const rendered = ctx.config.platform === 'ios'
     ? iosHierarchyHasRenderedContent(xml)
     : !!ctx.config.package && androidHierarchyHasRenderedContent(xml, ctx.config.package);
@@ -347,6 +358,12 @@ const HOOKS_PROBE_POLL_MS = 3_000;
 
 export interface EnsureSessionReadyOptions {
   onRecovery?: (error: unknown) => void
+  /**
+   * Called whenever the check (re)launches the app — an inline relaunch of an
+   * app that was no longer in front, or a session recovery. The app is then on
+   * its launch screen, whatever screen it was left on.
+   */
+  onRelaunch?: () => void
   /**
    * Delay (ms) before recovery attempt N (the last entry is reused when
    * attempts exceed the list). Defaults to {@link DEFAULT_RETRY_BACKOFF_MS};
@@ -545,6 +562,10 @@ export async function ensureSessionReady(
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   options: EnsureSessionReadyOptions = {},
 ): Promise<void> {
+  const onRelaunch = (): void => {
+    ctx.relaunches.count++;
+    options.onRelaunch?.();
+  };
   return withActionProgress('sessionReady', ctx.config.package, async (progress) => {
     let lastError: unknown;
     // Whether the recovery before THIS rung completed. Drives the probe's
@@ -566,7 +587,7 @@ export async function ensureSessionReady(
         // agent), and a stale detail would then describe the wrong attempt on
         // the end event.
         progress.setDetail(undefined);
-        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs);
+        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs, onRelaunch);
         return;
       } catch (err) {
         lastError = err;
@@ -578,6 +599,9 @@ export async function ensureSessionReady(
         // immediate retry lands inside the same drop window (PILOT-282).
         await delay(backoff[attempt - 1] ?? backoff.at(-1) ?? 0);
         try {
+          // Before the call: a recovery that fails part-way may already have
+          // relaunched the app.
+          onRelaunch();
           await recoverSession(ctx);
           recovered = true;
         } catch (recoveryErr) {
@@ -770,7 +794,19 @@ export async function executeAppReset(
   }
 
   if (options.prepared && satisfies(options.prepared.policy, policy)) {
-    await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
+    let relaunched = false;
+    await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, {
+      onRelaunch: () => { relaunched = true; },
+    }));
+    // The prepared state stands, but not necessarily on this scope's start
+    // route: one navigation instead of a whole reset. An app the readiness
+    // check had to relaunch is on its launch screen, whatever was prepared.
+    if (policy.route !== undefined && action.kind !== 'none'
+      && (relaunched || options.prepared.policy.route !== policy.route)) {
+      // A link sent into a still-booting app is lost.
+      if (relaunched) await step('waitForAppReady', () => waitForAppReady(ctx));
+      await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
+    }
     const when = new Date(options.prepared.preparedAt).toLocaleTimeString();
     return finish({
       origin: 'prepared',
@@ -793,6 +829,9 @@ export async function executeAppReset(
   let fellBack = false;
   let reason: string | undefined;
   let processRecreated = true;
+  // Whether the reset itself left the app on the declared start route (only
+  // an acknowledged in-app reset can carry it).
+  let routeReached = false;
 
   if (action.kind === 'restore') {
     await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
@@ -802,6 +841,12 @@ export async function executeAppReset(
     // advertises in-app reset hooks, owns the warm-window cold policy, and
     // reports exactly which rung ran so the trace stays honest.
     let result: Awaited<ReturnType<SessionDevice['_resetApp']>> | undefined;
+    // A warm reset lands on the start route in the same delivery: the in-app
+    // hook's reset link carries the route. A deep link outside the hooks' URL
+    // prefix cannot ride on it — reset to "/" and open the link afterwards.
+    const target = policy.route !== undefined && action.kind === 'warm'
+      ? warmResetTarget(policy.route, ctx.capabilities?.hooksUrlPrefix)
+      : undefined;
     await step('resetApp', async () => {
       result = await ctx.device._resetApp(pkg, {
         mode: action.kind,
@@ -818,6 +863,7 @@ export async function executeAppReset(
         // it — fall to clear. Explicit device.resetApp() calls keep the
         // gentler restart fallback.
         fallbackToClear: action.kind === 'warm',
+        ...(target !== undefined ? { target } : {}),
       });
       for (const s of result.steps) {
         steps.push({ name: s.name, durationMs: s.durationMs, ok: s.ok, ...(s.detail ? { detail: s.detail } : {}) });
@@ -828,6 +874,7 @@ export async function executeAppReset(
       fellBack = result.fellBack;
       reason = result.reason;
       processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
+      routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
       // The daemon seeing the marker is fresh proof of hooks. The reverse is
       // not: a missed read under load plans a fallback without disproving the
       // hooks, so detection only ever upgrades (sticky, like the probe).
@@ -850,7 +897,11 @@ export async function executeAppReset(
     }
   }
 
-  await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
+  // A relaunch by the readiness checks below puts the app back on its launch
+  // screen, so a reset that landed on the start route no longer stands there.
+  let relaunched = false;
+  const relaunchedAfterReset = (): void => { relaunched = true; };
+  await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, { onRelaunch: relaunchedAfterReset }));
   // A relaunched process is "ready" only once the app has drawn something:
   // the session check above is satisfied by a bare Activity/splash window,
   // and a deep link or hooks probe fired into a still-booting React Native
@@ -859,15 +910,17 @@ export async function executeAppReset(
   // ladder restart/clear on a daemon that already waited for it before
   // answering: a second agent round trip there (a full snapshot) costs every
   // relaunch. iOS keeps only its non-empty-hierarchy check in both cases.
-  // Android keeps its own wait: its agent stops at the first rendered node,
-  // so the repeat is nearly free, and skipping it left CI's hook-less
-  // emulator still landscape after a rotation test restored portrait.
+  // A relaunch by the session check above came after the daemon's wait, so
+  // it always needs its own. Android keeps its own wait: its agent stops at
+  // the first rendered node, so the repeat is nearly free, and skipping it
+  // left CI's hook-less emulator still landscape after a rotation test
+  // restored portrait.
   const daemonRendered = ctx.config.platform === 'ios'
     && (modeUsed === 'restart' || modeUsed === 'clear')
     && ctx.capabilities?.daemonWaitsForRender === true;
-  const rendered = processRecreated && !daemonRendered;
+  const rendered = (processRecreated && !daemonRendered) || relaunched;
   if (rendered || ctx.config.platform === 'ios') {
-    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered }));
+    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered, onRelaunch: relaunchedAfterReset }));
   }
   if (
     action.kind !== 'warm'
@@ -882,11 +935,80 @@ export async function executeAppReset(
     await probeResetCapabilities(ctx, { pollMs: 0 });
     if (action.kind === 'clear') await checkMissingResetHooks(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
   }
+  // Last, on a ready app (a link sent into a still-booting app is lost), and
+  // after the hooks re-read above, which may have just learnt the URL prefix.
+  if (policy.route !== undefined && (!routeReached || relaunched)) {
+    await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
+  }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
+}
+
+/**
+ * Open the declared start route (`appResetRoute`) as a deep link, for a reset
+ * that could not land on it itself (a restart, clear or restore, a fallback,
+ * or a prepared device). A path needs the hooks' URL prefix; a session that
+ * has not recorded it yet looks at the marker for it.
+ */
+async function openStartRoute(
+  ctx: SessionPreflightContext,
+  route: string,
+  step: StepRunner,
+  hooksProbeMs: number | undefined,
+): Promise<void> {
+  let url = routeDeepLink(route, ctx.capabilities?.hooksUrlPrefix);
+  if (url === undefined) {
+    await step('readHooksUrlPrefix', async () => {
+      // Look for the whole budget even when the session recorded no hooks:
+      // that `false` only says the startup probe never saw the marker (a
+      // probe can miss it under load), and a path on a hooked app must not
+      // fail on one missed read. Only a misconfigured hookless app pays the
+      // budget, on its way to the error below.
+      const deadline = Date.now() + (hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
+      for (;;) {
+        if (await readHooksMarker(ctx)) {
+          // Fresh proof of hooks: detection only ever upgrades.
+          (ctx.capabilities ??= {}).hooksDetected = true;
+          break;
+        }
+        if (Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+        await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
+      }
+    });
+    url = routeDeepLink(route, ctx.capabilities?.hooksUrlPrefix);
+  }
+  if (url === undefined) {
+    const example = `myapp://${route.startsWith('/') ? route : `/${route}`}`;
+    throw new Error(
+      `appResetRoute '${route}' is a path, which Tapsmith resolves against the URL prefix that `
+        + '@tapsmith/react-native publishes in its hooks marker, but the app shows no hooks marker. '
+        + `Mount <TapsmithTestHooks /> in the app, or give the full deep link instead (e.g. appResetRoute: '${example}').`,
+    );
+  }
+  const link = url;
+  await step('openRoute', async () => {
+    try {
+      await ctx.device.openDeepLink(link);
+    } catch (err) {
+      // Name the option: the bare delivery error reads as though the test
+      // itself had opened the link.
+      const wrapped = new Error(`Could not open appResetRoute '${route}' (${link}): ${formatError(err)}`);
+      throw Object.assign(wrapped, { cause: err });
+    }
+  }, link);
 }
 
 type StepRunner = (name: string, fn: () => Promise<void>, detail?: string) => Promise<void>;
 const runDirect: StepRunner = (_name, fn) => fn();
+
+/**
+ * Put the app back on the declared start route after a readiness check outside
+ * the reset relaunched it (the app is then on its launch screen). Waits for
+ * the relaunched app first: a link sent into a still-booting app is lost.
+ */
+export async function reopenStartRoute(ctx: SessionPreflightContext, route: string, hooksProbeMs?: number): Promise<void> {
+  await waitForAppReady(ctx);
+  await openStartRoute(ctx, route, runDirect, hooksProbeMs);
+}
 
 /**
  * The `clear` action: wipe app data and cold-launch. Does NOT include the
@@ -1066,6 +1188,7 @@ async function verifySession(
   iosForegroundProbe?: Partial<IosForegroundProbeTiming>,
   tally?: ProbeLatencyTally,
   dialogs: BlockingDialogTally = { dismissals: 0, seen: new Map() },
+  onRelaunch?: () => void,
 ): Promise<void> {
   const pong = await ctx.client.ping();
   if (!pong.agentConnected) {
@@ -1094,6 +1217,7 @@ async function verifySession(
       }
       if (state !== 'foreground') {
         try {
+          onRelaunch?.();
           await ctx.device.launchApp(ctx.config.package);
         } catch (err) {
           // The probe answered; the relaunch is what broke. Drop the probe
@@ -1131,6 +1255,7 @@ async function verifySession(
         // recovery destroys beforeAll-established state) escalate to a
         // whole-file retry. A genuinely broken session fails the relaunch or
         // the readiness wait below, and THAT propagates into real recovery.
+        onRelaunch?.();
         await ctx.device.launchApp(ctx.config.package);
         const relaunched = await waitForHierarchy(ctx.client);
         await waitForAndroidAppHierarchy(ctx, relaunched.hierarchyXml, ctx.config.package, dialogs);
@@ -1149,7 +1274,10 @@ async function verifySession(
  * dispatch: iOS first needs a non-empty hierarchy ({@link waitForIosAppReady});
  * both then wait, bounded, for rendered content ({@link waitForRenderedContent}).
  */
-async function waitForAppReady(ctx: SessionPreflightContext, options: { rendered?: boolean } = {}): Promise<void> {
+async function waitForAppReady(
+  ctx: SessionPreflightContext,
+  options: { rendered?: boolean; onRelaunch?: () => void } = {},
+): Promise<void> {
   if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, options);
   return waitForAndroidAppReady(ctx);
 }
@@ -1247,15 +1375,24 @@ async function waitForRenderedContent(
  * cold relaunch, and the hooks-marker read misses, pinning a hooked session
  * to clear resets (PILOT-1058).
  */
-async function waitForIosAppReady(ctx: SessionPreflightContext, options: { rendered?: boolean } = {}): Promise<void> {
-  await waitForIosAppHierarchy(ctx);
-  if (options.rendered !== false && ctx.config.package) {
+async function waitForIosAppReady(
+  ctx: SessionPreflightContext,
+  options: { rendered?: boolean; onRelaunch?: () => void } = {},
+): Promise<void> {
+  // A relaunch inside the hierarchy phase puts the app back on a bare shell,
+  // so it needs the rendered-content phase even where the caller skipped it.
+  let relaunched = false;
+  await waitForIosAppHierarchy(ctx, () => {
+    relaunched = true;
+    options.onRelaunch?.();
+  });
+  if ((options.rendered !== false || relaunched) && ctx.config.package) {
     await waitForRenderedContent(ctx, ctx.config.package, iosHierarchyHasRenderedContent);
   }
 }
 
 /** The first phase of {@link waitForIosAppReady}: a non-empty hierarchy. */
-async function waitForIosAppHierarchy(ctx: SessionPreflightContext): Promise<void> {
+async function waitForIosAppHierarchy(ctx: SessionPreflightContext, onRelaunch?: () => void): Promise<void> {
   const start = Date.now();
   const deadline = start + IOS_APP_READY_TIMEOUT_MS;
   // An "empty hierarchy" almost never means an empty tree: the daemon maps
@@ -1294,6 +1431,7 @@ async function waitForIosAppHierarchy(ctx: SessionPreflightContext): Promise<voi
             `[tapsmith] iOS app not in foreground (${state}) after ` +
             `${Math.round((Date.now() - start) / 1000)}s waiting for readiness; relaunching once\n`,
           );
+          onRelaunch?.();
           await ctx.device.launchApp(ctx.config.package);
         }
       } catch {

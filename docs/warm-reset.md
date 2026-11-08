@@ -48,7 +48,7 @@ That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'
 | Prop | Purpose |
 |---|---|
 | `clear` | Stores to wipe on every reset — anything with `clear()` or `clearAll()`: AsyncStorage, MMKV, … |
-| `onReset` | Your own reset: sign out, drop in-memory caches, reset navigation. Receives `{ target, nonce }`. |
+| `onReset` | Your own reset: sign out, drop in-memory caches, reset navigation. Receives `{ target, nonce }`; if it navigates, navigate to `target` — that is the route the reset (and an `appResetRoute`) asked for, and Tapsmith cannot see where the app ends up. `target` is the route's path without its query: a query in `appResetRoute` (`'/settings?tab=2'`) reaches your app only with the reset link itself, so a handler that navigates again drops it. |
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
 | `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders nothing and registers nothing. |
 
@@ -67,7 +67,7 @@ In a bare React Native app, which does not inline `EXPO_PUBLIC_*` variables, pas
 
 ## What a warm reset does not clear
 
-The reset clears storage and re-navigates, but React keeps component-local state that survives navigation: a `ScrollView` offset, an uncontrolled `TextInput`, an animation value. If a test relies on such state being fresh (for example, tapping a link at the top of a home list that an earlier test scrolled), reset it when the epoch changes:
+The reset clears storage and re-navigates, but React keeps component-local state that survives navigation — and a reset that lands on the screen already showing (a per-test `appResetRoute`, after the previous test on the same screen) does not remount it at all: a `ScrollView` offset, an uncontrolled `TextInput`, an animation value. If a test relies on such state being fresh (for example, tapping a link at the top of a home list that an earlier test scrolled), reset it when the epoch changes:
 
 ```tsx
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
@@ -87,7 +87,7 @@ export default function HomeScreen() {
 ## How a warm reset works
 
 1. The component renders an invisible marker in the accessibility tree — `tapsmith-hooks:1;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>` — that Tapsmith reads once after launch (that is the detection) and again after every reset. `nav` counts every URL the process receives, which lets Tapsmith positively acknowledge plain navigation deep links too — including a link to the screen already showing, which no UI heuristic can verify (on iOS that used to cost the full warm-delivery window plus a cold relaunch, ~11 s per navigation). `boot` is a random token generated once per app process: when Tapsmith delivers a reset cold (its periodic cold-launch valve, or a retry), the epoch counter restarts with the process, and a changed `boot` is how the fresh process's acknowledgement is recognised. The marker draws nothing on screen, and no locator matches it: `getByText("nav")` or `getByTestId("tapsmith-hooks")` find nothing ([what locators never match](locators.md#what-locators-never-match)). Earlier versions of `@tapsmith/react-native` also drew a small grey copy of the marker in the bottom-right corner; upgrading the package removes it.
-2. To reset, Tapsmith opens `<prefix><route>?__tapsmith_reset=1&nonce=…` — a normal deep link, so your router lands on `route` while the hooks clear the stores and run `onReset`.
+2. To reset, Tapsmith opens `<prefix><route>?__tapsmith_reset=1&nonce=…` — a normal deep link, so your router lands on `route` while the hooks dismiss the keyboard, clear the stores and run `onReset`.
 3. The hooks bump `epoch`. Tapsmith waits for the epoch to advance — that is the **acknowledgement**; no fixed sleeps. If your handler throws, the epoch still advances and the marker carries `err=…`, so Tapsmith reports the failure and falls back instead of hanging.
 
 The whole ladder — warm → restart → clear — runs in the daemon (`ResetApp`), and the trace records which rung ran and why: *"warm reset via @tapsmith/react-native (epoch 4→5), 0.4s"*, or *"warm reset via in-app hooks failed (…); fell back to restart"*. Two robustness details: a marker read that misses mid-transition (a busy screen, heavy trace capture) does not downgrade the reset — once hooks have been seen in a session, the daemon acknowledges against the last epoch it saw, since the epoch only advances when a reset is delivered and the `boot` token covers an unnoticed relaunch. And when a *declared* warm policy genuinely cannot run warm, it falls back to a **clear**, not a restart — the policy promised state-clearing (only the explicit `device.resetApp()` API uses the gentler restart fallback).
@@ -95,6 +95,10 @@ The whole ladder — warm → restart → clear — runs in the daemon (`ResetAp
 ### Bounding the warm window on iOS simulators
 
 Long all-warm sessions on a simulator can drift from a fresh launch (accessibility trees stop being flattened, element ids go stale). Tapsmith therefore relaunches cold every `appResetColdEvery` warm resets (default 10), on every retry attempt, and after two warm resets in a row fail to verify. The trace says so: *"cold relaunch: warm-window bound reached (10 resets)"*. Set `appResetColdEvery: 0` to disable the valve.
+
+### Landing on the test's screen
+
+The reset link already carries a route, so a scope whose tests all start on one screen can have the reset land there instead of on `/` and then pay a second deep link: `test.use({ appResetScope: 'test', appResetRoute: '/settings' })`. The screen stays mounted when the previous test left the app on it, so reset its own state on the epoch, as in [What a warm reset does not clear](#what-a-warm-reset-does-not-clear). See [Starting on a screen](writing-tests.md#starting-on-a-screen).
 
 ## Without the module
 

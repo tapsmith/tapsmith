@@ -815,7 +815,7 @@ export class Device {
         },
         'App reset failed',
         {
-          detail: () => (response ? describeAppResetResponse(mode, response) : undefined),
+          detail: () => (response ? describeAppResetResponse(mode, response, options.target) : undefined),
           skipBeforeCapture: options.skipTraceCapture,
         }));
     return toAppResetResult(mode, response!);
@@ -2309,6 +2309,13 @@ export interface AppResetResult {
   epochAfter?: number;
   /** Each rung tried, with its timing and outcome. */
   steps: Array<{ name: string; durationMs: number; ok: boolean; detail?: string }>;
+  /**
+   * The app ended on `target`: the in-app reset was acknowledged on that
+   * route. False when a restart or clear rung ran (the app is at its launch
+   * route), and when the target screen hid the hooks marker so the reset was
+   * confirmed on `/` instead — navigate yourself then if the route matters.
+   */
+  targetReached: boolean;
 }
 
 function toAppResetResult(requested: 'warm' | 'restart' | 'clear', r: ResetAppResponse): AppResetResult {
@@ -2320,6 +2327,7 @@ function toAppResetResult(requested: 'warm' | 'restart' | 'clear', r: ResetAppRe
     ...(r.reason ? { reason: r.reason } : {}),
     durationMs: r.durationMs,
     hooksDetected: r.hooksDetected,
+    targetReached: r.success && r.targetReached,
     ...(r.hooksDetected ? { epochBefore: r.epochBefore, epochAfter: r.epochAfter } : {}),
     steps: (r.steps ?? []).map((st) => ({
       name: st.name,
@@ -2330,11 +2338,12 @@ function toAppResetResult(requested: 'warm' | 'restart' | 'clear', r: ResetAppRe
   };
 }
 
-function describeAppResetResponse(requested: 'warm' | 'restart' | 'clear', r: ResetAppResponse): string {
+function describeAppResetResponse(requested: 'warm' | 'restart' | 'clear', r: ResetAppResponse, target?: string): string {
   const used = appResetModeFromWire(r.modeUsed) ?? requested;
+  const landed = r.targetReached && target !== undefined && target !== '/' ? ` → ${target}` : '';
   const via = used === 'warm'
     ? (r.hooksDetected
-      ? `warm reset via @tapsmith/react-native (epoch ${r.epochBefore}→${r.epochAfter})`
+      ? `warm reset via @tapsmith/react-native (epoch ${r.epochBefore}→${r.epochAfter})${landed}`
       : 'warm reset via resetAppDeepLink')
     : used === 'restart' ? 'terminated and relaunched (data kept)' : 'cleared app data and relaunched';
   const secs = `${(r.durationMs / 1000).toFixed(1)}s`;

@@ -8,7 +8,7 @@ import { WebViewHandle } from '../webview-handle.js';
 import { isTestEndedError, runInAttemptContext } from '../attempt-fence.js';
 import { selectorToProto } from '../selectors.js';
 import type { TapsmithGrpcClient, ActionResponse } from '../grpc-client.js';
-import { TraceCollector } from '../trace/trace-collector.js';
+import { setActiveTraceCollector, TraceCollector } from '../trace/trace-collector.js';
 import type { ConsoleTraceEvent } from '../trace/types.js';
 import { onActionProgress, type ActionProgressEvent } from '../action-progress.js';
 
@@ -1475,7 +1475,7 @@ describe('Device.resetApp()', () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
       modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: false,
-      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [],
+      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app', appResetColdEvery: 0 });
@@ -1489,7 +1489,7 @@ describe('Device.resetApp()', () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
       modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: false,
-      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [],
+      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app', appResetColdEvery: 10 });
@@ -1513,6 +1513,7 @@ describe('Device.resetApp()', () => {
         { name: 'warm-hooks', durationMs: 3000, ok: false, detail: 'epoch did not advance within 3000ms' },
         { name: 'restart', durationMs: 900, ok: true, detail: '' },
       ],
+      targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app' });
@@ -1528,7 +1529,7 @@ describe('Device.resetApp()', () => {
     expect(result).toEqual({
       modeRequested: 'warm', modeUsed: 'restart', fellBack: true, coldLaunch: true,
       reason: 'warm reset via in-app hooks failed (epoch did not advance within 3000ms)',
-      durationMs: 1234, hooksDetected: true, epochBefore: 3, epochAfter: 0,
+      durationMs: 1234, hooksDetected: true, epochBefore: 3, epochAfter: 0, targetReached: false,
       steps: [
         { name: 'warm-hooks', durationMs: 3000, ok: false, detail: 'epoch did not advance within 3000ms' },
         { name: 'restart', durationMs: 900, ok: true },
@@ -1536,11 +1537,36 @@ describe('Device.resetApp()', () => {
     });
   });
 
+  it('reports a warm reset that landed on its target, and names the route in the trace detail', async () => {
+    const resetApp = vi.fn(async () => ({
+      requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
+      modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: false,
+      reason: '', durationMs: 1500, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: true,
+    }));
+    const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
+    const device = new Device(client, { package: 'com.example.app' });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-reset-trace-'));
+    const collector = makeTraceCollector(tempDir);
+    setActiveTraceCollector(collector);
+    try {
+      const result = await device.resetApp({ target: '/settings' });
+
+      expect(result.targetReached).toBe(true);
+      expect(collector.events).toContainEqual(expect.objectContaining({
+        action: 'resetApp',
+        detail: expect.stringContaining('(epoch 1→2) → /settings'),
+      }));
+    } finally {
+      setActiveTraceCollector(null);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('throws with the daemon error when the ladder is exhausted', async () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: false, errorType: 'RESET_FAILED', errorMessage: 'clear failed (pm clear did not report success)',
       screenshot: Buffer.alloc(0), modeRequested: 'APP_RESET_MODE_CLEAR', modeUsed: 'APP_RESET_MODE_CLEAR',
-      fellBack: false, coldLaunch: false, reason: '', durationMs: 10, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [],
+      fellBack: false, coldLaunch: false, reason: '', durationMs: 10, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app' });
@@ -1552,7 +1578,7 @@ describe('Device.resetApp()', () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
       modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: true,
-      reason: 'cold relaunch: retry attempt', durationMs: 5000, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [],
+      reason: 'cold relaunch: retry attempt', durationMs: 5000, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app' });
