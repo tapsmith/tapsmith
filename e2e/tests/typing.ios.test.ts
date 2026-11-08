@@ -73,6 +73,11 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
     await expect(typingScreen.codeValue).toHaveText("code=1234")
   })
 
+  test("a code field whose app moves the focus on later than the first key shows keeps one digit per box with a long delay", async ({ typingScreen }) => {
+    await typingScreen.firstSlowCodeBox.type("1234", { delay: 1500 })
+    await expect(typingScreen.slowCodeValue).toHaveText("slowcode=1234")
+  })
+
   for (const held of ["ab", "a"]) {
     test(`typing into a secure field holding ${held.length} character(s) that iOS empties as it takes focus again fails instead of reporting success`, async ({ typingScreen }) => {
       await typingScreen.secureInput.type(held, { delay })

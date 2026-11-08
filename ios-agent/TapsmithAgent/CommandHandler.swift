@@ -1388,15 +1388,25 @@ class CommandHandler {
                     String(first), before: before, secure: secure, selectorParams: selectorParams
                 )
                 let rest = String(plan.keys.dropFirst())
+                // Wait out the delay before the focus check: an app can move
+                // the focus on a while after the key shows (a React Native
+                // field moves it from its JavaScript change handler), and
+                // the next key goes no sooner anyway.
+                let firstShownAt = Date()
+                if !rest.isEmpty {
+                    Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(
+                        lastSentAt: firstShownAt, delayMs: delayMs, now: Date()
+                    ))
+                }
                 if !rest.isEmpty, focusMovedOn(from: field) {
                     // A field that moves the focus on by itself (one box per
                     // digit): keys sent while the focus moves are lost, and
                     // the text ends up spread over several fields.
                     NSLog("[typeText] the focus moved on after the first key: typing the rest a key at a time")
                     try typeFollowingFocus(rest, from: field, before: before, typedBefore: String(first),
-                                           delayMs: delayMs, lastSentAt: Date())
+                                           delayMs: delayMs, lastSentAt: firstShownAt)
                 } else {
-                    if !rest.isEmpty && !sendRest(rest, delayMs: delayMs) {
+                    if !rest.isEmpty && !sendRest(rest, delayMs: delayMs, lastSentAt: firstShownAt) {
                         NSLog("[typeText] the burst of \(rest.count) key(s) could not be synthesized")
                     }
                     try checkTyped(plan.keys, before: before, secure: secure, delayMs: delayMs,
@@ -1419,9 +1429,9 @@ class CommandHandler {
     /// Send the keys after the first, `delayMs` apart: one burst of key
     /// events, or, for a delay over a second, a key at a time
     /// (`TypingCheck.burstsAtOnce`).
-    /// The first key has just shown in the field: the delay counts from there.
-    private func sendRest(_ keys: String, delayMs: Int) -> Bool {
-        var lastSentAt = Date()
+    /// The delay counts from `lastSentAt` (when the first key showed).
+    private func sendRest(_ keys: String, delayMs: Int, lastSentAt: Date) -> Bool {
+        var lastSentAt = lastSentAt
         if TypingCheck.burstsAtOnce(delayMs: delayMs) {
             Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
             return EventSynthesizer.typeKeys(keys, charactersPerSecond: TypingCheck.charactersPerSecond(delayMs: delayMs))
