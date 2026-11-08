@@ -132,16 +132,23 @@ pub(super) const DRAG_HOLD_MS: f64 = 60.0;
 #[cfg(any(target_os = "macos", test))]
 const NUDGE_BELOW: f32 = 0.5;
 /// Where a full drag starts, as a fraction of the region from the edge the
-/// finger moves away from: clear of the region's edge, so it does not start
-/// on a header or the home indicator.
+/// finger moves away from. A SwiftUI List or a UITableView runs under its
+/// see-through navigation bar and search field (the top fifth of the screen)
+/// and under a tab bar, and a drag that starts on a bar moves nothing; the old
+/// centred 0.6 swipe started a fifth in. The finger may then cross a bar: the
+/// list keeps tracking it.
 #[cfg(any(target_os = "macos", test))]
-const DRAG_START_INSET: f64 = 0.1;
+const DRAG_START_INSET: f64 = 0.25;
+/// A full drag ends at least this far inside the region's far edge.
+#[cfg(any(target_os = "macos", test))]
+const DRAG_END_INSET: f64 = 0.02;
 
 /// The path of an iOS scroll step's drag through the HID helper, idea from
 /// Speedrun's iOS agent (Apache-2.0; our own code): a 12 pt kick in 36 ms, the
 /// bulk in 156 ms, the last 40 pt slowly, then a still hold before the lift,
-/// so nothing flings. A drag of `distance` ≥ 0.5 starts 10% in from the edge
-/// the finger moves away from; a shorter one is centred on the region. The
+/// so nothing flings. A drag of `distance` ≥ 0.5 starts a quarter in from the
+/// edge the finger moves away from and stays inside the region (at most 0.73
+/// of it); a shorter one is centred on the region. The
 /// last sample is where the finger lifts. None for an empty region, an
 /// unknown direction or a non-positive distance.
 #[cfg(any(target_os = "macos", test))]
@@ -161,7 +168,9 @@ pub(super) fn hid_drag_path(
     }
     // Rounded: an f32 0.8 is 0.800000011… as an f64.
     let d = (f64::from(distance) * 1e4).round() / 1e4;
-    let d = d.clamp(0.05, 1.0 - 2.0 * DRAG_START_INSET);
+    // A full drag ends inside the region: as far as `distance` takes it from
+    // its start, at most to `DRAG_END_INSET` short of the far edge.
+    let d = d.clamp(0.05, 1.0 - DRAG_START_INSET - DRAG_END_INSET);
     let (w, h) = (r - l, b - t);
     let (cx, cy) = ((l + r) / 2.0, (t + b) / 2.0);
     let ((x0, y0), (x1, y1)) = if distance < NUDGE_BELOW {
@@ -400,12 +409,13 @@ mod tests {
         let path = hid_drag_path("up", &REGION, 0.8).unwrap();
         let first = path[0];
         let last = *path.last().unwrap();
-        // 10% in from the bottom edge, 0.8 of the region's height upward.
-        assert!((first.y - 820.0).abs() < 1e-6, "{first:?}");
-        assert!((last.y - 180.0).abs() < 1e-6, "{last:?}");
+        // A quarter in from the bottom edge, upward to 2% short of the top
+        // (0.73 of the region: 0.8 would leave it).
+        assert!((first.y - 700.0).abs() < 1e-6, "{first:?}");
+        assert!((last.y - 116.0).abs() < 1e-6, "{last:?}");
         assert_eq!(first.x, 200.0);
         assert!(path.iter().all(|s| s.x == 200.0));
-        // Monotonic in time and position; samples at most 8 ms apart.
+        // Monotonic in time and position; samples one interval apart.
         for w in path.windows(2) {
             assert!(w[1].at_ms > w[0].at_ms);
             assert!(w[1].at_ms - w[0].at_ms <= DRAG_MOVE_INTERVAL_MS + 1e-9);
@@ -452,11 +462,39 @@ mod tests {
             (p[0], *p.last().unwrap())
         };
         let (f, l) = first_last("down");
-        assert!((f.y - 180.0).abs() < 1e-6 && (l.y - 820.0).abs() < 1e-6);
+        assert!((f.y - 300.0).abs() < 1e-6 && (l.y - 884.0).abs() < 1e-6);
         let (f, l) = first_last("left");
-        assert!((f.x - 360.0).abs() < 1e-6 && (l.x - 40.0).abs() < 1e-6 && f.y == 500.0);
+        assert!((f.x - 300.0).abs() < 1e-6 && (l.x - 8.0).abs() < 1e-6 && f.y == 500.0);
         let (f, l) = first_last("right");
-        assert!((f.x - 40.0).abs() < 1e-6 && (l.x - 360.0).abs() < 1e-6);
+        assert!((f.x - 100.0).abs() < 1e-6 && (l.x - 392.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_full_drag_starts_clear_of_bars_drawn_over_the_list() {
+        // A SwiftUI List or UITableView runs under its see-through navigation
+        // bar and search field (the top ~20% of the screen) and a tab bar: a
+        // drag that starts there presses the bar and moves nothing. A full
+        // step starts a quarter in from the edge it moves away from, as far in
+        // as the old centred 0.6 swipe did or further, and stays in the list.
+        let screen = proto::Bounds {
+            left: 0,
+            top: 0,
+            right: 402,
+            bottom: 874,
+        };
+        for dir in ["up", "down"] {
+            let p = hid_drag_path(dir, &screen, 0.8).unwrap();
+            let (first, last) = (p[0], *p.last().unwrap());
+            assert!(
+                (218.0..=656.0).contains(&first.y),
+                "{dir}: starts at {first:?}"
+            );
+            assert!(last.y >= 0.0 && last.y <= 874.0, "{dir}: ends at {last:?}");
+            assert!(
+                (last.y - first.y).abs() >= 0.7 * 874.0,
+                "{dir}: still most of a list per step"
+            );
+        }
     }
 
     #[test]

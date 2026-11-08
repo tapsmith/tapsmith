@@ -29,6 +29,30 @@ describe("Native: List", () => {
     await expect(list.detail(80)).toBeVisible()
   })
 
+  // The List runs under its see-through navigation bar and search field: a
+  // scroll back up must start its drag on the rows, not on the bar.
+  describe("scrolling both ways", () => {
+    // Several scrolls of the 100-row List: more than the default 30 s.
+    test.use({ timeout: 120_000 })
+
+    test("scrollIntoView scrolls back up to a row, and finds both ends of the list", async ({ device, list }) => {
+      await list.item(60).scrollIntoView({ maxScrolls: 30 })
+      await expect(list.item(60)).toBeVisible()
+      await list.item(2).scrollIntoView({ direction: "up", maxScrolls: 30 })
+      await list.item(2).tap()
+      await expect(list.detail(2)).toBeVisible()
+      await device.getByRole("button", { name: "List" }).first().tap()
+
+      const missing = device.getByText("Item 999", { exact: true })
+      const atBottom = await missing.scrollIntoView({ direction: "down", maxScrolls: 30 }).then(() => null, (e: unknown) => e)
+      expect((atBottom as Error).message).toMatch(/reached the end of the scrollable content/)
+      await expect(list.item(100)).toBeVisible()
+      const atTop = await missing.scrollIntoView({ direction: "up", maxScrolls: 30 }).then(() => null, (e: unknown) => e)
+      expect((atTop as Error).message).toMatch(/reached the end of the scrollable content/)
+      await expect(list.item(1)).toBeVisible()
+    })
+  })
+
   test("a full swipe left deletes a row", async ({ device, list }) => {
     const box = await list.item(2).boundingBox()
     if (!box) throw new Error("Item 2 has no bounds")
