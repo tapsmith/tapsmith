@@ -100,6 +100,13 @@ enum TypingCheck {
         var value: String
     }
 
+    /// What an input shows: iOS reports an empty input's placeholder as
+    /// its value, which reads as empty (as `ElementInfo.text` does).
+    static func shownValue(_ value: String, placeholder: String?) -> String {
+        if let placeholder, !placeholder.isEmpty, value == placeholder { return "" }
+        return value
+    }
+
     /// The inputs typing went through, each once, in the order it first
     /// reached them (`frames` as read, repeats included). Frames read from
     /// the tree and from an element's whole-point bounds differ by rounding.

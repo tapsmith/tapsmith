@@ -900,7 +900,8 @@ class SnapshotElementFinder {
             .firstMatch
         guard element.exists, let snap = try? element.snapshot(),
               textInputTypes.contains(snap.elementType) else { return nil }
-        return TypingCheck.FocusedInput(frame: snap.frame, value: snap.value as? String ?? "")
+        let value = TypingCheck.shownValue(snap.value as? String ?? "", placeholder: snap.placeholderValue)
+        return TypingCheck.FocusedInput(frame: snap.frame, value: value)
     }
 
     private func findLiveFocusedTextInput() -> LiveFocusedTextInput? {

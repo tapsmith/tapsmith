@@ -42,6 +42,14 @@ do {
     expect("no delay, no wait", TypingCheck.waitBeforeKey(lastSentAt: sent, delayMs: 0, now: sent) == 0)
 }
 
+// An empty input reports its placeholder as its value; it reads as empty.
+do {
+    expect("a value equal to the placeholder reads as empty", TypingCheck.shownValue("–", placeholder: "–") == "")
+    expect("a typed value reads as itself", TypingCheck.shownValue("1", placeholder: "–") == "1")
+    expect("no placeholder, no change", TypingCheck.shownValue("1", placeholder: nil) == "1")
+    expect("an empty placeholder is not a match", TypingCheck.shownValue("", placeholder: "") == "")
+}
+
 // Retyping across fields empties each field once.
 do {
     let a = CGRect(x: 10, y: 10, width: 40, height: 40)

@@ -1660,8 +1660,7 @@ class CommandHandler {
         for frame in frames {
             guard let input = inputs.first(where: { OcclusionAnalyzer.framesMatch($0.frame, frame, tolerance: 1.5) })
             else { return nil }
-            var value = input.value as? String ?? ""
-            if let placeholder = input.placeholderValue, value == placeholder { value = "" }
+            let value = TypingCheck.shownValue(input.value as? String ?? "", placeholder: input.placeholderValue)
             values.append((value, input.elementType == .secureTextField))
         }
         return values
