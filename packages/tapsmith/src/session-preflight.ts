@@ -351,6 +351,12 @@ const HOOKS_PROBE_POLL_MS = 3_000;
 export interface EnsureSessionReadyOptions {
   onRecovery?: (error: unknown) => void
   /**
+   * Called whenever the check (re)launches the app — an inline relaunch of an
+   * app that was no longer in front, or a session recovery. The app is then on
+   * its launch screen, whatever screen it was left on.
+   */
+  onRelaunch?: () => void
+  /**
    * Delay (ms) before recovery attempt N (the last entry is reused when
    * attempts exceed the list). Defaults to {@link DEFAULT_RETRY_BACKOFF_MS};
    * overridable so unit tests don't sleep for real.
@@ -569,7 +575,7 @@ export async function ensureSessionReady(
         // agent), and a stale detail would then describe the wrong attempt on
         // the end event.
         progress.setDetail(undefined);
-        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs);
+        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs, options.onRelaunch);
         return;
       } catch (err) {
         lastError = err;
@@ -581,6 +587,9 @@ export async function ensureSessionReady(
         // immediate retry lands inside the same drop window (PILOT-282).
         await delay(backoff[attempt - 1] ?? backoff.at(-1) ?? 0);
         try {
+          // Before the call: a recovery that fails part-way may already have
+          // relaunched the app.
+          options.onRelaunch?.();
           await recoverSession(ctx);
           recovered = true;
         } catch (recoveryErr) {
@@ -773,10 +782,17 @@ export async function executeAppReset(
   }
 
   if (options.prepared && satisfies(options.prepared.policy, policy)) {
-    await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
+    let relaunched = false;
+    await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, {
+      onRelaunch: () => { relaunched = true; },
+    }));
     // The prepared state stands, but not necessarily on this scope's start
-    // route: one navigation instead of a whole reset.
-    if (policy.route !== undefined && action.kind !== 'none' && options.prepared.policy.route !== policy.route) {
+    // route: one navigation instead of a whole reset. An app the readiness
+    // check had to relaunch is on its launch screen, whatever was prepared.
+    if (policy.route !== undefined && action.kind !== 'none'
+      && (relaunched || options.prepared.policy.route !== policy.route)) {
+      // A link sent into a still-booting app is lost.
+      if (relaunched) await step('waitForAppReady', () => waitForAppReady(ctx));
       await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
     }
     const when = new Date(options.prepared.preparedAt).toLocaleTimeString();
@@ -1127,6 +1143,7 @@ async function verifySession(
   iosForegroundProbe?: Partial<IosForegroundProbeTiming>,
   tally?: ProbeLatencyTally,
   dialogs: BlockingDialogTally = { dismissals: 0, seen: new Map() },
+  onRelaunch?: () => void,
 ): Promise<void> {
   const pong = await ctx.client.ping();
   if (!pong.agentConnected) {
@@ -1155,6 +1172,7 @@ async function verifySession(
       }
       if (state !== 'foreground') {
         try {
+          onRelaunch?.();
           await ctx.device.launchApp(ctx.config.package);
         } catch (err) {
           // The probe answered; the relaunch is what broke. Drop the probe
@@ -1192,6 +1210,7 @@ async function verifySession(
         // recovery destroys beforeAll-established state) escalate to a
         // whole-file retry. A genuinely broken session fails the relaunch or
         // the readiness wait below, and THAT propagates into real recovery.
+        onRelaunch?.();
         await ctx.device.launchApp(ctx.config.package);
         const relaunched = await waitForHierarchy(ctx.client);
         await waitForAndroidAppHierarchy(ctx, relaunched.hierarchyXml, ctx.config.package, dialogs);

@@ -532,6 +532,45 @@ describe('session-preflight', () => {
       expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
     });
 
+    describe('a prepared device the readiness check relaunched opens the route again', () => {
+      // The app stopped before adoption: it is on its launch screen now,
+      // whatever route the preparation left it on.
+      const prepared = () => ({ policy: route(WARM_FILE, '/settings'), preparedAt: Date.now(), durationMs: 1_000, source: 'the entry reset' });
+
+      it('iOS: the app was no longer in the foreground', async () => {
+        const ctx = hooked({ config: { package: 'com.example.app', platform: 'ios' } });
+        vi.mocked(ctx.device.getAppState).mockResolvedValueOnce('notRunning' as never);
+
+        await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared: prepared() });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        expect(ctx.device._resetApp).not.toHaveBeenCalled();
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+
+      it('Android: the app was gone from the screen', async () => {
+        const ctx = hooked();
+        vi.mocked(ctx.device.currentPackage).mockResolvedValueOnce('com.android.launcher');
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce({
+          requestId: '1', hierarchyXml: '<hierarchy><node package="com.android.launcher" text="Apps" /></hierarchy>', errorMessage: '',
+        });
+
+        await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared: prepared() });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+
+      it('a recovered session', async () => {
+        const ctx = hooked();
+        vi.mocked(ctx.client.ping).mockResolvedValueOnce({ version: '0.1.0', agentConnected: false });
+
+        await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared: prepared() });
+
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+    });
+
     it('appReset none does not navigate (no reset ran to land anywhere)', async () => {
       const ctx = hooked();
       const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'startup launch' };
