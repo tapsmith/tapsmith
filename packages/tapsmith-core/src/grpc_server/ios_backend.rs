@@ -1375,8 +1375,10 @@ impl DeviceBackend for IosBackend<'_> {
                     }
                 } else if has_keychain {
                     debug!(%pkg, "Archive contains keychain state but TAPSMITH_NO_KEYCHAIN_STATE is set; skipping keychain restore");
+                    timer.note("keychain", "disabled");
                 } else {
                     debug!(%pkg, "Archive has no keychain member (saved by an older version); skipping keychain restore");
+                    timer.note("keychain", "none");
                 }
                 info!(%pkg, %local_path, container, "iOS simulator app state restored");
                 timer.succeed();
