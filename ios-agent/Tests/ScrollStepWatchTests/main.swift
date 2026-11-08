@@ -123,6 +123,76 @@ expect("a sub-point difference does not change it",
        ScrollStepWatch.fingerprint(rows, in: list)
            == ScrollStepWatch.fingerprint(rows.map { (frame: $0.frame.offsetBy(dx: 0, dy: 0.3), label: $0.label) }, in: list))
 
+// A UIKit table hands back its reused cells' children in another order after
+// a drag, at rest at the same frames: not a move (QA F2).
+expect("the same nodes in another order give the same fingerprint",
+       ScrollStepWatch.fingerprint(rows, in: list) == ScrollStepWatch.fingerprint(rows.reversed(), in: list))
+
+// ─── regionNodes ───
+
+struct Node { let frame: CGRect; let label: String; let children: [Node]; var scrolls = false; var cell = false }
+let navBar = Node(frame: CGRect(x: 0, y: 62, width: 400, height: 106), label: "Title", children: [])
+let table = Node(frame: CGRect(x: 0, y: 168, width: 400, height: 672), label: "", children: [
+    Node(frame: frame(200), label: "Row 1", children: []),
+    Node(frame: frame(244), label: "Row 2", children: []),
+], scrolls: true)
+let tree = Node(frame: CGRect(x: 0, y: 0, width: 400, height: 874), label: "App", children: [navBar, table])
+let tableRegion = CGRect(x: 0, y: 168, width: 400, height: 672)
+let inTable = ScrollStepWatch.regionNodes(root: tree, children: \.children, frame: \.frame, label: \.label, isScrollView: \.scrolls, isCell: \.cell, region: tableRegion)
+expect("only the scroll container's own subtree counts when one has the region's frame",
+       inTable.map(\.label).sorted() == ["", "Row 1", "Row 2"])
+let movedBar = Node(frame: CGRect(x: 0, y: 61, width: 400, height: 108), label: "Title", children: [])
+let tree2 = Node(frame: tree.frame, label: "App", children: [movedBar, table])
+expect("a bar over the list that moves a point is not the list moving",
+       ScrollStepWatch.fingerprint(inTable, in: tableRegion)
+           == ScrollStepWatch.fingerprint(
+               ScrollStepWatch.regionNodes(root: tree2, children: \.children, frame: \.frame, label: \.label, isScrollView: \.scrolls, isCell: \.cell, region: tableRegion),
+               in: tableRegion))
+let noMatch = ScrollStepWatch.regionNodes(root: tree, children: \.children, frame: \.frame, label: \.label,
+                                          isScrollView: \.scrolls, isCell: \.cell, region: CGRect(x: 0, y: 0, width: 400, height: 150))
+expect("with no scroll view covering half the region, every node counts", noMatch.count == 5)
+
+// A full-screen List: the window and a non-scrolling overlay share its frame.
+let screenRect = CGRect(x: 0, y: 0, width: 400, height: 874)
+let fullList = Node(frame: screenRect, label: "", children: [Node(frame: frame(300), label: "Row 9", children: [])], scrolls: true)
+let overlay = Node(frame: screenRect, label: "overlay", children: [])
+let fullTree = Node(frame: screenRect, label: "App", children: [Node(frame: screenRect, label: "Window", children: [fullList, overlay])])
+let picked = ScrollStepWatch.regionNodes(root: fullTree, children: \.children, frame: \.frame, label: \.label, isScrollView: \.scrolls, isCell: \.cell, region: screenRect)
+expect("a full-screen list's own subtree counts, not a same-sized view that does not scroll",
+       picked.map(\.label).sorted() == ["", "Row 9"])
+
+// QA F2: a UITableView's scroll indicator resized by a point after a drag at the top.
+let indicator = (frame: CGRect(x: 396, y: 171, width: 3, height: 81), label: "")
+let indicatorAfter = (frame: CGRect(x: 396, y: 171, width: 3, height: 80), label: "")
+expect("a scroll indicator changing is not the list moving",
+       ScrollStepWatch.fingerprint(rows + [indicator], in: list) == ScrollStepWatch.fingerprint(rows + [indicatorAfter], in: list))
+
+// QA F2: an unloaded UITableView row reports its contents at a placeholder
+// frame at the table's origin, and which rows those are changes every drag.
+func tableWith(unloaded label: String) -> Node {
+    Node(frame: CGRect(x: 0, y: 168, width: 400, height: 672), label: "", children: [
+        Node(frame: frame(200), label: "Row 1", children: [], cell: true),
+        Node(frame: CGRect(x: 0, y: 2000, width: 400, height: 44), label: label, children: [
+            Node(frame: CGRect(x: 0, y: 168, width: 58, height: 20), label: label, children: []),
+        ], cell: true),
+    ], scrolls: true)
+}
+let before = ScrollStepWatch.regionNodes(root: tableWith(unloaded: "Row 42"), children: \.children, frame: \.frame, label: \.label,
+                                         isScrollView: \.scrolls, isCell: \.cell, region: tableRegion)
+let after = ScrollStepWatch.regionNodes(root: tableWith(unloaded: "Row 76"), children: \.children, frame: \.frame, label: \.label,
+                                        isScrollView: \.scrolls, isCell: \.cell, region: tableRegion)
+expect("an unloaded row's placeholder contents are not the table moving",
+       ScrollStepWatch.fingerprint(before, in: tableRegion) == ScrollStepWatch.fingerprint(after, in: tableRegion))
+
+// A table under a large-title bar: its frame grows as the title collapses,
+// away from the region read before the scroll. It is still the container.
+let grownTable = Node(frame: CGRect(x: 0, y: 116, width: 400, height: 724), label: "", children: table.children, scrolls: true)
+let grownTree = Node(frame: tree.frame, label: "App", children: [navBar, grownTable])
+let inGrown = ScrollStepWatch.regionNodes(root: grownTree, children: \.children, frame: \.frame, label: \.label,
+                                          isScrollView: \.scrolls, isCell: \.cell, region: tableRegion)
+expect("a scroll container whose frame drifted from the region is still the one watched",
+       inGrown.map(\.label).sorted() == ["", "Row 1", "Row 2"])
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)

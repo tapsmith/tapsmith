@@ -551,19 +551,23 @@ class SnapshotElementFinder {
     /// (PILOT-998): taken before the step's drag, by the read before it.
     private var lastSnapshot: XCUIElementSnapshot?
 
-    /// `ScrollStepWatch.fingerprint` of the last snapshot's nodes inside
-    /// `region`; nil before any snapshot.
+    /// `ScrollStepWatch.fingerprint` of the last snapshot's nodes in the
+    /// scroll container at `region` (`ScrollStepWatch.regionNodes`); nil
+    /// before any snapshot.
     func lastSnapshotFingerprint(in region: CGRect) -> Int? {
         lock.lock()
         let last = lastSnapshot
         lock.unlock()
         guard let root = last else { return nil }
-        var nodes: [(frame: CGRect, label: String)] = []
-        var stack: [XCUIElementSnapshot] = [root]
-        while let node = stack.popLast() {
-            nodes.append((frame: node.frame, label: node.label))
-            stack.append(contentsOf: node.children.reversed())
-        }
+        let nodes = ScrollStepWatch.regionNodes(
+            root: root,
+            children: { $0.children },
+            frame: { $0.frame },
+            label: { $0.label },
+            isScrollView: { [.scrollView, .table, .collectionView, .webView].contains($0.elementType) },
+            isCell: { $0.elementType == .cell },
+            region: region
+        )
         return ScrollStepWatch.fingerprint(nodes, in: region)
     }
 

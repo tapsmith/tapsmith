@@ -6708,6 +6708,22 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
       expect(swipe).not.toHaveBeenCalled();
     });
 
+    it("stops at the end of a table whose screen read never repeats, once two steps saw the table hold still", async () => {
+      // A UITableView hands back its reused cells' children in another order
+      // after every drag, and a large-title bar can shift a point, so the
+      // screen read never matches the one before (PILOT-929's check): the
+      // step's own judgement of its list, made at rest, decides.
+      let n = 0;
+      const changing = vi.fn(async () => ({ requestId: '1', hierarchyXml: table(n++), errorMessage: '' }));
+      const scrollStep = steps([{ elements: [] }, { elements: [], moved: 'MOVED_NO' }]);
+      const client = makeMockClient({ scrollStep, getUiHierarchy: changing, findElements: vi.fn(async () => makeFindElementsResponse([])) });
+
+      await expect(handle(client, 'ios').scrollIntoView({ direction: 'up', maxScrolls: 10 })).rejects.toThrow(
+        /reached the end of the scrollable content.*after 3 scroll\(s\) in direction "up"/,
+      );
+      expect(scrollStep).toHaveBeenCalledTimes(3);
+    });
+
     it('swipes when nothing on screen scrolls, as there is no container to step in', async () => {
       const scrollStep = steps([{ elements: [cell(500, true)] }]);
       const swipe = vi.fn(async () => successResponse());

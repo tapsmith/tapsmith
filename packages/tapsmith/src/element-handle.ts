@@ -3957,6 +3957,8 @@ export class ElementHandle {
       // What the last swipe's step said about the list under the finger;
       // undefined after a plain swipe.
       let lastStepMoved: ScrollStepResponse['moved'] | undefined;
+      // How many steps in a row saw their list hold still (MOVED_NO).
+      let stillSteps = 0;
       // One step: true when the device made it (its find stands as the next
       // probe), false when it cannot make steps.
       const step = async (findFirst: boolean): Promise<boolean> => {
@@ -3973,6 +3975,7 @@ export class ElementHandle {
         if (res.swiped) {
           swipes++;
           lastStepMoved = res.moved;
+          stillSteps = res.moved === 'MOVED_NO' ? stillSteps + 1 : 0;
           if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
           // The container the agent picked, when the step had none.
           const r = res.region;
@@ -3994,6 +3997,7 @@ export class ElementHandle {
         settleExtraTicks = 0;
         lastStepMoved = undefined;
         if (stepsFit() && (await step(false))) return;
+        stillSteps = 0;
         const opts = gentle
           ? { speed: Math.min(speed, SCROLL_GENTLE_MAX_SPEED), distance: SCROLL_GENTLE_DISTANCE }
           : { speed, distance: 0.6 };
@@ -4251,6 +4255,18 @@ export class ElementHandle {
             await swipe();
             continue;
           }
+        }
+        // Two iOS steps in a row that saw their list at rest and unchanged
+        // (the agent compares the scroll container's own tree, in any order)
+        // are the end of the content. The screen read below can miss it
+        // there: a UITableView hands back its reused cells' children in
+        // another order after every drag, and a large-title bar can shift a
+        // point, so no read ever matches the one before. On Android "no
+        // scroll event" is weaker evidence (a view may scroll without one),
+        // so the screen read alone decides.
+        if (platform === 'ios' && stillSteps >= 2 && !overshot) {
+          reachedEnd = true;
+          break;
         }
         // Affirmative miss. Read the screen: unchanged since before the last
         // swipe means that swipe moved nothing, so more of them will not
