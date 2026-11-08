@@ -609,6 +609,7 @@ export async function openDeviceSession(
       networkTracingEnabled,
       capabilities,
       notices: [],
+      relaunches: { count: 0 },
     },
     daemonProcess: opts.daemonProcess,
     agentPort: opts.agentPort,

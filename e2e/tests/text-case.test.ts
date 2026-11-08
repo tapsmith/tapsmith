@@ -6,18 +6,16 @@
  * the "Welcome to Expo" heading.
  */
 import { beforeEach, describe, expect, test } from "tapsmith"
-import { openScreen } from "../utils/app-reset.js"
 import { TextMatchingScreen } from "../screens/text-matching.screen.js"
 
 describe("Case-insensitive substring getByText (PILOT-522)", () => {
   // Tests tap counters on one screen, so each needs a fresh app state.
-  test.use({ appResetScope: "test" })
+  test.use({ appResetScope: "test", appResetRoute: "/text-matching" })
 
   let screen: TextMatchingScreen
 
   beforeEach(async ({ device }) => {
     screen = new TextMatchingScreen(device)
-    await openScreen(device, "/text-matching")
   })
 
   test("getByText finds textTransform-uppercased text typed in any case", async ({ device }) => {

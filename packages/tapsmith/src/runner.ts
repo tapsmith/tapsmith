@@ -42,7 +42,7 @@ import {
   type PreparedState,
   type ResetCapabilities,
 } from './app-reset.js';
-import { collectAnsweredSystemDialogs, executeAppReset, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
+import { collectAnsweredSystemDialogs, executeAppReset, reopenStartRoute, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
 import { deviceGroupSize, resolveDeviceGroup, validateAppResetOptions, validateDevicesOption, validateRecordingModes } from './config.js';
 import { type AttemptToken } from './attempt-fence.js';
 import { isRunnerTimeoutError, runBounded } from './run-bounded.js';
@@ -1295,6 +1295,13 @@ export interface RunOptions {
    * scope inheriting the parent's policy must reset back to it.
    */
   _applied?: { current?: AppResetPolicy };
+  /**
+   * @internal — the start route (`appResetRoute`) the most recent reset left
+   * the device on, until the next test starts. The embedder's own readiness
+   * check (`beforeEachTest`) can relaunch the app in between, putting it back
+   * on its launch screen; the runner then opens the route again.
+   */
+  _startRoute?: { pending?: string };
   /** @internal Warnings from preflight notices, waiting for the next test result. */
   _preflightWarnings?: string[];
   /**
@@ -2056,10 +2063,34 @@ async function runTracedAppReset(
     // holder would be discarded with a rethrown infra error).
     if (failure) throw failure.reason;
     drainPreflightNotices(opts, collector);
+    if (opts._startRoute) {
+      opts._startRoute.pending = policy.route !== undefined && appResetAction(policy).kind !== 'none' ? policy.route : undefined;
+    }
     return reports;
   } finally {
     collector?.endGroup();
   }
+}
+
+function relaunchCounts(opts: RunOptions): Map<string, number> {
+  return new Map(resettableDevices(opts).map((rd) => [rd.name, rd.sessionContext.relaunches.count]));
+}
+
+/**
+ * The reset left the app on its start route, then the embedder's readiness
+ * check (`beforeEachTest`) relaunched it — onto its launch screen. Open the
+ * route again on each device that was relaunched, so the test still starts
+ * where the scope declared.
+ */
+async function reopenStartRouteAfterRelaunch(opts: RunOptions, before: Map<string, number>): Promise<void> {
+  const route = opts._startRoute?.pending;
+  if (route === undefined) return;
+  await Promise.all(resettableDevices(opts)
+    .filter((rd) => rd.sessionContext.relaunches.count !== before.get(rd.name))
+    .map((rd) => reopenStartRoute(
+      { ...rd.sessionContext, config: { ...opts.config, device: rd.serial ?? opts.config.device } },
+      route,
+    )));
 }
 
 
@@ -2889,12 +2920,16 @@ async function runSuiteContext(
           // Setup work that may issue device actions (e.g. ensureSessionReady
           // in UI worker mode). Runs inside the beforeEach group.
           if (opts.beforeEachTest) {
+            const relaunchesBefore = relaunchCounts(opts);
             try {
               await opts.beforeEachTest(fullName);
             } finally {
               drainPreflightNotices(opts, traceCollector);
             }
+            await reopenStartRouteAfterRelaunch(opts, relaunchesBefore);
           }
+          // The test now owns the screen: a later relaunch is not the reset's.
+          if (opts._startRoute) opts._startRoute.pending = undefined;
 
           // Give the device a moment to go idle before each test, so the
           // previous test's toasts, animations and async work settle before
@@ -3976,6 +4011,7 @@ async function runTestFileOwned(
     testFilePath: filePath,
     _prepared: new Map(opts.devices.flatMap((d) => (d.prepared ? [[d.name, d.prepared] as const] : []))),
     _applied: {},
+    _startRoute: {},
     _abortFileController: abortFileController,
     abortSignal: abortFileController
       ? (opts.abortSignal

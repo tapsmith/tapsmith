@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useTapsmithResetEpoch } from "@tapsmith/react-native"
+import { useEffect, useRef, useState } from "react"
 import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from "react-native"
 
 export default function TogglesScreen() {
@@ -12,13 +13,30 @@ export default function TogglesScreen() {
 
   const [selectedSize, setSelectedSize] = useState("medium")
 
+  // A warm reset that lands on this screen (`appResetRoute: "/toggles"`)
+  // navigates here rather than remounting, so put the screen back to its
+  // initial state, scrolled to the top, when the epoch moves.
+  const scrollRef = useRef<ScrollView>(null)
+  const resetEpoch = useTapsmithResetEpoch()
+  useEffect(() => {
+    if (resetEpoch === 0) return
+    setDarkMode(false)
+    setNotifications(true)
+    setSound(true)
+    setVibration(false)
+    setAgreed(false)
+    setNewsletter(false)
+    setSelectedSize("medium")
+    scrollRef.current?.scrollTo({ y: 0, animated: false })
+  }, [resetEpoch])
+
   const statusText = [
     darkMode ? "Dark mode on" : "Dark mode off",
     notifications ? "Notifications on" : "Notifications off",
   ].join(", ")
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView ref={scrollRef} style={styles.container}>
       <Text style={styles.sectionHeader} accessibilityRole="header">
         Switches
       </Text>

@@ -122,6 +122,21 @@ class CommandHandler {
         return false
     }
 
+    /// Wait between polls by running the main RunLoop rather than blocking
+    /// it: XCTest delivers its accessibility (XPC) replies on this RunLoop,
+    /// so a `Thread.sleep` here can hold back the very update a poll is
+    /// waiting to see. Falls back to sleeping when the RunLoop has no input
+    /// source to run (it would otherwise return at once and spin).
+    private static func pollWait(_ seconds: TimeInterval) {
+        let until = Date(timeIntervalSinceNow: seconds)
+        while Date() < until {
+            if !RunLoop.current.run(mode: .default, before: until) {
+                Thread.sleep(until: until)
+                return
+            }
+        }
+    }
+
     private func safeAppState(_ app: XCUIApplication) -> XCUIApplication.State {
         var state: XCUIApplication.State = .unknown
         _ = ObjCExceptionCatcher.catchException {
@@ -218,23 +233,25 @@ class CommandHandler {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
-                // Dialog accepted — re-check on the next iteration.
-            } else {
-                var acknowledged = false
-                _ = ObjCExceptionCatcher.catchException {
-                    guard let snapshot = try? app.snapshot(),
-                          let marker = self.hooksMarker(in: snapshot),
-                          let nav = marker.nav else { return }
-                    if let bootBefore, let boot = marker.boot, boot != bootBefore {
-                        acknowledged = nav >= 1
-                    } else {
-                        acknowledged = nav > navBefore
-                    }
+            // Read the marker first: a warm delivery is almost always
+            // acknowledged by the time `open(url)` returns, and the
+            // SpringBoard query for the "Open in" prompt costs ~70 ms that
+            // only a delivery the prompt is still gating needs to pay.
+            var acknowledged = false
+            _ = ObjCExceptionCatcher.catchException {
+                guard let snapshot = try? app.snapshot(),
+                      let marker = self.hooksMarker(in: snapshot),
+                      let nav = marker.nav else { return }
+                if let bootBefore, let boot = marker.boot, boot != bootBefore {
+                    acknowledged = nav >= 1
+                } else {
+                    acknowledged = nav > navBefore
                 }
-                if acknowledged { return true }
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            if acknowledged { return true }
+            // Dialog accepted: re-check at once.
+            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            Self.pollWait(0.2)
         }
         return false
     }
@@ -261,26 +278,26 @@ class CommandHandler {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
-                // Dialog accepted — re-check on the next iteration.
-            } else {
-                var outcome: HooksEpochOutcome?
-                _ = ObjCExceptionCatcher.catchException {
-                    guard let snapshot = try? app.snapshot(),
-                          let marker = self.hooksMarker(in: snapshot),
-                          self.hooksAcknowledged(
-                              epoch: marker.epoch, boot: marker.boot,
-                              epochBefore: epochBefore, bootBefore: bootBefore
-                          ) else { return }
-                    if let err = marker.err {
-                        outcome = .hookError(err)
-                    } else {
-                        outcome = .acknowledged(marker.epoch)
-                    }
+            // Marker first, the "Open in" prompt only when it has not
+            // acknowledged yet (see waitForHooksNav).
+            var outcome: HooksEpochOutcome?
+            _ = ObjCExceptionCatcher.catchException {
+                guard let snapshot = try? app.snapshot(),
+                      let marker = self.hooksMarker(in: snapshot),
+                      self.hooksAcknowledged(
+                          epoch: marker.epoch, boot: marker.boot,
+                          epochBefore: epochBefore, bootBefore: bootBefore
+                      ) else { return }
+                if let err = marker.err {
+                    outcome = .hookError(err)
+                } else {
+                    outcome = .acknowledged(marker.epoch)
                 }
-                if let outcome { return outcome }
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            if let outcome { return outcome }
+            // Dialog accepted: re-check at once.
+            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            Self.pollWait(0.2)
         }
         return .timedOut
     }
@@ -2805,7 +2822,7 @@ class CommandHandler {
             let ackNavGreaterThan = (params["ackNavGreaterThan"] as? NSNumber)?.uint64Value
             let ackBootBefore = params["ackBootBefore"] as? String
             let targetApp = XCUIApplication(bundleIdentifier: bundleId)
-            _ = safeAppState(targetApp)
+            let stateBefore = safeAppState(targetApp)
             QuiescenceDisabler.disable(for: targetApp)
 
             if deliverInProcess {
@@ -2836,7 +2853,13 @@ class CommandHandler {
 
                 _ = ObjCExceptionCatcher.catchException {
                     targetApp.activate()
-                    Thread.sleep(forTimeInterval: 0.15)
+                    // Let an app brought back from the background settle
+                    // before the URL arrives. One that was already in front
+                    // (every per-test reset and in-test link) has nothing to
+                    // settle: activate() returns at once for it.
+                    if stateBefore != .runningForeground {
+                        Thread.sleep(forTimeInterval: 0.15)
+                    }
                     targetApp.open(url)
                 }
 

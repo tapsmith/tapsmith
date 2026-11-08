@@ -4406,6 +4406,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             },
             wait_for_idle: req.wait_for_idle,
             idle_timeout_ms,
+            target_reached: std::sync::atomic::AtomicBool::new(false),
         };
         let consumes_streak = plan.consumes_warm_failure_streak;
         let outcome = app_reset::run_ladder(&ops, plan, req.allow_fallback).await;
@@ -4470,6 +4471,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             // silently downgrading whole files to clear resets under load).
             // Only markers with a reset hook count — the deep-link nav probe
             // may have remembered an empty-`url=` marker.
+            target_reached: outcome.error.is_none()
+                && outcome.mode_used == app_reset::ResetMode::Warm
+                && ops
+                    .target_reached
+                    .load(std::sync::atomic::Ordering::Relaxed),
             hooks_detected: marker.is_some()
                 || self
                     .last_hooks_marker
@@ -6869,6 +6875,10 @@ struct ServiceResetOps<'a> {
     target_path: String,
     wait_for_idle: bool,
     idle_timeout_ms: u64,
+    /// Set when the warm-hooks rung was acknowledged on `target_path` itself,
+    /// not on the root route it re-delivers to when the target hides the
+    /// marker (`ResetAppResponse.target_reached`).
+    target_reached: std::sync::atomic::AtomicBool,
 }
 
 impl ServiceResetOps<'_> {
@@ -7016,10 +7026,14 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
                 *self.svc.last_hooks_marker.write().await = Some(after.clone());
                 match after.err {
                     Some(err) => Err(format!("in-app reset reported an error: {err}")),
-                    None => Ok(app_reset::WarmAck {
-                        epoch: after.epoch,
-                        process_recreated: recreated,
-                    }),
+                    None => {
+                        self.target_reached
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        Ok(app_reset::WarmAck {
+                            epoch: after.epoch,
+                            process_recreated: recreated,
+                        })
+                    }
                 }
             }
             Some(_) => Err("in-app reset did not advance its epoch".to_string()),
@@ -7042,6 +7056,8 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
                     remembered.epoch += 1;
                     *self.svc.last_hooks_marker.write().await = Some(remembered);
                 }
+                self.target_reached
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 // The boot token is unknown here; `cold` already says whether
                 // the plan relaunched.
                 Ok(app_reset::WarmAck {

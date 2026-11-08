@@ -90,6 +90,7 @@ export interface RunFileUseOptions {
   appState?: string
   appReset?: AppResetMode
   appResetScope?: AppResetScope
+  appResetRoute?: string
   appResetColdEvery?: number
   baseURL?: string
   extraHTTPHeaders?: Record<string, string>
@@ -408,6 +409,7 @@ export interface SerializedConfig {
   resetAppWaitMs?: number
   appReset?: AppResetMode
   appResetScope?: AppResetScope
+  appResetRoute?: string
   appResetColdEvery?: number
   baseURL?: string
   extraHTTPHeaders?: Record<string, string>
@@ -452,6 +454,7 @@ export function serializeConfig(config: TapsmithConfig): SerializedConfig {
     resetAppWaitMs: config.resetAppWaitMs,
     appReset: config.appReset,
     appResetScope: config.appResetScope,
+    appResetRoute: config.appResetRoute,
     appResetColdEvery: config.appResetColdEvery,
     baseURL: config.baseURL,
     extraHTTPHeaders: config.extraHTTPHeaders,
@@ -495,6 +498,7 @@ export function configFromSerialized(s: SerializedConfig, daemonAddress: string)
     resetAppWaitMs: s.resetAppWaitMs,
     appReset: s.appReset,
     appResetScope: s.appResetScope,
+    appResetRoute: s.appResetRoute,
     appResetColdEvery: s.appResetColdEvery,
     baseURL: s.baseURL,
     extraHTTPHeaders: s.extraHTTPHeaders,
