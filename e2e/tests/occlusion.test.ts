@@ -127,11 +127,17 @@ describe("Occlusion", () => {
       await occlusionScreen.coverAndReplaceButton.tap()
       await expect(occlusionScreen.overlay).toBeVisible()
 
-      // The cover goes after 1.5 s, and "Covered action" goes with it.
-      expect(await failureOf(occlusionScreen.coveredAction.tap())).toMatch(/not found|no element/i)
+      // The cover goes after 1.5 s, and "Covered action" goes with it. React
+      // keeps the same native view and relabels it as "Replacement action",
+      // so a read of the target that straddles the swap must not be taken
+      // for the target (PILOT-1065).
+      const failure = await failureOf(occlusionScreen.coveredAction.tap())
 
+      // Where any touch went first, so a tap that wrongly succeeds shows
+      // which element took it.
       await expect(occlusionScreen.replacementAction).toBeVisible()
       await expect(occlusionScreen.counts).toHaveText(counts({}))
+      expect(failure).toMatch(/not found|no element/i)
     })
   })
 

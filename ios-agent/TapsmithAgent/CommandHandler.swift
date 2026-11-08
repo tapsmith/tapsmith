@@ -914,9 +914,16 @@ class CommandHandler {
         // A row's element bound by its place among others is read again
         // here, and the table can have reused its cells since getElement
         // checked it: plan on this read only if it is still where the match
-        // was found (RowBinding, PILOT-952).
+        // was found (RowBinding, PILOT-952). Nor on a read its own query
+        // could not have returned: the element changed while XCTest read it
+        // (React Native relabelling a reused view as the element that
+        // replaced it), and touching it would touch the replacement
+        // (LiveQueryPin, PILOT-1065).
         if let snap = try? xcElem?.snapshot(),
-           snapshotFinder.isFoundElement(element.elementId, liveFrame: snap.frame) {
+           snapshotFinder.isFoundElement(
+               element.elementId, liveFrame: snap.frame, liveLabel: snap.label, liveIdentifier: snap.identifier,
+               livePlaceholder: snap.placeholderValue ?? ""
+           ) {
             target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
         } else {
             // The live element can't be read (it unmounted, or an iOS 26 live

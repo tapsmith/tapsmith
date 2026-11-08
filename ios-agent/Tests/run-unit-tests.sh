@@ -157,6 +157,12 @@ xcrun swiftc -sdk "$SDK" \
 "$OUT/row-binding-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/LiveQueryPinTests/main.swift \
+  TapsmithAgent/LiveQueryPin.swift \
+  -o "$OUT/live-query-pin-tests"
+"$OUT/live-query-pin-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/DoubleTapRouteTests/main.swift \
   TapsmithAgent/DoubleTapRoute.swift \
   -o "$OUT/double-tap-route-tests"
