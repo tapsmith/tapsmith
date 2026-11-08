@@ -2765,10 +2765,14 @@ pub(crate) fn action_target(
     }
 }
 
-/// Extract the reserved keychain member from an app-state archive and swap
-/// it into the simulator's device-level keychain (restarting securityd so
-/// the swapped db is picked up).
-async fn restore_simulator_keychain(udid: &str, container: &str, archive_path: &str) -> Result<()> {
+/// Extract the reserved keychain member from an app-state archive and put it
+/// back into the simulator's device-level keychain (see
+/// [`ios::device::restore_keychain`]).
+async fn restore_simulator_keychain(
+    udid: &str,
+    container: &str,
+    archive_path: &str,
+) -> Result<ios::device::KeychainRestore> {
     use anyhow::{bail, Context};
 
     let keychain_dir = ios::device::simulator_keychain_dir(container).ok_or_else(|| {
@@ -2807,7 +2811,7 @@ async fn restore_simulator_keychain(udid: &str, container: &str, archive_path: &
         );
     }
     let src_dir = scratch.path().join(ios::device::KEYCHAIN_ARCHIVE_MEMBER);
-    ios::device::swap_keychain_files(udid, &keychain_dir, &src_dir).await
+    ios::device::restore_keychain(udid, &keychain_dir, &src_dir).await
 }
 
 #[tonic::async_trait]

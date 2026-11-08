@@ -927,8 +927,10 @@ impl DeviceBackend for IosBackend<'_> {
     ) -> ActionResult {
         let pkg = &req.package_name;
         let local_path = &req.path;
+        let mut timer = crate::timing::PhaseTimer::new("appstate", "save");
 
         if self.svc.is_active_ios_physical().await {
+            timer.note("target", "physical");
             // Physical devices: use `xcrun devicectl device copy from
             // --domain-type appDataContainer` to pull the app's data
             // container to a scratch directory, then tar it for
@@ -973,6 +975,7 @@ impl DeviceBackend for IosBackend<'_> {
             return match output {
                 Ok(out) if out.status.success() => {
                     info!(%pkg, %local_path, "iOS physical app state saved");
+                    timer.succeed();
                     Ok(TapsmithServiceImpl::success_action_response(request_id))
                 }
                 Ok(out) => {
@@ -997,8 +1000,15 @@ impl DeviceBackend for IosBackend<'_> {
             };
         }
         // iOS simulator: app container is on the host filesystem.
-        // Use simctl to find it, then tar it directly.
-        let container = match self.svc.get_app_container_cached(&serial, pkg).await {
+        // Use simctl to find it, then tar it directly. Finding it and
+        // terminating the app (to flush its data) are independent simctl
+        // calls, each up to seconds on a loaded host: run them together.
+        let (container, _) = tokio::join!(
+            self.svc.get_app_container_cached(&serial, pkg),
+            ios::device::terminate_app(&serial, pkg),
+        );
+        timer.phase("locate_terminate");
+        let container = match container {
             Ok(path) => path,
             Err(e) => {
                 return Ok(self
@@ -1011,9 +1021,6 @@ impl DeviceBackend for IosBackend<'_> {
                     .await);
             }
         };
-
-        // Terminate the app to flush data
-        let _ = ios::device::terminate_app(&serial, pkg).await;
 
         // Stage the simulator's device-level keychain db so the
         // archive captures keychain-backed state (Firebase Auth and
@@ -1041,6 +1048,7 @@ impl DeviceBackend for IosBackend<'_> {
                 }
             }
         }
+        timer.phase("keychain");
 
         // Create tar.gz archive of the data container, excluding
         // caches and ephemeral data that inflates the archive
@@ -1075,10 +1083,12 @@ impl DeviceBackend for IosBackend<'_> {
             .args(&tar_args)
             .output()
             .await;
+        timer.phase("tar");
 
         match output {
             Ok(out) if out.status.success() => {
                 info!(%pkg, %local_path, "iOS app state saved");
+                timer.succeed();
                 Ok(TapsmithServiceImpl::success_action_response(request_id))
             }
             Ok(out) => {
@@ -1111,8 +1121,10 @@ impl DeviceBackend for IosBackend<'_> {
     ) -> ActionResult {
         let pkg = &req.package_name;
         let local_path = &req.path;
+        let mut timer = crate::timing::PhaseTimer::new("appstate", "restore");
 
         if self.svc.is_active_ios_physical().await {
+            timer.note("target", "physical");
             // Physical: extract the archive locally, then push each
             // top-level child (`Documents`, `Library`, `tmp`) back
             // into the app container via `devicectl device copy to
@@ -1227,6 +1239,7 @@ impl DeviceBackend for IosBackend<'_> {
                     .await);
             }
             info!(%pkg, %local_path, "iOS physical app state restored");
+            timer.phase("copy");
             // Reinstalling + pushing the container replaces the app
             // bundle under the running XCUITest runner. The agent's
             // cached XCUIApplication references become stale in a
@@ -1249,13 +1262,19 @@ impl DeviceBackend for IosBackend<'_> {
                     )
                     .await);
             }
+            timer.phase("agent_restart");
+            timer.succeed();
             return Ok(TapsmithServiceImpl::success_action_response(request_id));
         }
         // iOS simulator: terminate the app, clear the data container,
-        // then extract the saved archive.
-        let _ = ios::device::terminate_app(&serial, pkg).await;
-
-        let container = match self.svc.get_app_container_cached(&serial, pkg).await {
+        // then extract the saved archive. Terminating and locating the
+        // container are independent simctl calls: run them together.
+        let (container, _) = tokio::join!(
+            self.svc.get_app_container_cached(&serial, pkg),
+            ios::device::terminate_app(&serial, pkg),
+        );
+        timer.phase("locate_terminate");
+        let container = match container {
             Ok(path) => path,
             Err(e) => {
                 return Ok(self
@@ -1277,6 +1296,7 @@ impl DeviceBackend for IosBackend<'_> {
         if let Err(e) = ios::device::clear_container(&container).await {
             warn!(%pkg, error = %e, "clear_container failed, continuing");
         }
+        timer.phase("container");
 
         // Archives saved by newer daemons carry the simulator
         // keychain under a reserved member; older archives don't,
@@ -1291,6 +1311,7 @@ impl DeviceBackend for IosBackend<'_> {
             }
             _ => false,
         };
+        timer.phase("list");
 
         // Exclude both the `./`-prefixed form (how bsdtar stores it
         // when we add it on save) and the bare form, so the keychain
@@ -1328,24 +1349,29 @@ impl DeviceBackend for IosBackend<'_> {
             .await
             .unwrap_or_else(|e| Err(std::io::Error::other(e)))
         };
+        timer.phase("extract");
 
         match output {
             Ok(out) if out.status.success() => {
                 if has_keychain && !ios::device::keychain_state_disabled() {
-                    if let Err(e) =
-                        restore_simulator_keychain(&serial, &container, local_path).await
-                    {
-                        // Failing silently here would reproduce the
-                        // half-restored auth state this feature
-                        // exists to fix — surface it instead.
-                        return Ok(self
-                            .svc
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Keychain restore failed: {e}"),
-                            )
-                            .await);
+                    let restored =
+                        restore_simulator_keychain(&serial, &container, local_path).await;
+                    timer.phase("keychain");
+                    match restored {
+                        Ok(how) => timer.note("keychain", how.as_str()),
+                        Err(e) => {
+                            // Failing silently here would reproduce the
+                            // half-restored auth state this feature
+                            // exists to fix — surface it instead.
+                            return Ok(self
+                                .svc
+                                .action_error(
+                                    request_id,
+                                    "APP_STATE_RESTORE_FAILED",
+                                    format!("Keychain restore failed: {e}"),
+                                )
+                                .await);
+                        }
                     }
                 } else if has_keychain {
                     debug!(%pkg, "Archive contains keychain state but TAPSMITH_NO_KEYCHAIN_STATE is set; skipping keychain restore");
@@ -1353,6 +1379,7 @@ impl DeviceBackend for IosBackend<'_> {
                     debug!(%pkg, "Archive has no keychain member (saved by an older version); skipping keychain restore");
                 }
                 info!(%pkg, %local_path, container, "iOS simulator app state restored");
+                timer.succeed();
                 Ok(TapsmithServiceImpl::success_action_response(request_id))
             }
             Ok(out) => {
