@@ -885,14 +885,18 @@ export async function executeAppReset(
     }
   }
 
-  await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
-  if (processRecreated || ctx.config.platform === 'ios') {
+  // A relaunch by the readiness checks below puts the app back on its launch
+  // screen, so a reset that landed on the start route no longer stands there.
+  let relaunched = false;
+  const relaunchedAfterReset = (): void => { relaunched = true; };
+  await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, { onRelaunch: relaunchedAfterReset }));
+  if (processRecreated || relaunched || ctx.config.platform === 'ios') {
     // A relaunched process is "ready" only once the app has drawn something:
     // the session check above is satisfied by a bare Activity/splash window,
     // and a deep link or hooks probe fired into a still-booting React Native
     // app is silently lost. An acknowledged warm reset needs none of this —
     // the marker epoch is the proof of rendering.
-    await step('waitForAppReady', () => waitForAppReady(ctx));
+    await step('waitForAppReady', () => waitForAppReady(ctx, relaunchedAfterReset));
   }
   if (
     action.kind !== 'warm'
@@ -909,7 +913,7 @@ export async function executeAppReset(
   }
   // Last, on a ready app (a link sent into a still-booting app is lost), and
   // after the hooks re-read above, which may have just learnt the URL prefix.
-  if (policy.route !== undefined && !routeReached) {
+  if (policy.route !== undefined && (!routeReached || relaunched)) {
     await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
   }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
@@ -1229,8 +1233,8 @@ async function verifySession(
  * dispatch: iOS polls for a non-empty hierarchy ({@link waitForIosAppReady});
  * Android polls for rendered content ({@link waitForAndroidAppReady}).
  */
-async function waitForAppReady(ctx: SessionPreflightContext): Promise<void> {
-  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx);
+async function waitForAppReady(ctx: SessionPreflightContext, onRelaunch?: () => void): Promise<void> {
+  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, onRelaunch);
   return waitForAndroidAppReady(ctx);
 }
 
@@ -1305,7 +1309,7 @@ async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<voi
  * where we know the app should be in the foreground; not used per-test
  * because tests may intentionally leave the app stopped.
  */
-async function waitForIosAppReady(ctx: SessionPreflightContext): Promise<void> {
+async function waitForIosAppReady(ctx: SessionPreflightContext, onRelaunch?: () => void): Promise<void> {
   const start = Date.now();
   const deadline = start + IOS_APP_READY_TIMEOUT_MS;
   // An "empty hierarchy" almost never means an empty tree: the daemon maps
@@ -1344,6 +1348,7 @@ async function waitForIosAppReady(ctx: SessionPreflightContext): Promise<void> {
             `[tapsmith] iOS app not in foreground (${state}) after ` +
             `${Math.round((Date.now() - start) / 1000)}s waiting for readiness; relaunching once\n`,
           );
+          onRelaunch?.();
           await ctx.device.launchApp(ctx.config.package);
         }
       } catch {

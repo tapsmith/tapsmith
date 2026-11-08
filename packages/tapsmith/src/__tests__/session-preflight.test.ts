@@ -474,6 +474,36 @@ describe('session-preflight', () => {
       expect(report.steps.map((s) => s.name)).not.toContain('openRoute');
     });
 
+    describe('a warm reset that landed on the route, then had its app relaunched by the readiness check, opens the route again', () => {
+      it('iOS: the app was no longer in the foreground', async () => {
+        const ctx = hooked({ config: { package: 'com.example.app', platform: 'ios' } });
+        vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+        vi.mocked(ctx.device.getAppState).mockResolvedValueOnce('background' as never);
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: HOOKED, errorMessage: '' });
+
+        await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test' });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+
+      it('Android: the app was gone from the screen', async () => {
+        const ctx = hooked();
+        vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+        vi.mocked(ctx.device.currentPackage).mockResolvedValueOnce('com.android.launcher');
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce({
+          requestId: '1', hierarchyXml: '<hierarchy><node package="com.android.launcher" text="Apps" /></hierarchy>', errorMessage: '',
+        });
+
+        const report = await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test' });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+        const names = report.steps.map((st) => st.name);
+        expect(names.indexOf('waitForAppReady')).toBeLessThan(names.indexOf('openRoute'));
+      });
+    });
+
     it('a warm reset that fell back to clear opens the route afterwards', async () => {
       const ctx = hooked();
       vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', {
