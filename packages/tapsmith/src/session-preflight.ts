@@ -529,9 +529,9 @@ const IOS_FOREGROUND_PROBE_BUDGET_MS = 30_000;
  *  unreachable while the per-attempt deadline is shorter; kept as defence. */
 const AGENT_SLOW_SIGNATURES = ['DEADLINE_EXCEEDED', 'Agent command timed out'];
 const HIERARCHY_POLL_INTERVAL_MS = 500;
-/** How long a cold-launched Android app gets to render its first content
- * before we proceed anyway (see {@link waitForAndroidAppReady}). */
-const ANDROID_APP_READY_TIMEOUT_MS = 10_000;
+/** How long a (re)launched app gets to render its first content before we
+ * proceed anyway (see {@link waitForRenderedContent}). */
+const APP_RENDER_READY_TIMEOUT_MS = 10_000;
 /** How much longer than its budget the `waitForAppReady` RPC may take: the
  *  daemon answers at the end of the budget at the latest, plus its own agent
  *  round-trip slack. */
@@ -902,13 +902,25 @@ export async function executeAppReset(
   let relaunched = false;
   const relaunchedAfterReset = (): void => { relaunched = true; };
   await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, { onRelaunch: relaunchedAfterReset }));
-  if (processRecreated || relaunched || ctx.config.platform === 'ios') {
-    // A relaunched process is "ready" only once the app has drawn something:
-    // the session check above is satisfied by a bare Activity/splash window,
-    // and a deep link or hooks probe fired into a still-booting React Native
-    // app is silently lost. An acknowledged warm reset needs none of this —
-    // the marker epoch is the proof of rendering.
-    await step('waitForAppReady', () => waitForAppReady(ctx, relaunchedAfterReset));
+  // A relaunched process is "ready" only once the app has drawn something:
+  // the session check above is satisfied by a bare Activity/splash window,
+  // and a deep link or hooks probe fired into a still-booting React Native
+  // app is silently lost. An acknowledged warm reset needs none of this —
+  // the marker epoch is the proof of rendering — and on iOS neither does a
+  // ladder restart/clear on a daemon that already waited for it before
+  // answering: a second agent round trip there (a full snapshot) costs every
+  // relaunch. iOS keeps only its non-empty-hierarchy check in both cases.
+  // A relaunch by the session check above came after the daemon's wait, so
+  // it always needs its own. Android keeps its own wait: its agent stops at
+  // the first rendered node, so the repeat is nearly free, and skipping it
+  // left CI's hook-less emulator still landscape after a rotation test
+  // restored portrait.
+  const daemonRendered = ctx.config.platform === 'ios'
+    && (modeUsed === 'restart' || modeUsed === 'clear')
+    && ctx.capabilities?.daemonWaitsForRender === true;
+  const rendered = (processRecreated && !daemonRendered) || relaunched;
+  if (rendered || ctx.config.platform === 'ios') {
+    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered, onRelaunch: relaunchedAfterReset }));
   }
   if (
     action.kind !== 'warm'
@@ -1259,11 +1271,14 @@ async function verifySession(
 
 /**
  * Wait for a (re)launched app to have rendered its first content. Platform
- * dispatch: iOS polls for a non-empty hierarchy ({@link waitForIosAppReady});
- * Android polls for rendered content ({@link waitForAndroidAppReady}).
+ * dispatch: iOS first needs a non-empty hierarchy ({@link waitForIosAppReady});
+ * both then wait, bounded, for rendered content ({@link waitForRenderedContent}).
  */
-async function waitForAppReady(ctx: SessionPreflightContext, onRelaunch?: () => void): Promise<void> {
-  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, onRelaunch);
+async function waitForAppReady(
+  ctx: SessionPreflightContext,
+  options: { rendered?: boolean; onRelaunch?: () => void } = {},
+): Promise<void> {
+  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, options);
   return waitForAndroidAppReady(ctx);
 }
 
@@ -1288,29 +1303,43 @@ export function androidHierarchyHasRenderedContent(hierarchyXml: string, package
  * the app's window exists — for a React Native app that is the splash,
  * seconds before the JS bundle has rendered anything. Anything sent to the
  * app in that window (a deep link, the hooks-marker probe) is lost. Wait for
- * rendered content, bounded; a first screen with no text at all simply falls
- * through after the timeout — the tests' own auto-waiting takes over.
- *
- * The daemon's `WaitForAppReady` has the agent watch the live window roots
- * (PILOT-976). A daemon that predates it, or a call that fails, gets the old
- * polling of full hierarchy dumps for what is left of the budget.
+ * rendered content, bounded (see {@link waitForRenderedContent}).
  */
 async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<void> {
   const pkg = ctx.config.package;
   if (!pkg) return;
+  await waitForRenderedContent(ctx, pkg, (xml) => androidHierarchyHasRenderedContent(xml, pkg));
+}
+
+/**
+ * Wait, bounded, for the app to draw real content; a first screen with none
+ * simply falls through after {@link APP_RENDER_READY_TIMEOUT_MS} with a
+ * breadcrumb — the tests' own auto-waiting takes over.
+ *
+ * The daemon's `WaitForAppReady` has the agent watch the app itself (Android
+ * PILOT-976, iOS PILOT-1058). A daemon or agent that predates it, or a call
+ * that fails, gets polling of full hierarchy dumps read with `hasContent` for
+ * what is left of the budget.
+ */
+async function waitForRenderedContent(
+  ctx: SessionPreflightContext,
+  pkg: string,
+  hasContent: (hierarchyXml: string) => boolean,
+): Promise<void> {
   const start = Date.now();
   const noContent = (): void => {
     process.stderr.write(
-      `[tapsmith] ${pkg} showed no rendered content ${ANDROID_APP_READY_TIMEOUT_MS}ms after launch; continuing\n`,
+      `[tapsmith] ${pkg} showed no rendered content ${APP_RENDER_READY_TIMEOUT_MS}ms after launch; continuing\n`,
     );
   };
   try {
     const answer = await ctx.client.waitForAppReady(
       pkg,
-      ANDROID_APP_READY_TIMEOUT_MS,
-      ANDROID_APP_READY_TIMEOUT_MS + APP_READY_RPC_SLACK_MS,
+      APP_RENDER_READY_TIMEOUT_MS,
+      APP_RENDER_READY_TIMEOUT_MS + APP_READY_RPC_SLACK_MS,
     );
     if (answer.supported) {
+      (ctx.capabilities ??= {}).daemonWaitsForRender = true;
       if (!answer.ready) noContent();
       return;
     }
@@ -1320,11 +1349,11 @@ async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<voi
   while (true) {
     try {
       const h = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
-      if (androidHierarchyHasRenderedContent(h.hierarchyXml ?? '', pkg)) return;
+      if (hasContent(h.hierarchyXml ?? '')) return;
     } catch {
       // Agent may still be settling after the relaunch — keep polling.
     }
-    if (Date.now() - start >= ANDROID_APP_READY_TIMEOUT_MS) {
+    if (Date.now() - start >= APP_RENDER_READY_TIMEOUT_MS) {
       noContent();
       return;
     }
@@ -1333,12 +1362,37 @@ async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<voi
 }
 
 /**
- * Wait for an iOS app to be ready after launch by polling for a non-empty
- * accessibility hierarchy. Used at the file level (after launchConfiguredApp)
- * where we know the app should be in the foreground; not used per-test
- * because tests may intentionally leave the app stopped.
+ * Wait for an iOS app to be ready after launch: first a non-empty
+ * accessibility hierarchy (the app is up), then, bounded, rendered content.
+ * Used at the file level (after launchConfiguredApp) where we know the app
+ * should be in the foreground; not used per-test because tests may
+ * intentionally leave the app stopped. `rendered: false` (an acknowledged warm
+ * reset, whose epoch already proves rendering) skips the second phase.
+ *
+ * A non-empty hierarchy alone is not "ready": a relaunched React Native app
+ * is a bare shell (application, window, empty containers) until its bundle
+ * renders. A warm deep link sent into it finds no content and falls back to a
+ * cold relaunch, and the hooks-marker read misses, pinning a hooked session
+ * to clear resets (PILOT-1058).
  */
-async function waitForIosAppReady(ctx: SessionPreflightContext, onRelaunch?: () => void): Promise<void> {
+async function waitForIosAppReady(
+  ctx: SessionPreflightContext,
+  options: { rendered?: boolean; onRelaunch?: () => void } = {},
+): Promise<void> {
+  // A relaunch inside the hierarchy phase puts the app back on a bare shell,
+  // so it needs the rendered-content phase even where the caller skipped it.
+  let relaunched = false;
+  await waitForIosAppHierarchy(ctx, () => {
+    relaunched = true;
+    options.onRelaunch?.();
+  });
+  if ((options.rendered !== false || relaunched) && ctx.config.package) {
+    await waitForRenderedContent(ctx, ctx.config.package, iosHierarchyHasRenderedContent);
+  }
+}
+
+/** The first phase of {@link waitForIosAppReady}: a non-empty hierarchy. */
+async function waitForIosAppHierarchy(ctx: SessionPreflightContext, onRelaunch?: () => void): Promise<void> {
   const start = Date.now();
   const deadline = start + IOS_APP_READY_TIMEOUT_MS;
   // An "empty hierarchy" almost never means an empty tree: the daemon maps
