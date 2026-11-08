@@ -796,6 +796,55 @@ pub async fn terminate_app(udid: &str, bundle_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// What a `simctl terminate` reported about the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SimTerminate {
+    /// simctl stopped the app; it returns once launchd has reaped it.
+    Terminated,
+    /// The app was not running ("found nothing to terminate").
+    NotRunning,
+    /// Anything else: the app's state is unknown.
+    Failed(String),
+}
+
+impl SimTerminate {
+    /// Whether the app is known not to be running afterwards.
+    pub fn app_is_stopped(&self) -> bool {
+        matches!(self, Self::Terminated | Self::NotRunning)
+    }
+}
+
+/// Read a `simctl terminate` result. simctl exits 0 once the app is gone,
+/// and fails with ESRCH ("found nothing to terminate") when it was not
+/// running; any other failure says nothing about the app.
+fn classify_simctl_terminate(success: bool, stderr: &str) -> SimTerminate {
+    if success {
+        SimTerminate::Terminated
+    } else if stderr.contains("found nothing to terminate") {
+        SimTerminate::NotRunning
+    } else {
+        SimTerminate::Failed(stderr.trim().to_string())
+    }
+}
+
+/// Terminate an app on a simulator and report what simctl said about it.
+#[instrument]
+pub async fn terminate_app_reporting(udid: &str, bundle_id: &str) -> SimTerminate {
+    match bounded_output(
+        "simctl terminate",
+        Command::new("xcrun").args(["simctl", "terminate", udid, bundle_id]),
+        SIMCTL_TIMEOUT,
+    )
+    .await
+    {
+        Ok(output) => classify_simctl_terminate(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stderr),
+        ),
+        Err(e) => SimTerminate::Failed(e.to_string()),
+    }
+}
+
 /// Open a URL on a simulator (deep link).
 #[allow(dead_code)]
 #[instrument]
@@ -1742,6 +1791,31 @@ pub async fn clear_app_data(udid: &str, bundle_id: &str, app_path: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simctl_terminate_result_says_whether_the_app_is_stopped() {
+        assert_eq!(
+            classify_simctl_terminate(true, ""),
+            SimTerminate::Terminated
+        );
+        // Real stderr from Xcode 27 for an app that is not running (exit 3).
+        let not_running = "An error was encountered processing the command \
+            (domain=NSPOSIXErrorDomain, code=3):\nSimulator device failed to terminate \
+            dev.tapsmith.testapp.\nfound nothing to terminate\n";
+        assert_eq!(
+            classify_simctl_terminate(false, not_running),
+            SimTerminate::NotRunning
+        );
+        let failed =
+            classify_simctl_terminate(false, "Unable to lookup in current state: Shutdown\n");
+        assert_eq!(
+            failed,
+            SimTerminate::Failed("Unable to lookup in current state: Shutdown".to_string())
+        );
+        assert!(SimTerminate::Terminated.app_is_stopped());
+        assert!(SimTerminate::NotRunning.app_is_stopped());
+        assert!(!failed.app_is_stopped());
+    }
 
     #[test]
     fn simctl_relaunch_terminates_the_running_process_in_the_same_call() {
