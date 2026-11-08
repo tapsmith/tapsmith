@@ -12,8 +12,12 @@ export interface KeyboardDeps {
 
 /** Longest wait for the on-screen keyboard to report it has gone. */
 const KEYBOARD_HIDE_CAP_MS = 1_000;
-/** Wait for a focused input's blur with no on-screen keyboard to watch. */
-const BLUR_SETTLE_MS = 100;
+/**
+ * Wait for a focused input's blur with no on-screen keyboard to watch (a
+ * simulator's hardware keyboard). Covers the 24-116 ms a reset link that
+ * navigates away was measured to take to deliver the input's `onBlur` on iOS.
+ */
+const BLUR_SETTLE_MS = 250;
 /**
  * Wait after `keyboardDidHide` for the input's own blur. A reset link that
  * navigates away hides the keyboard with the screen transition, and the
