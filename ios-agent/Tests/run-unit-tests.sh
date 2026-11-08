@@ -125,6 +125,12 @@ xcrun swiftc -sdk "$SDK" \
   -o "$OUT/typing-focus-tests"
 "$OUT/typing-focus-tests"
 
+xcrun swiftc -sdk "$SDK" \
+  Tests/TypingCheckTests/main.swift \
+  TapsmithAgent/TypingCheck.swift \
+  -o "$OUT/typing-check-tests"
+"$OUT/typing-check-tests"
+
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/CellFramesTests/main.swift \
