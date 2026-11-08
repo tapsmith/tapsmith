@@ -563,7 +563,14 @@ class SnapshotElementFinder {
             root: root,
             children: { $0.children },
             frame: { $0.frame },
-            label: { $0.label },
+            label: { node in
+                ScrollStepWatch.nodeKey(
+                    type: node.elementType.rawValue,
+                    identifier: node.identifier,
+                    label: node.label,
+                    value: node.value.map { String(describing: $0) } ?? ""
+                )
+            },
             isScrollView: { [.scrollView, .table, .collectionView, .webView].contains($0.elementType) },
             isCell: { $0.elementType == .cell },
             region: region

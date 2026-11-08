@@ -131,6 +131,14 @@ enum ScrollStepWatch {
         return h.finalize()
     }
 
+    /// What identifies a node in the fingerprint besides its frame: its type,
+    /// identifier, label and value, as the screen read compares every
+    /// attribute. Pages of a pager that differ only by an identifier (a
+    /// gallery of unlabelled images with test ids) then still read as moved.
+    static func nodeKey(type: UInt, identifier: String, label: String, value: String) -> String {
+        "\(type)|\(identifier)|\(label)|\(value)"
+    }
+
     /// Nodes thinner than this either way are not content (scroll indicators).
     static let minNodeThickness: CGFloat = 6
 

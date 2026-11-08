@@ -193,6 +193,12 @@ let inGrown = ScrollStepWatch.regionNodes(root: grownTree, children: \.children,
 expect("a scroll container whose frame drifted from the region is still the one watched",
        inGrown.map(\.label).sorted() == ["", "Row 1", "Row 2"])
 
+// QA review: pages of a pager that differ only by a test id.
+let page1 = [(frame: CGRect(x: 0, y: 200, width: 400, height: 300), label: ScrollStepWatch.nodeKey(type: 43, identifier: "photo-1", label: "", value: ""))]
+let page2 = [(frame: CGRect(x: 0, y: 200, width: 400, height: 300), label: ScrollStepWatch.nodeKey(type: 43, identifier: "photo-2", label: "", value: ""))]
+expect("a page that differs only by its identifier reads as moved",
+       ScrollStepWatch.fingerprint(page1, in: list) != ScrollStepWatch.fingerprint(page2, in: list))
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)
