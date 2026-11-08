@@ -702,6 +702,133 @@ class ActionExecutor(
         settleAfterSwipe(vertical = p.fromX == p.toX)
     }
 
+    // ─── scrollIntoView() steps (PILOT-998) ───
+
+    /** The whole screen, as a region. */
+    internal fun screenBox() = HierarchyAttributes.Box(0, 0, device.displayWidth, device.displayHeight)
+
+    /**
+     * A scroll step's drag inside [region] ([SwipeGeometry]): vertical ones
+     * are [GestureInjector.scrollStepDrag]s, which stop dead; a sideways one
+     * lifts ([GestureInjector.stepDrag]), so a pager still turns its page.
+     * The scroll events of the view under the drag's start point are
+     * recorded from the drag's start until [endScrollStep].
+     */
+    internal fun scrollStepDrag(
+        region: HierarchyAttributes.Box,
+        direction: String,
+        distance: Double,
+    ) {
+        val p = SwipeGeometry.points(region, direction, distance)
+        stepPoint = p.fromX to p.fromY
+        val vertical = p.fromX == p.toX
+        val ok =
+            if (vertical) {
+                input.scrollStepDrag(p.fromX, p.fromY, p.toX, p.toY, GestureInjector.STEP_DRAG_MAX_MOVES)
+            } else {
+                input.drag(p.fromX, p.fromY, p.toX, p.toY, GestureInjector.STEP_DRAG_MAX_MOVES)
+            }
+        if (!ok) throw ActionFailedException("Failed to swipe $direction: the device refused the drag")
+    }
+
+    /** Stop recording a step's scroll events. */
+    internal fun endScrollStep() {
+        stepPoint = null
+    }
+
+    /**
+     * Whether the view under the last step drag's start point scrolled at or
+     * after [sinceUptime]; null when scroll events are not being received.
+     */
+    internal fun stepScrolledSince(sinceUptime: Long): Boolean? = if (listening) lastStepScrollAt >= sinceUptime else null
+
+    /** Wait until no accessibility event has arrived for [quietMs], at most [capMs]. */
+    internal fun waitForQuiet(
+        quietMs: Long,
+        capMs: Long,
+    ) {
+        try {
+            instrumentation.uiAutomation.waitForIdle(quietMs, capMs)
+        } catch (_: java.util.concurrent.TimeoutException) {
+            // A screen that never goes quiet: read it anyway.
+        }
+    }
+
+    /**
+     * The scroll container a step drags in when the SDK sent none
+     * ([ScrollContainerPick]): one walk of the shown nodes of every window.
+     * Null when nothing on screen scrolls.
+     */
+    internal fun pickScrollContainer(): HierarchyAttributes.Box? {
+        val automation = instrumentation.uiAutomation
+        val displayWidth = device.displayWidth
+        val displayHeight = device.displayHeight
+        val windows = mutableListOf<HierarchyAttributes.Box>()
+        val candidates = mutableListOf<ScrollContainerPick.Candidate>()
+        val covers = mutableListOf<HierarchyAttributes.Box>()
+        var order = 0
+        for (window in automation.windows) {
+            val root = window.root ?: continue
+            val wr = Rect()
+            window.getBoundsInScreen(wr)
+            val windowBox = HierarchyAttributes.Box(wr.left, wr.top, wr.right, wr.bottom)
+            if (NonAppNodes.excludesWindow(window.type, window.isFocused, window.isActive, windowBox, displayWidth, displayHeight) {
+                    root.packageName
+                }
+            ) {
+                covers += windowBox
+                continue
+            }
+            val index = windows.size
+            windows += windowBox
+
+            // Depth first, in drawing order; each node with the clip and the
+            // orders of its scrolling ancestors.
+            data class Visit(
+                val node: android.view.accessibility.AccessibilityNodeInfo,
+                val clip: HierarchyAttributes.Box?,
+                val ancestors: Set<Int>,
+            )
+            val stack = ArrayDeque<Visit>()
+            stack.addLast(Visit(root, null, emptySet()))
+            while (stack.isNotEmpty()) {
+                val (node, clip, ancestors) = stack.removeLast()
+                val myOrder = order++
+                var childClip = clip
+                var childAncestors = ancestors
+                if (node.isScrollable) {
+                    val r = Rect()
+                    node.getBoundsInScreen(r)
+                    val b = HierarchyAttributes.Box(r.left, r.top, r.right, r.bottom)
+                    val shown = if (clip != null) ScrollContainerPick.intersect(b, clip) else b
+                    if (shown != null) {
+                        candidates += ScrollContainerPick.Candidate(index, shown, myOrder, ancestors)
+                        childClip = shown
+                    }
+                    childAncestors = ancestors + myOrder
+                }
+                for (i in node.childCount - 1 downTo 0) {
+                    val child = node.getChild(i) ?: continue
+                    if (child.isVisibleToUser) stack.addLast(Visit(child, childClip, childAncestors))
+                }
+            }
+        }
+        return ScrollContainerPick.pick(screenBox(), windows, candidates, covers)
+    }
+
+    /** Where the current step's drag started, while one runs. */
+    @Volatile private var stepPoint: Pair<Int, Int>? = null
+
+    /** Arrival (uptime) of the last scroll event from the view under [stepPoint]. */
+    @Volatile private var lastStepScrollAt = 0L
+
+    /** Arrival (uptime) of the last event that may mean the screen changed. */
+    @Volatile var lastChangeAt = 0L
+        private set
+
+    /** Whether the accessibility listener is installed. */
+    @Volatile private var listening = false
+
     /**
      * Arrival time (uptime) of the last TYPE_VIEW_SCROLLED event that may be
      * along each axis, recorded by [onAccessibilityEvent] for
@@ -723,14 +850,38 @@ class ActionExecutor(
         // stale values once this is installed).
         try {
             instrumentation.uiAutomation.setOnAccessibilityEventListener(::onAccessibilityEvent)
+            listening = true
         } catch (e: Exception) {
             Log.w(TAG, "Could not listen for scroll events; swipes will not wait for flings to settle", e)
         }
     }
 
     private fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (event.eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            -> {
+                lastChangeAt = SystemClock.uptimeMillis()
+                return
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {}
+            else -> return
+        }
         val now = SystemClock.uptimeMillis()
+        lastChangeAt = now
+        // A scroll step's "it moved" counts only the scroll view under the
+        // finger, not another view that scrolled meanwhile (a carousel).
+        val point = stepPoint
+        if (point != null) {
+            try {
+                val r = Rect()
+                event.source?.getBoundsInScreen(r)
+                if (r.contains(point.first, point.second)) lastStepScrollAt = now
+            } catch (_: Exception) {
+                // The view went away mid-event: not counted.
+            }
+        }
         val hasDeltas = android.os.Build.VERSION.SDK_INT >= 28
         if (!hasDeltas || SwipeSettle.isAlongAxis(event.scrollDeltaX, event.scrollDeltaY, vertical = true)) {
             lastVerticalScrollAt = now

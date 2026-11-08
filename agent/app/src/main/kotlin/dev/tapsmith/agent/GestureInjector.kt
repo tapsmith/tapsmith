@@ -46,6 +46,11 @@ data class TouchEvent(
     val pointers: List<PointerState>,
     val actionIndex: Int = 0,
     val sync: Boolean,
+    /**
+     * The event's own time, for a gesture whose samples are stamped apart
+     * from when they are sent ([GestureInjector.scrollStepDrag]); null: now.
+     */
+    val eventTime: Long? = null,
 )
 
 /** One key event to inject: a press ([down]) or a release. */
@@ -64,7 +69,7 @@ data class KeyPress(
 fun motionEventTime(
     event: TouchEvent,
     now: Long,
-): Long = if (event.action == TouchAction.DOWN) event.downTime else now
+): Long = if (event.action == TouchAction.DOWN) event.downTime else event.eventTime ?: now
 
 /** Where the agent's input events go. True when the input system accepted the event. */
 interface InputSink {
@@ -277,6 +282,31 @@ class GestureInjector(
          */
         const val DRAG_FRAME_MOVES = 2
 
+        /** A [scrollStepDrag]'s moves span this much event time (Speedrun's 50 ms drag). */
+        const val STEP_DRAG_MOVE_MS = 50L
+
+        /**
+         * Event time between a [scrollStepDrag]'s last moving sample and its
+         * first still one: more than VelocityTracker's 40 ms "the pointer
+         * stopped" gap, which clears the moving samples.
+         */
+        const val STEP_DRAG_STOP_GAP_MS = 50L
+
+        /**
+         * Event time between a [scrollStepDrag]'s two still samples: more than
+         * VelocityTracker's 100 ms horizon, so no moving sample is in it.
+         */
+        const val STEP_DRAG_HORIZON_MS = 110L
+
+        /** Real time between a [scrollStepDrag]'s moves after the frame-waited ones. */
+        const val STEP_DRAG_MOVE_GAP_MS = 8L
+
+        /** A [scrollStepDrag] makes at least this many moves… */
+        const val STEP_DRAG_MIN_MOVES = DRAG_FRAME_MOVES + 1
+
+        /** …and at most this many. */
+        const val STEP_DRAG_MAX_MOVES = 8
+
         /** Key codes that set modifier meta state while they are held, as UiAutomator sends them. */
         private val KEY_MODIFIERS =
             mapOf(
@@ -488,6 +518,87 @@ class GestureInjector(
         val upOk = single(TouchAction.UP, downTime, x, y, sync = true)
         if (!upOk) single(TouchAction.CANCEL, downTime, x, y, sync = true)
         return ok && upOk
+    }
+
+    /**
+     * scrollIntoView()'s step drag (PILOT-998; the CANCEL ending and the short
+     * drag are ideas from Speedrun's Android agent, Apache-2.0, our own code):
+     * a drag that leaves no momentum and takes ~100 ms of real time where
+     * [stepDrag] takes ~600 ms.
+     *
+     * - The press and the first [DRAG_FRAME_MOVES] moves are synchronous and
+     *   wait a display frame each, as [stepDrag]'s do, so a scrolling parent
+     *   takes the gesture over past slop.
+     * - The other moves go [STEP_DRAG_MOVE_GAP_MS] apart without waiting for
+     *   the app (the last one waits, so the app has the whole drag).
+     * - Event times are backdated: the moves span [STEP_DRAG_MOVE_MS] of event
+     *   time, then two still samples at the end point are stamped past
+     *   VelocityTracker's stop gap and its horizon, and no event is stamped
+     *   later than it is sent.
+     * - It ends with a CANCEL, not an UP: a lift after backdated samples
+     *   still flung (one drag moved a list 150 rows), while a cancelled drag
+     *   stops dead, and nothing under the finger is clicked. The cost: a
+     *   paging or snapping list stays where the finger left it, and React
+     *   Native gets no `onScrollEndDrag`. So it is kept to vertical scroll
+     *   steps; sideways swipes still lift, so a pager turns.
+     *
+     * A refused event stops the moves; the pointer is still cancelled. A
+     * cancelled command cancels the pointer and throws
+     * [CommandCancelledException].
+     */
+    fun scrollStepDrag(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        steps: Int,
+    ): Boolean {
+        val n = steps.coerceIn(STEP_DRAG_MIN_MOVES, STEP_DRAG_MAX_MOVES)
+        val xStep = (x2 - x1).toDouble() / n
+        val yStep = (y2 - y1).toDouble() / n
+        // Every event time is at or before the real time it is sent: the
+        // last still sample is stamped this far after the press.
+        val span = STEP_DRAG_MOVE_MS + STEP_DRAG_STOP_GAP_MS + STEP_DRAG_HORIZON_MS
+        val downTime = clock.now() - span
+        var x = x1
+        var y = y1
+
+        fun at(
+            t: Long,
+            action: TouchAction,
+            sync: Boolean,
+        ) = sink.touch(TouchEvent(action, downTime, listOf(PointerState(0, x, y)), sync = sync, eventTime = t))
+
+        fun checkpoint() {
+            try {
+                CommandCancellation.checkpoint()
+            } catch (e: CommandCancelledException) {
+                at(maxOf(clock.now(), downTime + span), TouchAction.CANCEL, sync = true)
+                throw e
+            }
+        }
+        var ok = single(TouchAction.DOWN, downTime, x, y, sync = true)
+        clock.waitForNextFrame()
+        for (i in 1..n) {
+            if (!ok) break
+            checkpoint()
+            x = if (i == n) x2 else x1 + (xStep * i).toInt()
+            y = if (i == n) y2 else y1 + (yStep * i).toInt()
+            val t = downTime + STEP_DRAG_MOVE_MS * i / n
+            if (i <= DRAG_FRAME_MOVES) {
+                ok = at(t, TouchAction.MOVE, sync = true)
+                clock.waitForNextFrame()
+            } else {
+                ok = at(t, TouchAction.MOVE, sync = i == n)
+                if (i < n) clock.sleep(STEP_DRAG_MOVE_GAP_MS)
+            }
+        }
+        val stillAt = downTime + STEP_DRAG_MOVE_MS + STEP_DRAG_STOP_GAP_MS
+        if (ok) ok = at(stillAt, TouchAction.MOVE, sync = false)
+        if (ok) ok = at(stillAt + STEP_DRAG_HORIZON_MS, TouchAction.MOVE, sync = true)
+        checkpoint()
+        val cancelOk = at(maxOf(clock.now(), downTime + span + 1), TouchAction.CANCEL, sync = true)
+        return ok && cancelOk
     }
 
     /**

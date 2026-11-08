@@ -533,6 +533,9 @@ class SnapshotElementFinder {
             do {
                 let s = try app.snapshot()
                 if !s.dictionaryRepresentation.isEmpty {
+                    lock.lock()
+                    lastSnapshot = s
+                    lock.unlock()
                     return s
                 }
             } catch {
@@ -546,6 +549,68 @@ class SnapshotElementFinder {
             ?? "Snapshot returned empty tree after retries"
         NSLog("[TapsmithSnapshot] \(msg)")
         throw AgentError.elementNotFound(msg)
+    }
+
+    /// The last snapshot taken, for a scroll step's "did the list move"
+    /// (PILOT-998): taken before the step's drag, by the read before it.
+    private var lastSnapshot: XCUIElementSnapshot?
+
+    /// `ScrollStepWatch.fingerprint` of the last snapshot's nodes in the
+    /// scroll container at `region` (`ScrollStepWatch.regionNodes`); nil
+    /// before any snapshot.
+    func lastSnapshotFingerprint(in region: CGRect) -> Int? {
+        lock.lock()
+        let last = lastSnapshot
+        lock.unlock()
+        guard let root = last else { return nil }
+        let nodes = ScrollStepWatch.regionNodes(
+            root: root,
+            children: { $0.children },
+            frame: { $0.frame },
+            label: { node in
+                ScrollStepWatch.nodeKey(
+                    type: node.elementType.rawValue,
+                    identifier: node.identifier,
+                    label: node.label,
+                    value: node.value.map { String(describing: $0) } ?? ""
+                )
+            },
+            isScrollView: { [.scrollView, .table, .collectionView, .webView].contains($0.elementType) },
+            isCell: { $0.elementType == .cell },
+            region: region
+        )
+        return ScrollStepWatch.fingerprint(nodes, in: region)
+    }
+
+    /// The last snapshot taken, to look at again after a later one replaces it.
+    func lastSnapshotTaken() -> XCUIElementSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastSnapshot
+    }
+
+    /// The frames of `selector`'s matches in `snapshot`, by the same match
+    /// walk as `findElements`, registering nothing (no element ids, no cache).
+    func matchFrames(_ selector: ElementSelector, in snapshot: XCUIElementSnapshot) -> [CGRect] {
+        var dict = matchableDict(of: snapshot)
+        let found = (try? findElements(selector, in: &dict, register: false)) ?? []
+        return found.map { e in
+            CGRect(
+                x: CGFloat(e.bounds.left),
+                y: CGFloat(e.bounds.top),
+                width: CGFloat(e.bounds.right - e.bounds.left),
+                height: CGFloat(e.bounds.bottom - e.bounds.top)
+            )
+        }
+    }
+
+    /// The app's frame in the last snapshot taken: the interface size a
+    /// rotation Tapsmith did not make has already changed.
+    func lastSnapshotFrameSize() -> CGSize? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let size = lastSnapshot?.frame.size, size.width > 0, size.height > 0 else { return nil }
+        return size
     }
 
     /// Clear all caches (call after app relaunch).

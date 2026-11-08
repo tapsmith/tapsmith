@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scrollRegion } from '../scroll-container.js';
+import { pickScrollRegion, scrollRegion } from '../scroll-container.js';
 
 // PILOT-934: scrollIntoView() swipes inside the scroll container that holds
 // its element, so a swipe cannot start outside a dialog (dismissing it) or on
@@ -186,6 +186,22 @@ describe('scrollRegion — iOS (the element\'s frame is known)', () => {
     );
 
     expect(scrollRegion(xml, { left: 500, top: 60, right: 700, bottom: 260 })).toEqual({ left: 16, top: 155, right: 386, bottom: 260 });
+  });
+
+  it('says whether the region is the scrollable nearest the element or a farther one around it', () => {
+    // A 40 pt chip row (too small to swipe in) inside a table: the table
+    // contains the chip but scrolls the other way.
+    const xml = ios(
+      el('Table', '[0,100][402,874]', '',
+        el('CollectionView', '[0,200][402,240]', '', el('Button', '[500,204][560,236]', 'label="Chip 9"')) +
+        el('CollectionView', '[0,300][402,500]', '', el('Cell', '[420,300][620,500]', 'label="Tile 3"'))),
+    );
+
+    expect(pickScrollRegion(xml, { left: 420, top: 300, right: 620, bottom: 500 }))
+      .toEqual({ region: { left: 0, top: 300, right: 402, bottom: 500 }, source: 'holds' });
+    expect(pickScrollRegion(xml, { left: 500, top: 204, right: 560, bottom: 236 }))
+      .toEqual({ region: { left: 0, top: 100, right: 402, bottom: 874 }, source: 'ancestor' });
+    expect(pickScrollRegion(xml, { left: 0, top: 3000, right: 402, bottom: 3044 }).source).toBe('largest');
   });
 
   it('falls back to the largest scrollable on screen when the element is not in the dump', () => {

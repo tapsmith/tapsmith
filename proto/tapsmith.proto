@@ -7,6 +7,9 @@ package tapsmith;
 service TapsmithService {
   rpc FindElement(FindElementRequest) returns (FindElementResponse);
   rpc FindElements(FindElementsRequest) returns (FindElementsResponse);
+  // One scrollIntoView() step in one device call (PILOT-998): drag the list,
+  // wait for it to go quiet, find the element, and say whether the list moved.
+  rpc ScrollStep(ScrollStepRequest) returns (ScrollStepResponse);
   // Evaluate several selectors against one UI snapshot, without waiting, so
   // locator suggestions and match counts come from the agent's own matching
   // (PILOT-848). Each selector gets its own result; one bad selector fails
@@ -252,6 +255,55 @@ message FindElementsResponse {
   string request_id = 1;
   repeated ElementInfo elements = 2;
   string error_message = 3;
+}
+
+// One scrollIntoView() step (PILOT-998): drag inside `region` (or a scroll
+// container the agent picks), wait for the list to stop changing, then find
+// `selector` as FindElements does, from the screen the drag left.
+message ScrollStepRequest {
+  string request_id = 1;
+  Selector selector = 2;
+  // The find's read budget, as FindElementsRequest.timeout_ms. The step's
+  // drag and quiet wait come on top of it.
+  uint64 timeout_ms = 3;
+  // The way the finger moves ("up" drags the content up, revealing what is
+  // below), as SwipeRequest.direction.
+  string direction = 4;
+  // The scroll container to drag in. Unset: the agent picks one (Android),
+  // or the step is unsupported (iOS).
+  Bounds region = 5;
+  // The drag's length as a fraction of the region along its axis. Below 0.5
+  // it is a short nudge around the region's centre.
+  float distance = 6;
+  // Before dragging, wait for the screen to go quiet and find afresh; when
+  // the element is on screen, do not drag (the first step confirms the first
+  // miss, PILOT-283).
+  bool find_first = 7;
+}
+
+message ScrollStepResponse {
+  enum Moved {
+    MOVED_UNSPECIFIED = 0;
+    // The list under the finger scrolled.
+    MOVED_YES = 1;
+    // Nothing under the finger scrolled: the end of the content, or the drag
+    // missed the list.
+    MOVED_NO = 2;
+  }
+  string request_id = 1;
+  repeated ElementInfo elements = 2;
+  string error_message = 3;
+  Moved moved = 4;
+  // The region the step dragged in: the one sent, or the one the agent
+  // picked. Unset when it dragged across the screen or did not drag.
+  Bounds region = 5;
+  // False when find_first found the element on screen, so nothing was dragged.
+  bool swiped = 6;
+  // The device cannot make a scroll step (an agent that predates it, a
+  // physical iOS device, an iOS step without a region, an iOS screen whose
+  // turn the agent cannot tell): nothing was done, and the caller scrolls
+  // the old way.
+  bool unsupported = 7;
 }
 
 message EvaluateSelectorsRequest {

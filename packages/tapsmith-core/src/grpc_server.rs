@@ -32,6 +32,7 @@ use crate::screenshot;
 mod android_backend;
 mod device_backend;
 mod ios_backend;
+mod scroll_step;
 
 use device_backend::{DeviceBackend, PermissionChange};
 
@@ -2535,6 +2536,148 @@ impl TapsmithServiceImpl {
         }
     }
 
+    /// An iOS scroll step's drag through the simulator's HID helper
+    /// (PILOT-998): the samples of [`scroll_step::hid_drag_path`] on their
+    /// timeline, then the lift. `NotHandled` when the active device is not a
+    /// simulator or the helper is unavailable (nothing was touched);
+    /// `Refused` when the helper failed mid-drag (the touch is cancelled) or
+    /// is required (`TAPSMITH_REQUIRE_IOS_HID`) but unavailable.
+    #[cfg(target_os = "macos")]
+    async fn hid_scroll_drag(&self, path: &[scroll_step::DragSample]) -> HidOutcome {
+        let udid = {
+            let dm = self.device_manager.read().await;
+            match dm.active_device() {
+                Some(d) if d.platform == Platform::Ios && d.is_emulator => d.serial.clone(),
+                _ => return HidOutcome::NotHandled,
+            }
+        };
+        if let Err(e) = self.hid_injector.ensure(&udid).await {
+            return hid_unavailable(&udid, "scroll drag", &e);
+        }
+        let Some((first, rest)) = path.split_first() else {
+            return HidOutcome::NotHandled;
+        };
+        let Some(last) = rest.last().copied() else {
+            return HidOutcome::NotHandled;
+        };
+        let line = |op: &str, s: &scroll_step::DragSample| format!("{op} {:.1} {:.1}", s.x, s.y);
+        if let Err(e) = self.hid_injector.send(&udid, &line("d", first)).await {
+            return hid_unavailable(&udid, "scroll drag", &e);
+        }
+        let started = tokio::time::Instant::now();
+        let failed = |e: anyhow::Error| {
+            HidOutcome::Refused(AgentResponse {
+                success: false,
+                error: Some(format!(
+                    "scrollIntoView: the iOS simulator's HID helper failed mid-drag: {e}"
+                )),
+                error_type: Some("ACTION_FAILED".to_string()),
+                data: Value::Null,
+            })
+        };
+        for sample in rest {
+            tokio::time::sleep_until(
+                started + Duration::from_micros((sample.at_ms * 1000.0) as u64),
+            )
+            .await;
+            if let Err(e) = self.hid_injector.send(&udid, &line("m", sample)).await {
+                let _ = self.hid_injector.send(&udid, "c").await;
+                return failed(e);
+            }
+        }
+        // The lift waits for the helper's answer, and then for the app to have
+        // it, as a HID tap does: the step's find must not read the list while
+        // the finger is still down, or before the helper has caught up.
+        if let Err(e) = self
+            .hid_injector
+            .send_and_wait(&udid, &line("u", &last), hid_tap_reply_deadline(None))
+            .await
+        {
+            let _ = self.hid_injector.send(&udid, "c").await;
+            return failed(anyhow::anyhow!("{e}"));
+        }
+        tokio::time::sleep(HID_TAP_BARRIER).await;
+        debug!(
+            ms = started.elapsed().as_millis() as u64,
+            "scroll step: HID drag injected"
+        );
+        HidOutcome::Injected
+    }
+
+    /// An iOS scroll step (PILOT-998): the HID drag, then the agent's
+    /// `scrollStepFind`. Unsupported — the SDK scrolls the old way — without
+    /// a region, off a simulator, or when the helper is unavailable.
+    async fn ios_scroll_step(
+        &self,
+        request_id: String,
+        req: &proto::ScrollStepRequest,
+        selector: Value,
+        deadline_ms: u64,
+    ) -> proto::ScrollStepResponse {
+        let Some(region) = req.region.filter(|b| b.right > b.left && b.bottom > b.top) else {
+            return scroll_step::unsupported(request_id);
+        };
+        #[cfg(target_os = "macos")]
+        {
+            let on_simulator = matches!(
+                self.device_manager.read().await.active_device(),
+                Some(d) if d.platform == Platform::Ios && d.is_emulator
+            );
+            if !on_simulator {
+                return scroll_step::unsupported(request_id);
+            }
+            let Some(path) = scroll_step::hid_drag_path(&req.direction, &region, req.distance)
+            else {
+                return scroll_step::unsupported(request_id);
+            };
+            // The helper places points in the device's native portrait space;
+            // the region is in the app's interface space. The agent maps them
+            // as it maps a tap's point, before anything is touched, so an agent
+            // that predates scroll steps answers before a drag is made.
+            let mapped = self
+                .send_agent_command_with_timeout(
+                    &AgentCommand::ScrollStepPoints {
+                        points: scroll_step::drag_points(&path),
+                    },
+                    deadline_ms,
+                )
+                .await;
+            let path = match mapped {
+                Ok(resp) if resp.success => match scroll_step::native_path(&path, &resp.data) {
+                    Some(native) => native,
+                    // The way the screen is turned cannot be told.
+                    None => return scroll_step::unsupported(request_id),
+                },
+                other => {
+                    return scroll_step::step_response(request_id, "scrollStepPoints", other, None)
+                }
+            };
+            match self.hid_scroll_drag(&path).await {
+                HidOutcome::Injected => {}
+                HidOutcome::NotHandled => return scroll_step::unsupported(request_id),
+                HidOutcome::Refused(resp) => {
+                    return scroll_step::step_response(request_id, "scrollStepFind", Ok(resp), None)
+                }
+            }
+            let command = AgentCommand::ScrollStepFind {
+                selector,
+                region: json!({
+                    "left": region.left, "top": region.top,
+                    "right": region.right, "bottom": region.bottom,
+                }),
+            };
+            let result = self
+                .send_agent_command_with_timeout(&command, deadline_ms)
+                .await;
+            scroll_step::step_response(request_id, "scrollStepFind", result, Some(region))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (selector, deadline_ms, region);
+            scroll_step::unsupported(request_id)
+        }
+    }
+
     /// Coordinate-addressed variant of [`try_hid_long_press`]: same device
     /// and helper gating, no element resolution.
     #[cfg(target_os = "macos")]
@@ -2994,6 +3137,49 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_message: status.message().to_string(),
             })),
         }
+    }
+
+    #[instrument(skip_all, fields(request_id))]
+    async fn scroll_step(
+        &self,
+        request: Request<proto::ScrollStepRequest>,
+    ) -> Result<Response<proto::ScrollStepResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+        let selector = selector_to_json(
+            req.selector
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("selector is required"))?,
+        );
+        let deadline_ms = req.timeout_ms + scroll_step::SCROLL_STEP_WORK_MS;
+        let platform = self
+            .device_manager
+            .read()
+            .await
+            .active_device()
+            .map(|d| d.platform);
+        if platform == Some(Platform::Ios) {
+            return Ok(Response::new(
+                self.ios_scroll_step(request_id, &req, selector, deadline_ms)
+                    .await,
+            ));
+        }
+        let command = AgentCommand::ScrollStep {
+            selector,
+            direction: req.direction.clone(),
+            region: req.region.as_ref().and_then(swipe_region_to_json),
+            distance: req.distance,
+            find_first: req.find_first,
+        };
+        let result = self
+            .send_agent_command_with_timeout(&command, deadline_ms)
+            .await;
+        Ok(Response::new(scroll_step::step_response(
+            request_id,
+            "scrollStep",
+            result,
+            None,
+        )))
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -8464,6 +8650,65 @@ mod tests {
         r#"<hierarchy><node package="com.example.app" text="" content-desc=""/></hierarchy>"#;
     const RENDERED_XML: &str =
         r#"<hierarchy><node package="com.example.app" text="Home"/></hierarchy>"#;
+
+    fn scroll_step_request(region: Option<proto::Bounds>) -> proto::ScrollStepRequest {
+        proto::ScrollStepRequest {
+            request_id: "s1".into(),
+            selector: Some(proto::Selector {
+                selector: Some(proto::selector::Selector::Text("Row 60".into())),
+                ..Default::default()
+            }),
+            timeout_ms: 250,
+            direction: "up".into(),
+            region,
+            distance: 0.8,
+            find_first: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_android_scroll_step_is_one_agent_command() {
+        use proto::tapsmith_service_server::TapsmithService;
+        let (svc, seen) = service_with_mock_agent(|_, _| {
+            json!({"result": {"elements": [], "moved": true,
+                "region": {"left": 0, "top": 200, "right": 1080, "bottom": 1800}}})
+        })
+        .await;
+        let resp = svc
+            .scroll_step(Request::new(scroll_step_request(None)))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(*seen.lock().unwrap(), vec!["scrollStep"]);
+        assert_eq!(resp.moved, proto::scroll_step_response::Moved::Yes as i32);
+        assert_eq!(resp.region.unwrap().bottom, 1800);
+        assert!(resp.swiped && !resp.unsupported);
+    }
+
+    #[tokio::test]
+    async fn a_scroll_step_on_an_agent_without_it_is_unsupported() {
+        use proto::tapsmith_service_server::TapsmithService;
+        let (svc, _) = service_with_mock_agent(|_, _| {
+            json!({"error": {"type": "ACTION_FAILED", "message": "Unknown method: scrollStep"}})
+        })
+        .await;
+        let resp = svc
+            .scroll_step(Request::new(scroll_step_request(None)))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(resp.unsupported);
+    }
+
+    #[tokio::test]
+    async fn a_scroll_step_needs_a_selector() {
+        use proto::tapsmith_service_server::TapsmithService;
+        let (svc, _) = service_with_mock_agent(|_, _| json!({"result": {}})).await;
+        let mut req = scroll_step_request(None);
+        req.selector = None;
+        let err = svc.scroll_step(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
 
     #[tokio::test]
     async fn rendered_content_wait_asks_the_agent_and_pulls_no_dump() {

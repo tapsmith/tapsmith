@@ -148,6 +148,17 @@ describe("UIKit: table view", () => {
       await expect(uikitTable.selection).toHaveText("Selected: Row 80")
     })
 
+    // A reused cell hands back its children in another order at the same
+    // frames: that is not the table moving, so scrolling up for a row that
+    // isn't there stops at the top.
+    test("scrollIntoView stops at the top of the table for a row that isn't there", async ({ device, uikitTable }) => {
+      await uikitTable.rowText(30).scrollIntoView({ maxScrolls: 30 })
+      const missing = device.getByText("Row 999", { exact: true })
+      const atTop = await missing.scrollIntoView({ direction: "up", maxScrolls: 15 }).then(() => null, (e: unknown) => e)
+      expect((atTop as Error).message).toMatch(/reached the end of the scrollable content/)
+      await expect(uikitTable.rowText(1)).toBeVisible()
+    })
+
     // Rows 50 to 100 each have a "More Info" detail button. Once the table
     // has scrolled, a row's button is still the one in that row, not the
     // one at its place among the others (PILOT-952).
