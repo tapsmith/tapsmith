@@ -1532,6 +1532,8 @@ class CommandHandler {
         // The inputs emptied (or found empty) so far, when `clearing`.
         var cleared: [CGRect] = []
         for key in keys {
+            // The delay first, so the focus is read just before the key goes.
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
             var at = now()
             let stillBy = Date(timeIntervalSinceNow: TypingCheck.focusStillWait)
             while Date() < stillBy {
@@ -1553,6 +1555,13 @@ class CommandHandler {
                         if at?.value.isEmpty == true { break }
                         Thread.sleep(forTimeInterval: 0.01)
                     } while Date() < emptyBy
+                    // Keys typed after what is left would read back wrong.
+                    if let left = at, !left.value.isEmpty {
+                        throw AgentError.actionFailed(
+                            "typeText could not empty a field the focus moved on to, to type into it again: it still shows " +
+                                TypingCheck.describe(left.value, secure: false)
+                        )
+                    }
                 }
             }
             // Keys sent with no text input focused go nowhere.
@@ -1567,8 +1576,14 @@ class CommandHandler {
             // another input, or out of them all (an app that blurs or submits
             // on its last digit).
             var after: TypingCheck.FocusedInput??
-            for _ in 0..<TypingCheck.keyTries {
-                Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            for attempt in 0..<TypingCheck.keyTries {
+                if attempt > 0 {
+                    // Sending it again: keep the delay, and take a change
+                    // that came meanwhile as the last send arriving late.
+                    Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+                    let read = now()
+                    if read != focused { after = .some(read); break }
+                }
                 _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
                 lastSentAt = Date()
                 let keyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
