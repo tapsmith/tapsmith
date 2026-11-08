@@ -7,7 +7,7 @@
 //! (agent boot vs. per-command device latency vs. app reset).
 //!
 //! Line format (one per event, easy to grep/aggregate):
-//!   [TIMING] pid=<n> kind=<boot|cmd|reset> name=<str> dur_ms=<n> ok=<bool> ...
+//!   [TIMING] pid=<n> kind=<boot|cmd|reset|appstate> name=<str> dur_ms=<n> ok=<bool> ...
 
 use std::io::Write;
 use std::sync::OnceLock;
