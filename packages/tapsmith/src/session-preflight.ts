@@ -934,7 +934,16 @@ async function openStartRoute(
     );
   }
   const link = url;
-  await step('openRoute', () => ctx.device.openDeepLink(link), link);
+  await step('openRoute', async () => {
+    try {
+      await ctx.device.openDeepLink(link);
+    } catch (err) {
+      // Name the option: the bare delivery error reads as though the test
+      // itself had opened the link.
+      const wrapped = new Error(`Could not open appResetRoute '${route}' (${link}): ${formatError(err)}`);
+      throw Object.assign(wrapped, { cause: err });
+    }
+  }, link);
 }
 
 type StepRunner = (name: string, fn: () => Promise<void>, detail?: string) => Promise<void>;

@@ -582,6 +582,15 @@ describe('session-preflight', () => {
       expect(ctx.capabilities.hooksUrlPrefix).toBe('app:///');
     });
 
+    it('a route that cannot be opened fails naming appResetRoute', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device.openDeepLink).mockRejectedValueOnce(new Error('openDeepLink: navigation was not acknowledged'));
+
+      const err = await executeAppReset(ctx, route(CLEAR_FILE, '/no-such-route'), { phase: 'file reset' }).catch((e: unknown) => e);
+
+      expect((err as Error).message).toMatch(/^Could not open appResetRoute '\/no-such-route' \(app:\/\/\/no-such-route\): openDeepLink: navigation was not acknowledged/);
+    });
+
     it('a path on an app without hooks fails, naming the full-link form', async () => {
       const ctx = makeContext({ config: { package: 'com.example.app', activity: '.MainActivity', appReset: 'clear' } });
       ctx.capabilities = { hooksDetected: false };
