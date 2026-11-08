@@ -65,11 +65,13 @@ export interface ScrollRegionPick {
   region?: Rect;
   /**
    * `'holds'` when the region is the nearest scrollable holding `target`,
+   * `'ancestor'` when it is a farther one (the nearest is too small or off
+   * screen),
    * `'previous'` when `previous` was kept because `target` matched nothing,
    * and `'largest'` when it is the largest scrollable on screen, which may
    * not hold the element at all.
    */
-  source?: 'holds' | 'previous' | 'largest';
+  source?: 'holds' | 'ancestor' | 'previous' | 'largest';
 }
 
 /** {@link scrollRegion}, saying also how the region was chosen. */
@@ -127,9 +129,14 @@ export function pickScrollRegion(xml: string, target?: Rect, previous?: Rect): S
 
   if (target) {
     const self = entries.filter((e) => !e.nonApp && e.bounds && sameFrame(e.bounds, target)).at(-1);
+    // The nearest scrollable around the element holds it; a farther one
+    // used because the nearest is too small or off screen only contains it,
+    // and may not scroll the way the element lies.
+    let nearest = true;
     for (let a = self?.parent; a; a = a.parent) {
       const r = region(a);
-      if (r) return { region: r, source: 'holds' };
+      if (r) return { region: r, source: nearest ? 'holds' : 'ancestor' };
+      if (isScrollable(a.node) && !a.nonApp) nearest = false;
     }
     if (!self && previous && candidates.some((c) => sameFrame(c.r, previous))) {
       return { region: previous, source: 'previous' };

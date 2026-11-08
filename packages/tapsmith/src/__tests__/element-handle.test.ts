@@ -6754,7 +6754,31 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
 
       await expect(handle(client, 'ios').scrollIntoView({ direction: 'left', maxScrolls: 1 })).rejects.toThrow(/after 1 scroll/);
       expect(scrollStep).not.toHaveBeenCalled();
-      expect(swipe).toHaveBeenCalledWith('right', expect.objectContaining({ region: tableRegion }));
+      // A fling, as before steps: not a drag, not a slow gentle swipe.
+      expect(swipe).toHaveBeenCalledWith('right', { speed: 2000, distance: 0.6, region: tableRegion });
+    });
+
+    it('swipes sideways rather than stepping when the scrollable nearest the element is too small to swipe in', async () => {
+      // A 40 pt chip row inside the table: the table around it is the region,
+      // but it scrolls only up and down.
+      const chips = `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+        `<XCUIElementTypeTable type="XCUIElementTypeTable" bounds="[0,100][402,874]">` +
+        `<XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" bounds="[0,200][402,240]">` +
+        `<XCUIElementTypeButton type="XCUIElementTypeButton" label="Item 25" bounds="[500,204][560,236]"/>` +
+        `</XCUIElementTypeCollectionView></XCUIElementTypeTable></XCUIElementTypeApplication></hierarchy>`;
+      const chip = makeElementInfo({ text: 'Item 25', visible: false, bounds: { left: 500, top: 204, right: 560, bottom: 236 } });
+      const scrollStep = steps([{ elements: [] }]);
+      const swipe = vi.fn(async () => successResponse());
+      const client = makeMockClient({
+        scrollStep,
+        swipe,
+        findElements: vi.fn(async () => makeFindElementsResponse([chip])),
+        getUiHierarchy: vi.fn(hierarchySequence([chips])),
+      });
+
+      await expect(handle(client, 'ios').scrollIntoView({ direction: 'right', maxScrolls: 1 })).rejects.toThrow(/after 1 scroll/);
+      expect(scrollStep).not.toHaveBeenCalled();
+      expect(swipe).toHaveBeenCalledWith('left', expect.objectContaining({ region: tableRegion }));
     });
 
     it('still steps up and down in the largest container when the element is not on screen', async () => {

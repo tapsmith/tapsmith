@@ -103,6 +103,7 @@ describe("Touches on a moving screen", () => {
     const error = await carouselScreen.page("No such page").scrollIntoView({ direction: "left", maxScrolls: 3 })
       .then(() => null, (e: unknown) => e)
     expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toMatch(/reached the end of the scrollable content|not visible after 3 scroll/)
     await expect(carouselScreen.addButton).toBeVisible()
   })
 })
