@@ -95,4 +95,14 @@ describe("Touches on a moving screen", () => {
       await expect(carouselScreen.caught).toHaveText(`Caught: ${start + n}`)
     }
   })
+
+  test("a sideways scrollIntoView() for an element not on screen stays on this screen", async ({ carouselScreen }) => {
+    // Nothing tells which list holds a missing element, so the swipe runs in
+    // the largest scrollable, the page that scrolls up and down. A slow
+    // sideways drag there is the edge swipe that goes back a screen on iOS.
+    const error = await carouselScreen.page("No such page").scrollIntoView({ direction: "left", maxScrolls: 3 })
+      .then(() => null, (e: unknown) => e)
+    expect(error).toBeInstanceOf(Error)
+    await expect(carouselScreen.addButton).toBeVisible()
+  })
 })

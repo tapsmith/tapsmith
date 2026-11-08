@@ -6738,6 +6738,36 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
       expect(scrollStep).not.toHaveBeenCalled();
       expect(swipe).toHaveBeenCalledTimes(1);
     });
+
+    it('swipes sideways rather than stepping when the only container is one that may not hold the element', async () => {
+      // The element is not on screen, so the region is the largest scrollable,
+      // a list that scrolls up and down. A slow sideways drag there is the
+      // edge swipe that pops the screen; a fling is not.
+      const scrollStep = steps([{ elements: [] }]);
+      const swipe = vi.fn(async () => successResponse());
+      const client = makeMockClient({
+        scrollStep,
+        swipe,
+        findElements: vi.fn(async () => makeFindElementsResponse([])),
+        getUiHierarchy: vi.fn(hierarchySequence([table(0)])),
+      });
+
+      await expect(handle(client, 'ios').scrollIntoView({ direction: 'left', maxScrolls: 1 })).rejects.toThrow(/after 1 scroll/);
+      expect(scrollStep).not.toHaveBeenCalled();
+      expect(swipe).toHaveBeenCalledWith('right', expect.objectContaining({ region: tableRegion }));
+    });
+
+    it('still steps up and down in the largest container when the element is not on screen', async () => {
+      const scrollStep = steps([{ elements: [] }]);
+      const client = makeMockClient({
+        scrollStep,
+        findElements: vi.fn(async () => makeFindElementsResponse([])),
+        getUiHierarchy: vi.fn(hierarchySequence([table(0)])),
+      });
+
+      await expect(handle(client, 'ios').scrollIntoView({ direction: 'down', maxScrolls: 1 })).rejects.toThrow(/after 1 scroll/);
+      expect(stepArgs(scrollStep)).toEqual([{ direction: 'up', distance: 0.8, region: tableRegion }]);
+    });
   });
 });
 

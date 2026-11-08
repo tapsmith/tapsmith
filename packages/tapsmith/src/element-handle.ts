@@ -26,7 +26,7 @@ import {
 import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
 import type { SwipeDirection } from './input-names.js';
 import { onScreenSignature } from './screen-signature.js';
-import { scrollRegion, type Rect } from './scroll-container.js';
+import { pickScrollRegion, type Rect } from './scroll-container.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -3906,6 +3906,10 @@ export class ElementHandle {
       // when it swiped the screen because nothing on screen scrolls. Kept for
       // the next swipe when the screen cannot be read.
       let region: Rect | undefined;
+      // Whether `region` is the scrollable that holds the element, rather
+      // than the largest one on screen standing in for an element whose
+      // frame is unknown.
+      let regionHolds = false;
       // Momentum carried the element off screen after a scroll brought it on
       // (PILOT-935): `overshot` until the next swipe scrolls back for it,
       // `carriedOff` until it is seen on screen again (for the failure
@@ -3947,13 +3951,18 @@ export class ElementHandle {
       // whose steps stop dead (sideways still flings, so a pager turns); on
       // iOS only inside a scroll container, which the step drags in through
       // the simulator's HID helper, so nothing flings anywhere in the scroll.
+      // Sideways on iOS only in the container that holds the element: a slow
+      // sideways drag in a list that scrolls only up and down is the edge
+      // swipe that pops the screen, where a fling across it is not.
       // A device that cannot make steps (a physical iPhone, an older agent)
       // says so, and the scroll goes on the old way.
       let stepsUnsupported = false;
       const stepsFit = (): boolean =>
         !stepsUnsupported &&
         !this._hasModifiers() &&
-        (android ? direction === 'up' || direction === 'down' : platform === 'ios' && region !== undefined);
+        (android
+          ? direction === 'up' || direction === 'down'
+          : platform === 'ios' && region !== undefined && (isVertical(direction) || regionHolds));
       // What the last swipe's step said about the list under the finger;
       // undefined after a plain swipe.
       let lastStepMoved: ScrollStepResponse['moved'] | undefined;
@@ -4315,7 +4324,11 @@ export class ElementHandle {
         // (PILOT-934); the element's frame, when the tree reports it, says
         // which container that is, and the last region stands in while the
         // element is still moving and its frame matches nothing in the dump.
-        if (read) region = scrollRegion(read.xml, usableFrame(result.el), region);
+        if (read) {
+          const pick = pickScrollRegion(read.xml, usableFrame(result.el), region);
+          region = pick.region;
+          if (pick.source !== 'previous') regionHolds = pick.source === 'holds';
+        }
         lastNudge = undefined;
         await swipe();
       }

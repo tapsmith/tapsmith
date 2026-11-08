@@ -14,4 +14,5 @@ export class CarouselScreen {
   get slideButton() { return this.device.getByRole("button", { name: "Slide the button in" }) }
   get slidingButton() { return this.device.getByRole("button", { name: "Catch me" }) }
   get caught() { return this.device.getByTestId("carousel-caught") }
+  page(title: string) { return this.device.getByText(title, { exact: true }) }
 }
