@@ -73,16 +73,18 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
     await expect(typingScreen.codeValue).toHaveText("code=1234")
   })
 
-  test("typing into a secure field that iOS empties as it takes focus again fails instead of reporting success", async ({ typingScreen }) => {
-    await typingScreen.secureInput.type("ab", { delay })
-    await expect(typingScreen.secureLength).toHaveText("secure=2")
-    await typingScreen.slowInput.tap()
-    let error: unknown
-    try {
-      await typingScreen.secureInput.type("xyz", { delay, timeout: 5000 })
-    } catch (e) {
-      error = e
-    }
-    expect(String(error)).toContain("the secure field dropped the 2 character(s) it held")
-  })
+  for (const held of ["ab", "a"]) {
+    test(`typing into a secure field holding ${held.length} character(s) that iOS empties as it takes focus again fails instead of reporting success`, async ({ typingScreen }) => {
+      await typingScreen.secureInput.type(held, { delay })
+      await expect(typingScreen.secureLength).toHaveText(`secure=${held.length}`)
+      await typingScreen.slowInput.tap()
+      let error: unknown
+      try {
+        await typingScreen.secureInput.type("xyz", { delay, timeout: 5000 })
+      } catch (e) {
+        error = e
+      }
+      expect(String(error)).toContain("use clearAndType() to replace its text")
+    })
+  }
 })

@@ -1474,6 +1474,13 @@ class CommandHandler {
                 if try landed(), let field { return field }
                 Thread.sleep(forTimeInterval: 0.02)
             } while Date() < deadline
+            guard TypingCheck.resendsFirstKey(before: before, secure: secure) else {
+                throw AgentError.actionFailed(
+                    "typeText: the secure field still shows \(before.count) character(s) after the first key: " +
+                        "iOS may have emptied it as the key went in (it empties a secure field typed into after it " +
+                        "takes focus); use clearAndType() to replace its text"
+                )
+            }
             guard attempt < TypingCheck.firstKeyTries else { break }
             NSLog("[typeText] the first key did not arrive (try \(attempt)); refocusing the field and sending it again")
             let refreshed = try resolveElement(selectorParams)

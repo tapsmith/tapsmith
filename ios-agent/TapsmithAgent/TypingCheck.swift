@@ -83,6 +83,15 @@ enum TypingCheck {
         }
     }
 
+    /// Whether a first key that has not shown is sent again. Not into a
+    /// secure field that held text: iOS empties one typed into after it
+    /// takes focus, so its count cannot tell a lost key from a key that
+    /// replaced the content (one bullet before, one after), and a resend
+    /// could make the count right with the wrong text.
+    static func resendsFirstKey(before: String, secure: Bool) -> Bool {
+        !secure || before.isEmpty
+    }
+
     /// The text input with keyboard focus, as typing into a field that
     /// moves the focus on by itself (one box per digit) watches it: a key
     /// has landed once this changes.

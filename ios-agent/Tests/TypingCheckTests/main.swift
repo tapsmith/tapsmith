@@ -99,6 +99,10 @@ do {
     expect("scrambled is typed again", TypingCheck.retypes(.scrambled, before: "x", secure: false))
     expect("a change is not", !TypingCheck.retypes(.changed, before: "", secure: false))
     expect("complete is not", !TypingCheck.retypes(.complete, before: "", secure: false))
+    expect("the first key is sent again into a plain field", TypingCheck.resendsFirstKey(before: "ab", secure: false))
+    expect("and into an empty secure field", TypingCheck.resendsFirstKey(before: "", secure: true))
+    expect("not into a secure field that held text (iOS may have emptied it: one bullet can be the new key)",
+           !TypingCheck.resendsFirstKey(before: "•", secure: true))
     expect("an empty secure field is typed again", TypingCheck.retypes(.short, before: "", secure: true))
     expect("a secure field with content is not (it cannot be read back)",
            !TypingCheck.retypes(.short, before: "••", secure: true))
