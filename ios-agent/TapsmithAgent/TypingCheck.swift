@@ -50,9 +50,13 @@ enum TypingCheck {
 
     /// Compare what the field shows with what it held before plus the keys
     /// typed. A secure field reads back only as bullets, so only lengths
-    /// can be compared.
+    /// can be compared; one holding fewer than before lost what it held.
     static func read(_ shown: String, before: String, typed: String, secure: Bool) -> Reading {
         if secure {
+            // Fewer characters than it held: it lost them (iOS empties a
+            // secure field that takes a key after gaining focus), and keys
+            // sent again could make the count right with the wrong text.
+            if shown.count < before.count { return .changed }
             let expected = before.count + typed.count
             if shown.count == expected { return .complete }
             return shown.count < expected ? .short : .changed

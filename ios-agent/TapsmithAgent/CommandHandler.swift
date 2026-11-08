@@ -1451,6 +1451,11 @@ class CommandHandler {
             switch TypingCheck.read(shown, before: before, typed: key, secure: secure) {
             case .complete:
                 return true
+            case .changed where secure && shown.count < before.count:
+                throw AgentError.actionFailed(
+                    "typeText: the secure field dropped the \(before.count) character(s) it held as the first key " +
+                        "went in (iOS empties a secure field typed into after it takes focus); use clearAndType() to replace its text"
+                )
             case .changed:
                 throw AgentError.actionFailed(
                     "typeText: after the first key the field shows \(TypingCheck.describe(shown, secure: secure)), " +

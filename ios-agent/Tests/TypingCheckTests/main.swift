@@ -87,6 +87,10 @@ do {
     expect("secure: fewer is short", read("•••", "abcde", secure: true) == .short)
     expect("secure: more is a change", read("••••••", "abcde", secure: true) == .changed)
     expect("secure: counted after what it held", read("•••••", before: "••", "abc", secure: true) == .complete)
+    expect("secure: fewer than it held is a change (iOS emptied it on the first key)",
+           read("•", before: "••", "x", secure: true) == .changed)
+    expect("secure: an emptied field refilled to the expected count is still caught early",
+           read("••", before: "••", "x", secure: true) == .short)
 }
 
 // What is repaired by typing again.
