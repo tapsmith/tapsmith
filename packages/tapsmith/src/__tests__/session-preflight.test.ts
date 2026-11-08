@@ -56,6 +56,7 @@ function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]
   return {
     label: 'Worker 0 (emulator-5554)',
     notices: [] as import('../session-preflight.js').PreflightNotice[],
+    relaunches: { count: 0 },
     config: { package: 'com.example.app', activity: '.MainActivity' },
     device,
     client,
@@ -576,6 +577,16 @@ describe('session-preflight', () => {
         expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
         expect(ctx.device._resetApp).not.toHaveBeenCalled();
         expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+
+      it('counts the relaunch on the session, for checks made outside the reset', async () => {
+        const ctx = hooked({ config: { package: 'com.example.app', platform: 'ios' } });
+        vi.mocked(ctx.device.getAppState).mockResolvedValueOnce('notRunning' as never);
+
+        await ensureSessionReady(ctx, 'before test');
+        expect(ctx.relaunches.count).toBe(1);
+        await ensureSessionReady(ctx, 'before test');
+        expect(ctx.relaunches.count).toBe(1);
       });
 
       it('Android: the app was gone from the screen', async () => {

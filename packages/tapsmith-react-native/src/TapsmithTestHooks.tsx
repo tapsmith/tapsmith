@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Keyboard, Linking, StyleSheet, Text, View } from 'react-native';
+import { Keyboard, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatMarker, parseResetRequest, resetDedupeKey, BOOT_TOKEN } from './protocol.js';
 import { publishResetEpoch } from './epoch.js';
 import { CARRIER_TEXT_COLOR } from './carrier-color.js';
 import { hooksEnabledByDefault } from './enabled.js';
+import { blurFocusedInput, type KeyboardDeps } from './keyboard.js';
 import { registeredHandlers, runResetPipeline, type Clearable, type ResetHandler } from './reset.js';
 
 export interface TapsmithTestHooksProps {
@@ -45,6 +46,16 @@ export interface TapsmithTestHooksProps {
  *
  * Renders nothing and registers nothing when disabled (production).
  */
+const keyboardDeps: KeyboardDeps = {
+  focusedInput: () => TextInput.State?.currentlyFocusedInput?.() ?? null,
+  isVisible: () => Keyboard.isVisible?.() ?? false,
+  dismiss: () => Keyboard.dismiss(),
+  onDidHide: (cb) => {
+    const sub = Keyboard.addListener('keyboardDidHide', cb);
+    return () => sub.remove();
+  },
+};
+
 export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enabled }: TapsmithTestHooksProps) {
   const active = enabled ?? hooksEnabledByDefault();
   const [epoch, setEpoch] = useState(0);
@@ -84,7 +95,12 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
       // A fresh app has no focused input. A reset that lands on the screen
       // already showing keeps it mounted, and with it whatever input had focus
       // and the keyboard over it, which the next test would start under.
-      Keyboard.dismiss();
+      // Blur it before the clear, and let the blur's handlers run first.
+      try {
+        await blurFocusedInput(keyboardDeps);
+      } catch {
+        // Best effort: a reset must not fail over the keyboard.
+      }
       try {
         const handlers: ResetHandler[] = [...(latest.current.onReset ? [latest.current.onReset] : []), ...registeredHandlers()];
         await runResetPipeline(request, latest.current.clear, handlers);

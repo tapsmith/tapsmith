@@ -52,6 +52,14 @@ export interface SessionPreflightContext {
    * reference, like `capabilities`.
    */
   notices: PreflightNotice[]
+  /**
+   * How many times {@link ensureSessionReady} has (re)launched the app this
+   * session. One object per device session, shared by reference like
+   * `notices`: the runner reads it around an embedder's own readiness check
+   * (`beforeEachTest`), which knows nothing of the start route, to see whether
+   * that check took the app off the route the reset just delivered.
+   */
+  relaunches: { count: number }
 }
 
 /** A system ANR/crash dialog the Android preflight (or, mid-test, the agent)
@@ -554,6 +562,10 @@ export async function ensureSessionReady(
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   options: EnsureSessionReadyOptions = {},
 ): Promise<void> {
+  const onRelaunch = (): void => {
+    ctx.relaunches.count++;
+    options.onRelaunch?.();
+  };
   return withActionProgress('sessionReady', ctx.config.package, async (progress) => {
     let lastError: unknown;
     // Whether the recovery before THIS rung completed. Drives the probe's
@@ -575,7 +587,7 @@ export async function ensureSessionReady(
         // agent), and a stale detail would then describe the wrong attempt on
         // the end event.
         progress.setDetail(undefined);
-        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs, options.onRelaunch);
+        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs, onRelaunch);
         return;
       } catch (err) {
         lastError = err;
@@ -589,7 +601,7 @@ export async function ensureSessionReady(
         try {
           // Before the call: a recovery that fails part-way may already have
           // relaunched the app.
-          options.onRelaunch?.();
+          onRelaunch();
           await recoverSession(ctx);
           recovered = true;
         } catch (recoveryErr) {
@@ -975,6 +987,16 @@ async function openStartRoute(
 
 type StepRunner = (name: string, fn: () => Promise<void>, detail?: string) => Promise<void>;
 const runDirect: StepRunner = (_name, fn) => fn();
+
+/**
+ * Put the app back on the declared start route after a readiness check outside
+ * the reset relaunched it (the app is then on its launch screen). Waits for
+ * the relaunched app first: a link sent into a still-booting app is lost.
+ */
+export async function reopenStartRoute(ctx: SessionPreflightContext, route: string, hooksProbeMs?: number): Promise<void> {
+  await waitForAppReady(ctx);
+  await openStartRoute(ctx, route, runDirect, hooksProbeMs);
+}
 
 /**
  * The `clear` action: wipe app data and cold-launch. Does NOT include the

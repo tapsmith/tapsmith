@@ -98,6 +98,7 @@ function makeDevice(name: string) {
     device: device as unknown as SessionPreflightContext['device'],
     client: client as unknown as SessionPreflightContext['client'],
     notices: [],
+    relaunches: { count: 0 },
   };
   const runDevice: RunDevice = {
     name,
