@@ -27,7 +27,10 @@ enum AppReadiness {
     /// `XCUIElementTypeOther` — which would otherwise never read as ready.
     /// The bare shell after a launch (window and containers with neither)
     /// still does not count, nor does the application node, which carries the
-    /// app's name from launch on. Matches the SDK's dump-based fallback.
+    /// app's name from launch on. The SDK's dump-based fallback (for an
+    /// agent without `waitForAppReady`) shares the label/identifier clause
+    /// but not the type shortcut, so an unlabelled text, control or image
+    /// counts only here.
     static func isRenderedContent(
         _ isContentType: Bool,
         _ isApplication: Bool,
