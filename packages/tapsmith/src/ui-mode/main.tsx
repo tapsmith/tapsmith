@@ -172,6 +172,14 @@ function App() {
    * - 'manual': user clicked a test — stop auto-following
    */
   const autoFollowRef = useRef<'auto' | `worker:${number}` | 'manual'>('auto');
+  /**
+   * The user picked an earlier action of the viewed test. Like a selected
+   * action in Playwright's live trace, the pick holds: streamed rows and the
+   * run end don't move it. It lapses when the user views another test, a run
+   * starts, the viewed test restarts, or the user picks its newest row
+   * (which resumes following).
+   */
+  const userPinnedRef = useRef(false);
 
   const { testTraces, setTestTraces, activeTestRef, pendingSourcesRef } = useTraceData();
   // Pre-run source preview: keyed by normalised absolute path (forward slashes).
@@ -862,6 +870,7 @@ function App() {
           testWorkerMapRef.current.clear();
         }
         autoFollowRef.current = 'auto';
+        userPinnedRef.current = false;
         break;
       case 'run-end':
         setIsRunning(false);
@@ -947,6 +956,7 @@ function App() {
         if (!viewedTraceKeyRef.current || viewedTraceKeyRef.current === key) {
           setPinnedIndex(0);
           setHoveredIndex(null);
+          userPinnedRef.current = false;
         }
         // Ensure trace data exists for this test, snapshotting its source file.
         // If trace data already exists (e.g. retry after infrastructure error
@@ -1170,7 +1180,7 @@ function App() {
         // Pinning is positional: for shifted hook events the actionIndex
         // runs ahead of the row position by the reserved-slot count, so
         // subtract pinDelta (0 for the test's own events).
-        if (isVisibleRow && key === activeTestRef.current
+        if (isVisibleRow && key === activeTestRef.current && !userPinnedRef.current
           && (!viewedTraceKeyRef.current || viewedTraceKeyRef.current === key)) {
           setPinnedIndex(ev.actionIndex - (hookShift?.pinDelta ?? 0));
         }
@@ -1735,11 +1745,27 @@ function App() {
   // clicked it manually or the selection was restored on reconnect.  During
   // a live run auto-follow handles pinning via the trace-event handler, so
   // we only fire here when no run is in progress.
+  //
+  // A new viewed test re-pins. A new row re-pins, and so does the run
+  // ending — it catches up a view the run left behind (run-start pinned it
+  // to row 0, or another worker's test took the live pin) — unless the user
+  // picked an action of this test (userPinnedRef). Only a new viewed test
+  // drops the hover: clearing it as rows stream in flips the selection to
+  // the pinned row under a still pointer, scrolling the list away from it
+  // on every action.
+  const lastPinSourceRef = useRef<{ key: string | null; length: number; running: boolean }>({ key: null, length: 0, running: false });
   useEffect(() => {
+    const last = lastPinSourceRef.current;
+    const keyChanged = last.key !== viewedTraceKey;
+    const lengthChanged = last.length !== actionEvents.length;
+    const runEnded = last.running && !isRunning;
+    lastPinSourceRef.current = { key: viewedTraceKey, length: actionEvents.length, running: isRunning };
+    if (keyChanged) userPinnedRef.current = false;
+    if (!keyChanged && !((lengthChanged || runEnded) && !userPinnedRef.current)) return;
     if (viewedTraceKey && actionEvents.length > 0
       && (autoFollowRef.current === 'manual' || !isRunning)) {
       setPinnedIndex(actionEvents.length - 1);
-      setHoveredIndex(null);
+      if (keyChanged) setHoveredIndex(null);
     }
   }, [viewedTraceKey, actionEvents.length, isRunning]);
 
@@ -1771,8 +1797,13 @@ function App() {
     send({ type: 'select-worker-view', mode, ...(typeof mode === 'number' ? { deviceIndex } : {}) });
   }, [send, clearPendingMirrorPick]);
 
+  // The newest row of the viewed test — the in-flight one while a step runs.
+  // Picking it means "follow", picking anything earlier holds the pick.
+  const newestRowRef = useRef(-1);
+  newestRowRef.current = currentTrace?.inFlightAction ? actionEvents.length : actionEvents.length - 1;
   const handleActionPin = useCallback((index: number) => {
     setPinnedIndex(index);
+    userPinnedRef.current = index < newestRowRef.current;
     // Choosing the action already pinned changes no index, but still
     // re-binds the tab to the trace.
     bindToTrace();
@@ -2013,6 +2044,7 @@ function App() {
           showMetadata={viewedTestNode?.type === 'test'}
           inFlightAction={currentTrace?.inFlightAction}
           preflightMessage={preflightMessage}
+          holdScrollUnderPointer
         />
       }
       screenshotPanel={
