@@ -348,7 +348,9 @@ function checkScreenshots(archive, r) {
     // origin (or an edge past the far side) for an element the viewport clips —
     // a partially scrolled row is the common case. What cannot happen is a box
     // sitting entirely off the frame, which is what a coordinate-space mismatch
-    // produces.
+    // produces — except for a query row that captured before it scrolled or
+    // waited: iOS reports a below-the-fold element's real frame then.
+    if (capturesBeforeItWaits(step.action)) continue
     r.check(
       b.right > 0 && b.bottom > 0 && b.left < frameWidth && b.top < frameHeight,
       `step ${step.actionIndex} recorded an element box with no overlap with the ${frame} ` +
@@ -462,13 +464,13 @@ function checkHierarchies(archive, r) {
   // captures are best-effort with a 5s timeout, and a slow a11y dump drops the
   // claim without failing the run.
   const namedActions = archive.steps.filter(
-    (s) => s.type === "action" && selectorName(s.selector) !== null,
+    (s) => s.type === "action" && !capturesBeforeItWaits(s.action) && selectorName(s.selector) !== null,
   )
   if (namedActions.length === 0) {
     r.check(
       false,
-      "no action recorded a named selector, so capture/step pairing could not be cross-checked " +
-        "against real device data",
+      "no action recorded a named selector (find/waitFor/scrollIntoView rows do not count), so " +
+        "capture/step pairing could not be cross-checked against real device data",
     )
   } else {
     r.check(

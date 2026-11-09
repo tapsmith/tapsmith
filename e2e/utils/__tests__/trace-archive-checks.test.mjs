@@ -607,29 +607,59 @@ test("does not cross-check an auto-waiting assertion against its own snapshot", 
   assert.deepEqual(failures, [])
 })
 
-test("does not cross-check a query row that captures before it waits or scrolls", () => {
-  // find(), waitFor() and scrollIntoView() take their frame before they wait or
-  // scroll, so their target may legitimately be absent from their own snapshot.
-  for (const action of ["find", "waitFor(visible)", "waitFor(attached)", "scrollIntoView"]) {
-    const failures = failuresFor((p) => {
-      p.events[1] = {
-        type: "action",
-        actionIndex: 1,
-        timestamp: p.events[1].timestamp,
-        category: "other",
-        action,
-        selector: JSON.stringify({ text: "Below The Fold" }),
-        duration: 120,
-        success: true,
-        hasScreenshotBefore: true,
-        hasScreenshotAfter: false,
-        hasHierarchyBefore: true,
-        hasHierarchyAfter: false,
-        stack: [{ file: TEST_FILE, line: 7 }],
-      }
-    })
-    assert.deepEqual(failures, [], `${action} should not be cross-checked`)
+// A find()/waitFor()/scrollIntoView() row, which takes its frame before it
+// waits or scrolls, in place of the trace's assertion at index 1.
+function queryRow(p, action, extra = {}) {
+  p.events[1] = {
+    type: "action",
+    actionIndex: 1,
+    timestamp: p.events[1].timestamp,
+    category: "other",
+    action,
+    selector: JSON.stringify({ text: "Below The Fold" }),
+    duration: 120,
+    success: true,
+    hasScreenshotBefore: true,
+    hasScreenshotAfter: false,
+    hasHierarchyBefore: true,
+    hasHierarchyAfter: false,
+    stack: [{ file: TEST_FILE, line: 7 }],
+    ...extra,
   }
+}
+
+const QUERY_ROWS = ["find", "waitFor(visible)", "waitFor(hidden)", "scrollIntoView"]
+
+test("does not cross-check a query row that captures before it waits or scrolls", () => {
+  // Their target may legitimately be absent from their own snapshot.
+  for (const action of QUERY_ROWS) {
+    assert.deepEqual(failuresFor((p) => queryRow(p, action)), [], `${action} should not be cross-checked`)
+  }
+})
+
+test("accepts a query row's start box that lies off the frame", () => {
+  // iOS reports an off-screen element's real frame, so a scroll target below
+  // the fold, or one scrolled away above it, is boxed outside the start frame.
+  for (const action of QUERY_ROWS) {
+    for (const bounds of [
+      { left: 54, top: 5000, right: 348, bottom: 5043 },
+      { left: 54, top: -674, right: 348, bottom: -631 },
+    ]) {
+      assert.deepEqual(failuresFor((p) => queryRow(p, action, { bounds })), [], `${action} ${JSON.stringify(bounds)}`)
+    }
+  }
+  // Still caught for one the action could not have been given.
+  assertFails(
+    (p) => queryRow(p, "find", { bounds: { left: 40, top: 300, right: 40, bottom: 300 } }),
+    /degenerate element box/,
+  )
+})
+
+test("says the named actions were all query rows rather than blaming a dump timeout", () => {
+  assertFails((p) => {
+    queryRow(p, "find")
+    delete p.events[2].selector
+  }, /no action recorded a named selector/)
 })
 
 // ─── network ───
