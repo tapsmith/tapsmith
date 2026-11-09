@@ -8,7 +8,8 @@ const noop = () => {}
  * request it makes goes through it. Call it first in the beforeEach of a
  * describe that talks to the network (real requests, route(), network waits).
  *
- * CI traces only retried attempts. On a first attempt the proxy otherwise
+ * When the attempt's trace doesn't record network (tracing off, or
+ * `network: false` as in the iOS provisioning lane), the proxy otherwise
  * starts at the test's first route() or network wait (PILOT-775), and by then
  * the app may hold a keep-alive connection, opened straight to the server by
  * an earlier test, that bypasses it: a route registered then never fires.

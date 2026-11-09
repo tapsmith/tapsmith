@@ -23,7 +23,7 @@ export default defineConfig({
   retries: 2,
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
-  trace: { mode: "on-all-retries", daemonLogs: true },
+  trace: { mode: "retain-on-failure-and-retries", daemonLogs: true },
   video: "on-first-retry",
   workers: 2,
   launchEmulators: true,

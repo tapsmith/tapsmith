@@ -25,7 +25,7 @@ export default defineConfig({
   retries: 2,
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
-  trace: { mode: "on-all-retries", daemonLogs: true, network: false },
+  trace: { mode: "retain-on-failure-and-retries", daemonLogs: true, network: false },
   video: "on-first-retry",
   workers: 1,
   simulator: process.env.TAPSMITH_IOS_SIMULATOR || "iPhone 16",
