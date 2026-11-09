@@ -29,7 +29,7 @@ import { onScreenSignature } from './screen-signature.js';
 import { pickScrollRegion, type Rect } from './scroll-container.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepResponse } from './grpc-client.js';
-import { type TraceCapture, extractStack } from './trace/trace-collector.js';
+import { type TraceCapture, type CaptureBeforeAfter, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory } from './trace/types.js';
 import { tracedAction } from './trace/traced-action.js';
 import { sleep, isAbortError } from './abort.js';
@@ -71,6 +71,12 @@ const WAIT_FOR_STATES: readonly string[] = ['visible', 'hidden', 'attached', 'de
  *  consumed to stop the scroll rather than being delivered to child views.
  *  500ms is the measured safe minimum for iOS. */
 const SCROLL_SETTLE_MS = 500;
+/** The frame a screen-changing traced method captured when it started. */
+interface QueryTraceStart {
+  actionIndex: number
+  captures: Partial<CaptureBeforeAfter>
+}
+
 /** Idle-wait budget used to confirm a first-tick miss in scrollIntoView()
  *  before committing to the first swipe. Right after navigation or app launch
  *  the accessibility tree can lag the rendered screen (briefly describing the
@@ -2181,7 +2187,9 @@ export class ElementHandle {
   async find(options?: TimeoutOptions): Promise<ElementInfo> {
     const call = this._forCall('find()', options, ['timeout']);
     if (call !== this) return call.find();
-    this._emitQueryStarted('find');
+    // find() waits up to its timeout, so its frame is taken when it starts
+    // (see _captureQueryStart), not after the wait.
+    const traceStart = await this._captureQueryStart('find');
     const start = Date.now();
     try {
       let result: ElementInfo;
@@ -2222,10 +2230,10 @@ export class ElementHandle {
         }
         result = element;
       }
-      await this._traceQuery('find', `Found: ${result.text || result.className}`, Date.now() - start, result.bounds);
+      await this._traceQuery('find', `Found: ${result.text || result.className}`, Date.now() - start, result.bounds, traceStart);
       return result;
     } catch (err) {
-      await this._traceQueryFailed('find', err, Date.now() - start);
+      await this._traceQueryFailed('find', err, Date.now() - start, traceStart);
       throw err;
     }
   }
@@ -2504,7 +2512,9 @@ export class ElementHandle {
     // timeout, not as a TypeError on a slow run.
     const raw = options?.timeout;
     const timeoutMs = typeof raw === 'number' && raw < 1 ? 0 : checkTimeout('waitFor()', raw) ?? this._timeoutMs;
-    this._emitQueryStarted(`waitFor(${state})`);
+    // waitFor() waits up to its timeout, so its frame is taken when it starts
+    // (see _captureQueryStart), not after the wait. The clock starts after it.
+    const traceStart = await this._captureQueryStart(`waitFor(${state})`);
     const start = Date.now();
 
     const FIND_TIMEOUT_MS = 500;
@@ -2551,7 +2561,7 @@ export class ElementHandle {
       while (true) {
         try {
           if (await checkState()) {
-            await this._traceQuery(`waitFor(${state})`, `State reached: ${state}`, Date.now() - start);
+            await this._traceQuery(`waitFor(${state})`, `State reached: ${state}`, Date.now() - start, undefined, traceStart);
             return;
           }
           // checkState returned (state not yet reached) → the agent answered, so
@@ -2582,7 +2592,7 @@ export class ElementHandle {
         if (sleepMs > 0) await sleep(sleepMs, this._client._getAbortSignal?.());
       }
     } catch (err) {
-      await this._traceQueryFailed(`waitFor(${state})`, err, Date.now() - start);
+      await this._traceQueryFailed(`waitFor(${state})`, err, Date.now() - start, traceStart);
       throw err;
     }
   }
@@ -2614,15 +2624,54 @@ export class ElementHandle {
   }
 
   /**
+   * @internal — Start a traced query that changes the screen (scrollIntoView)
+   * or waits for it to change (waitFor, find): capture its frame now, before
+   * it acts or waits, and stream the in-flight row at the index that capture
+   * reserved (PILOT-1078). The viewer shows an action's "after" as the next
+   * row's capture, so a frame taken at completion would show the end state as
+   * the previous action's "after" and as this row's "before". The instant
+   * reads (count, isVisible, …) keep capturing after their one read: the frame
+   * is the same, and capturing first would delay the read only when tracing.
+   * Pass the result to `_traceQuery` / `_traceQueryFailed`.
+   */
+  private async _captureQueryStart(action: string): Promise<QueryTraceStart | undefined> {
+    const trace = this._traceCapture;
+    if (!trace) return undefined;
+    const stack = extractStack(new Error().stack ?? '');
+    const sourceLocation = stack[0];
+    const started = await trace.collector.captureBeforeAction(trace.takeScreenshot, trace.captureHierarchy);
+    trace.collector._emitActionStarted({
+      category: 'other',
+      action,
+      selector: JSON.stringify(selectorToProto(this._selector)),
+      sourceLocation,
+      stack,
+      deviceId: trace.deviceId,
+      log: [],
+      hasScreenshotBefore: !!started.captures.screenshotBefore,
+      hasHierarchyBefore: !!started.captures.hierarchyBefore,
+    }, started.actionIndex);
+    return started;
+  }
+
+  /**
    * @internal — Emit a trace event for a read-only query with a single
    * screenshot capture (the "after" shot showing current device state).
+   * `started` is the capture `_captureQueryStart` already took for a method
+   * that changes the screen; none is taken here then.
    */
-  private async _traceQuery(action: string, result: string, durationMs: number, bounds?: ElementInfo['bounds']): Promise<void> {
+  private async _traceQuery(
+    action: string,
+    result: string,
+    durationMs: number,
+    bounds?: ElementInfo['bounds'],
+    started?: QueryTraceStart,
+  ): Promise<void> {
     const trace = this._traceCapture;
     if (!trace) return;
     const stack = extractStack(new Error().stack ?? '');
     const sourceLocation = stack[0];
-    const { actionIndex, captures: beforeCaptures } = await trace.collector.captureBeforeAction(
+    const { actionIndex, captures: beforeCaptures } = started ?? await trace.collector.captureBeforeAction(
       trace.takeScreenshot, trace.captureHierarchy,
     );
     trace.collector.addActionEvent({
@@ -2649,14 +2698,19 @@ export class ElementHandle {
    * UI mode in-flight slot clears even if user code catches the throw and
    * keeps running.
    */
-  private async _traceQueryFailed(action: string, err: unknown, durationMs: number): Promise<void> {
+  private async _traceQueryFailed(
+    action: string,
+    err: unknown,
+    durationMs: number,
+    started?: QueryTraceStart,
+  ): Promise<void> {
     const trace = this._traceCapture;
     if (!trace) return;
     const stack = extractStack(new Error().stack ?? '');
     const sourceLocation = stack[0];
     const errMsg = err instanceof Error ? err.message : String(err);
     const errStack = err instanceof Error ? err.stack : undefined;
-    const { actionIndex, captures: beforeCaptures } = await trace.collector.captureBeforeAction(
+    const { actionIndex, captures: beforeCaptures } = started ?? await trace.collector.captureBeforeAction(
       trace.takeScreenshot, trace.captureHierarchy,
     );
     trace.collector.addActionEvent({
@@ -3799,7 +3853,10 @@ export class ElementHandle {
     const maxScrolls = options?.maxScrolls ?? (platform === 'android' || platform === 'ios' ? 10 : 5);
     const speed = options?.speed ?? 2000;
 
-    this._emitQueryStarted('scrollIntoView');
+    // Unlike the read-only queries, scrollIntoView changes the screen, so its
+    // frame is captured before it scrolls: the viewer shows the previous
+    // action's "after" as this capture, and this one's "after" as the next.
+    const traceStart = await this._captureQueryStart('scrollIntoView');
     const start = Date.now();
 
     let lastTransientErr: Error | undefined;
@@ -4218,6 +4275,7 @@ export class ElementHandle {
               `Visible after ${swipes} scroll(s)`,
               Date.now() - start,
               settled.bounds,
+              traceStart,
             );
             return;
           }
@@ -4374,7 +4432,7 @@ export class ElementHandle {
           (budget || (swipes > 0 && !region ? '.' : '')),
       );
     } catch (err) {
-      await this._traceQueryFailed('scrollIntoView', err, Date.now() - start);
+      await this._traceQueryFailed('scrollIntoView', err, Date.now() - start, traceStart);
       throw err;
     }
   }
