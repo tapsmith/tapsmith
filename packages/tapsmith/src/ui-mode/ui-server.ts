@@ -401,8 +401,6 @@ export async function startUIServer(
     isRunning = true;
     targetsRetriedThisRun.clear();
     runStartedAt = Date.now();
-    runFirstActionAt = undefined;
-    runPreflightOrigin = undefined;
     // Per-worker counters are per run: `run-ended` reads `failed` to decide
     // whether to hold a device for inspection, so a failure must not stick
     // to the worker across later (single-file) runs.
@@ -467,8 +465,6 @@ export async function startUIServer(
       failed: final.failed,
       skipped: final.skipped,
       interrupted: final.interrupted,
-      timeToFirstActionMs: runFirstActionAt !== undefined && runStartedAt > 0 ? runFirstActionAt - runStartedAt : undefined,
-      preflight: { origin: runPreflightOrigin ?? 'unknown' },
     });
     lastRunEnd = final;
     for (const w of runEndWaiters.splice(0)) w(final);
@@ -807,9 +803,6 @@ export async function startUIServer(
   /** Node the client has selected — the strongest hint for what runs next. */
   let selectedNode: { file: string; projectName?: string } | undefined;
   let lastRunProject: string | undefined;
-  /** Per run: when the first traced action landed, and how the first file's isolation was satisfied. */
-  let runFirstActionAt: number | undefined;
-  let runPreflightOrigin: 'prepared' | 'inline' | 'skipped' | undefined;
   /** Coalesced mirror-gesture bursts per worker for the activity feed. */
   const mirrorBursts = new Map<number, { id: string; counts: Map<string, number>; startedAt: number; last: number }>();
   const MUTATING_MCP_TOOLS = new Set(['tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key', 'tapsmith_launch_app']);
@@ -3079,14 +3072,6 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               break;
             }
             case 'trace-event': {
-              const ev = msg.event as { type?: string; action?: string; origin?: string };
-              if (runFirstActionAt === undefined && (ev.type === 'action' || ev.type === 'assertion')) {
-                runFirstActionAt = Date.now();
-              }
-              if (runPreflightOrigin === undefined && ev.type === 'action') {
-                if (ev.action === 'appReset' && (ev.origin === 'prepared' || ev.origin === 'skipped')) runPreflightOrigin = ev.origin;
-                else if (ev.action === 'resetApp' || ev.action === 'restoreAppState') runPreflightOrigin = 'inline';
-              }
               const traceMsg: TraceEventMessage = {
                 type: 'trace-event',
                 testFullName: worker.currentTest ?? '',

@@ -882,18 +882,6 @@ function App() {
           showInfo(msg.interrupted
             ? `Run stopped (${msg.interrupted} test${msg.interrupted === 1 ? '' : 's'} interrupted)`
             : 'Run stopped');
-        } else if (msg.timeToFirstActionMs != null) {
-          // The number users feel: how long before the first test did anything,
-          // and whether the background preparation paid for it.
-          const secs = `${(msg.timeToFirstActionMs / 1000).toFixed(1)}s`;
-          const how = msg.preflight?.origin === 'prepared'
-            ? 'device was prepared'
-            : msg.preflight?.origin === 'inline'
-              ? 'app reset ran inline'
-              : msg.preflight?.origin === 'skipped'
-                ? 'no app reset'
-                : undefined;
-          showInfo(`First action after ${secs}${how ? ` (${how})` : ''}`);
         }
         // Clear any tests/suites/files stuck in 'running' (e.g. after stop).
         treeRef.current.resetRunningStatuses();

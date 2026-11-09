@@ -188,10 +188,6 @@ export interface RunStartMessage {
 
 export interface RunEndMessage {
   type: 'run-end'
-  /** Milliseconds from run start to the first traced action of the first test. */
-  timeToFirstActionMs?: number
-  /** How the first file's isolation was satisfied. */
-  preflight?: { origin: 'prepared' | 'inline' | 'skipped' | 'unknown' }
   /** 'stopped' = the user stopped the run before it finished. */
   status: 'passed' | 'failed' | 'stopped'
   duration: number
