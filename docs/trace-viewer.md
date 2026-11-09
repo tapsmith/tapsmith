@@ -97,7 +97,7 @@ Horizontal strip of screenshot thumbnails. Click to jump to an action. Failed ac
 Shows before/after screenshots for the selected action:
 - **Before** — screenshot taken before the action executed
 - **Action** — before screenshot with tap/swipe coordinate overlay
-- **After** — screenshot taken after the action completed
+- **After** — the screen once the action completed: the next step's before screenshot, or, for the last step, a final screenshot taken when the test ends
 
 ### Detail Tabs (right)
 

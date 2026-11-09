@@ -1,9 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { TraceCollector } from '../trace/trace-collector.js';
-import { tracedAction } from '../trace/traced-action.js';
+import { tracedAction, captureBeforeState } from '../trace/traced-action.js';
+import { TRACE_CAPTURE_TIMEOUT_MS } from '../trace/trace-collector.js';
 import { runInAttemptContext } from '../attempt-fence.js';
 import type { TraceConfig } from '../trace/types.js';
 import type { ActionResponse } from '../grpc-client.js';
@@ -139,6 +140,30 @@ describe('TraceCollector action index reservation', () => {
       expect(completed.find((e) => e.device === s.device)?.index).toBe(s.index);
     }
     expect(c.currentActionIndex).toBe(2);
+  });
+
+  it('reserves an index even when a batch capture spends the whole budget and nothing is captured', async () => {
+    const c = new TraceCollector(makeConfig(), tempDir());
+    const realNow = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(realNow);
+    try {
+      const before = await captureBeforeState({
+        collector: c,
+        takeScreenshot: async () => undefined,
+        captureHierarchy: async () => undefined,
+        // An iOS batch capture that fails only after the capture budget ran out.
+        captureTraceState: async () => {
+          now.mockReturnValue(realNow + TRACE_CAPTURE_TIMEOUT_MS + 1);
+          return { success: false, errorMessage: 'timed out' } as never;
+        },
+      }, undefined, []);
+      expect(before.captures).toEqual({});
+      expect(before.actionIndex).toBe(0);
+      // Another device's action meanwhile must not take the in-flight row's index.
+      expect(c._reserveActionIndex()).toBe(1);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('honours setActionIndexOffset for reservations too', async () => {

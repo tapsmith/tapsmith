@@ -7736,11 +7736,11 @@ describe('action trace lifecycle (PILOT-244)', () => {
     lifecycle: { event: AnyTraceEvent; lifecycle?: 'started' | 'completed' }[];
   }
 
-  function makeTraceHarness(): TraceHarness {
+  function makeTraceHarness(options: { screenshots?: boolean } = {}): TraceHarness {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-eh-trace-'));
     tempDirs.push(tempDir);
     const collector = new TraceCollector({
-      mode: 'on', screenshots: false, snapshots: false, sources: false,
+      mode: 'on', screenshots: options.screenshots ?? false, snapshots: false, sources: false,
       attachments: true, network: false, deviceLogs: false, daemonLogs: false,
     }, tempDir);
     const lifecycle: TraceHarness['lifecycle'] = [];
@@ -7789,6 +7789,181 @@ describe('action trace lifecycle (PILOT-244)', () => {
     expect(actions[1].error).toMatch(/UiAutomation not connected/);
     expect(h.lifecycle.filter((e) => e.lifecycle === 'started').map((e) => (e.event as ActionTraceEvent).action))
       .toEqual(['allTextContents', 'allTextContents']);
+  });
+
+  /** A harness that records frame captures, in order, alongside the calls under test (PILOT-1078). */
+  function orderedHarness(): { h: TraceHarness; order: string[] } {
+    const h = makeTraceHarness({ screenshots: true });
+    const order: string[] = [];
+    h.traceCapture.takeScreenshot = async () => { order.push('capture'); return undefined; };
+    return { h, order };
+  }
+
+  const startedIndexes = (h: TraceHarness): number[] =>
+    h.lifecycle.filter((e) => e.lifecycle === 'started').map((e) => e.event.actionIndex);
+
+  it('captures scrollIntoView()\'s frame before it scrolls, so the previous row\'s "after" is not the scrolled screen (PILOT-1078)', async () => {
+    const { h, order } = orderedHarness();
+    const target = makeElementInfo({ visible: true, bounds: { left: 0, top: 100, right: 200, bottom: 150 } });
+    let swiped = false;
+    const findElements = vi.fn(async () => makeFindElementsResponse(swiped ? [target] : []));
+    const findElement = vi.fn(async () => ({ requestId: '1', found: swiped, element: swiped ? target : undefined, errorMessage: '' }));
+    const swipe = vi.fn(async () => { order.push('swipe'); swiped = true; return successResponse(); });
+    const client = makeMockClient({ findElements, findElement, swipe });
+    const handle = new ElementHandle(client, _text('Below The Fold'), 5000, { traceCapture: h.traceCapture });
+
+    await handle.scrollIntoView({ maxScrolls: 2 });
+
+    expect(order).toEqual(['capture', 'swipe']);
+    const actions = actionEvents(h);
+    expect(actions.map((a) => [a.action, a.success, a.log])).toEqual([['scrollIntoView', true, ['Visible after 1 scroll(s)']]]);
+    // The in-flight row and the completed row share the index the start capture reserved.
+    expect(startedIndexes(h)).toEqual([actions[0].actionIndex]);
+  });
+
+  it('captures a failed scrollIntoView()\'s frame once, before it scrolls (PILOT-1078)', async () => {
+    const { h, order } = orderedHarness();
+    const swipe = vi.fn(async () => { order.push('swipe'); return successResponse(); });
+    const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])), swipe });
+    const handle = new ElementHandle(client, _text('Never'), 5000, { traceCapture: h.traceCapture });
+
+    await expect(handle.scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(/not visible after 1 scroll/);
+
+    expect(order).toEqual(['capture', 'swipe']);
+    const actions = actionEvents(h);
+    expect(actions.map((a) => [a.action, a.success])).toEqual([['scrollIntoView', false]]);
+    expect(startedIndexes(h)).toEqual([actions[0].actionIndex]);
+  });
+
+  it('captures waitFor()\'s frame before it waits, not when the state is reached (PILOT-1078)', async () => {
+    const { h, order } = orderedHarness();
+    let reads = 0;
+    const findElements = vi.fn(async () => {
+      order.push('read');
+      return makeFindElementsResponse(++reads >= 3 ? [makeElementInfo({ visible: true })] : []);
+    });
+    const client = makeMockClient({ findElements });
+    const handle = new ElementHandle(client, _text('Later'), 5000, { traceCapture: h.traceCapture });
+
+    await withFakeClock(5000, () => handle.waitFor());
+
+    expect(order).toEqual(['capture', 'read', 'read', 'read']);
+    const actions = actionEvents(h);
+    expect(actions.map((a) => [a.action, a.success])).toEqual([['waitFor(visible)', true]]);
+    expect(startedIndexes(h)).toEqual([actions[0].actionIndex]);
+  });
+
+  it('captures a timed-out waitFor()\'s frame once, before it waits (PILOT-1078)', async () => {
+    const { h, order } = orderedHarness();
+    const findElements = vi.fn(async () => { order.push('read'); return makeFindElementsResponse([]); });
+    const client = makeMockClient({ findElements });
+    const handle = new ElementHandle(client, _text('Never'), 300, { traceCapture: h.traceCapture });
+
+    await expect(withFakeClock(5000, () => handle.waitFor())).rejects.toThrow();
+
+    expect(order[0]).toBe('capture');
+    expect(order.filter((o) => o === 'capture')).toHaveLength(1);
+    expect(actionEvents(h).map((a) => [a.action, a.success])).toEqual([['waitFor(visible)', false]]);
+  });
+
+  it('captures find()\'s frame before it waits for the element (PILOT-1078)', async () => {
+    const { h, order } = orderedHarness();
+    let reads = 0;
+    const el = makeElementInfo({ visible: true, text: 'Later' });
+    const findElements = vi.fn(async () => { order.push('read'); return makeFindElementsResponse(++reads >= 2 ? [el] : []); });
+    // The bounds lookup taken alongside the start capture (not yet on screen).
+    const findElement = vi.fn(async () => ({ requestId: '1', found: false, errorMessage: 'Element not found' }));
+    const client = makeMockClient({ findElements, findElement });
+    const handle = new ElementHandle(client, _text('Later'), 5000, { traceCapture: h.traceCapture });
+
+    await withFakeClock(5000, () => handle.find());
+
+    expect(order[0]).toBe('capture');
+    expect(order.filter((o) => o === 'capture')).toHaveLength(1);
+    const actions = actionEvents(h);
+    expect(actions.map((a) => [a.action, a.success])).toEqual([['find', true]]);
+    expect(startedIndexes(h)).toEqual([actions[0].actionIndex]);
+  });
+
+  it('records the bounds read with scrollIntoView()\'s start frame, not where the scroll left the element (PILOT-1078)', async () => {
+    const { h } = orderedHarness();
+    const scrolledTo = { left: 0, top: 100, right: 200, bottom: 150 };
+    const target = makeElementInfo({ visible: true, bounds: scrolledTo });
+    let swiped = false;
+    const findElements = vi.fn(async () => makeFindElementsResponse(swiped ? [target] : []));
+    // Below the fold when the frame is taken: the start lookup finds nothing.
+    const findElement = vi.fn(async () => ({ requestId: '1', found: swiped, element: swiped ? target : undefined, errorMessage: '' }));
+    const swipe = vi.fn(async () => { swiped = true; return successResponse(); });
+    const client = makeMockClient({ findElements, findElement, swipe });
+    const handle = new ElementHandle(client, _text('Below The Fold'), 5000, { traceCapture: h.traceCapture });
+
+    await handle.scrollIntoView({ maxScrolls: 2 });
+
+    // No box over a pre-scroll frame the element is not in.
+    expect(actionEvents(h)[0].bounds).toBeUndefined();
+  });
+
+  it('records the bounds read with find()\'s start frame when the element moves during the wait (PILOT-1078)', async () => {
+    const { h } = orderedHarness();
+    const atStart = { left: 0, top: 10, right: 100, bottom: 40 };
+    const atEnd = { left: 0, top: 300, right: 100, bottom: 330 };
+    let lookups = 0;
+    const findElement = vi.fn(async () => ({
+      requestId: '1', found: true, errorMessage: '',
+      element: makeElementInfo({ visible: true, text: 'Row', bounds: lookups++ === 0 ? atStart : atEnd }),
+    }));
+    const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ visible: true, text: 'Row', bounds: atEnd })]));
+    const client = makeMockClient({ findElement, findElements });
+    const handle = new ElementHandle(client, _text('Row'), 5000, { traceCapture: h.traceCapture });
+
+    const found = await handle.find();
+
+    expect(found.bounds).toEqual(atEnd);
+    const row = actionEvents(h)[0];
+    expect(row.action).toBe('find');
+    expect(row.bounds).toEqual(atStart);
+    // The streamed in-flight row carries the same start bounds.
+    const started = h.lifecycle.find((e) => e.lifecycle === 'started')!.event as ActionTraceEvent;
+    expect(started.bounds).toEqual(atStart);
+  });
+
+  it('records no start bounds for a modified handle, rather than the first match\'s (PILOT-1078)', async () => {
+    const first = { left: 0, top: 10, right: 100, bottom: 40 };
+    const second = { left: 0, top: 50, right: 100, bottom: 80 };
+    const rows = [
+      makeElementInfo({ visible: true, text: 'Row', bounds: first }),
+      makeElementInfo({ visible: true, text: 'Row', bounds: second }),
+    ];
+    // The start lookup can only resolve the bare selector: it would answer with the first row.
+    const findElement = vi.fn(async () => ({ requestId: '1', found: true, errorMessage: '', element: rows[0] }));
+    const findElements = vi.fn(async () => makeFindElementsResponse(rows));
+    const client = makeMockClient({ findElement, findElements });
+    const { h } = orderedHarness();
+    const handle = new ElementHandle(client, _text('Row'), 5000, { traceCapture: h.traceCapture });
+
+    for (const target of [handle.nth(1), handle.filter({ hasText: 'Row' }).last()]) {
+      await target.find();
+      await target.waitFor();
+    }
+
+    const actions = actionEvents(h);
+    expect(actions.map((a) => a.action)).toEqual(['find', 'waitFor(visible)', 'find', 'waitFor(visible)']);
+    for (const a of actions) expect(a.bounds).toBeUndefined();
+    for (const e of h.lifecycle.filter((l) => l.lifecycle === 'started')) {
+      expect((e.event as ActionTraceEvent).bounds).toBeUndefined();
+    }
+    expect(findElement).not.toHaveBeenCalled();
+  });
+
+  it('still captures an instant read\'s frame after the read, so tracing does not delay it (PILOT-1078)', async () => {
+    const { h, order } = orderedHarness();
+    const findElements = vi.fn(async () => { order.push('read'); return makeFindElementsResponse([]); });
+    const client = makeMockClient({ findElements });
+    const handle = new ElementHandle(client, _text('Absent'), 5000, { traceCapture: h.traceCapture });
+
+    expect(await handle.count()).toBe(0);
+
+    expect(order).toEqual(['read', 'capture']);
   });
 
   it('emits a started lifecycle event before the auto-wait resolves (live in-flight)', async () => {
