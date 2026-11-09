@@ -162,6 +162,11 @@
       allowedVersions: '<23',
     },
     {
+      description: 'typescript-eslint 8 supports TypeScript <6.1 only (its peer range), so TypeScript 7 waits until a typescript-eslint release accepts it',
+      matchPackageNames: ['typescript'],
+      allowedVersions: '<7',
+    },
+    {
       description: 'Leave engines ranges alone; raising the Node floor is a product decision',
       matchDepTypes: ['engines'],
       enabled: false,
