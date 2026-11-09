@@ -607,6 +607,31 @@ test("does not cross-check an auto-waiting assertion against its own snapshot", 
   assert.deepEqual(failures, [])
 })
 
+test("does not cross-check a query row that captures before it waits or scrolls", () => {
+  // find(), waitFor() and scrollIntoView() take their frame before they wait or
+  // scroll, so their target may legitimately be absent from their own snapshot.
+  for (const action of ["find", "waitFor(visible)", "waitFor(attached)", "scrollIntoView"]) {
+    const failures = failuresFor((p) => {
+      p.events[1] = {
+        type: "action",
+        actionIndex: 1,
+        timestamp: p.events[1].timestamp,
+        category: "other",
+        action,
+        selector: JSON.stringify({ text: "Below The Fold" }),
+        duration: 120,
+        success: true,
+        hasScreenshotBefore: true,
+        hasScreenshotAfter: false,
+        hasHierarchyBefore: true,
+        hasHierarchyAfter: false,
+        stack: [{ file: TEST_FILE, line: 7 }],
+      }
+    })
+    assert.deepEqual(failures, [], `${action} should not be cross-checked`)
+  }
+})
+
 // ─── network ───
 
 test("does not abandon the report when an entry's url will not parse", () => {

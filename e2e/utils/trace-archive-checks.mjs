@@ -358,6 +358,11 @@ function checkScreenshots(archive, r) {
   r.note(`${checkedBoxes} element boxes checked against the ${frame} frame`)
 }
 
+/** A query row whose frame is taken before it waits or scrolls to its target. */
+function capturesBeforeItWaits(action) {
+  return action === "find" || action === "scrollIntoView" || /^waitFor\(/.test(action ?? "")
+}
+
 function checkHierarchies(archive, r) {
   // See checkScreenshots: with no steps there is nothing to pair against.
   if (archive.steps.length === 0) return
@@ -422,8 +427,9 @@ function checkHierarchies(archive, r) {
   // Only actions qualify. An assertion's capture is taken *before* it polls, by
   // design, so the trace shows the screen the wait started from — its target
   // legitimately may not be on screen yet. The same holds for the `find`,
-  // `waitFor(...)` and `scrollIntoView` query rows, which are action-typed: the
-  // test this drives calls none of them, so they are not exempted here.
+  // `waitFor(...)` and `scrollIntoView` query rows, which are action-typed but
+  // capture before they wait or scroll, so they are skipped too (the test this
+  // drives calls none of them, but `--verify-only` may read any trace).
   //
   // Deliberately not gated on `step.bounds` (which the box check above does
   // skip when absent): bounds come from a separate 100ms `findElement` lookup
@@ -434,6 +440,7 @@ function checkHierarchies(archive, r) {
   let verifiedPairings = 0
   for (const step of archive.steps) {
     if (step.type !== "action" || !step.hasHierarchyBefore) continue
+    if (capturesBeforeItWaits(step.action)) continue
     const needle = selectorName(step.selector)
     if (needle === null) continue
     const xml = unescapeXml(new TextDecoder().decode(
