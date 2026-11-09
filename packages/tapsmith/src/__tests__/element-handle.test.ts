@@ -7927,6 +7927,34 @@ describe('action trace lifecycle (PILOT-244)', () => {
     expect(started.bounds).toEqual(atStart);
   });
 
+  it('records no start bounds for a modified handle, rather than the first match\'s (PILOT-1078)', async () => {
+    const first = { left: 0, top: 10, right: 100, bottom: 40 };
+    const second = { left: 0, top: 50, right: 100, bottom: 80 };
+    const rows = [
+      makeElementInfo({ visible: true, text: 'Row', bounds: first }),
+      makeElementInfo({ visible: true, text: 'Row', bounds: second }),
+    ];
+    // The start lookup can only resolve the bare selector: it would answer with the first row.
+    const findElement = vi.fn(async () => ({ requestId: '1', found: true, errorMessage: '', element: rows[0] }));
+    const findElements = vi.fn(async () => makeFindElementsResponse(rows));
+    const client = makeMockClient({ findElement, findElements });
+    const { h } = orderedHarness();
+    const handle = new ElementHandle(client, _text('Row'), 5000, { traceCapture: h.traceCapture });
+
+    for (const target of [handle.nth(1), handle.filter({ hasText: 'Row' }).last()]) {
+      await target.find();
+      await target.waitFor();
+    }
+
+    const actions = actionEvents(h);
+    expect(actions.map((a) => a.action)).toEqual(['find', 'waitFor(visible)', 'find', 'waitFor(visible)']);
+    for (const a of actions) expect(a.bounds).toBeUndefined();
+    for (const e of h.lifecycle.filter((l) => l.lifecycle === 'started')) {
+      expect((e.event as ActionTraceEvent).bounds).toBeUndefined();
+    }
+    expect(findElement).not.toHaveBeenCalled();
+  });
+
   it('still captures an instant read\'s frame after the read, so tracing does not delay it (PILOT-1078)', async () => {
     const { h, order } = orderedHarness();
     const findElements = vi.fn(async () => { order.push('read'); return makeFindElementsResponse([]); });

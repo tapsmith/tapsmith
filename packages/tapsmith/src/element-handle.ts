@@ -2639,14 +2639,16 @@ export class ElementHandle {
     const sourceLocation = stack[0];
     // The element's bounds are read with the frame, as tracedAction does, so
     // the box drawn over this frame is where the element was in it — not
-    // where the scroll or wait left it.
+    // where the scroll or wait left it. That lookup resolves the bare
+    // selector only: for a handle narrowed by nth()/filter()/a parent scope
+    // it would answer with another element, so such a row records no box.
     const started = await captureBeforeState({
       collector: trace.collector,
       takeScreenshot: trace.takeScreenshot,
       captureHierarchy: trace.captureHierarchy,
       findElement: (sel: Selector, timeout: number) => this._client.findElement(sel, timeout),
       captureTraceState: trace.captureTraceState,
-    }, this._selector, []);
+    }, this._hasModifiers() ? undefined : this._selector, []);
     trace.collector._emitActionStarted({
       category: 'other',
       action,

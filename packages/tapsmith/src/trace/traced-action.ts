@@ -67,8 +67,8 @@ function resolveDetail(extra: TracedActionExtra | undefined): string | undefined
 type Bounds = { left: number; top: number; right: number; bottom: number };
 
 export interface BeforeState {
-  /** The index the capture reserved, or the one handed in; unset when nothing captured. */
-  actionIndex?: number
+  /** The index the capture reserved, or the one handed in. */
+  actionIndex: number
   captures: { screenshotBefore?: unknown; hierarchyBefore?: unknown }
   /** The element's bounds at the moment of the capture, when it was found then. */
   bounds?: Bounds
@@ -165,6 +165,10 @@ export async function captureBeforeState(
     }
   }
 
+  // Nothing captured (the batch spent the whole budget): reserve the index
+  // anyway, so the started row streamed next and the completed event share it
+  // even when another device acts in between.
+  actionIndex ??= ctx.collector._reserveActionIndex();
   return { actionIndex, captures, bounds };
 }
 
@@ -196,7 +200,7 @@ export async function tracedAction(
 
   // The index this action's events carry. Reserved by the before-capture (or
   // handed in by the caller) so a concurrent action on another device cannot
-  // take the same one; unset when nothing captured — the emit then claims one.
+  // take the same one.
   let actionIndex: number | undefined = extra?.reservedActionIndex;
   // A skipped capture reserves nothing, so reserve here: the runner resets
   // every device of a group concurrently, and two started rows peeking the
