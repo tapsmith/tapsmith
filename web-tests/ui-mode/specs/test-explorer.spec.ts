@@ -7,6 +7,7 @@ import {
   twoFileTree,
   twoProjectTree,
 } from "../messages/scenarios.js"
+import { projectNode } from "../messages/tree.js"
 
 test.describe("Test explorer", () => {
   test("renders the tree from a test-tree message", async ({ app, explorer }) => {
@@ -239,45 +240,26 @@ test.describe("Test explorer", () => {
     await expect(explorer.nodesOfType("file")).toHaveCount(1)
   })
 
-  test.describe("Declared isolation", () => {
-    test("shows a badge only for nodes that declare a reset policy or saved state", async ({ ui, explorer }) => {
-      const tree = singleFileTree()
-      const file = tree[0]
-      // The suite opts into per-test restarts; one test restores saved state.
-      const suite = file.children!.find((n) => n.type === "suite")!
-      suite.use = { appReset: "restart", appResetScope: "test" }
-      const stateTest = suite.children![0]
-      stateTest.use = { appReset: "restart", appResetScope: "test", appState: "./tapsmith-results/auth.tar.gz" }
+  test("shows no reset-policy chip on any row, even where use declares one", async ({ ui, explorer }) => {
+    // A declared reset policy is configuration, not run state: the tree does
+    // not badge it on any row (the trace's Metadata tab shows the isolation a
+    // test actually ran under). The devices badge, which reads the same
+    // `use`, still shows where it is declared.
+    const files = singleFileTree()
+    const file = files[0]
+    file.use = { appReset: "clear" }
+    const suite = file.children!.find((n) => n.type === "suite")!
+    suite.use = { appReset: "restart", appResetScope: "test" }
+    suite.children![0].use = { appReset: "restart", appResetScope: "test", appState: "./tapsmith-results/auth.tar.gz" }
+    suite.children!.find((n) => n.name === "swipe registers swipe")!.use = { appResetScope: "file" }
+    ui.seed(idleSeed([projectNode("pair", files, { use: { devices: 2, deviceNames: ["alice", "bob"], appReset: "warm", appState: "" } })]))
+    await ui.open()
+    await explorer.expandAllButton.click()
 
-      ui.seed(idleSeed(tree))
-      await ui.open()
-      await explorer.expandAllButton.click()
-
-      await expect(explorer.isolationFor("Gestures screen")).toHaveText("restart / test")
-      await expect(explorer.isolationFor("double tap registers double tap gesture")).toHaveText("state / test")
-      await expect(explorer.isolationFor("double tap registers double tap gesture")).toHaveAttribute("title", /Restores saved app state/)
-      // The file itself declares nothing — no badge, the tree stays quiet by default.
-      await expect(explorer.isolationFor("gestures.test.ts")).toHaveCount(0)
-      await expect(explorer.isolationFor("smoke")).toHaveCount(0)
-    })
-
-    test("a scope declared on its own gets a badge too", async ({ ui, explorer }) => {
-      // The common form: `test.use({ appResetScope: "test" })` keeps the
-      // configured mode (auto) and only asks for a reset before every test.
-      const tree = singleFileTree()
-      const suite = tree[0].children!.find((n) => n.type === "suite")!
-      suite.use = { appResetScope: "test" }
-      for (const child of suite.children!) child.use = { appResetScope: "test" }
-
-      ui.seed(idleSeed(tree))
-      await ui.open()
-      await explorer.expandAllButton.click()
-
-      await expect(explorer.isolationFor("Gestures screen")).toHaveText("per test")
-      await expect(explorer.isolationFor("Gestures screen")).toHaveAttribute("title", /Reset before every test/)
-      await expect(explorer.isolationFor("swipe registers swipe")).toHaveText("per test")
-      // Undeclared nodes still get nothing.
-      await expect(explorer.isolationFor("smoke")).toHaveCount(0)
-    })
+    await expect(explorer.devicesFor("[pair]")).toHaveText(/alice · bob/)
+    for (const name of ["[pair]", "gestures.test.ts", "Gestures screen", "double tap registers double tap gesture", "swipe registers swipe"]) {
+      await expect(explorer.node(name)).toBeVisible()
+      await expect(explorer.node(name)).not.toContainText(/clear|restart|warm|state|per test|per file/)
+    }
   })
 })
