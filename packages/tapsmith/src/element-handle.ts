@@ -2624,7 +2624,7 @@ export class ElementHandle {
    * @internal — Start a traced query that changes the screen (scrollIntoView)
    * or waits for it to change (waitFor, find): capture its frame now, before
    * it acts or waits, and stream the in-flight row at the index that capture
-   * reserved (PILOT-1078). The viewer shows an action's "after" as the next
+   * reserved. The viewer shows an action's "after" as the next
    * row's capture, so a frame taken at completion would show the end state as
    * the previous action's "after" and as this row's "before". The instant
    * reads (count, isVisible, …) keep capturing after their one read: the frame
