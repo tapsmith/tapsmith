@@ -6,7 +6,7 @@ plugins {
 val coreKtxVersion = "1.19.1"
 val testRunnerVersion = "1.7.0"
 val testCoreVersion = "1.7.0"
-val uiautomatorVersion = "2.4.0"
+val uiautomatorVersion = "2.4.1"
 val coroutinesVersion = "1.11.0"
 val jsonVersion = "20240303"
 
