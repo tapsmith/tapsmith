@@ -421,7 +421,9 @@ function checkHierarchies(archive, r) {
   //
   // Only actions qualify. An assertion's capture is taken *before* it polls, by
   // design, so the trace shows the screen the wait started from — its target
-  // legitimately may not be on screen yet.
+  // legitimately may not be on screen yet. The same holds for the `find`,
+  // `waitFor(...)` and `scrollIntoView` query rows, which are action-typed: the
+  // test this drives calls none of them, so they are not exempted here.
   //
   // Deliberately not gated on `step.bounds` (which the box check above does
   // skip when absent): bounds come from a separate 100ms `findElement` lookup

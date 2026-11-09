@@ -7871,12 +7871,8 @@ describe('action trace lifecycle (PILOT-244)', () => {
     let reads = 0;
     const el = makeElementInfo({ visible: true, text: 'Later' });
     const findElements = vi.fn(async () => { order.push('read'); return makeFindElementsResponse(++reads >= 2 ? [el] : []); });
-    const findElement = vi.fn(async () => {
-      order.push('read');
-      return ++reads >= 2
-        ? { requestId: '1', found: true, element: el, errorMessage: '' }
-        : { requestId: '1', found: false, errorMessage: 'Element not found' };
-    });
+    // The bounds lookup taken alongside the start capture (not yet on screen).
+    const findElement = vi.fn(async () => ({ requestId: '1', found: false, errorMessage: 'Element not found' }));
     const client = makeMockClient({ findElements, findElement });
     const handle = new ElementHandle(client, _text('Later'), 5000, { traceCapture: h.traceCapture });
 
@@ -7887,6 +7883,48 @@ describe('action trace lifecycle (PILOT-244)', () => {
     const actions = actionEvents(h);
     expect(actions.map((a) => [a.action, a.success])).toEqual([['find', true]]);
     expect(startedIndexes(h)).toEqual([actions[0].actionIndex]);
+  });
+
+  it('records the bounds read with scrollIntoView()\'s start frame, not where the scroll left the element (PILOT-1078)', async () => {
+    const { h } = orderedHarness();
+    const scrolledTo = { left: 0, top: 100, right: 200, bottom: 150 };
+    const target = makeElementInfo({ visible: true, bounds: scrolledTo });
+    let swiped = false;
+    const findElements = vi.fn(async () => makeFindElementsResponse(swiped ? [target] : []));
+    // Below the fold when the frame is taken: the start lookup finds nothing.
+    const findElement = vi.fn(async () => ({ requestId: '1', found: swiped, element: swiped ? target : undefined, errorMessage: '' }));
+    const swipe = vi.fn(async () => { swiped = true; return successResponse(); });
+    const client = makeMockClient({ findElements, findElement, swipe });
+    const handle = new ElementHandle(client, _text('Below The Fold'), 5000, { traceCapture: h.traceCapture });
+
+    await handle.scrollIntoView({ maxScrolls: 2 });
+
+    // No box over a pre-scroll frame the element is not in.
+    expect(actionEvents(h)[0].bounds).toBeUndefined();
+  });
+
+  it('records the bounds read with find()\'s start frame when the element moves during the wait (PILOT-1078)', async () => {
+    const { h } = orderedHarness();
+    const atStart = { left: 0, top: 10, right: 100, bottom: 40 };
+    const atEnd = { left: 0, top: 300, right: 100, bottom: 330 };
+    let lookups = 0;
+    const findElement = vi.fn(async () => ({
+      requestId: '1', found: true, errorMessage: '',
+      element: makeElementInfo({ visible: true, text: 'Row', bounds: lookups++ === 0 ? atStart : atEnd }),
+    }));
+    const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ visible: true, text: 'Row', bounds: atEnd })]));
+    const client = makeMockClient({ findElement, findElements });
+    const handle = new ElementHandle(client, _text('Row'), 5000, { traceCapture: h.traceCapture });
+
+    const found = await handle.find();
+
+    expect(found.bounds).toEqual(atEnd);
+    const row = actionEvents(h)[0];
+    expect(row.action).toBe('find');
+    expect(row.bounds).toEqual(atStart);
+    // The streamed in-flight row carries the same start bounds.
+    const started = h.lifecycle.find((e) => e.lifecycle === 'started')!.event as ActionTraceEvent;
+    expect(started.bounds).toEqual(atStart);
   });
 
   it('still captures an instant read\'s frame after the read, so tracing does not delay it (PILOT-1078)', async () => {

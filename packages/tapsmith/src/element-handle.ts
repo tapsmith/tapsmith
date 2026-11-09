@@ -29,9 +29,9 @@ import { onScreenSignature } from './screen-signature.js';
 import { pickScrollRegion, type Rect } from './scroll-container.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepResponse } from './grpc-client.js';
-import { type TraceCapture, type CaptureBeforeAfter, extractStack } from './trace/trace-collector.js';
+import { type TraceCapture, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory } from './trace/types.js';
-import { tracedAction } from './trace/traced-action.js';
+import { type BeforeState, captureBeforeState, tracedAction } from './trace/traced-action.js';
 import { sleep, isAbortError } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
@@ -71,11 +71,8 @@ const WAIT_FOR_STATES: readonly string[] = ['visible', 'hidden', 'attached', 'de
  *  consumed to stop the scroll rather than being delivered to child views.
  *  500ms is the measured safe minimum for iOS. */
 const SCROLL_SETTLE_MS = 500;
-/** The frame a screen-changing traced method captured when it started. */
-interface QueryTraceStart {
-  actionIndex: number
-  captures: Partial<CaptureBeforeAfter>
-}
+/** The frame (and the element's bounds then) a waiting or scrolling query captured when it started. */
+type QueryTraceStart = BeforeState;
 
 /** Idle-wait budget used to confirm a first-tick miss in scrollIntoView()
  *  before committing to the first swipe. Right after navigation or app launch
@@ -2632,18 +2629,29 @@ export class ElementHandle {
    * the previous action's "after" and as this row's "before". The instant
    * reads (count, isVisible, …) keep capturing after their one read: the frame
    * is the same, and capturing first would delay the read only when tracing.
-   * Pass the result to `_traceQuery` / `_traceQueryFailed`.
+   * Pass the result to `_traceQuery` / `_traceQueryFailed`, which then record
+   * the bounds read with that frame instead of the ones the call ended with.
    */
   private async _captureQueryStart(action: string): Promise<QueryTraceStart | undefined> {
     const trace = this._traceCapture;
     if (!trace) return undefined;
     const stack = extractStack(new Error().stack ?? '');
     const sourceLocation = stack[0];
-    const started = await trace.collector.captureBeforeAction(trace.takeScreenshot, trace.captureHierarchy);
+    // The element's bounds are read with the frame, as tracedAction does, so
+    // the box drawn over this frame is where the element was in it — not
+    // where the scroll or wait left it.
+    const started = await captureBeforeState({
+      collector: trace.collector,
+      takeScreenshot: trace.takeScreenshot,
+      captureHierarchy: trace.captureHierarchy,
+      findElement: (sel: Selector, timeout: number) => this._client.findElement(sel, timeout),
+      captureTraceState: trace.captureTraceState,
+    }, this._selector, []);
     trace.collector._emitActionStarted({
       category: 'other',
       action,
       selector: JSON.stringify(selectorToProto(this._selector)),
+      bounds: started.bounds,
       sourceLocation,
       stack,
       deviceId: trace.deviceId,
@@ -2658,7 +2666,8 @@ export class ElementHandle {
    * @internal — Emit a trace event for a read-only query with a single
    * screenshot capture (the "after" shot showing current device state).
    * `started` is the capture `_captureQueryStart` already took for a method
-   * that changes the screen; none is taken here then.
+   * that scrolls or waits; none is taken here then, and the row records the
+   * bounds read with that capture rather than `bounds`.
    */
   private async _traceQuery(
     action: string,
@@ -2680,7 +2689,9 @@ export class ElementHandle {
       selector: JSON.stringify(selectorToProto(this._selector)),
       duration: durationMs,
       success: true,
-      bounds,
+      // A start capture's frame shows the screen before the call: the bounds
+      // read with it, not where the element ended up.
+      bounds: started ? started.bounds : bounds,
       sourceLocation,
       stack,
       deviceId: trace.deviceId,
@@ -2719,6 +2730,7 @@ export class ElementHandle {
       selector: JSON.stringify(selectorToProto(this._selector)),
       duration: durationMs,
       success: false,
+      bounds: started?.bounds,
       error: errMsg,
       errorStack: errStack,
       sourceLocation,

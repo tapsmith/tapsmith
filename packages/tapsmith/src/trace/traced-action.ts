@@ -62,6 +62,112 @@ function resolveDetail(extra: TracedActionExtra | undefined): string | undefined
   return typeof extra.detail === 'function' ? extra.detail() : extra.detail;
 }
 
+// ─── Before-capture with element bounds ───
+
+type Bounds = { left: number; top: number; right: number; bottom: number };
+
+export interface BeforeState {
+  /** The index the capture reserved, or the one handed in; unset when nothing captured. */
+  actionIndex?: number
+  captures: { screenshotBefore?: unknown; hierarchyBefore?: unknown }
+  /** The element's bounds at the moment of the capture, when it was found then. */
+  bounds?: Bounds
+}
+
+/**
+ * Capture a row's before frame (screenshot + hierarchy) together with the
+ * bounds of `selector`'s element at that same moment, so the box the viewer
+ * draws over the frame describes that frame. One batched round trip where the
+ * device supports it (iOS), else the capture and a short element lookup in
+ * parallel. Appends what it did to `log`.
+ */
+export async function captureBeforeState(
+  ctx: TraceContext,
+  selector: Selector | undefined,
+  log: string[],
+  reservedActionIndex?: number,
+): Promise<BeforeState> {
+  let actionIndex = reservedActionIndex;
+  let captures: BeforeState['captures'] = {};
+  let bounds: Bounds | undefined;
+  const traceCaptureDeadline = Date.now() + TRACE_CAPTURE_TIMEOUT_MS;
+
+  // When the batched captureTraceState is available (iOS), use a single
+  // round-trip for screenshot + hierarchy + element bounds instead of 3
+  // separate gRPC calls that each trigger their own app.snapshot() IPC.
+  let batchSuccess = false;
+  if (ctx.captureTraceState) {
+    const batchStart = Date.now();
+    try {
+      const batchResult = await ctx.captureTraceState({
+        screenshot: ctx.collector.config.screenshots,
+        hierarchy: ctx.collector.config.snapshots,
+        elementSelector: selector,
+      });
+      if (batchResult?.success) {
+        batchSuccess = true;
+        const screenshotData = batchResult.screenshotData?.length
+          ? batchResult.screenshotData : undefined;
+        const hierarchyXml = batchResult.hierarchyXml || undefined;
+
+        const captured = await ctx.collector.captureBeforeAction(
+          () => Promise.resolve(screenshotData as Buffer | undefined),
+          () => Promise.resolve(hierarchyXml),
+          undefined,
+          actionIndex,
+        );
+        captures = captured.captures;
+        actionIndex = captured.actionIndex;
+
+        if (batchResult.elementFound && batchResult.element?.bounds) {
+          bounds = batchResult.element.bounds;
+          log.push(`Element found at [${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}] (${Date.now() - batchStart}ms)`);
+        } else if (selector) {
+          log.push(`Element lookup returned no match (${Date.now() - batchStart}ms)`);
+        }
+      } else {
+        log.push(`Batch trace state capture failed: ${batchResult?.errorMessage ?? 'no response'}`);
+      }
+    } catch (err) {
+      log.push(`Batch trace state capture failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (!batchSuccess) {
+    const remainingCaptureMs = traceCaptureDeadline - Date.now();
+    if (remainingCaptureMs < MIN_TRACE_FALLBACK_TIMEOUT_MS) {
+      log.push('Skipping individual trace capture fallback; batch consumed capture budget');
+    } else {
+      // Individual parallel calls (Android, or iOS fallback on batch failure)
+      const boundsPromise = (selector && ctx.findElement)
+        ? (async () => {
+            const lookupStart = Date.now();
+            try {
+              const res = await ctx.findElement!(selector, 100);
+              if (res.found && res.element?.bounds) {
+                bounds = res.element.bounds;
+                log.push(`Element found at [${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}] (${Date.now() - lookupStart}ms)`);
+              } else {
+                log.push(`Element lookup returned no match (${Date.now() - lookupStart}ms)`);
+              }
+            } catch {
+              log.push(`Element lookup failed (${Date.now() - lookupStart}ms)`);
+            }
+          })()
+        : Promise.resolve();
+
+      const [, captured] = await Promise.all([
+        boundsPromise,
+        ctx.collector.captureBeforeAction(ctx.takeScreenshot, ctx.captureHierarchy, remainingCaptureMs, actionIndex),
+      ]);
+      captures = captured.captures;
+      actionIndex = captured.actionIndex;
+    }
+  }
+
+  return { actionIndex, captures, bounds };
+}
+
 export async function tracedAction(
   ctx: TraceContext | undefined,
   action: string,
@@ -88,12 +194,6 @@ export async function tracedAction(
   let bounds: { left: number; top: number; right: number; bottom: number } | undefined;
   let point: { x: number; y: number } | undefined;
 
-  const traceCaptureDeadline = Date.now() + TRACE_CAPTURE_TIMEOUT_MS;
-
-  // When the batched captureTraceState is available (iOS), use a single
-  // round-trip for screenshot + hierarchy + element bounds instead of 3
-  // separate gRPC calls that each trigger their own app.snapshot() IPC.
-  let beforeCaptures: { screenshotBefore?: unknown; hierarchyBefore?: unknown } = {};
   // The index this action's events carry. Reserved by the before-capture (or
   // handed in by the caller) so a concurrent action on another device cannot
   // take the same one; unset when nothing captured — the emit then claims one.
@@ -104,96 +204,22 @@ export async function tracedAction(
   if (actionIndex === undefined && extra?.skipBeforeCapture) {
     actionIndex = ctx.collector._reserveActionIndex();
   }
-  // Treat a skipped capture like a completed batch so the fallback path
-  // below does not run either.
-  let batchSuccess = !!extra?.skipBeforeCapture;
+  let beforeCaptures: { screenshotBefore?: unknown; hierarchyBefore?: unknown } = {};
 
   if (extra?.skipBeforeCapture) {
     log.push('Skipping before screenshot + hierarchy (fixture setup)');
   } else {
     log.push('Capturing before screenshot + hierarchy');
-  }
-
-  if (ctx.captureTraceState && !extra?.skipBeforeCapture) {
-    const batchStart = Date.now();
-    try {
-      const batchResult = await ctx.captureTraceState({
-        screenshot: ctx.collector.config.screenshots,
-        hierarchy: ctx.collector.config.snapshots,
-        elementSelector: selector,
-      });
-      if (batchResult?.success) {
-        batchSuccess = true;
-        const screenshotData = batchResult.screenshotData?.length
-          ? batchResult.screenshotData : undefined;
-        const hierarchyXml = batchResult.hierarchyXml || undefined;
-
-        const captured = await ctx.collector.captureBeforeAction(
-          () => Promise.resolve(screenshotData as Buffer | undefined),
-          () => Promise.resolve(hierarchyXml),
-          undefined,
-          actionIndex,
-        );
-        beforeCaptures = captured.captures;
-        actionIndex = captured.actionIndex;
-
-        if (batchResult.elementFound && batchResult.element?.bounds) {
-          bounds = batchResult.element.bounds;
-          log.push(`Element found at [${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}] (${Date.now() - batchStart}ms)`);
-          if (category === 'tap') {
-            point = {
-              x: (bounds.left + bounds.right) / 2,
-              y: (bounds.top + bounds.bottom) / 2,
-            };
-            log.push(`Tap target: (${point.x}, ${point.y})`);
-          }
-        } else if (selector) {
-          log.push(`Element lookup returned no match (${Date.now() - batchStart}ms)`);
-        }
-      } else {
-        log.push(`Batch trace state capture failed: ${batchResult?.errorMessage ?? 'no response'}`);
-      }
-    } catch (err) {
-      log.push(`Batch trace state capture failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  if (!batchSuccess) {
-    const remainingCaptureMs = traceCaptureDeadline - Date.now();
-    if (remainingCaptureMs < MIN_TRACE_FALLBACK_TIMEOUT_MS) {
-      log.push('Skipping individual trace capture fallback; batch consumed capture budget');
-    } else {
-      // Individual parallel calls (Android, or iOS fallback on batch failure)
-      const boundsPromise = (selector && ctx.findElement)
-        ? (async () => {
-            const lookupStart = Date.now();
-            try {
-              const res = await ctx.findElement!(selector, 100);
-              if (res.found && res.element?.bounds) {
-                bounds = res.element.bounds;
-                log.push(`Element found at [${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}] (${Date.now() - lookupStart}ms)`);
-                if (category === 'tap') {
-                  point = {
-                    x: (bounds.left + bounds.right) / 2,
-                    y: (bounds.top + bounds.bottom) / 2,
-                  };
-                  log.push(`Tap target: (${point.x}, ${point.y})`);
-                }
-              } else {
-                log.push(`Element lookup returned no match (${Date.now() - lookupStart}ms)`);
-              }
-            } catch {
-              log.push(`Element lookup failed (${Date.now() - lookupStart}ms)`);
-            }
-          })()
-        : Promise.resolve();
-
-      const [, captured] = await Promise.all([
-        boundsPromise,
-        ctx.collector.captureBeforeAction(ctx.takeScreenshot, ctx.captureHierarchy, remainingCaptureMs, actionIndex),
-      ]);
-      beforeCaptures = captured.captures;
-      actionIndex = captured.actionIndex;
+    const before = await captureBeforeState(ctx, selector, log, actionIndex);
+    beforeCaptures = before.captures;
+    actionIndex = before.actionIndex;
+    bounds = before.bounds;
+    if (bounds && category === 'tap') {
+      point = {
+        x: (bounds.left + bounds.right) / 2,
+        y: (bounds.top + bounds.bottom) / 2,
+      };
+      log.push(`Tap target: (${point.x}, ${point.y})`);
     }
   }
 
