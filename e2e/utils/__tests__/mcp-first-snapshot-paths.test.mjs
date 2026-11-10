@@ -37,11 +37,15 @@ test("a PR that touches no guarded path skips the check", () => {
 test("a PR touching any guarded area runs the check", () => {
   const samples = [
     "packages/tapsmith-core/src/ios/device.rs",
+    "packages/tapsmith-core/src/ios/launch_gate.rs",
     "packages/tapsmith-core/src/grpc_server.rs",
     "packages/tapsmith-core/src/grpc_server/ios_backend.rs",
-    "packages/tapsmith-core/src/agent_comms.rs",
+    "ios-agent/TapsmithAgent/TapsmithAgentRunner.swift",
+    "ios-agent/TapsmithAgent/LaunchAccessibilityCheck.swift",
+    "ios-agent/TapsmithAgent/LaunchGate.swift",
+    "ios-agent/TapsmithAgent/ObjCExceptionCatcher.m",
     "ios-agent/TapsmithAgent/HierarchyDumper.swift",
-    "ios-agent/TapsmithAgent.xcodeproj/project.pbxproj",
+    "ios-agent/TapsmithAgent/XCTestIssueRelay.swift",
     "packages/tapsmith/src/mcp/connection.ts",
     "packages/tapsmith/src/mcp/tools/snapshot.ts",
     "e2e/verify-mcp-first-snapshot.mjs",
@@ -56,10 +60,37 @@ test("a PR touching any guarded area runs the check", () => {
   }
 })
 
+// Each of these used to be guarded. Every E2E test exercises them anyway, and
+// none is on the PILOT-462 path (PILOT-1133).
+test("code outside the PILOT-462 path no longer runs the check", () => {
+  const dropped = [
+    // The generic agent transport.
+    "packages/tapsmith-core/src/agent_comms.rs",
+    // The rest of grpc_server/: Android-only or platform-neutral.
+    "packages/tapsmith-core/src/grpc_server/android_backend.rs",
+    "packages/tapsmith-core/src/grpc_server/device_backend.rs",
+    "packages/tapsmith-core/src/grpc_server/scroll_step.rs",
+    // The rest of the agent: locators, touch, keyboard, waits, the project.
+    "ios-agent/TapsmithAgent/CommandHandler.swift",
+    "ios-agent/TapsmithAgent/ElementFinder.swift",
+    "ios-agent/TapsmithAgent/HidTouch.swift",
+    "ios-agent/TapsmithAgent/KeyboardDismissPlanner.swift",
+    "ios-agent/TapsmithAgent/WaitEngine.swift",
+    "ios-agent/TapsmithAgent.xcodeproj/project.pbxproj",
+    "ios-agent/Tests/run-unit-tests.sh",
+  ]
+  for (const file of dropped) {
+    assert.equal(isGuarded(file), false, file)
+    assert.equal(decide({ eventName: "pull_request", changedFiles: [file] }).run, false, file)
+  }
+})
+
 test("prefixes are matched as path prefixes, exact files exactly", () => {
   assert.equal(isGuarded("packages/tapsmith-core/src/ios_helper.rs"), false)
   assert.equal(isGuarded("packages/tapsmith-core/src/grpc_server.rs.bak"), false)
   assert.equal(isGuarded("ios-agent-docs/readme.md"), false)
+  assert.equal(isGuarded("ios-agent/TapsmithAgent/HierarchyDumper.swift.orig"), false)
+  assert.equal(isGuarded("packages/tapsmith-core/src/grpc_server/ios_backend.rs.bak"), false)
   assert.equal(isGuarded("packages/tapsmith/src/mcp-utils.ts"), false)
   assert.equal(isGuarded(".github/workflows/e2e-ios-multi.yml"), false)
 })
@@ -120,21 +151,21 @@ test("the CLI writes run=false for a non-guarded diff and run=true for a guarded
     git("remote", "add", "origin", repo)
     commitFile(repo, git, "docs/a.md")
     assert.equal(runCli(repo, base), "run=false")
-    commitFile(repo, git, "ios-agent/X.swift")
+    commitFile(repo, git, "ios-agent/TapsmithAgent/HierarchyDumper.swift")
     assert.equal(runCli(repo, base), "run=true")
   } finally {
     rmSync(repo, { recursive: true, force: true })
   }
 })
 
-test("moving a file out of a guarded directory runs the check", () => {
+test("moving a guarded file elsewhere runs the check", () => {
   const { repo, git } = scratchRepo()
   try {
-    commitFile(repo, git, "ios-agent/A.swift")
+    commitFile(repo, git, "ios-agent/TapsmithAgent/HierarchyDumper.swift")
     const base = git("rev-parse", "HEAD")
     git("remote", "add", "origin", repo)
     mkdirSync(join(repo, "other"))
-    git("mv", "ios-agent/A.swift", "other/A.swift")
+    git("mv", "ios-agent/TapsmithAgent/HierarchyDumper.swift", "other/HierarchyDumper.swift")
     git("commit", "-q", "-m", "move")
     assert.equal(runCli(repo, base), "run=true")
   } finally {
@@ -179,7 +210,7 @@ test("a PR merge commit is diffed against its first parent, not a stale base sha
     git("checkout", "-q", "-b", "pr")
     commitFile(repo, git, "docs/a.md")
     git("checkout", "-q", "main")
-    commitFile(repo, git, "ios-agent/Later.swift") // landed on main after the PR's base
+    commitFile(repo, git, "ios-agent/TapsmithAgent/LaunchGate.swift") // landed on main after the PR's base
     git("merge", "-q", "--no-ff", "-m", "merge pr", "pr")
     assert.equal(runCli(repo, staleBase), "run=false")
   } finally {
