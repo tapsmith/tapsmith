@@ -223,6 +223,15 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/region-screenshot-tests"
 "$OUT/region-screenshot-tests"
 
+# Pins XCTest's private animations-idle request (every element touch's wait).
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/AnimationsIdleTests/main.swift \
+  TapsmithAgent/AnimationsIdle.swift \
+  TapsmithAgent/TouchPlanClock.swift \
+  -o "$OUT/animations-idle-tests"
+"$OUT/animations-idle-tests"
+
 # Pins XCTest's private open-URL request (every warm deep link's delivery).
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \

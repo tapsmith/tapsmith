@@ -887,18 +887,41 @@ class CommandHandler {
     /// be. The new plan has what is left of `timeoutMs`, and is not settled
     /// again. An element plan needs no new plan: `XCUIElement.tap()` works out
     /// its own hit point when it touches.
+    ///
+    /// First, the app's UIKit animations must be over (`AnimationsIdle`): a
+    /// touch during a presentation transition is dropped, and the pixel
+    /// settle can call a fading target still (PILOT-1129).
     private func planSettledTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
         reserveMs: Int64 = 0
     ) throws -> TouchPlan {
         let started = Date()
-        let plan = try planTouch(element, timeoutMs: timeoutMs, reserveMs: reserveMs)
+        waitForAnimationsIdle(reserveMs: reserveMs)
+        let afterIdle = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
+        let plan = try planTouch(element, timeoutMs: afterIdle, reserveMs: reserveMs)
         let outcome = settleBeforeTouch(plan, reserveMs: reserveMs)
         guard case .point = plan, outcome.sawChange else { return plan }
         let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
         NSLog("[TapsmithCommand] \(element.elementId) changed while settling; planning the touch again")
         return try planTouch(element, timeoutMs: remaining, reserveMs: reserveMs)
+    }
+
+    /// Wait for the app's UIKit animations (a view controller presentation or
+    /// dismissal, any UIView animation) to end, at most
+    /// `AnimationsIdle.maxWaitSeconds` and never past the daemon's read
+    /// deadline (less `reserveMs` for a long press's hold). Returns at once
+    /// when nothing animates, or when XCTest can't be asked.
+    private func waitForAnimationsIdle(reserveMs: Int64) {
+        guard let request = AnimationsIdle.request(for: app) else { return }
+        let deadline = AnimationsIdle.deadline(
+            now: Date(),
+            readDeadline: commandReadDeadline,
+            reserveSeconds: Double(max(0, reserveMs)) / 1000
+        )
+        if AnimationsIdle.wait(deadline: deadline, request: request) == .timedOut {
+            NSLog("[TapsmithCommand] app still animating at the wait's deadline; touching anyway")
+        }
     }
 
     /// Wait for the planned touch's target to stop changing on screen
