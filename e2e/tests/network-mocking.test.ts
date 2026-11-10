@@ -16,7 +16,6 @@ import {
   type Route,
 } from "../fixtures.js"
 import { openScreen, resetApp } from "../utils/app-reset.js"
-import { startNetworkProxy } from "../utils/network-proxy.js"
 
 function routeFetchNoCacheOptions(route: Route) {
   const headers = { ...route.request().headers }
@@ -84,7 +83,6 @@ describe("Network mocking", () => {
   })
 
   test.beforeEach(async ({ device, apiCallsScreen }) => {
-    await startNetworkProxy(device)
     await openScreen(device, "/api-calls")
     await expect(apiCallsScreen.heading).toBeVisible()
   })
@@ -275,9 +273,9 @@ describe("Network mocking", () => {
   })
 })
 
-// PILOT-775: mocking needs no trace config — with tracing off, the first
-// route() or network wait of a test starts the proxy on demand. Routes and
-// waits come first, before the screen that sends the request.
+// PILOT-775: mocking needs no trace config — with tracing off, the proxy
+// starts with the session, since the run's files call route() (PILOT-1013).
+// Routes and waits come first, before the screen that sends the request.
 describe("Network mocking without a trace (PILOT-775)", () => {
   test.use({ trace: "off", timeout: 20_000 })
 

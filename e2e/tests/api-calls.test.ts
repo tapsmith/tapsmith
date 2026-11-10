@@ -8,7 +8,6 @@
  */
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
-import { startNetworkProxy } from "../utils/network-proxy.js"
 
 describe("API Calls screen", () => {
   // Each test navigates back to the screen and makes real HTTP requests,
@@ -16,7 +15,6 @@ describe("API Calls screen", () => {
   test.use({ timeout: 15_000 })
 
   test.beforeEach(async ({ device, apiCallsScreen }) => {
-    await startNetworkProxy(device)
     await openScreen(device, "/api-calls")
     await expect(apiCallsScreen.heading).toBeVisible()
   })
