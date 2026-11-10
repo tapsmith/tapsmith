@@ -167,6 +167,13 @@ describe('locateTapsmith', () => {
     expect(found.error).toContain('TAPSMITH_PROJECT_DIR');
   });
 
+  it('says the project folder does not exist, rather than that Tapsmith is not installed there', () => {
+    const missing = path.join(tmp, 'typo');
+    const found = locateTapsmith(missing);
+    expect(found.error).toContain(`The project folder ${missing} does not exist`);
+    expect(found.error).toContain('TAPSMITH_PROJECT_DIR');
+  });
+
   it('says how to install Tapsmith when the project has none', () => {
     const found = locateTapsmith(tmp);
     expect(found.error).toContain(`Tapsmith is not installed in ${tmp}`);
@@ -227,6 +234,11 @@ describe('the inline launcher', () => {
     expect(script).not.toMatch(/^\s*\/\//m);
     expect(script).not.toContain('/**');
     expect(script.startsWith('import ')).toBe(true);
+  });
+
+  it('holds no `${`, which Cursor would substitute as a placeholder in a plugin MCP config', () => {
+    const config = JSON.parse(generatedFiles(REPO)['plugins/tapsmith/mcp-inline.json']!) as McpConfig;
+    expect(config.mcpServers['tapsmith-headless']!.args.join(' ')).not.toContain('${');
   });
 });
 

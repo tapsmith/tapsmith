@@ -78,10 +78,11 @@ export function generatedFiles(root = ROOT) {
   const claudeMcp = {
     mcpServers: { [server]: { command: 'node', args: [`\${CLAUDE_PLUGIN_ROOT}/${LAUNCHER}`] } },
   };
-  // Codex's plugin MCP config has no variable for the plugin's directory, and
-  // Cursor's is documented only for another format, so both get the launcher
-  // inline. `--` ends Node's own options, so arguments added after it
-  // (`--config <file>`) reach the launcher.
+  // Codex's plugin MCP config has no variable for the plugin's directory, so
+  // it gets the launcher inline. So does Cursor, whose plugin-directory
+  // variable could not be checked in the app; inline needs no expansion (and
+  // holds no `${`, which Cursor substitutes). `--` ends Node's own options, so
+  // arguments added after it (`--config <file>`) reach the launcher.
   const inlineMcp = {
     mcpServers: {
       [server]: { command: 'node', args: ['--input-type=module', '-e', inlineLauncherScript(launcher), '--'] },
@@ -146,7 +147,12 @@ export function staleFiles(root = ROOT) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.includes('--check')) {
+  const args = process.argv.slice(2);
+  if (args.some((a) => a !== '--check')) {
+    console.error('Usage: node plugins/source/sync.mjs [--check]');
+    process.exit(2);
+  }
+  if (args.includes('--check')) {
     const stale = staleFiles();
     if (stale.length > 0) {
       console.error(`The plugin files are out of date; run \`node plugins/source/sync.mjs\`:\n${stale.join('\n')}`);
