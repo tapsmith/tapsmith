@@ -389,7 +389,7 @@ describe('openDeviceSession', () => {
   });
 
   // PILOT-1013: a run whose tests use the network APIs starts the proxy
-  // before the app's first connection.
+  // before the app launches.
   describe('network proxy at session start', () => {
     const spec = { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' };
 

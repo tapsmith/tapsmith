@@ -8,7 +8,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { minimatch } from 'minimatch';
 import { platformOfSerial, resolveProjects, scopeDevicePinToPlatform, topologicalSort, type ResolvedProject } from '../project.js';
 import { classifyUnmatchedTestFile, discoverTestFiles } from '../test-file-discovery.js';
-import { testFilesUseNetworkApis } from '../network-api-scan.js';
+import { createNetworkApiScanner } from '../network-api-scan.js';
 import {
   deserializeTestResult,
   deserializeSuiteResult,
@@ -139,11 +139,8 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * refresh forks a child only for what changed.
    */
   private _fileStamps = new Map<string, string>();
-  /**
-   * Whether the session's test files use the network APIs, and the file
-   * list and stamps it was answered for — scanned again when they move.
-   */
-  private _networkApisScan: { key: string; result: Promise<boolean> } | null = null;
+  /** Whether the session's test files use the network APIs, as they are now. */
+  private readonly _scanNetworkApis = createNetworkApiScanner();
   /** The refresh running now, and the one queued behind it (see `refreshTestFiles`). */
   private _syncInFlight: Promise<void> | null = null;
   private _syncQueued: Promise<void> | null = null;
@@ -1449,11 +1446,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * outlives the call, and the app keeps the connections an earlier run made.
    */
   private _networkApisInRun(): Promise<boolean> {
-    const key = JSON.stringify([this._testFiles, [...this._fileStamps]]);
-    if (this._networkApisScan?.key !== key) {
-      this._networkApisScan = { key, result: testFilesUseNetworkApis(this._testFiles) };
-    }
-    return this._networkApisScan.result;
+    return this._scanNetworkApis(this._testFiles);
   }
 
   private async _runFileInChild(

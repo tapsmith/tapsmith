@@ -2475,9 +2475,9 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   }
   // Whether any file this session can run uses route(), waitForRequest(),
   // waitForResponse() or on('request' | 'response'): if so every device
-  // session starts the network proxy before the app's first request
-  // (PILOT-1013). UI and watch scan every discovered file, since any of them
-  // may run in the session.
+  // session starts the network proxy before the app launches (PILOT-1013).
+  // UI and watch scan every discovered file, since any of them may run in
+  // the session, and scan again for each run.
   const { testFilesUseNetworkApis } = await import('./network-api-scan.js');
   const networkApisInRun = await testFilesUseNetworkApis(testFiles);
   printTapsmithBanner();

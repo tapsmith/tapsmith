@@ -54,7 +54,7 @@ let config: TapsmithConfig | undefined;
 /** The worker's device group, primary first. Empty until `init` completes. */
 let sessions: DeviceSession[] = [];
 let screenshotDir: string | undefined;
-/** `UIWorkerInitMessage.networkApisInRun`, for every file this worker runs. */
+/** Whether the session's test files use the network APIs: from `init`, then each `run-file`. */
 let networkApisInRun = false;
 let ipcOpen = true;
 let currentAbortController: AbortController | undefined;
@@ -585,11 +585,14 @@ process.on('message', (msg: UIWorkerMessage) => {
       enqueue(() => handleInit(msg));
       break;
     case 'run-file':
-      enqueue(() => handleRunFile(
-        msg.filePath, msg.projectUseOptions, msg.projectName,
-        { testFilter: msg.testFilter, fullNames: msg.fullNames, grep: msg.grep },
-        msg.preparedFor,
-      ));
+      enqueue(() => {
+        networkApisInRun = msg.networkApisInRun;
+        return handleRunFile(
+          msg.filePath, msg.projectUseOptions, msg.projectName,
+          { testFilter: msg.testFilter, fullNames: msg.fullNames, grep: msg.grep },
+          msg.preparedFor,
+        );
+      });
       break;
     case 'prepare':
       enqueue(() => handlePrepare(msg));

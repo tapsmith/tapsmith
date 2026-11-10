@@ -1009,6 +1009,12 @@ export interface UIWorkerRunFileMessage {
   grep: import('../worker-protocol.js').SerializedGrepFilters
   /** The device already satisfies this file's policy (background preparation). */
   preparedFor?: import('../app-reset.js').PreparedState
+  /**
+   * Whether the session's test files use the network APIs as they are now —
+   * scanned again for each run, since the user edits tests between runs
+   * (PILOT-1013). Required, like `InitMessage.networkApisInRun`.
+   */
+  networkApisInRun: boolean
 }
 
 /** Server → UI worker: reset the app in the background to `policy`. */

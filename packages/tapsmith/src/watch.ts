@@ -46,6 +46,7 @@ import { RunQueue, mapKeyToAction, watchUsage } from './watch-queue.js';
 import { preserveEmulatorsForReuse, emulatorsLaunchedThisProcess, type LaunchedEmulator } from './emulator.js';
 import { deviceTargetLabel } from './dispatcher.js';
 import type { ProvisionedTarget, UnavailableTargets } from './unavailable-targets.js';
+import { createNetworkApiScanner } from './network-api-scan.js';
 
 // ─── ANSI helpers ───
 
@@ -82,9 +83,9 @@ export interface WatchModeContext {
    */
   forceInstall: boolean
   /**
-   * Whether the session's test files use the network APIs (PILOT-1013),
-   * scanned once at startup: every run starts the network proxy before the
-   * file's first hook, and every worker before its app launches.
+   * Whether the session's test files use the network APIs at startup
+   * (PILOT-1013): every worker starts its devices' proxy before its app
+   * launches. Each run scans the files again for its own children.
    */
   networkApisInRun: boolean
   /**
@@ -223,6 +224,9 @@ export function filesNoWorkerCanRun<T extends { projectName?: string }>(
 // ─── Watch mode coordinator ───
 
 export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
+  // Each run asks again: the user may write the session's first mocking
+  // test while watch runs (PILOT-1013).
+  const scanNetworkApis = createNetworkApiScanner();
   const state = {
     knownFiles: new Set(ctx.testFiles),
     failedFiles: new Set<string>(),
@@ -608,6 +612,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     const allResults: TestResult[] = [];
     const allSuites: SuiteResult[] = [];
     const failedFilePaths = new Set<string>();
+    const networkApisInRun = await scanNetworkApis([...state.knownFiles]);
     const activeWorkers = watchWorkers.filter((w) => !w.retired);
 
     // Track per-dispatch listeners so we can remove them without
@@ -669,6 +674,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
             projectUseOptions: next.projectUseOptions,
             projectName: next.projectName,
             grep: grepFor(next.projectName),
+            networkApisInRun,
           } satisfies UIWorkerMessage);
         }
 
@@ -1237,12 +1243,13 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     };
   }
 
-  function runFileInChild(
+  async function runFileInChild(
     filePath: string,
     reporter: TapsmithReporter,
     projectUseOptions?: RunFileUseOptions,
     projectName?: string,
   ): Promise<{ results: TestResult[]; suite: SuiteResult }> {
+    const networkApisInRun = await scanNetworkApis([...state.knownFiles]);
     return new Promise((resolve, reject) => {
       const child = fork(resolvedScript, [], {
         stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
@@ -1268,7 +1275,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         projectName,
         grep: grepFor(projectName),
         runMode: 'watch',
-        networkApisInRun: ctx.networkApisInRun,
+        networkApisInRun,
         resetCapabilities: ctx.resetCapabilities,
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {
           groupMembers: ctx.groupMembers.map((m) => ({

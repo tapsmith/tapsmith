@@ -6,11 +6,10 @@ import { HeadlessTestDispatcher } from '../mcp/headless-dispatcher.js';
 
 // PILOT-1013: each `run_tests` child is told whether the session's test files
 // use the network APIs, from every discovered file (not only those the call
-// runs), scanned again when the files or their stamps move.
+// runs), scanned again when a file it read changes.
 
 interface Internals {
   _testFiles: string[]
-  _fileStamps: Map<string, string>
   _networkApisInRun(): Promise<boolean>
 }
 
@@ -30,13 +29,11 @@ describe('headless MCP: network APIs in the session', () => {
     const plain = write('plain.test.ts', `test('a', async ({ device }) => { await device.launchApp() })`);
     const other = write('other.test.ts', `test('b', async () => {})`);
     internals._testFiles = [plain, other];
-    internals._fileStamps = new Map([[plain, '1'], [other, '1']]);
     expect(await internals._networkApisInRun()).toBe(false);
 
     write('other.test.ts', `test('b', async ({ device }) => { await device.route('**', (r) => r.abort()) })`);
-    // Same stamps: the answer stands.
-    expect(await internals._networkApisInRun()).toBe(false);
-    internals._fileStamps.set(other, '2');
+    const later = new Date(Date.now() + 5_000);
+    fs.utimesSync(other, later, later);
     expect(await internals._networkApisInRun()).toBe(true);
   });
 });

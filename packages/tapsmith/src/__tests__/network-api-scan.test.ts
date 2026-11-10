@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { testFilesUseNetworkApis } from '../network-api-scan.js';
+import { createNetworkApiScanner, testFilesUseNetworkApis } from '../network-api-scan.js';
 
 let dir: string;
 
@@ -116,5 +116,54 @@ export default async function run(device) { await device.waitForRequest(data.url
   it('is false when no file can be read', async () => {
     const broken = write('broken.test.ts', `this is not ( valid typescript`);
     expect(await testFilesUseNetworkApis([broken, path.join(dir, 'gone.test.ts')])).toBe(false);
+  });
+});
+
+describe('createNetworkApiScanner', () => {
+  const touch = (file: string, offsetMs: number): void => {
+    const t = new Date(Date.now() + offsetMs);
+    fs.utimesSync(file, t, t);
+  };
+
+  it('scans again when a test file, a helper it imports or the file list changes, and not otherwise', async () => {
+    const scan = createNetworkApiScanner();
+    const helper = write('utils/mock.ts', `export async function mockApi(device: any) { await device.launchApp() }\n`);
+    const a = write('a.test.ts', `${header}import { mockApi } from './utils/mock.js'\ntest('a', async ({ device }) => { await mockApi(device) })\n`);
+    expect(await scan([a])).toBe(false);
+
+    // A helper the test imports starts mocking.
+    fs.writeFileSync(helper, `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`);
+    touch(helper, 5_000);
+    expect(await scan([a])).toBe(true);
+
+    // Back to no mocking, in the test file itself this time.
+    fs.writeFileSync(helper, `export async function mockApi(device: any) { await device.launchApp() }\n`);
+    touch(helper, 10_000);
+    expect(await scan([a])).toBe(false);
+
+    // A new file that mocks joins the session.
+    const b = write('b.test.ts', `${header}test('b', async ({ device }) => { await device.waitForResponse('**') })\n`);
+    expect(await scan([a, b])).toBe(true);
+  });
+
+  it('reuses the last answer while nothing it read has changed', async () => {
+    const scan = createNetworkApiScanner();
+    const a = write('a.test.ts', `${header}test('a', async ({ device }) => { await device.route('**', () => {}) })\n`);
+    const mtime = new Date(2026, 0, 1);
+    fs.utimesSync(a, mtime, mtime);
+    expect(await scan([a])).toBe(true);
+    // Changed on disk without a new modification time: the answer stands.
+    fs.writeFileSync(a, `${header}test('a', async () => {})\n`);
+    fs.utimesSync(a, mtime, mtime);
+    expect(await scan([a])).toBe(true);
+  });
+
+  it('scans a file again once it is edited, even one it could not read before', async () => {
+    const scan = createNetworkApiScanner();
+    const a = write('a.test.ts', `this is not ( valid typescript`);
+    expect(await scan([a])).toBe(false);
+    fs.writeFileSync(a, `${header}test('a', async ({ device }) => { await device.route('**', () => {}) })\n`);
+    touch(a, 5_000);
+    expect(await scan([a])).toBe(true);
   });
 });

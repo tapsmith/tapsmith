@@ -1,4 +1,5 @@
 import { NetworkReplayBuffer } from './network-replay.js';
+import { createNetworkApiScanner } from '../network-api-scan.js';
 /**
  * UI mode server.
  *
@@ -394,6 +395,9 @@ export async function startUIServer(
 
   /** Devices a target retry already set up with `--force-install`. */
   const forceInstalledSerials = new Set<string>();
+  // Each run asks again whether the session's tests use the network APIs:
+  // the user may write the first mocking test mid-session (PILOT-1013).
+  const scanNetworkApis = createNetworkApiScanner();
   /** Worker ids a failed target retry gave back, for the next attempt. */
   const freeWorkerIds: number[] = [];
   /** Ends a run's wait on a device-target retry (Stop). */
@@ -2756,6 +2760,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // A device target that could not start is tried again first; while it
     // still cannot, its files fail with the reason (PILOT-415).
     const unavailable = await reviveTargetsFor(files);
+    // The files as they are now: the user may have written the session's
+    // first mocking test since it started (PILOT-1013).
+    const networkApisInRun = await scanNetworkApis(ctx.testFiles);
     if (!parallelRunAborted) {
       for (const f of unavailable) {
         const sig = f.projectName ? ctx.bucketByProject?.get(f.projectName) : undefined;
@@ -2907,6 +2914,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           fullNames: next.fullNames ? [...next.fullNames] : undefined,
           grep: serializeGrepFilters(grepFor(next.projectName)),
           preparedFor,
+          networkApisInRun,
         };
         // A worker can die between exit-event delivery and this dispatch; an
         // unguarded send would throw ERR_IPC_CHANNEL_CLOSED out of the

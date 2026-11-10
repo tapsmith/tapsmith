@@ -7,7 +7,7 @@
  * (PILOT-775), but by then the app may hold keep-alive connections, opened
  * straight to the server by an earlier test or the startup launch, that
  * bypass it. A run that uses these APIs anywhere therefore starts the proxy
- * when its device session starts, before the app's first request; a run that
+ * when its device session starts, before the app launches; a run that
  * never uses them pays nothing.
  *
  * Static, since the session opens before any test runs: esbuild resolves each
@@ -121,13 +121,14 @@ async function moduleUsesNetworkApis(file: string): Promise<boolean> {
   }
 }
 
-/**
- * Whether any of `files`, or a local module one of them imports, calls a
- * network API. Never throws: a file that cannot be read or resolved counts
- * as not using them (its own load error is reported when it runs).
- */
-export async function testFilesUseNetworkApis(files: readonly string[]): Promise<boolean> {
-  if (files.length === 0) return false;
+/** What a scan found, and every local module it read. */
+interface NetworkApiScan {
+  uses: boolean
+  modules: string[]
+}
+
+async function scanNetworkApis(files: readonly string[]): Promise<NetworkApiScan> {
+  if (files.length === 0) return { uses: false, modules: [] };
   let modules: string[];
   try {
     modules = await localModules([...files]);
@@ -139,5 +140,54 @@ export async function testFilesUseNetworkApis(files: readonly string[]): Promise
   }
   const unique = [...new Set(modules)];
   const results = await Promise.all(unique.map(moduleUsesNetworkApis));
-  return results.some(Boolean);
+  return { uses: results.some(Boolean), modules: unique };
+}
+
+/**
+ * Whether any of `files`, or a local module one of them imports, calls a
+ * network API. Never throws: a file that cannot be read or resolved counts
+ * as not using them (its own load error is reported when it runs).
+ */
+export async function testFilesUseNetworkApis(files: readonly string[]): Promise<boolean> {
+  return (await scanNetworkApis(files)).uses;
+}
+
+function modificationTime(file: string): number {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * {@link testFilesUseNetworkApis} for a session that outlives its files —
+ * watch mode, UI mode, the MCP server — where the user edits tests between
+ * runs. Each call answers for the files as they are now, scanning again only
+ * when the file list changed or a module the last scan read (a test file, a
+ * helper, a fixture) was modified since; otherwise it costs a stat per module.
+ */
+export function createNetworkApiScanner(): (files: readonly string[]) => Promise<boolean> {
+  let last: { files: string; stamps: Array<[string, number]>; scan: Promise<NetworkApiScan> } | undefined;
+  return async (files) => {
+    const key = JSON.stringify([...files].sort());
+    const fresh = last && last.files === key
+      && last.stamps.every(([module, mtime]) => modificationTime(module) === mtime);
+    if (!fresh) {
+      // Stamped before the scan reads them, so an edit made during the scan
+      // is seen by the next call.
+      const stampsBefore = new Map(files.map((f) => [f, modificationTime(f)] as const));
+      const scan = scanNetworkApis(files);
+      const entry = { files: key, stamps: [...stampsBefore], scan };
+      last = entry;
+      const { modules } = await scan;
+      // Only if no later call replaced this entry meanwhile.
+      // The files themselves always count, even one the scan could not read.
+      if (last === entry) {
+        const read = new Set([...files, ...modules]);
+        entry.stamps = [...read].map((m) => [m, stampsBefore.get(m) ?? modificationTime(m)] as [string, number]);
+      }
+    }
+    return (await last!.scan).uses;
+  };
 }
