@@ -706,7 +706,7 @@ Tapsmith supports Playwright-style network interception. Route handlers let you 
 
 #### `device.route(url, handler, options?): Promise<void>`
 
-Intercept network requests matching a URL pattern. Routes run on Tapsmith's network proxy, which needs no config: the test runner starts it on the first `route()`, `waitForRequest()` or `waitForResponse()` a test or hook makes (or with the test, when its trace records network), and keeps it up for the rest of the session. The proxy only sees connections the app opens after it starts, so register routes before the app sends the requests they mock — at the top of the test or in a `beforeEach`, before navigating. If the proxy cannot start, `route()` throws `Network capture disabled: …` with the reason. When a test's routes never fired and the capture shows why (HTTPS passed through uncaptured, or a proxy that only started mid-test), Tapsmith prints a warning naming the test; outside the test runner nothing starts the proxy, and the runner warns that the routes could not fire (see [Network prerequisites](network.md#prerequisites)). Route handlers only see traffic Tapsmith can decrypt; hosts that are configured for passthrough, or dynamically tunneled because an HTTP/2-capable client rejects the generated MITM certificate, cannot be matched.
+Intercept network requests matching a URL pattern. Routes run on Tapsmith's network proxy, which needs no config: when the run's test files (or the local modules they import) call `route()`, `waitForRequest()`, `waitForResponse()` or `on('request' | 'response')`, the test runner starts it as each device session starts, before the app launches, and keeps it up for the rest of the session. A call it does not find in the files (one inside an npm package, say) starts it on demand, at the first such call a test or hook makes; a trace that records network starts it with each test. A route only sees requests made after it is registered, so register routes before the app sends the requests they mock — at the top of the test or in a `beforeEach`, before navigating. If the proxy cannot start, `route()` throws `Network capture disabled: …` with the reason. When a test's routes never fired and the capture shows why (HTTPS passed through uncaptured, or a proxy that only started mid-test), Tapsmith prints a warning naming the test; outside the test runner nothing starts the proxy, and the runner warns that the routes could not fire (see [Network prerequisites](network.md#prerequisites)). Route handlers only see traffic Tapsmith can decrypt; hosts that are configured for passthrough, or dynamically tunneled because an HTTP/2-capable client rejects the generated MITM certificate, cannot be matched.
 
 See also: [`device.unroute()`](#deviceunrouteurl-handler-promisevoid), [`device.unrouteAll()`](#deviceunrouteall-promisevoid).
 
@@ -732,14 +732,14 @@ Remove all registered route handlers, including those registered in `beforeAll`.
 
 #### `device.waitForRequest(urlOrPredicate, options?): Promise<TapsmithRequest>`
 
-Wait for a network request matching the pattern. Starts the network proxy on demand, as `device.route()` does; start waiting before the action that sends the request. Rejects at once with `Network capture disabled: …` when the proxy cannot start, and a timeout says when no capture was running or the proxy only started with the wait.
+Wait for a network request matching the pattern. Needs the network proxy, which starts as it does for `device.route()`; start waiting before the action that sends the request. Rejects at once with `Network capture disabled: …` when the proxy cannot start, and a timeout says when no capture was running or the proxy only started with the wait.
 
 - `urlOrPredicate`: `string | RegExp | ((request: TapsmithRequest) => boolean)`
 - `options.timeout?`: `number` — timeout in ms (default: device timeout)
 
 #### `device.waitForResponse(urlOrPredicate, options?): Promise<NetworkResponseEventData>`
 
-Wait for a network response matching the pattern. Starts the network proxy on demand and reports a failed start, or a timeout that capture likely caused, as `device.waitForRequest()` does.
+Wait for a network response matching the pattern. Needs the network proxy, as `device.route()` does, and reports a failed start, or a timeout that capture likely caused, as `device.waitForRequest()` does.
 
 Resolves with a `NetworkResponseEventData`: `method`, `url`, `status`, `headers`, `body` (`Buffer | null`) and `routeAction`. `body` is decoded, as Playwright's `response.body()` is: chunked framing is removed and a `gzip`, `deflate` or `br` `Content-Encoding` is decompressed, so `JSON.parse(resp.body!.toString())` works against a compressing server. `headers` stay as sent, so `content-encoding` and `transfer-encoding` describe the wire bytes, not `body`. A body in another coding (such as `zstd`) is left as received. The `postData` of a request from `device.waitForRequest()` or `device.on('request')` is decoded the same way.
 
@@ -747,7 +747,7 @@ A waiter belongs to the test that creates it. If the test ends first (say, a ste
 
 #### `device.on(event, handler): void`
 
-Subscribe to network events: `'request'` or `'response'`. Starts the network proxy on demand, as `device.route()` does. A listener lasts as long as a route registered in the same place would ([Route lifetime](network.md#route-lifetime)).
+Subscribe to network events: `'request'` or `'response'`. Needs the network proxy, which starts as it does for `device.route()`. A listener lasts as long as a route registered in the same place would ([Route lifetime](network.md#route-lifetime)).
 
 ```ts
 device.on('request', (req) => console.log(req.url))
@@ -2988,7 +2988,7 @@ Pass `--yes` or any setup flag below (every flag but `--json`) to run non-intera
 | `--simulator <name>` | iOS simulator name (default: a booted iOS simulator, else the newest available iPhone, preferring stock names such as `iPhone 16` to simulators you renamed; a renamed one exists only on your Mac, so when init writes one anyway, the config says so in a comment and init warns) |
 | `--device-type <type>` | `emulator`, `physical` or `both` (default: `emulator`) |
 | `--network-capture` | Record HTTP(S) traffic in traces: writes `trace: { mode: 'retain-on-failure' }`. The default, as in the wizard, unless the only device set up is an Android emulator on a Google Play image |
-| `--no-network-capture` | Write no `trace` setting. Network mocking still works: the proxy starts on demand ([Network prerequisites](network.md#prerequisites)) |
+| `--no-network-capture` | Write no `trace` setting. Network mocking still works: the proxy starts when the tests need it ([Network prerequisites](network.md#prerequisites)) |
 | `--no-example-test` | Skip scaffolding `tests/example.tapsmith.ts` |
 | `--no-agents-md` | Skip scaffolding the `AGENTS.md` section |
 | `--force` | Overwrite an existing `tapsmith.config.*` |

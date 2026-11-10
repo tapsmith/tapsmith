@@ -82,6 +82,12 @@ export interface WatchModeContext {
    */
   forceInstall: boolean
   /**
+   * Whether the session's test files use the network APIs (PILOT-1013),
+   * scanned once at startup: every run starts the network proxy before the
+   * file's first hook, and every worker before its app launches.
+   */
+  networkApisInRun: boolean
+  /**
    * Sticky reset capabilities for the primary device, shared with the CLI's
    * startup launch (which probes for in-app hooks). Threaded into every
    * watch-run child — they are forked fresh per run — and updated from each
@@ -575,6 +581,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         // adopt), but the CLI already force-installed there this session.
         // Once per device: not again on every retry of a target that keeps failing.
         forceInstall,
+        networkApisInRun: ctx.networkApisInRun,
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({ name: groupNames[i + 1].name, deviceSerial: m.serial, daemonPort: m.daemonPort })),
         } : {}),
@@ -1261,6 +1268,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         projectName,
         grep: grepFor(projectName),
         runMode: 'watch',
+        networkApisInRun: ctx.networkApisInRun,
         resetCapabilities: ctx.resetCapabilities,
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {
           groupMembers: ctx.groupMembers.map((m) => ({

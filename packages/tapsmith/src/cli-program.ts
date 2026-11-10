@@ -467,7 +467,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--simulator <name>', 'iOS simulator name (default: a booted iOS simulator, else the newest available iPhone; stock names before renamed ones)')
     .option('--device-type <type>', 'emulator, physical or both (default: emulator)')
     .option('--network-capture', 'Record HTTP(S) traffic in traces (default: on, unless the only device is a Google Play-image emulator)')
-    .option('--no-network-capture', 'Write no trace setting (network mocking still works: the proxy starts on demand)')
+    .option('--no-network-capture', 'Write no trace setting (network mocking still works: the proxy starts when the tests need it)')
     .option('--no-example-test', 'Skip scaffolding tests/example.tapsmith.ts')
     .option('--no-agents-md', 'Skip scaffolding the AGENTS.md section')
     .option('--force', 'Overwrite an existing tapsmith.config.*', false)

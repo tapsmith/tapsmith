@@ -16,7 +16,7 @@ import { execFileSync, type ChildProcess, type StdioOptions } from 'node:child_p
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
 import { deviceGroupSize, type TapsmithConfig } from './config.js';
-import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts } from './trace/types.js';
+import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts, resolveTraceConfig } from './trace/types.js';
 import { installedApkMatches, isPackageInstalled, waitForPackageIndexed } from './emulator.js';
 import { installApp, installAppAsync, installedAppMatches, isAppInstalled, probeSimulatorHealth, rebootSimulator } from './ios-simulator.js';
 import { findAgentApk, findAgentTestApk, missingAndroidAgentError } from './agent-resolve.js';
@@ -124,6 +124,18 @@ export interface OpenDeviceSessionOptions {
    * Required so an embedder cannot open a device without claiming it.
    */
   claimSession: SessionIdentity
+  /**
+   * Start the network proxy before the app is installed and launched, because
+   * the run's test files use the network APIs (`testFilesUseNetworkApis`,
+   * PILOT-1013): connections the app opens before the proxy starts bypass it,
+   * so a route registered later would never see them. `multiDevice` when the
+   * device belongs to a group of two or more (the capture must then be
+   * isolated per device). `false` when the run does not use them. Ignored
+   * with `adopt` — the app is already running; the runner starts the proxy
+   * at its first file instead. Required, like `claimSession`, so no embedder
+   * opens a device without deciding.
+   */
+  startNetworkProxy: false | { multiDevice: boolean }
   onProgress?: (message: string) => void
   /**
    * Step-level progress for embedders with a step UI (the sequential CLI):
@@ -680,6 +692,17 @@ export async function openDeviceSession(
       } catch {
         // Non-fatal — the device may already be awake and unlocked.
       }
+    }
+
+    // Before the install, the agent and the launch, so the app's first
+    // connection already goes through the proxy. The outcome is reported by
+    // the runner at its first file, where warnings reach every run path.
+    if (opts.startNetworkProxy && !opts.adopt) {
+      progress('starting the network proxy');
+      await device._startNetworkProxyForSession({
+        requireIsolation: opts.startNetworkProxy.multiDevice,
+        httpPorts: resolveTraceConfig(config.trace).networkHttpPorts,
+      });
     }
 
     if (opts.adopt) {

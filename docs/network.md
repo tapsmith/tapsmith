@@ -11,23 +11,25 @@ Both features share the same underlying MITM proxy infrastructure.
 
 ## Prerequisites
 
-Network interception runs on Tapsmith's MITM proxy, and mocking needs no config: the test runner starts the proxy on demand, on the first `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` or `device.on('request' | 'response')` a test (or one of its hooks or fixtures) makes on a device. It then stays up for the rest of the session — drained after every test and released when the session ends — and every later test starts capture at its beginning, as a trace does. A test whose trace records network traffic starts it at the beginning of the test instead (see [Network Capture in Traces](#network-capture-in-traces)).
+Network interception runs on Tapsmith's MITM proxy, and mocking needs no config. When any test file of the run calls `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` or `device.on('request' | 'response')`, the test runner starts the proxy as each device session starts, before the app is launched, so every connection the app opens goes through it. A run that never calls them starts no proxy. The proxy then stays up for the rest of the session — drained after every test and released when the session ends — and every test starts capture at its beginning, as a trace does.
 
-The startup `Config` line says which applies: `network: captured` when the trace records network for every test, `network: on demand` otherwise.
+Tapsmith finds those calls by reading the run's test files and the local modules they import (helpers, fixtures, screen objects), before any test runs. In UI mode, watch mode and the MCP server, every test file the session can run counts. The MCP server launches the app when it connects to a device, before any test is run, so there the proxy starts at the beginning of the first test file a `run_tests` call runs. A call it cannot see — one made inside an npm package, or through a computed method name — still works: the proxy then starts on demand, at the first such call a test (or one of its hooks or fixtures) makes on a device. A test whose trace records network traffic starts the proxy at the beginning of the test too (see [Network Capture in Traces](#network-capture-in-traces)).
 
-**Register routes before the app sends the requests they mock.** The proxy only sees connections the app opens after it started. When the first route of a session starts it mid-test, the app may already hold a keep-alive connection to that server from an earlier request, and keeps using it — past the proxy — until the app is relaunched. Register routes (and start waits) at the top of the test, or in `beforeEach`/`beforeAll`, before navigating to the screen that fetches, as you would with Playwright's `page.route()` before `page.goto()`. A trace that records network (`trace: "retain-on-failure"`, which `tapsmith init` writes by default unless the only device set up is a Google Play-image emulator) starts the proxy with each test, so the app's connections go through it from the test's reset onwards.
+The startup `Config` line says which applies: `network: captured` when the trace records network for every test, `network: at session start` when the run's tests use the calls above, `network: on demand` otherwise.
+
+**Register routes before the app sends the requests they mock.** The proxy sees every connection the app opens while it runs, but a route only sees the requests made after it is registered. Register routes (and start waits) at the top of the test, or in `beforeEach`/`beforeAll`, before navigating to the screen that fetches, as you would with Playwright's `page.route()` before `page.goto()`. When the proxy starts on demand instead, mid-session, the app may already hold a keep-alive connection to that server from an earlier request, and keeps using it — past the proxy — until the app is relaunched.
 
 When a test fails and its routes were live but none of them fired, Tapsmith names the test and lists the possible reasons the capture shows: `device.route() handlers never fired: "…" registered route handlers and none of them fired. Possible reasons: …`. They are:
 
 - *HTTPS to `<hosts>` passed through the network proxy uncaptured* — the device cannot trust Tapsmith's CA (an Android emulator on a Google Play system image, see [Android emulator image requirements](#android-emulator-image-requirements)), the host is in `trace.networkPassthroughHosts`, or the app rejected Tapsmith's certificate. Hosts that only OS services passed through are not listed;
-- *the network proxy started on demand during this test or its hooks* — the case above;
+- *the network proxy started on demand during this test or its hooks* — the on-demand case above;
 - *the app never sent a request matching the route patterns* — check the pattern.
 
 A `waitForRequest()`/`waitForResponse()` that times out says when no capture was running on the device, or when the proxy only started with that wait. If the proxy cannot start (on iOS, for example, the Network Extension is not approved yet — see [iOS Network Capture](ios-network-capture.md)), `device.route()` throws `Network capture disabled: …` with the reason, and a waiter rejects at once with it. A failed start is tried again once per test, not on every call.
 
 Outside the test runner — a script that drives a `Device` itself — nothing starts the proxy, so route handlers never fire; at the end of a test that registered routes while no proxy was running, the runner prints a warning naming it.
 
-To record traffic in traces as well, enable tracing in your config — any mode that records the test's first attempt (`"on"`, `"retain-on-failure"`, `"retain-on-first-failure"`, `"retain-on-failure-and-retries"`) captures every test; `"on-first-retry"` and `"on-all-retries"` capture only retries, and a first attempt starts the proxy on demand:
+To record traffic in traces as well, enable tracing in your config — any mode that records the test's first attempt (`"on"`, `"retain-on-failure"`, `"retain-on-first-failure"`, `"retain-on-failure-and-retries"`) captures every test; `"on-first-retry"` and `"on-all-retries"` capture only retries (a first attempt still mocks through the proxy started with the session):
 
 ```typescript
 import { defineConfig } from "tapsmith"
@@ -46,7 +48,7 @@ Or from the CLI:
 npx tapsmith test --trace on
 ```
 
-The `--trace on` flag enables tracing with all defaults, including `network: true`. To keep network traffic out of traces while keeping other trace features, set `network: false` in the config's object form (mocking still works: the proxy then starts on demand):
+The `--trace on` flag enables tracing with all defaults, including `network: true`. To keep network traffic out of traces while keeping other trace features, set `network: false` in the config's object form (mocking still works: the proxy starts as [Prerequisites](#prerequisites) describes):
 
 ```typescript
 export default defineConfig({

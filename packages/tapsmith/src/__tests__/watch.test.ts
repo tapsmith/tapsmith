@@ -252,6 +252,7 @@ describe('watch-run IPC protocol', () => {
       deviceName: 'device-1',
       filePath: '/test/login.test.ts',
       runMode: 'watch',
+      networkApisInRun: false,
       grep: { grep: [], grepInvert: [], projectGrep: [], projectGrepInvert: [] },
       config: {
         timeout: 30_000,

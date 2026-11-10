@@ -8,6 +8,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { minimatch } from 'minimatch';
 import { platformOfSerial, resolveProjects, scopeDevicePinToPlatform, topologicalSort, type ResolvedProject } from '../project.js';
 import { classifyUnmatchedTestFile, discoverTestFiles } from '../test-file-discovery.js';
+import { testFilesUseNetworkApis } from '../network-api-scan.js';
 import {
   deserializeTestResult,
   deserializeSuiteResult,
@@ -138,6 +139,11 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * refresh forks a child only for what changed.
    */
   private _fileStamps = new Map<string, string>();
+  /**
+   * Whether the session's test files use the network APIs, and the file
+   * list and stamps it was answered for — scanned again when they move.
+   */
+  private _networkApisScan: { key: string; result: Promise<boolean> } | null = null;
   /** The refresh running now, and the one queued behind it (see `refreshTestFiles`). */
   private _syncInFlight: Promise<void> | null = null;
   private _syncQueued: Promise<void> | null = null;
@@ -1435,6 +1441,21 @@ export class HeadlessTestDispatcher implements TestDispatcher {
 
   // ─── Test execution ───
 
+  /**
+   * Whether any test file of the session uses route(), waitForRequest(),
+   * waitForResponse() or on('request' | 'response') (PILOT-1013): each run's
+   * child then starts the network proxy before the file's first hook. Every
+   * discovered file counts, not only those a call runs — the device session
+   * outlives the call, and the app keeps the connections an earlier run made.
+   */
+  private _networkApisInRun(): Promise<boolean> {
+    const key = JSON.stringify([this._testFiles, [...this._fileStamps]]);
+    if (this._networkApisScan?.key !== key) {
+      this._networkApisScan = { key, result: testFilesUseNetworkApis(this._testFiles) };
+    }
+    return this._networkApisScan.result;
+  }
+
   private async _runFileInChild(
     filePath: string,
     projectUseOptions?: RunFileUseOptions,
@@ -1457,6 +1478,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     const runProject = projectName ? this._projects.find((p) => p.name === projectName) : undefined;
     const deviceName = resolveDeviceGroup(runProject?.effectiveConfig ?? this._config ?? {})[0].name;
 
+    const networkApisInRun = await this._networkApisInRun();
     const scripts = this._scripts!;
     return new Promise((resolve, reject) => {
       const child = fork(scripts.watchRunScript, [], {
@@ -1574,6 +1596,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         // script they happen to share.
         label: 'Run',
         runMode: 'mcp',
+        networkApisInRun,
         resetCapabilities: this._resetCapabilities.get(target.deviceSerial),
         ...(target.members && target.members.length > 0 ? {
           groupMembers: target.members.map((m) => ({

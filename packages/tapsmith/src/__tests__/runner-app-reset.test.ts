@@ -102,7 +102,7 @@ function makeOpts(d: ReturnType<typeof makeDevice>, config: TapsmithConfig, extr
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner double
     devices: [{ name: 'device-1', device: d.device as any, sessionContext }],
     resetCapabilities: {},
-    runMode: 'test',
+    runMode: 'test', networkApisInRun: false,
     // runTestFile creates this per file; these tests drive runSuiteContext directly.
     _applied: {},
     _startRoute: {},

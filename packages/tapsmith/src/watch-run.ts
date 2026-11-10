@@ -86,6 +86,12 @@ export interface WatchRunMessage {
    */
   runMode: Extract<RunMode, 'watch' | 'mcp'>
   /**
+   * Whether the session's test files use the network APIs — the parent's
+   * scan, passed on as `RunOptions.networkApisInRun` (PILOT-1013). Required:
+   * a parent that left it out would leave mocking on the late on-demand start.
+   */
+  networkApisInRun: boolean
+  /**
    * The parent's sticky reset-capability knowledge for the primary device
    * (in-app hooks detected, …). This child is forked fresh per run, so
    * without it every run would start undetected and `appReset: 'auto'` would
@@ -186,7 +192,8 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       })),
     ],
     config,
-    { claimSession: currentSession(), label, adoptVerify: !config.package, connectTimeoutMs: 5_000 },
+    // Adopting a running app: the runner starts the proxy at the file instead.
+    { claimSession: currentSession(), startNetworkProxy: false, label, adoptVerify: !config.package, connectTimeoutMs: 5_000 },
   );
 
   // Created BEFORE preflight so a stop that lands during wake/unlock/app-reset
@@ -243,6 +250,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       },
       resetCapabilities: sessions[0].capabilities,
       runMode: msg.runMode,
+      networkApisInRun: msg.networkApisInRun,
       projectUseOptions: msg.projectUseOptions,
       projectName: msg.projectName,
       testFilter: msg.testFilter,

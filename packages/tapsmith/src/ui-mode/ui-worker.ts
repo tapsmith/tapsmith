@@ -54,6 +54,8 @@ let config: TapsmithConfig | undefined;
 /** The worker's device group, primary first. Empty until `init` completes. */
 let sessions: DeviceSession[] = [];
 let screenshotDir: string | undefined;
+/** `UIWorkerInitMessage.networkApisInRun`, for every file this worker runs. */
+let networkApisInRun = false;
 let ipcOpen = true;
 let currentAbortController: AbortController | undefined;
 
@@ -151,6 +153,7 @@ function setupTraceStreaming(dev: DeviceSession['device']): void {
 async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
   workerId = msg.workerId;
   screenshotDir = msg.screenshotDir;
+  networkApisInRun = msg.networkApisInRun;
   const daemonAddress = `localhost:${msg.daemonPort}`;
 
   config = configFromSerialized(msg.config, daemonAddress);
@@ -194,6 +197,7 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
     config,
     {
       claimSession: currentSession(),
+      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0 },
       label: `UI Worker ${workerId}`,
       launchPhase: 'UI worker startup launch',
       forceInstall: msg.forceInstall,
@@ -410,6 +414,7 @@ async function runFileWithRecovery(
         abortFileOnError: isRecoverableInfrastructureError,
         resetCapabilities: sharedCapabilities(),
         runMode: 'ui',
+        networkApisInRun,
         projectUseOptions,
         projectName,
         testFilter: selection.testFilter,

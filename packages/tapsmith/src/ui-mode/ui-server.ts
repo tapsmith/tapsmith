@@ -187,6 +187,12 @@ export interface UIServerContext {
    * at startup (the CLI already did the primary). Never on a respawn.
    */
   forceInstall: boolean
+  /**
+   * Whether the session's test files use the network APIs (PILOT-1013):
+   * every worker starts its devices' network proxy before the app launches.
+   * Required, like `forceInstall`.
+   */
+  networkApisInRun: boolean
   projects?: ResolvedProject[]
   /** Dependency-ordered project waves from topologicalSort(). */
   projectWaves?: ResolvedProject[][]
@@ -2400,6 +2406,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           adoptPrimary: !!adopt,
           adoptPrepared: !!adopt && adoptPrepared,
           forceInstall,
+          networkApisInRun: ctx.networkApisInRun,
           ...(members.length > 0 ? {
             groupMembers: members.map((m) => ({
               name: m.name,

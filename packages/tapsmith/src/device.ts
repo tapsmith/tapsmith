@@ -70,6 +70,14 @@ const WEBVIEW_CONNECT_LOG_LIMIT = 80;
 // ─── Pending network waiters (PILOT-543) ───
 
 /** A waitForRequest/waitForResponse still waiting, and how to end it early. */
+/**
+ * @internal — How a network capture start went: the daemon's answer, or the
+ * error the call threw (PILOT-1013).
+ */
+export type NetworkCaptureStartOutcome =
+  | { res: { proxyPort: number; success: boolean; errorMessage: string } }
+  | { err: unknown };
+
 interface PendingWaiter {
   readonly seq: number;
   cancel(): void;
@@ -218,6 +226,10 @@ export class Device {
   private _onDemandStart: Promise<void> | null = null;
   /** The proxy came up through an on-demand start since the runner last asked. */
   private _proxyStartedOnDemand = false;
+  /** Whether the session-start proxy start (PILOT-1013) was already tried. */
+  private _sessionNetworkStartTried = false;
+  /** How the session open's proxy start went, until the runner reports it. */
+  private _sessionNetworkStartOutcome: NetworkCaptureStartOutcome | undefined;
   /** waitForRequest/waitForResponse calls still waiting. */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
@@ -1127,6 +1139,42 @@ export class Device {
   }
 
   /**
+   * @internal — Claim this device's one session-start proxy start
+   * (PILOT-1013): true the first time, when the proxy is not already up, so
+   * the caller starts it now; false after that. The session open (before the
+   * app launches) and the runner's first file (for a session that adopted a
+   * running app) both ask, and whichever asks first starts it. One try: a
+   * start that failed is left to the on-demand start of a test that needs it.
+   */
+  _claimSessionNetworkStart(): boolean {
+    if (this._sessionNetworkStartTried || this._networkProxyRunning) return false;
+    this._sessionNetworkStartTried = true;
+    return true;
+  }
+
+  /**
+   * @internal — Start the network proxy as the device session opens, before
+   * the app launches (PILOT-1013), unless a start was already tried. Never
+   * throws: the outcome is kept for the runner, whose first file reports it
+   * the way it reports any start ({@link _takeSessionNetworkStartOutcome}).
+   */
+  async _startNetworkProxyForSession(options: { requireIsolation: boolean; httpPorts?: number[] }): Promise<void> {
+    if (!this._claimSessionNetworkStart()) return;
+    try {
+      this._sessionNetworkStartOutcome = { res: await this._startNetworkCapture(options) };
+    } catch (err) {
+      this._sessionNetworkStartOutcome = { err };
+    }
+  }
+
+  /** @internal — The outcome {@link _startNetworkProxyForSession} kept, once. */
+  _takeSessionNetworkStartOutcome(): NetworkCaptureStartOutcome | undefined {
+    const outcome = this._sessionNetworkStartOutcome;
+    this._sessionNetworkStartOutcome = undefined;
+    return outcome;
+  }
+
+  /**
    * @internal — Whether the proxy came up through an on-demand start since
    * the last call, then reset. A route that never fires after
    * such a start may have missed connections the app opened before it.
@@ -1343,11 +1391,13 @@ export class Device {
    * `Route` object that can `abort()`, `continue()`, `fulfill()`, or `fetch()`
    * the request.
    *
-   * Routes run on Tapsmith's network proxy. The test runner starts it for a
-   * test whose trace records network traffic, and otherwise on the first
-   * `route()`, `waitForRequest()` or `waitForResponse()` of a test;
-   * it then stays up for the rest of the session. Connections
-   * the app opened before the proxy started bypass it, so register routes
+   * Routes run on Tapsmith's network proxy. The test runner starts it as
+   * the device session starts when the run's test files call `route()`,
+   * `waitForRequest()`, `waitForResponse()` or `on('request' | 'response')`,
+   * for a test whose trace records network traffic, and otherwise on the
+   * first such call of a test; it then stays up for the rest of the session.
+   * Connections the app opened before the proxy started bypass it, and a
+   * route sees only requests made after it is registered, so register routes
    * before the app sends the requests they mock. Outside the test runner
    * nothing starts the proxy, route handlers never fire, and the runner
    * warns at the end of a test whose routes could not fire.
@@ -1534,8 +1584,9 @@ export class Device {
     if (!this._networkProxyRunning) {
       return '. No network capture was running on this device, so no request could be seen: ' +
         'waitForRequest() and waitForResponse() see traffic only through Tapsmith\'s network proxy, ' +
-        'which the test runner starts for a test (on its first route() or network wait, or when its ' +
-        'trace records network). See https://tapsmith.dev/guides/network/#prerequisites';
+        'which the test runner starts with the session when the run\'s test files use these calls, ' +
+        'or for a test (on its first route() or network wait, or when its trace records network). ' +
+        'See https://tapsmith.dev/guides/network/#prerequisites';
     }
     if (!proxyWasRunning) {
       return '. The network proxy started on demand with this wait, and connections the app had ' +

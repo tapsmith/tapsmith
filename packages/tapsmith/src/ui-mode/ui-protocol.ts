@@ -982,6 +982,8 @@ export interface UIWorkerInitMessage {
    * Required, like `InitMessage.forceInstall`.
    */
   forceInstall: boolean
+  /** See `InitMessage.networkApisInRun`. */
+  networkApisInRun: boolean
   /**
    * The rest of the device group (`devices[1..]`) for a `use.devices`
    * project, each on a daemon the server spawned for it. Omitted for
