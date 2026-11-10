@@ -1440,7 +1440,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
 
   /**
    * Whether any test file of the session uses route(), waitForRequest(),
-   * waitForResponse() or on('request' | 'response') (PILOT-1013): each run's
+   * waitForResponse() or on('request' | 'response'): each run's
    * child then starts the network proxy before the file's first hook. Every
    * discovered file counts, not only those a call runs — the device session
    * outlives the call, and the app keeps the connections an earlier run made.

@@ -34,7 +34,7 @@ export interface InitMessage {
    */
   forceInstall: boolean
   /**
-   * Whether the run's test files use the network APIs (PILOT-1013): the
+   * Whether the run's test files use the network APIs: the
    * worker starts each device's network proxy before the app launches, and
    * passes it on as `RunOptions.networkApisInRun`. Required, like
    * `forceInstall`.

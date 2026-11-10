@@ -1,10 +1,10 @@
 /**
  * Whether a run's test files use the network APIs that need Tapsmith's
  * network proxy — `route()`, `waitForRequest()`, `waitForResponse()` and
- * `on('request' | 'response')` (PILOT-1013).
+ * `on('request' | 'response')`.
  *
- * The runner starts the proxy on demand at a test's first such call
- * (PILOT-775), but by then the app may hold keep-alive connections, opened
+ * The runner starts the proxy on demand at a test's first such call,
+ * but by then the app may hold keep-alive connections, opened
  * straight to the server by an earlier test or the startup launch, that
  * bypass it. A run that uses these APIs anywhere therefore starts the proxy
  * when its device session starts, before the app launches; a run that

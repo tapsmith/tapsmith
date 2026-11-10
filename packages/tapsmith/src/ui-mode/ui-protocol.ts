@@ -1011,8 +1011,8 @@ export interface UIWorkerRunFileMessage {
   preparedFor?: import('../app-reset.js').PreparedState
   /**
    * Whether the session's test files use the network APIs as they are now —
-   * scanned again for each run, since the user edits tests between runs
-   * (PILOT-1013). Required, like `InitMessage.networkApisInRun`.
+   * scanned again for each run, since the user edits tests between runs.
+   * Required, like `InitMessage.networkApisInRun`.
    */
   networkApisInRun: boolean
 }

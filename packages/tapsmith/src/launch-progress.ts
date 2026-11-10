@@ -129,7 +129,7 @@ export interface UiLaunchPlanInput {
   deviceGroupSize?: number;
   /**
    * The run's test files use the network APIs (`testFilesUseNetworkApis`),
-   * so the proxy starts with the device session (PILOT-1013).
+   * so the proxy starts with the device session.
    */
   networkApisInRun?: boolean;
 }
@@ -167,7 +167,7 @@ function platformSummary(
 /**
  * How network capture runs (PILOT-775): `captured` when the trace records
  * network for every test, else `at session start` when the run's tests use
- * the network APIs (PILOT-1013), else `on demand` — the proxy starts on a
+ * the network APIs, else `on demand` — the proxy starts on a
  * test's first route() or network wait. Projects that differ are listed
  * together.
  */

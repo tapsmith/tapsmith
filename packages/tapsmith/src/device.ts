@@ -218,7 +218,7 @@ export class Device {
   private _onDemandStart: Promise<void> | null = null;
   /** The proxy came up through an on-demand start since the runner last asked. */
   private _proxyStartedOnDemand = false;
-  /** Whether the session-start proxy start (PILOT-1013) was already tried. */
+  /** Whether the session-start proxy start was already tried. */
   private _sessionNetworkStartTried = false;
   /** waitForRequest/waitForResponse calls still waiting. */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
@@ -1129,8 +1129,8 @@ export class Device {
   }
 
   /**
-   * @internal — Claim this device's one session-start proxy start
-   * (PILOT-1013): true the first time, when the proxy is not already up, so
+   * @internal — Claim this device's one session-start proxy start:
+   * true the first time, when the proxy is not already up, so
    * the caller starts it now; false after that. The session open (before the
    * app launches) and the runner's first file (for a session that adopted a
    * running app) both ask, and whichever asks first starts it. One try: a
@@ -1143,7 +1143,7 @@ export class Device {
   }
 
   /**
-   * @internal — Start the network proxy for the session (PILOT-1013), as the
+   * @internal — Start the network proxy for the session, as the
    * device session opens or before the runner's first file, unless a start
    * was already tried. Never throws, and says nothing: outside a test there
    * is no one to tell on every run path (a UI worker's or MCP child's stderr

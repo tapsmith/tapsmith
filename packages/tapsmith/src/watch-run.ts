@@ -87,7 +87,7 @@ export interface WatchRunMessage {
   runMode: Extract<RunMode, 'watch' | 'mcp'>
   /**
    * Whether the session's test files use the network APIs — the parent's
-   * scan, passed on as `RunOptions.networkApisInRun` (PILOT-1013). Required:
+   * scan, passed on as `RunOptions.networkApisInRun`. Required:
    * a parent that left it out would leave mocking on the late on-demand start.
    */
   networkApisInRun: boolean

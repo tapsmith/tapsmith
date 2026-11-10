@@ -373,7 +373,7 @@ function armOnDemandNetworkCapture(opts: RunOptions): void {
 /**
  * Start every device's proxy now, before the file's worker fixtures, hooks
  * and first test, when the run's test files use the network APIs
- * (`RunOptions.networkApisInRun`, PILOT-1013): connections the app opens from
+ * (`RunOptions.networkApisInRun`): connections the app opens from
  * here on go through it, so a test that mocks a server an earlier test
  * already talked to still sees its requests. Once per device — usually the
  * session open already did it, before the app launched; this covers sessions
@@ -1312,7 +1312,7 @@ export interface RunOptions {
   /**
    * Whether the run's test files use `route()`, `waitForRequest()`,
    * `waitForResponse()` or `on('request' | 'response')`
-   * (`testFilesUseNetworkApis`, PILOT-1013) — deliberately REQUIRED, like
+   * (`testFilesUseNetworkApis`) — deliberately REQUIRED, like
    * `resetCapabilities`. When true, the runner starts each device's network
    * proxy before the file's first hook if the session open has not already,
    * so the app's connections go through it before any test mocks them.

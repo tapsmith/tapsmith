@@ -126,8 +126,8 @@ export interface OpenDeviceSessionOptions {
   claimSession: SessionIdentity
   /**
    * Start the network proxy before the app is installed and launched, because
-   * the run's test files use the network APIs (`testFilesUseNetworkApis`,
-   * PILOT-1013): connections the app opens before the proxy starts bypass it,
+   * the run's test files use the network APIs (`testFilesUseNetworkApis`):
+   * connections the app opens before the proxy starts bypass it,
    * so a route registered later would never see them. `multiDevice` when the
    * device belongs to a group of two or more (the capture must then be
    * isolated per device). `false` when the run does not use them. With

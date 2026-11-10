@@ -189,7 +189,7 @@ export interface UIServerContext {
    */
   forceInstall: boolean
   /**
-   * Whether the session's test files use the network APIs (PILOT-1013):
+   * Whether the session's test files use the network APIs:
    * every worker starts its devices' network proxy before the app launches.
    * Required, like `forceInstall`.
    */

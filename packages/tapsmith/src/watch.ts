@@ -83,8 +83,8 @@ export interface WatchModeContext {
    */
   forceInstall: boolean
   /**
-   * Whether the session's test files use the network APIs at startup
-   * (PILOT-1013): every worker starts its devices' proxy before its app
+   * Whether the session's test files use the network APIs at startup:
+   * every worker starts its devices' proxy before its app
    * launches. Each run scans the files again for its own children.
    */
   networkApisInRun: boolean
