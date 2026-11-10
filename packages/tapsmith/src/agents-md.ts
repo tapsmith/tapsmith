@@ -16,6 +16,8 @@ export function renderAgentsSection(): string {
 
 This project uses [Tapsmith](https://github.com/tapsmith/tapsmith) for mobile E2E tests (Playwright-style API).
 
+The docs for the installed Tapsmith version ship in the package: read \`node_modules/tapsmith/docs/<page>.md\` (start with \`api-reference.md\`, \`writing-tests.md\` and \`locators.md\`) rather than guessing the API or relying on docs for another version.
+
 ### Running and debugging
 
 - Run all tests: \`npx tapsmith test\`
