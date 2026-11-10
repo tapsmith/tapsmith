@@ -2907,6 +2907,7 @@ class CommandHandler {
                         )
                     }
                     preOpenHierarchy = HierarchyDumper(app: targetApp).dump(from: pre)
+                    phases.lap("preSnapshot")
                 }
 
                 let activateError = ObjCExceptionCatcher.catchException {

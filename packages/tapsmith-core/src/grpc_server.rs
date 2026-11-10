@@ -430,7 +430,14 @@ fn log_agent_command_timing(
 /// order they run; any others follow sorted. Values that would break the
 /// line's `key=value` format are left out.
 fn agent_timing_fields(data: &Value) -> String {
-    const PHASE_ORDER: [&str; 5] = ["activate", "deliver", "verify", "displayCheck", "rebind"];
+    const PHASE_ORDER: [&str; 6] = [
+        "preSnapshot",
+        "activate",
+        "deliver",
+        "verify",
+        "displayCheck",
+        "rebind",
+    ];
     fn plain(text: &str) -> bool {
         !text.is_empty()
             && text
@@ -7350,12 +7357,12 @@ mod tests {
     fn agent_timing_fields_list_reported_phases_in_order() {
         let data = serde_json::json!({
             "success": true,
-            "phasesMs": {"verify": 61, "activate": 3, "deliver": 22, "bogus": "x"},
+            "phasesMs": {"verify": 61, "activate": 3, "deliver": 22, "preSnapshot": 40, "bogus": "x"},
             "delivery": "daemon",
         });
         assert_eq!(
             agent_timing_fields(&data),
-            " delivery=daemon activate_ms=3 deliver_ms=22 verify_ms=61"
+            " delivery=daemon preSnapshot_ms=40 activate_ms=3 deliver_ms=22 verify_ms=61"
         );
     }
 
