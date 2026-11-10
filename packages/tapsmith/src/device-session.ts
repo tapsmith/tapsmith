@@ -40,6 +40,14 @@ import { findDaemonBin } from './daemon-bin.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed, type DaemonStartOutcome } from './daemon-start.js';
 import { DaemonClaimedError, claimDeviceOrThrow, daemonDriverElsewhere, releaseDeviceClaim, type SessionIdentity } from './device-claims.js';
 
+/**
+ * Budget for each idle wait of a fresh emulator's warm-up launch. An app that
+ * goes idle ends the wait early; one that never does (a looping animation, a
+ * spinner) holds the Android agent for the whole budget, which was the config
+ * timeout, twice per session.
+ */
+const WARMUP_IDLE_TIMEOUT_MS = 5_000;
+
 // ─── Types ───
 
 /** Which device a session should hold, and the daemon that drives it. */
@@ -811,10 +819,10 @@ export async function openDeviceSession(
     // that makes the first few tests unreasonably slow or time out.
     if (opts.freshDevice && config.package) {
       progress('warming up fresh emulator');
-      await device.waitForIdle();
+      await device.waitForIdle(WARMUP_IDLE_TIMEOUT_MS);
       await device.terminateApp(config.package);
       session.prepared = await launchConfiguredApp(session.context, 'emulator warmup launch');
-      await device.waitForIdle();
+      await device.waitForIdle(WARMUP_IDLE_TIMEOUT_MS);
     }
 
     return session;
