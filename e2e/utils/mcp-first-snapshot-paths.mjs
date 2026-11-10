@@ -23,23 +23,26 @@ import { fileURLToPath } from "node:url"
  * Path prefixes the check guards. A trailing `/` means "anything under".
  *
  * Only what the PILOT-462 path runs through: the daemon's iOS clearData,
- * reset and restore (ios/ and the iOS backend), the agent's startup
- * accessibility probe and relaunch, its dump error and XCTest issue relay,
- * and the MCP server the check drives. Code every E2E test exercises anyway
- * (the generic gRPC dispatch in grpc_server.rs, the agent transport in
- * agent_comms.rs, the Android backend, the agent's locator, touch and
- * keyboard code) is left out: replayed over the 175 PRs merged from
- * Oct 10 to Nov 10 2026, the wider list ran the check on 80 of them and
- * this one on 46 (PILOT-1133). Push to main and manual runs still run it
- * whatever changed, as the backstop.
+ * reset, restore and agent restart (ios/, the iOS backend, and the iOS
+ * helpers grpc_server.rs still holds), the agent's startup accessibility
+ * probe and relaunch, its dump error and XCTest issue relay, and the MCP
+ * server the check drives. Code every E2E test exercises anyway (the agent
+ * transport in agent_comms.rs, the Android and shared backends, the agent's
+ * locator, touch and keyboard code) is left out: replayed over the 175 PRs
+ * merged from Oct 10 to Nov 10 2026, the wider list ran the check on 80 of
+ * them and this one on 57 (PILOT-1133). Push to main and manual runs still
+ * run it whatever changed, as the backstop.
  */
 export const GUARDED_PATHS = [
   // Simulator data-container clearing and app-state restore, agent launch
   // and its launch gate.
   "packages/tapsmith-core/src/ios/",
-  // The iOS backend the daemon's clearData, reset and restore handlers call.
-  // (grpc_server.rs only dispatches to a platform backend.)
+  // The iOS backend the daemon's clearData, reset and restore handlers call...
   "packages/tapsmith-core/src/grpc_server/ios_backend.rs",
+  // ...and the iOS helpers it calls back into here: the app container
+  // lookup (get_app_container_cached), the agent restart and its hierarchy
+  // probe, the iOS app reset and the keychain restore.
+  "packages/tapsmith-core/src/grpc_server.rs",
   // The XCUITest agent's startup: the launch gate, the accessibility probe
   // (with the ObjC exception catcher it runs under) and the relaunch...
   "ios-agent/TapsmithAgent/TapsmithAgentRunner.swift",

@@ -38,6 +38,7 @@ test("a PR touching any guarded area runs the check", () => {
   const samples = [
     "packages/tapsmith-core/src/ios/device.rs",
     "packages/tapsmith-core/src/ios/launch_gate.rs",
+    "packages/tapsmith-core/src/grpc_server.rs",
     "packages/tapsmith-core/src/grpc_server/ios_backend.rs",
     "ios-agent/TapsmithAgent/TapsmithAgentRunner.swift",
     "ios-agent/TapsmithAgent/LaunchAccessibilityCheck.swift",
@@ -63,8 +64,6 @@ test("a PR touching any guarded area runs the check", () => {
 // none is on the PILOT-462 path (PILOT-1133).
 test("code outside the PILOT-462 path no longer runs the check", () => {
   const dropped = [
-    // Generic gRPC dispatch to the platform backends.
-    "packages/tapsmith-core/src/grpc_server.rs",
     // The generic agent transport.
     "packages/tapsmith-core/src/agent_comms.rs",
     // The rest of grpc_server/: Android-only or platform-neutral.
