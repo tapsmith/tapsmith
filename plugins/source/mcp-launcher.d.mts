@@ -5,4 +5,4 @@ export declare function tapsmithBinFrom(dir: string): { bin: string; version: st
 export declare function locateTapsmith(
   start: string,
 ): { dir: string; bin: string; version: string; error?: undefined } | { error: string };
-export declare function main(): Promise<void>;
+export declare function main(extraArgs: string[]): Promise<void>;

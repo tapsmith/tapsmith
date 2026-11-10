@@ -52,22 +52,37 @@ function installFakeTapsmith(dir: string, version = '9.9.9'): string {
   );
 }
 
-/** Run the MCP server command the plugins register, as an MCP client would. */
-function runPluginServer(cwd: string, env: Record<string, string> = {}, extraArgs: string[] = []) {
-  const config = JSON.parse(generatedFiles(REPO)['plugins/tapsmith/.mcp.json']!) as {
-    mcpServers: Record<string, { command: string; args: string[] }>;
-  };
+type McpConfig = { mcpServers: Record<string, { command: string; args: string[] }> };
+
+/** The MCP server configs: Claude Code's (.mcp.json) and Cursor's and Codex's (mcp-inline.json). */
+const CONFIGS = ['.mcp.json', 'mcp-inline.json'] as const;
+
+/**
+ * Run the MCP server command a plugin config registers, as an MCP client
+ * would: Claude Code's `${CLAUDE_PLUGIN_ROOT}` is the plugin directory on disk
+ * (the drift test keeps it equal to what sync.mjs generates).
+ */
+function runPluginServer(configFile: (typeof CONFIGS)[number], cwd: string, env: Record<string, string> = {}, extraArgs: string[] = []) {
+  const config = JSON.parse(generatedFiles(REPO)[`plugins/tapsmith/${configFile}`]!) as McpConfig;
   const server = config.mcpServers['tapsmith-headless']!;
   expect(server.command).toBe('node');
+  const args = server.args.map((a) => a.replace('${CLAUDE_PLUGIN_ROOT}', path.join(REPO, 'plugins/tapsmith')));
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   if (!('CLAUDE_PROJECT_DIR' in env)) delete childEnv.CLAUDE_PROJECT_DIR;
   if (!('TAPSMITH_PROJECT_DIR' in env)) delete childEnv.TAPSMITH_PROJECT_DIR;
-  return spawnSync(process.execPath, [...server.args, ...extraArgs], { cwd, env: childEnv, encoding: 'utf8' });
+  return spawnSync(process.execPath, [...args, ...extraArgs], { cwd, env: childEnv, encoding: 'utf8' });
 }
 
 describe('plugin files', () => {
   it('match what plugins/source/sync.mjs generates (run it after changing a source)', () => {
     expect(staleFiles(REPO)).toEqual([]);
+  });
+
+  it('are not git-ignored, so they reach the repository the marketplaces install from', () => {
+    const files = Object.keys(generatedFiles(REPO));
+    const ignored = spawnSync('git', ['check-ignore', '--no-index', ...files], { cwd: REPO, encoding: 'utf8' });
+    // Exit 1: none of them is ignored. Exit 128: not a git checkout.
+    if (ignored.status !== 128) expect(ignored.stdout.trim().split('\n').filter(Boolean)).toEqual([]);
   });
 
   it('carry the tapsmith package version in every manifest', () => {
@@ -143,29 +158,45 @@ describe('locateTapsmith', () => {
   });
 });
 
-describe('the plugin MCP server command', () => {
+describe.each(CONFIGS)('the plugin MCP server command in %s', (configFile) => {
   it("runs the project's tapsmith mcp-server in the project, passing extra arguments on", () => {
     const bin = installFakeTapsmith(tmp);
-    const run = runPluginServer(tmp, {}, ['--config', 'tapsmith.config.ios.mjs']);
+    const run = runPluginServer(configFile, tmp, {}, ['--config', 'tapsmith.config.ios.mjs']);
     expect(run.stderr).toContain(`starting tapsmith 9.9.9 mcp-server in ${tmp}`);
     expect(run.status).toBe(0);
     // stdout is the MCP protocol: only the server writes to it.
     expect(JSON.parse(run.stdout)).toEqual({ args: ['mcp-server', '--config', 'tapsmith.config.ios.mjs'], cwd: tmp, bin });
   });
 
+  it('passes no extra arguments when there are none', () => {
+    installFakeTapsmith(tmp);
+    const run = runPluginServer(configFile, tmp);
+    expect(JSON.parse(run.stdout).args).toEqual(['mcp-server']);
+  });
+
   it('uses CLAUDE_PROJECT_DIR over the working directory', () => {
     installFakeTapsmith(path.join(tmp, 'project'));
     fs.mkdirSync(path.join(tmp, 'elsewhere'));
-    const run = runPluginServer(path.join(tmp, 'elsewhere'), { CLAUDE_PROJECT_DIR: path.join(tmp, 'project') });
+    const run = runPluginServer(configFile, path.join(tmp, 'elsewhere'), { CLAUDE_PROJECT_DIR: path.join(tmp, 'project') });
     expect(run.status).toBe(0);
     expect(JSON.parse(run.stdout).cwd).toBe(path.join(tmp, 'project'));
   });
 
   it('exits 1 with the reason on stderr and nothing on stdout when Tapsmith is not installed', () => {
-    const run = runPluginServer(tmp);
+    const run = runPluginServer(configFile, tmp);
     expect(run.status).toBe(1);
     expect(run.stdout).toBe('');
     expect(run.stderr).toContain('tapsmith plugin: Tapsmith is not installed');
+  });
+});
+
+describe('the inline launcher', () => {
+  it('drops the comments, which the agents would show as part of the command', () => {
+    const config = JSON.parse(generatedFiles(REPO)['plugins/tapsmith/mcp-inline.json']!) as McpConfig;
+    const script = config.mcpServers['tapsmith-headless']!.args[2]!;
+    expect(script).not.toMatch(/^\s*\/\//m);
+    expect(script).not.toContain('/**');
+    expect(script.startsWith('import ')).toBe(true);
   });
 });
 

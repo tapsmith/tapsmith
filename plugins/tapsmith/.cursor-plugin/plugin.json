@@ -23,5 +23,5 @@
   "skills": "./skills/",
   "displayName": "Tapsmith",
   "logo": "./assets/icon.png",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./mcp-inline.json"
 }
