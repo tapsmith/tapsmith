@@ -37,6 +37,10 @@ done
 # 4. Website footer
 sed -i '' "s/v$CURRENT_VERSION/v$NEW_VERSION/g" "$ROOT/website/src/pages/index.astro"
 
+# 4b. The coding-agent plugins' manifests carry the SDK version, so plugin
+# installs update with each release.
+node "$ROOT/plugins/source/sync.mjs"
+
 # 5. Regenerate lockfiles — only for packages whose manifests this script
 # changed. website and test-app don't reference the tapsmith version,
 # so regenerating their lockfiles can only pick up unrelated churn, and

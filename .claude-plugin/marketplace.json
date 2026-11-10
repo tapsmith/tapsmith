@@ -1,0 +1,15 @@
+{
+  "name": "tapsmith",
+  "description": "The Tapsmith plugin: write, run and debug mobile tests with a coding agent.",
+  "owner": {
+    "name": "Tapsmith",
+    "url": "https://tapsmith.dev"
+  },
+  "plugins": [
+    {
+      "name": "tapsmith",
+      "source": "./plugins/tapsmith",
+      "description": "Write, run and debug Tapsmith mobile tests: the Tapsmith MCP server, run from the project's own install, and a skill for finding locators, structuring tests and reading failed traces."
+    }
+  ]
+}
