@@ -2538,6 +2538,9 @@ async function startAgentFromConfig(
         );
         // A refusal is an answer, not an error: the daemon's reason is in it.
         if (res?.success === false) throw new Error(res.errorMessage || 'the daemon refused to start the agent');
+        // A successful start can carry a warning, such as a reducedMotion
+        // speed-up the daemon could not apply (PILOT-1073).
+        if (res?.errorMessage) log(`warning: ${res.errorMessage}`);
       },
       (err) => log(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`),
       { delayMs: AGENT_START_RETRY_DELAY_MS },

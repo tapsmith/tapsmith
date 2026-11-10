@@ -15,7 +15,10 @@ export default defineConfig({
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
   workers: 1,
-  trace: { mode: "on-all-retries", daemonLogs: true },
+  // Record every attempt, keep failures and retries: a flaky test keeps its
+  // failing first attempt next to the passing retry, so the flake itself is
+  // in the report, not only the attempt that recovered from it.
+  trace: { mode: "retain-on-failure-and-retries", daemonLogs: true },
   // on-first-retry: no encoder runs on healthy tests (PILOT-240); a failed
   // test's retry is recorded, so flake investigations still get a video.
   video: "on-first-retry",

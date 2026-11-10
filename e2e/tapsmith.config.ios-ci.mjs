@@ -16,8 +16,11 @@ export default defineConfig({
   retries: 2,
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
+  // Record every attempt, keep failures and retries: a flaky test keeps its
+  // failing first attempt next to the passing retry, so the flake itself is
+  // in the report, not only the attempt that recovered from it.
   trace: {
-    mode: "on-all-retries",
+    mode: "retain-on-failure-and-retries",
     daemonLogs: true,
     networkHosts: ["jsonplaceholder.typicode.com", "127.0.0.1"],
   },

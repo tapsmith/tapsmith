@@ -531,8 +531,11 @@ not see this as the Reduce Motion setting, and the keyboard's and the Home scree
 not affected, so the gain is smaller than on Android: on a test-app screen push and back, about
 10%. An app that is already running keeps its speed until it is next launched, which Tapsmith does
 when it starts. If the simulator's launchd environment already has a `FEATUREFLAGS_ENABLED` value
-of its own, Tapsmith leaves it alone and does not speed animations up (the daemon log says so). It
-is not applied on physical iOS devices.
+of its own, Tapsmith leaves it alone and does not speed animations up (the daemon log says so). On
+a loaded runner a freshly booted simulator can be slow to answer: Tapsmith tries again before the
+agent launches the app, and if the simulator still does not answer, the run prints a
+`reducedMotion could not be applied` warning and tries again at the next agent start. It is not
+applied on physical iOS devices.
 
 ### ADB Setup
 
