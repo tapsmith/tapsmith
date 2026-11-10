@@ -3126,11 +3126,30 @@ class CommandHandler {
             // requested state. If it still doesn't stick, fall through so
             // the caller sees whatever the device settled on — rotation
             // outside of Tapsmith's control is a valid platform state.
-            XCUIDevice.shared.orientation = target
-            Thread.sleep(forTimeInterval: 0.4)
-            if XCUIDevice.shared.orientation != target {
-                XCUIDevice.shared.orientation = target
-                Thread.sleep(forTimeInterval: 0.4)
+            // The setter can raise an XCTest automation issue on a loaded
+            // simulator, even after the turn went through: the read-back
+            // decides (RotationSettle.turnDevice, PILOT-1072).
+            let turnError = RotationSettle.turnDevice(
+                to: target,
+                set: { orientation in
+                    ObjCExceptionCatcher.catchException {
+                        XCUIDevice.shared.orientation = orientation
+                    }?.localizedDescription
+                },
+                read: {
+                    var current: UIDeviceOrientation?
+                    _ = ObjCExceptionCatcher.catchException {
+                        current = XCUIDevice.shared.orientation
+                    }
+                    return current
+                }
+            )
+            if let turnError {
+                // The device may have turned part-way: what is cached about
+                // the screen is no longer known to be right.
+                snapshotFinder.invalidateScreenSize()
+                actionExecutor.cachedScreenSize = nil
+                throw AgentError.actionFailed("Could not turn the device to \(orientation.lowercased()): \(turnError)")
             }
             // The screen size is cached and decides what counts as on screen,
             // so re-read it only once the app's window has turned: on a

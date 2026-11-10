@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// Waits for the app's window to turn after `setOrientation` (pure, so the
-/// host tests can drive it with a fake clock).
+/// Turns the device for `setOrientation` and waits for the app's window to
+/// turn after it (pure, so the host tests can drive it with a fake clock).
 ///
 /// The agent caches the screen size and uses it to decide what is on screen.
 /// `setOrientation` re-reads it after turning the device, but on a loaded
@@ -12,6 +12,36 @@ import Foundation
 /// visible until the next turn.
 enum RotationSettle {
     static let pollInterval: TimeInterval = 0.1
+    /// How long a set orientation is given to take before it is read back.
+    static let turnSettleSeconds: TimeInterval = 0.4
+    /// How many times the orientation is set before the agent gives up.
+    static let turnAttempts = 2
+
+    /// Turns the device to `target`: sets it, waits, reads it back, and sets
+    /// it once more if it has not taken. Returns nil when the device turned,
+    /// or when no set failed (a physical device's accelerometer can turn it
+    /// back, and the device's own orientation is a valid state); otherwise
+    /// the error the last failing set gave.
+    ///
+    /// `set` returns the error XCTest raised, if any. On a loaded simulator
+    /// the setter can raise an automation issue (`kAXErrorIPCTimeout` while
+    /// XCTest lists the active applications) after the turn has gone through
+    /// (PILOT-1072): the read-back decides, so such a turn is not reported as
+    /// a failure. `read` returns nil when the orientation cannot be read.
+    static func turnDevice<Orientation: Equatable>(
+        to target: Orientation,
+        set: (Orientation) -> String?,
+        read: () -> Orientation?,
+        sleep: (TimeInterval) -> Void = Thread.sleep(forTimeInterval:)
+    ) -> String? {
+        var lastError: String?
+        for _ in 0..<turnAttempts {
+            lastError = set(target)
+            sleep(turnSettleSeconds)
+            if read() == target { return nil }
+        }
+        return lastError
+    }
 
     /// Reads the window until its shape matches `landscape` (wider than tall)
     /// or `deadline` passes, and returns the last size read. An app that does

@@ -80,6 +80,100 @@ do {
     expect("zero frame is not an answer", h.run(landscape: true) == landscape && h.reads == 2)
 }
 
+// ─── turnDevice: setting the device's orientation (PILOT-1072) ───
+
+enum Turn: Equatable { case portrait, landscape }
+
+/// A device whose orientation setter can fail (an XCTest automation issue
+/// such as kAXErrorIPCTimeout, raised after the turn was sent or before),
+/// read back afterwards.
+final class FakeDevice {
+    var orientation: Turn = .portrait
+    var sets = 0
+    var sleeps: [TimeInterval] = []
+    /// Per set call: whether it turns the device, and the error it raises.
+    var script: [(turns: Bool, error: String?)]
+    /// Reads that fail (nil) before reads succeed.
+    var failedReads = 0
+
+    init(_ script: [(turns: Bool, error: String?)]) { self.script = script }
+
+    func turn(to target: Turn) -> String? {
+        RotationSettle.turnDevice(
+            to: target,
+            set: { t in
+                let step = self.sets < self.script.count ? self.script[self.sets] : (turns: true, error: nil)
+                self.sets += 1
+                if step.turns { self.orientation = t }
+                return step.error
+            },
+            read: { () -> Turn? in
+                if self.failedReads > 0 { self.failedReads -= 1; return nil }
+                return self.orientation
+            },
+            sleep: { self.sleeps.append($0) }
+        )
+    }
+}
+
+let axTimeout = "Failed to get list of active applications: Accessibility error kAXErrorIPCTimeout"
+
+// The plain case: one set, the device turns, no error.
+do {
+    let d = FakeDevice([(turns: true, error: nil)])
+    expect("turn: succeeds", d.turn(to: .landscape) == nil && d.orientation == .landscape)
+    expect("turn: one set", d.sets == 1)
+}
+
+// CI, 8 Nov 2026: the setter raised kAXErrorIPCTimeout after the device had
+// turned (the retry started in landscape). The turn happened, so the command
+// succeeds rather than failing a test whose device did what it asked.
+do {
+    let d = FakeDevice([(turns: true, error: axTimeout)])
+    expect("raised after turning: succeeds", d.turn(to: .landscape) == nil)
+    expect("raised after turning: not set again", d.sets == 1)
+}
+
+// The setter raised before the turn reached the device: set it again, once.
+do {
+    let d = FakeDevice([(turns: false, error: axTimeout), (turns: true, error: nil)])
+    expect("raised before turning: retried and succeeds", d.turn(to: .landscape) == nil && d.orientation == .landscape)
+    expect("raised before turning: two sets", d.sets == 2)
+}
+
+// Both sets raise and the device never turns: the command fails with the
+// error XCTest gave, rather than reporting a turn that did not happen.
+do {
+    let d = FakeDevice([(turns: false, error: axTimeout), (turns: false, error: axTimeout)])
+    let error = d.turn(to: .landscape)
+    expect("never turns, raised: fails with XCTest's error", error?.contains("kAXErrorIPCTimeout") == true)
+    expect("never turns, raised: two sets only", d.sets == 2)
+}
+
+// No error but the device did not take the turn (a physical device's
+// accelerometer reverting it): set again once, then report success as
+// before — the device's own orientation is a valid state, not a failure.
+do {
+    let d = FakeDevice([(turns: false, error: nil), (turns: false, error: nil)])
+    expect("never turns, no error: not a failure", d.turn(to: .landscape) == nil)
+    expect("never turns, no error: two sets", d.sets == 2)
+}
+
+// The read-back fails too (the same loaded AX server): a set that raised is
+// tried again; once a set goes through without error, that is taken.
+do {
+    let d = FakeDevice([(turns: true, error: axTimeout), (turns: true, error: nil)])
+    d.failedReads = 1
+    expect("unreadable after a raised set: set again, succeeds", d.turn(to: .landscape) == nil && d.sets == 2)
+}
+
+// Each set is given time to take before it is read back.
+do {
+    let d = FakeDevice([(turns: false, error: axTimeout), (turns: true, error: nil)])
+    _ = d.turn(to: .landscape)
+    expect("settles after each set", d.sleeps == [RotationSettle.turnSettleSeconds, RotationSettle.turnSettleSeconds])
+}
+
 if failures > 0 {
     print("\(failures) RotationSettle test(s) failed")
     exit(1)
