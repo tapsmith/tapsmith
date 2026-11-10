@@ -21,12 +21,6 @@ import ObjectiveC
 /// capture came back all black). PNG keeps the pixels exact, so two captures
 /// of an unchanged region compare equal.
 ///
-/// `captureJPEGData` takes the same capture as JPEG bytes, undecoded: a
-/// whole-screen region costs ~15–20 ms that way, against ~95 ms as PNG (the
-/// encoding is the cost). JPEG is lossy but deterministic, so two captures of
-/// an unchanged screen are the same bytes; the idle wait compares them so
-/// (`IdleSettle`).
-///
 /// Uses no UIKit or XCTest types, so the host unit tests compile it.
 enum RegionScreenshot {
     /// Why the private method can't be used.
@@ -51,14 +45,7 @@ enum RegionScreenshot {
         fileprivate let shot: ShotFunction
         fileprivate let selector: Selector
         fileprivate let encoding: AnyObject
-        /// The JPEG encoding for `captureJPEGData`; nil when it could not be
-        /// made (the PNG captures do not depend on it).
-        fileprivate let jpegEncoding: AnyObject?
     }
-
-    /// Quality of `captureJPEGData`'s encoding. Low enough to stay cheap,
-    /// high enough that a small change (a spinner's turn) changes the bytes.
-    static let jpegQuality = 0.5
 
     static let screenClassName = "XCUIScreen"
     static let encodingClassName = "XCTImageEncoding"
@@ -82,12 +69,21 @@ enum RegionScreenshot {
     /// The method, looked up once.
     static let api: Result<API, Unavailable> = resolve()
 
-    /// Look the method up and make the PNG encoding. The class names are
-    /// parameters so the host test can check the failure answers.
+    /// The same method with a low-quality JPEG encoding, for a large region
+    /// whose exact pixels don't matter: the black-display check reads the
+    /// whole content band (PNG-encoding that costs ~90 ms), thresholds one
+    /// capture and never compares two.
+    static let jpegAPI: Result<API, Unavailable> = resolve(uti: "public.jpeg", quality: 0.3)
+
+    /// Look the method up and make the encoding (`uti` at `quality`, PNG by
+    /// default). The class names are parameters so the host test can check
+    /// the failure answers.
     static func resolve(
         screenClass screenName: String = screenClassName,
         encodingClass encodingName: String = encodingClassName,
-        imageClass imageName: String = imageClassName
+        imageClass imageName: String = imageClassName,
+        uti: String = "public.png",
+        quality: Double = 1.0
     ) -> Result<API, Unavailable> {
         guard let screenClass = NSClassFromString(screenName) else { return .failure(.missingClass(screenName)) }
         guard let encodingClass = NSClassFromString(encodingName) else { return .failure(.missingClass(encodingName)) }
@@ -115,16 +111,13 @@ enum RegionScreenshot {
         guard let allocated = (encodingClass as AnyObject).perform(NSSelectorFromString("alloc"))?
             .takeUnretainedValue() else { return .failure(.encodingNotCreated) }
         let initialize = unsafeBitCast(method_getImplementation(initializer), to: EncodingInitFunction.self)
-        guard let encoding = initialize(allocated, initSelector, "public.png" as NSString, 1.0) else {
+        guard let encoding = initialize(allocated, initSelector, uti as NSString, quality) else {
             return .failure(.encodingNotCreated)
         }
-        let jpegEncoding = (encodingClass as AnyObject).perform(NSSelectorFromString("alloc"))
-            .flatMap { initialize($0.takeUnretainedValue(), initSelector, "public.jpeg" as NSString, jpegQuality) }
         return .success(API(
             shot: unsafeBitCast(method_getImplementation(shot), to: ShotFunction.self),
             selector: shotSelector,
-            encoding: encoding,
-            jpegEncoding: jpegEncoding
+            encoding: encoding
         ))
     }
 
@@ -144,33 +137,37 @@ enum RegionScreenshot {
 
     /// The screen inside `rect` (points), at the screen's pixel scale; nil
     /// when the method can't be used, the rect is empty, or the capture
-    /// fails (the caller falls back to the whole screen).
-    static func capture(_ rect: CGRect, of screen: AnyObject) -> CGImage? {
-        guard case .success(let api) = api,
-              let data = shot(api, api.encoding, rect, of: screen),
+    /// fails (the caller falls back to the whole screen). `chosen` is the
+    /// encoding to capture with: `api` (PNG) or `jpegAPI`.
+    static func capture(_ rect: CGRect, of screen: AnyObject, with chosen: Result<API, Unavailable> = api) -> CGImage? {
+        guard case .success(let api) = chosen, !rect.isNull, !rect.isEmpty else { return nil }
+        var error: NSError?
+        guard let image = api.shot(screen, api.selector, api.encoding, rect, &error) as? NSObject,
+              image.responds(to: NSSelectorFromString(imageDataSelectorName)),
+              let data = image.value(forKey: imageDataSelectorName) as? Data,
               let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
     }
+}
 
-    /// The screen inside `rect` (points) as JPEG bytes, not decoded; nil
-    /// when the method or the JPEG encoding can't be used, the rect is
-    /// empty, or the capture fails.
-    static func captureJPEGData(_ rect: CGRect, of screen: AnyObject) -> Data? {
-        guard case .success(let api) = api, let jpeg = api.jpegEncoding else { return nil }
-        return shot(api, jpeg, rect, of: screen)
-    }
+// ─── Settle captures ───
 
-    /// Whether `captureJPEGData` can be used.
-    static var jpegEncodingAvailable: Bool {
-        if case .success(let api) = api { return api.jpegEncoding != nil }
-        return false
-    }
+extension RegionScreenshot {
+    /// The same method with a JPEG encoding, for the idle wait (`IdleSettle`),
+    /// which compares two captures of the whole screen as bytes: ~15 ms each,
+    /// against ~95 ms as PNG (the encoding is the cost). JPEG is lossy, but
+    /// encoding the same pixels gives the same bytes: on a simulator, 120 of
+    /// 120 consecutive captures of a still screen matched, at every region
+    /// size tried, while a blinking caret changed them.
+    static let settleJPEGAPI: Result<API, Unavailable> = resolve(uti: "public.jpeg", quality: 0.5)
 
-    /// The encoded bytes of one capture of `rect` with `encoding`.
-    private static func shot(_ api: API, _ encoding: AnyObject, _ rect: CGRect, of screen: AnyObject) -> Data? {
-        guard !rect.isNull, !rect.isEmpty else { return nil }
+    /// The screen inside `rect` (points) as the encoded bytes of one capture
+    /// with `chosen`, not decoded; nil when the method or encoding can't be
+    /// used, the rect is empty, or the capture fails.
+    static func captureData(_ rect: CGRect, of screen: AnyObject, with chosen: Result<API, Unavailable>) -> Data? {
+        guard case .success(let api) = chosen, !rect.isNull, !rect.isEmpty else { return nil }
         var error: NSError?
-        guard let image = api.shot(screen, api.selector, encoding, rect, &error) as? NSObject,
+        guard let image = api.shot(screen, api.selector, api.encoding, rect, &error) as? NSObject,
               image.responds(to: NSSelectorFromString(imageDataSelectorName)) else { return nil }
         return image.value(forKey: imageDataSelectorName) as? Data
     }

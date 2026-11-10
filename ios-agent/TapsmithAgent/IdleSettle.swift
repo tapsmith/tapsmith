@@ -8,7 +8,7 @@ import Foundation
 /// to be a plain quarter-second sleep. Every test paid it before it started
 /// (the runner's pre-test wait), whether or not anything on the screen was
 /// moving. The wait now samples the whole screen (a JPEG region screenshot,
-/// `RegionScreenshot.captureJPEGData`, ~15–20 ms) and ends as soon as two
+/// `RegionScreenshot.settleJPEGAPI`, ~15–20 ms) and ends as soon as two
 /// consecutive samples, two rendered frames apart, are the same — the touch
 /// settle's rule (`TouchSettle`). A screen that never holds still (a spinner,
 /// a looping animation) still costs the ceiling, as before; a still one costs

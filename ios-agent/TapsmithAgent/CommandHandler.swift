@@ -925,7 +925,7 @@ class CommandHandler {
             deadline: deadline,
             now: Date.init,
             sleep: Thread.sleep(forTimeInterval:),
-            sample: { RegionScreenshot.captureJPEGData(region, of: XCUIScreen.main) }
+            sample: { RegionScreenshot.captureData(region, of: XCUIScreen.main, with: RegionScreenshot.settleJPEGAPI) }
         )
     }
 
