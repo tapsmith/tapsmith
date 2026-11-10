@@ -1065,6 +1065,26 @@ mod tests {
             .collect()
     }
 
+    /// Wait until `udid`'s installed helper process has exited, leaving it
+    /// in the map (a fixed sleep raced the stub's exit on loaded runners).
+    async fn wait_for_helper_exit(injector: &HidInjector, udid: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            {
+                let mut map = injector.helpers.lock().await;
+                let helper = map.get_mut(udid).expect("helper installed");
+                if matches!(helper.child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the stub helper did not exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     #[tokio::test]
     async fn a_line_that_hit_a_broken_pipe_is_sent_once_on_a_new_helper() {
         let log = tempfile::tempdir().unwrap();
@@ -1072,7 +1092,7 @@ mod tests {
         let injector = HidInjector::with_helper_path(path);
         injector.ensure("UDID-P").await.unwrap();
         // Let the first helper exit, so the write finds its stdin closed.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_for_helper_exit(&injector, "UDID-P").await;
         injector
             .send_and_wait("UDID-P", "t1 3 4 10", Duration::from_secs(5))
             .await
@@ -1088,7 +1108,7 @@ mod tests {
         let (_dir, path) = first_start_stub(log.path(), "exit 0");
         let injector = HidInjector::with_helper_path(path);
         injector.ensure("UDID-G").await.unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_for_helper_exit(&injector, "UDID-G").await;
         injector
             .send_gesture_start("UDID-G", "d 3 4")
             .await
@@ -1189,7 +1209,7 @@ mod tests {
         let injector = HidInjector::with_helper_path(path);
         injector.ensure("UDID-K").await.unwrap();
         injector.send("UDID-K", "d 5 6").await.unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_for_helper_exit(&injector, "UDID-K").await;
         injector.ensure("UDID-K").await.unwrap();
         injector
             .send_and_wait("UDID-K", "t1 1 1 10", Duration::from_secs(5))
