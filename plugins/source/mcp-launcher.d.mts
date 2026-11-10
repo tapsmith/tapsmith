@@ -1,5 +1,6 @@
 // Types for mcp-launcher.mjs, so the unit tests in packages/tapsmith can import it.
 
+export declare function firstWorkspaceFolder(value: string | undefined): string | undefined;
 export declare function projectDir(env: Record<string, string | undefined>, cwd: string): string;
 export declare function tapsmithBinFrom(dir: string): { bin: string; version: string } | undefined;
 export declare function locateTapsmith(

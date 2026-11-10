@@ -13,8 +13,10 @@
 // inline script.
 //
 // The project is TAPSMITH_PROJECT_DIR, else CLAUDE_PROJECT_DIR (Claude Code
-// sets it for plugin MCP servers), else the working directory (Codex and
-// Cursor start servers in the workspace). Tapsmith is resolved from there as
+// sets it for plugin MCP servers), else the first workspace folder in
+// WORKSPACE_FOLDER_PATHS (Cursor sets it; Cursor's MCP servers have been seen
+// to start outside the workspace), else the working directory (Codex starts
+// servers in the session's directory). Tapsmith is resolved from there as
 // Node resolves `import 'tapsmith'`; failing that, from the one folder below
 // it that holds a Tapsmith config (a monorepo's e2e/ package, say).
 
@@ -25,9 +27,30 @@ import { pathToFileURL } from 'node:url';
 
 const CONFIG_NAMES = ['tapsmith.config.ts', 'tapsmith.config.js', 'tapsmith.config.mjs'];
 
+/**
+ * The first folder in Cursor's WORKSPACE_FOLDER_PATHS that exists. Its
+ * separator for several folders is not documented, so the whole value is
+ * tried first, then its parts split on commas and on the path list separator.
+ */
+export function firstWorkspaceFolder(value) {
+  if (!value) return undefined;
+  const candidates = [value, ...value.split(new RegExp('[,' + path.delimiter + ']'))]
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return candidates.find((dir) => {
+    try {
+      return fs.statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** The folder the agent is working in. */
 export function projectDir(env, cwd) {
-  return path.resolve(env.TAPSMITH_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);
+  return path.resolve(
+    env.TAPSMITH_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || firstWorkspaceFolder(env.WORKSPACE_FOLDER_PATHS) || cwd,
+  );
 }
 
 /** The bin of the tapsmith package `dir` resolves, or undefined when it resolves none. */

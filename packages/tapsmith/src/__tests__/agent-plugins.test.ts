@@ -10,7 +10,7 @@ import * as os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { detectCodingAgents, isOnPath } from '../agent-plugins.js';
-import { childExecArgv, locateTapsmith, projectDir } from '../../../../plugins/source/mcp-launcher.mjs';
+import { childExecArgv, firstWorkspaceFolder, locateTapsmith, projectDir } from '../../../../plugins/source/mcp-launcher.mjs';
 import { generatedFiles, staleFiles } from '../../../../plugins/source/sync.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '../../../..');
@@ -82,6 +82,7 @@ function runPluginServer(configFile: (typeof CONFIGS)[number], cwd: string, env:
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   if (!('CLAUDE_PROJECT_DIR' in env)) delete childEnv.CLAUDE_PROJECT_DIR;
   if (!('TAPSMITH_PROJECT_DIR' in env)) delete childEnv.TAPSMITH_PROJECT_DIR;
+  if (!('WORKSPACE_FOLDER_PATHS' in env)) delete childEnv.WORKSPACE_FOLDER_PATHS;
   return spawnSync(process.execPath, [...args, ...extraArgs], { cwd, env: childEnv, encoding: 'utf8' });
 }
 
@@ -128,6 +129,25 @@ describe('projectDir', () => {
     expect(projectDir({ TAPSMITH_PROJECT_DIR: '/a', CLAUDE_PROJECT_DIR: '/b' }, '/c')).toBe('/a');
     expect(projectDir({ CLAUDE_PROJECT_DIR: '/b' }, '/c')).toBe('/b');
     expect(projectDir({ CLAUDE_PROJECT_DIR: '' }, '/c')).toBe('/c');
+  });
+
+  it("uses Cursor's workspace folder before the working directory, which Cursor may set elsewhere", () => {
+    fs.mkdirSync(path.join(tmp, 'ws'));
+    expect(projectDir({ WORKSPACE_FOLDER_PATHS: path.join(tmp, 'ws') }, '/c')).toBe(path.join(tmp, 'ws'));
+    expect(projectDir({ CLAUDE_PROJECT_DIR: '/b', WORKSPACE_FOLDER_PATHS: path.join(tmp, 'ws') }, '/c')).toBe('/b');
+    expect(projectDir({ WORKSPACE_FOLDER_PATHS: path.join(tmp, 'missing') }, '/c')).toBe('/c');
+  });
+});
+
+describe('firstWorkspaceFolder', () => {
+  it('takes the first existing folder of a list, whatever its separator', () => {
+    for (const name of ['a', 'b']) fs.mkdirSync(path.join(tmp, name));
+    const [a, b] = [path.join(tmp, 'a'), path.join(tmp, 'b')];
+    expect(firstWorkspaceFolder(a)).toBe(a);
+    expect(firstWorkspaceFolder(`${a},${b}`)).toBe(a);
+    expect(firstWorkspaceFolder(`${path.join(tmp, 'gone')}${path.delimiter}${b}`)).toBe(b);
+    expect(firstWorkspaceFolder('')).toBeUndefined();
+    expect(firstWorkspaceFolder(undefined)).toBeUndefined();
   });
 });
 
@@ -215,6 +235,14 @@ describe.each(CONFIGS)('the plugin MCP server command in %s', (configFile) => {
     installFakeTapsmith(path.join(tmp, 'project'));
     fs.mkdirSync(path.join(tmp, 'elsewhere'));
     const run = runPluginServer(configFile, path.join(tmp, 'elsewhere'), { CLAUDE_PROJECT_DIR: path.join(tmp, 'project') });
+    expect(run.status).toBe(0);
+    expect(JSON.parse(run.stdout).cwd).toBe(path.join(tmp, 'project'));
+  });
+
+  it("uses Cursor's WORKSPACE_FOLDER_PATHS over the working directory", () => {
+    installFakeTapsmith(path.join(tmp, 'project'));
+    fs.mkdirSync(path.join(tmp, 'elsewhere'));
+    const run = runPluginServer(configFile, path.join(tmp, 'elsewhere'), { WORKSPACE_FOLDER_PATHS: path.join(tmp, 'project') });
     expect(run.status).toBe(0);
     expect(JSON.parse(run.stdout).cwd).toBe(path.join(tmp, 'project'));
   });
