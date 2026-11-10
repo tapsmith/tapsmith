@@ -224,6 +224,7 @@ export class Device {
    * @internal — The proxy came up through the runner's start at a file, after
    * the app had been launched without it, so connections the app opened
    * before may bypass it (a reason the runner gives for unfired routes).
+   * Cleared once the app's process is recreated behind the proxy.
    */
   _proxyStartedAfterLaunch = false;
   /**
@@ -773,7 +774,7 @@ export class Device {
     return withActionProgress('restartApp', pkg,
       () => this._tracedAction('restartApp', 'device', undefined,
         () => this._client.restartApp(pkg, options?.waitForIdle ?? true),
-        'Restart app failed'));
+        'Restart app failed').then(() => this._appProcessRecreated()));
   }
 
   /**
@@ -784,7 +785,7 @@ export class Device {
     return withActionProgress('launchApp', packageName,
       () => this._tracedAction('launchApp', 'navigation', undefined,
         () => this._client.launchApp(packageName, options),
-        'Launch app failed'));
+        'Launch app failed').then(() => { if (options?.clearData) this._appProcessRecreated(); }));
   }
 
   /**
@@ -834,7 +835,17 @@ export class Device {
           detail: () => (response ? describeAppResetResponse(mode, response, options.target) : undefined),
           skipBeforeCapture: options.skipTraceCapture,
         }));
-    return toAppResetResult(mode, response!);
+    const result = toAppResetResult(mode, response!);
+    if (result.coldLaunch) this._appProcessRecreated();
+    return result;
+  }
+
+  /**
+   * The app's process was stopped or recreated: whatever connections it held
+   * are gone, so a proxy that started after it launched no longer misses them.
+   */
+  private _appProcessRecreated(): void {
+    this._proxyStartedAfterLaunch = false;
   }
 
   /**
@@ -893,7 +904,7 @@ export class Device {
     return withActionProgress('terminateApp', pkg,
       () => this._tracedAction('terminateApp', 'device', undefined,
         () => this._client.terminateApp(pkg),
-        'Terminate app failed'));
+        'Terminate app failed').then(() => this._appProcessRecreated()));
   }
 
   /**
@@ -962,7 +973,7 @@ export class Device {
     return withActionProgress('clearAppData', packageName,
       () => this._tracedAction('clearAppData', 'device', undefined,
         () => this._client.clearAppData(packageName),
-        'Clear app data failed'));
+        'Clear app data failed').then(() => this._appProcessRecreated()));
   }
 
   /** Programmatically grant a permission (Android runtime permission; iOS simulator `simctl privacy` service). */

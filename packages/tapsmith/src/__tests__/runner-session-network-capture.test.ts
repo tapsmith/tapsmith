@@ -236,6 +236,37 @@ describe('runTestFile — network capture at session start (PILOT-1013)', () => 
     }
   });
 
+  // R5-F1: a relaunch behind the proxy (a clear reset, restartApp, …) gives
+  // the app fresh connections through it — the late start no longer applies.
+  it.each([
+    ['terminateApp', `await device.terminateApp('com.example.app')`],
+    ['restartApp', `await device.restartApp('com.example.app')`],
+    ['clearAppData', `await device.clearAppData('com.example.app')`],
+    ['launchApp with clearData', `await device.launchApp('com.example.app', { clearData: true })`],
+  ])('names no late start once the app was relaunched behind the proxy (%s)', async (label, relaunch) => {
+    const { device } = makeDevice();
+    const client = (device as unknown as { _client: Record<string, unknown> })._client;
+    for (const m of ['terminateApp', 'restartApp', 'clearAppData', 'launchApp']) client[m] = async () => ({ success: true, errorMessage: '' });
+    const warned: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { warned.push(args.join(' ')); });
+    try {
+      const filePath = writeFile('relaunched.test.mjs', `
+        test('mocks after ${label}', async ({ device }) => {
+          ${relaunch};
+          await device.route('**/posts', (route) => route.fulfill({ status: 500 }));
+          throw new Error('no error alert');
+        });
+      `);
+      const [result] = collectResults(await runTestFile(filePath, makeOpts([device], true)));
+      // Failed where the test meant to, with its route registered.
+      expect(result!.error?.message).toBe('no error alert');
+      const line = warned.find((w) => w.includes(`"mocks after ${label}"`)) ?? '';
+      expect(line).not.toContain('after the app was already running');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('names no late start when the adopted app was launched behind the proxy', async () => {
     const { device } = makeDevice();
     device._launchedBehindProxy = true;
