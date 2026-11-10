@@ -36,3 +36,4 @@ export declare function testPaths(files: PackedFile[]): string[];
 export declare function installScriptsOf(pkg: { scripts?: Record<string, string> }): string[];
 export declare function nonExecutableFiles(files: Required<PackedFile>[], names: string[]): string[];
 export declare function undeclaredPlatformFields(pkg: { name: string; os?: unknown; cpu?: unknown; libc?: unknown }): Array<'os' | 'cpu' | 'libc'>;
+export declare function bundledDocsProblems(files: PackedFile[], pages: string[]): string[];

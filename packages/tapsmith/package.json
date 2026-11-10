@@ -9,9 +9,9 @@
     "tapsmith": "dist/bin.js"
   },
   "scripts": {
-    "build": "npm run clean && tsc -p tsconfig.build.json && chmod +x dist/bin.js dist/cli.js && mkdir -p dist/proto && cp ../../proto/tapsmith.proto dist/proto/ && mkdir -p dist/schema && cp schema/trace-format.schema.json dist/schema/ && mkdir -p dist/docs && cp ../../docs/api-reference.md dist/docs/ && npm run build:ios-agent-src && npm run build:trace-viewer && npm run build:ui-mode",
+    "build": "npm run clean && tsc -p tsconfig.build.json && chmod +x dist/bin.js dist/cli.js && mkdir -p dist/proto && cp ../../proto/tapsmith.proto dist/proto/ && mkdir -p dist/schema && cp schema/trace-format.schema.json dist/schema/ && node scripts/docs-bundle.mjs && npm run build:ios-agent-src && npm run build:trace-viewer && npm run build:ui-mode",
     "build:ios-agent-src": "(mkdir -p dist/ios-agent; [ -d ../../ios-agent/TapsmithAgent ] && cp -r ../../ios-agent/TapsmithAgent dist/ios-agent/; [ -d ../../ios-agent/TapsmithAgent.xcodeproj ] && cp -r ../../ios-agent/TapsmithAgent.xcodeproj dist/ios-agent/; [ -f ../../ios-agent/create-xcode-project.sh ] && cp ../../ios-agent/create-xcode-project.sh dist/ios-agent/; [ -f ../../ios-agent/install-runner-icon.sh ] && cp ../../ios-agent/install-runner-icon.sh dist/ios-agent/; [ -f ../../ios-agent/Package.swift ] && cp ../../ios-agent/Package.swift dist/ios-agent/) || true",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist docs",
     "build:trace-viewer": "vite build",
     "build:ui-mode": "vite build --config vite.config.ui-mode.ts",
     "check:clean-install": "node scripts/check-clean-install.mjs",
@@ -24,7 +24,8 @@
     "prepublishOnly": "npm run build"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "docs/"
   ],
   "homepage": "https://tapsmith.dev",
   "bugs": {
@@ -81,6 +82,7 @@
     "@types/ws": "^8.18.1",
     "ajv": "^8.20.0",
     "eslint": "^9.0.0",
+    "github-slugger": "^2.0.0",
     "knip": "^5.86.0",
     "lucide-preact": "^1.6.0",
     "marked": "^18.0.14",

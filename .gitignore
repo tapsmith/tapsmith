@@ -64,3 +64,6 @@ tapsmith-promo.mp4
 
 # Experimental promo video (keep locally for future edits)
 tools/promo-experimental/
+
+# Docs pages the SDK build bundles into the package (scripts/docs-bundle.mjs)
+packages/tapsmith/docs/
