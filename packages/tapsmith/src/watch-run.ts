@@ -192,8 +192,15 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       })),
     ],
     config,
-    // Adopting a running app: the runner starts the proxy at the file instead.
-    { claimSession: currentSession(), startNetworkProxy: false, label, adoptVerify: !config.package, connectTimeoutMs: 5_000 },
+    // Adopting a running app, so the runner starts the proxy at the file; the
+    // open still tells the daemon a proxy will run, for the app's relaunches.
+    {
+      claimSession: currentSession(),
+      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0 },
+      label,
+      adoptVerify: !config.package,
+      connectTimeoutMs: 5_000,
+    },
   );
 
   // Created BEFORE preflight so a stop that lands during wake/unlock/app-reset

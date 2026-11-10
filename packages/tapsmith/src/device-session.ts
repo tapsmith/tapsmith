@@ -130,10 +130,11 @@ export interface OpenDeviceSessionOptions {
    * PILOT-1013): connections the app opens before the proxy starts bypass it,
    * so a route registered later would never see them. `multiDevice` when the
    * device belongs to a group of two or more (the capture must then be
-   * isolated per device). `false` when the run does not use them. Ignored
-   * with `adopt` — the app is already running; the runner starts the proxy
-   * at its first file instead. Required, like `claimSession`, so no embedder
-   * opens a device without deciding.
+   * isolated per device). `false` when the run does not use them. With
+   * `adopt` the app is already running, so the runner starts the proxy at
+   * its first file instead; the open still tells the daemon a proxy will run.
+   * Required, like `claimSession`, so no embedder opens a device without
+   * deciding.
    */
   startNetworkProxy: false | { multiDevice: boolean }
   onProgress?: (message: string) => void
@@ -609,7 +610,11 @@ export async function openDeviceSession(
 
   const device = new Device(client, config);
   if (opts.tagTraceEvents) device._traceDeviceId = spec.name;
-  const networkTracingEnabled = isNetworkTracingEnabled(config.trace);
+  // Whether this session's app runs behind the network proxy: the trace
+  // records network, or the run's tests use the network APIs (PILOT-1013).
+  // The daemon prepares for it (on an iOS simulator, gRPC's DNS resolver at
+  // every launch; on a physical iPhone, the Wi-Fi proxy) only when told.
+  const networkTracingEnabled = isNetworkTracingEnabled(config.trace) || opts.startNetworkProxy !== false;
   const capabilities: ResetCapabilities = {};
   const session: DeviceSession = {
     name: spec.name,

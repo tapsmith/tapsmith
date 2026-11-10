@@ -407,6 +407,24 @@ describe('openDeviceSession', () => {
       expect(device._startAgent.mock.invocationCallOrder[0]).toBeGreaterThan(startedAt);
     });
 
+    // The daemon prepares the app for a proxied session (on an iOS simulator,
+    // gRPC's DNS resolver) only when told a proxy will run (R2-F1).
+    it('tells the daemon a proxy will run, at selection, at the agent start and for recovery, with tracing off', async () => {
+      const session = await openDeviceSession(spec, makeConfig(), { claimSession: SESSION, startNetworkProxy: { multiDevice: false }, label: 'Device' });
+      const device = mocks.devices[0];
+      expect(device.setDevice).toHaveBeenCalledWith('emulator-5554', true, [], []);
+      expect(device._startAgent).toHaveBeenCalledWith(expect.objectContaining({ networkTracingEnabled: true }));
+      expect(session.context.networkTracingEnabled).toBe(true);
+    });
+
+    it('keeps telling the daemon so when adopting a session whose run uses network APIs', async () => {
+      const session = await openDeviceSession(spec, makeConfig(), {
+        claimSession: SESSION, startNetworkProxy: { multiDevice: false }, label: 'Run', adopt: true, adoptVerify: false,
+      });
+      expect(mocks.devices[0].setDevice).toHaveBeenCalledWith('emulator-5554', true, [], []);
+      expect(session.context.networkTracingEnabled).toBe(true);
+    });
+
     it('asks for an isolated capture for a member of a group', async () => {
       await openDeviceSession(spec, makeConfig(), { claimSession: SESSION, startNetworkProxy: { multiDevice: true }, label: 'Device' });
       expect(mocks.devices[0]._startNetworkProxyForSession).toHaveBeenCalledWith({ requireIsolation: true, httpPorts: undefined });
