@@ -30,6 +30,12 @@
 //! simulator) checks the flag and sets it again if it was lost
 //! ([`reapply_if_lost`]).
 //!
+//! A `simctl spawn` that times out while the device is selected (a just-booted
+//! simulator under load) is tried again, and when selection still cannot read
+//! the simulator or certainly set the values, the speed-up stays **owed**:
+//! the next fresh agent start, which comes before the agent launches the app,
+//! tries the whole selection again ([`SessionSpeed`], PILOT-1073).
+//!
 //! Every failure here is logged and otherwise ignored: faster animations are
 //! a convenience, and must never fail a session.
 
@@ -51,6 +57,17 @@ pub const COEFFICIENT: &str = "0.1";
 /// Bound for each `simctl spawn` while a device is being selected: generous,
 /// because a just-booted simulator under load can take seconds per call.
 pub const SELECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How many times selection tries the read, and then the writes, before it
+/// leaves the speed-up owed to the next agent start (PILOT-1073). A freshly
+/// booted simulator under load can let one `simctl spawn` run past
+/// [`SELECT_TIMEOUT`] and answer the next. Kept at two so SetDevice stays
+/// well inside the SDK's 120 s deadline even with the [`OWNER_EXIT_WAIT`]:
+/// 25 s + 2 × 15 s + 2 × 15 s, plus the pauses.
+pub const SELECT_ATTEMPTS: u32 = 2;
+
+/// The pause before trying a timed-out read or write again.
+const RETRY_PAUSE: Duration = Duration::from_secs(1);
 
 /// Bound for each `simctl spawn` of the restore at daemon shutdown (a read,
 /// then the writes). Every daemon of a `--workers` run shuts down at once,
@@ -326,6 +343,35 @@ async fn apply(h: &dyn Host, udid: &str, timeout: Duration) -> bool {
     flag && coefficient
 }
 
+/// [`read_sim`], tried up to [`SELECT_ATTEMPTS`] times.
+async fn read_sim_retrying(h: &dyn Host, udid: &str, timeout: Duration) -> Option<Reading> {
+    for attempt in 1..=SELECT_ATTEMPTS {
+        if let Some(reading) = read_sim(h, udid, timeout).await {
+            return Some(reading);
+        }
+        if attempt < SELECT_ATTEMPTS {
+            info!(%udid, "Reading the simulator's animation settings again");
+            tokio::time::sleep(RETRY_PAUSE).await;
+        }
+    }
+    None
+}
+
+/// [`apply`], tried up to [`SELECT_ATTEMPTS`] times (both writes are
+/// idempotent, so one that did land is harmless to repeat).
+async fn apply_retrying(h: &dyn Host, udid: &str, timeout: Duration) -> bool {
+    for attempt in 1..=SELECT_ATTEMPTS {
+        if apply(h, udid, timeout).await {
+            return true;
+        }
+        if attempt < SELECT_ATTEMPTS {
+            info!(%udid, "Setting the simulator's animation speed again");
+            tokio::time::sleep(RETRY_PAUSE).await;
+        }
+    }
+    false
+}
+
 /// Put `originals` back where `current` still reads as Tapsmith's. True when
 /// nothing is left to restore (so the record can go).
 async fn put_back(
@@ -430,30 +476,32 @@ async fn wait_for_exiting_owner(h: &dyn Host, path: &Path) {
 /// undo what this daemon did, `None` (an SDK that does not say) leave this
 /// daemon's own setting as it is. Either way a record left by a daemon that
 /// died is recovered. `current` is what this daemon has applied so far, if
-/// anything; the result is what it has applied afterwards.
-pub async fn on_select(
+/// anything; the result is what it has applied afterwards, and whether a
+/// speed-up that `want` asks for is still owed: the simulator could not be
+/// read, or the writes did not certainly land.
+async fn select_once(
     h: &dyn Host,
     dir: &Path,
     udid: &str,
     want: Option<bool>,
     current: Option<&Applied>,
-) -> Option<Applied> {
+) -> (Option<Applied>, bool) {
     let ours_here = current.filter(|a| a.udid == udid).cloned();
     let path = record_path(dir, udid);
     if want != Some(true) && ours_here.is_none() && !path.exists() {
-        return None;
+        return (None, false);
     }
     if want.is_none() && ours_here.is_some() {
-        return ours_here;
+        return (ours_here, false);
     }
     if want == Some(true) {
         wait_for_exiting_owner(h, &path).await;
     }
 
-    let Some(reading) = read_sim(h, udid, SELECT_TIMEOUT).await else {
+    let Some(reading) = read_sim_retrying(h, udid, SELECT_TIMEOUT).await else {
         // Unknown, not "nothing applied": keep what this daemon already holds,
         // so a failed re-read never drops the restore owed at shutdown.
-        return ours_here;
+        return (ours_here, want == Some(true));
     };
     let applied = Applied {
         udid: udid.to_string(),
@@ -464,13 +512,13 @@ pub async fn on_select(
         Some(record) if is_ours(h, &record).await => {
             if want == Some(true) {
                 // Already applied; set it again in case someone undid it.
-                apply(h, udid, SELECT_TIMEOUT).await;
-                return Some(applied);
+                let landed = apply_retrying(h, udid, SELECT_TIMEOUT).await;
+                return (Some(applied), !landed);
             }
             if put_back(h, udid, &reading, &record.originals, SELECT_TIMEOUT).await {
                 remove_record(&path);
             }
-            return None;
+            return (None, false);
         }
         Some(record) if h.owner_alive(&record).await => {
             warn!(
@@ -478,7 +526,7 @@ pub async fn on_select(
                 owner = record.pid,
                 "Another live Tapsmith daemon has sped this simulator's animations up; leaving them to it"
             );
-            return None;
+            return (None, false);
         }
         Some(record) => {
             info!(%udid, owner = record.pid, "Recovering the animation speed left by an exited daemon");
@@ -486,7 +534,7 @@ pub async fn on_select(
                 if put_back(h, udid, &reading, &record.originals, SELECT_TIMEOUT).await {
                     remove_record(&path);
                 }
-                return None;
+                return (None, false);
             }
             // Taking it over: the dead daemon's originals are the simulator's
             // own values; what it reads now is what that daemon left.
@@ -494,7 +542,7 @@ pub async fn on_select(
         }
         None => {
             if want != Some(true) {
-                return None;
+                return (None, false);
             }
             if let Some(flag) = reading.flag.as_deref().filter(|f| !is_our_flag(Some(f))) {
                 warn!(
@@ -502,7 +550,7 @@ pub async fn on_select(
                     %flag,
                     "Not speeding animations up: the simulator's {FLAG_ENV} is already set"
                 );
-                return None;
+                return (None, false);
             }
             Originals {
                 flag: reading.flag.clone(),
@@ -521,17 +569,93 @@ pub async fn on_select(
     };
     if let Err(e) = write_record(&path, &record) {
         warn!(%udid, path = %path.display(), "Not speeding animations up: could not record the simulator's own values ({e:#})");
-        return None;
+        return (None, false);
     }
-    if apply(h, udid, SELECT_TIMEOUT).await {
+    if apply_retrying(h, udid, SELECT_TIMEOUT).await {
         info!(%udid, "Sped up the simulator's UIKit animations for this session (apps launched from now on)");
+        (Some(applied), false)
     } else {
         // The outcome is unknown, not "nothing changed": a timed-out spawn
         // can still land. Keep the record; the restore only puts back what
         // still reads as Tapsmith's.
         warn!(%udid, "Keeping the animation-speed record to restore at session end");
+        (Some(applied), true)
     }
-    Some(applied)
+}
+
+/// [`select_once`]'s applied half, for the tests written before the owed
+/// speed-up existed.
+#[cfg(test)]
+async fn on_select(
+    h: &dyn Host,
+    dir: &Path,
+    udid: &str,
+    want: Option<bool>,
+    current: Option<&Applied>,
+) -> Option<Applied> {
+    select_once(h, dir, udid, want, current).await.0
+}
+
+/// What one daemon holds for the iOS simulator animation speed across its
+/// session: the simulator it has sped up, and one whose speed-up the session
+/// asked for but that is not certainly in place yet.
+#[derive(Debug, Default)]
+pub struct SessionSpeed {
+    applied: Option<Applied>,
+    /// The simulator whose speed-up is still owed: selection could not read
+    /// it, or its writes did not certainly land. The next fresh agent start
+    /// on it ([`SessionSpeed::before_agent_start`]) tries again.
+    owed: Option<String>,
+}
+
+impl SessionSpeed {
+    pub fn applied(&self) -> Option<&Applied> {
+        self.applied.as_ref()
+    }
+
+    pub fn owed(&self) -> Option<&str> {
+        self.owed.as_deref()
+    }
+
+    /// Hand over the setting to restore at shutdown, leaving nothing behind.
+    pub fn take_applied(&mut self) -> Option<Applied> {
+        self.owed = None;
+        self.applied.take()
+    }
+
+    /// The daemon is selecting a device that is not a simulator this module
+    /// handles: nothing is owed any more (what is applied is the caller's
+    /// to restore).
+    pub fn leave(&mut self) {
+        self.owed = None;
+    }
+
+    /// The selection of simulator `udid` (see [`select_once`]). The caller
+    /// has already restored a different simulator this session had sped up.
+    pub async fn select(&mut self, h: &dyn Host, dir: &Path, udid: &str, want: Option<bool>) {
+        let (applied, owed) = select_once(h, dir, udid, want, self.applied.as_ref()).await;
+        self.applied = applied;
+        self.owed = owed.then(|| udid.to_string());
+        if owed {
+            warn!(%udid, "Could not speed the simulator's animations up yet (reducedMotion); trying again at the next agent start");
+        }
+    }
+
+    /// Before a fresh agent start on `udid`: try an owed speed-up again, or
+    /// set the flag again if the simulator lost it since it was applied.
+    pub async fn before_agent_start(&mut self, h: &dyn Host, dir: &Path, udid: &str) {
+        if self.owed.as_deref() == Some(udid) {
+            info!(%udid, "Trying again to speed the simulator's animations up (reducedMotion)");
+            self.select(h, dir, udid, Some(true)).await;
+            if self.owed.is_some() {
+                warn!(%udid, "The app may launch with normal-speed animations: the simulator's animation speed could not be set");
+            }
+            return;
+        }
+        if let Some(applied) = self.applied.as_ref().filter(|a| a.udid == udid) {
+            reapply_if_lost(h, applied).await;
+        }
+    }
 }
 
 /// Set the values again for a session that holds `applied`, after the
@@ -605,6 +729,9 @@ mod tests {
         fail_reads: bool,
         /// How long each spawn takes on this simulator.
         per_call: Duration,
+        /// How many more spawns time out without running (a CoreSimulator
+        /// that is briefly too busy to answer).
+        time_out_next: Mutex<u32>,
     }
 
     impl FakeHost {
@@ -619,6 +746,7 @@ mod tests {
                 fail_writes: false,
                 fail_reads: false,
                 per_call: Duration::from_millis(400),
+                time_out_next: Mutex::new(0),
             };
             if let Some(f) = flag {
                 h.env.lock().unwrap().insert(FLAG_ENV.into(), f.into());
@@ -663,6 +791,13 @@ mod tests {
             self.calls.lock().unwrap().push(args.join(" "));
             if self.per_call > timeout {
                 anyhow::bail!("simctl spawn timed out after {timeout:?}");
+            }
+            {
+                let mut left = self.time_out_next.lock().unwrap();
+                if *left > 0 {
+                    *left -= 1;
+                    anyhow::bail!("simctl spawn timed out after {timeout:?}");
+                }
             }
             let mut env = self.env.lock().unwrap();
             let mut defaults = self.defaults.lock().unwrap();
@@ -990,7 +1125,7 @@ mod tests {
         assert!(!applied.record_path.exists());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_failed_re_read_keeps_the_restore_this_daemon_owes() {
         let dir = tempfile::tempdir().unwrap();
         let mut h = FakeHost::new(None, None);
@@ -1063,5 +1198,183 @@ mod tests {
             "never passed on"
         );
         assert!(!path.exists(), "nothing else left to restore");
+    }
+
+    // ─── Transient spawn timeouts (PILOT-1073) ───
+
+    #[tokio::test(start_paused = true)]
+    async fn a_read_that_times_out_once_is_retried_at_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(None, None);
+        *h.time_out_next.lock().unwrap() = 1;
+        let mut speed = SessionSpeed::default();
+        speed.select(&h, dir.path(), U, Some(true)).await;
+        assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+        assert!(speed.applied().is_some());
+        assert_eq!(speed.owed(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_that_times_out_once_is_retried_at_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(None, None);
+        let mut speed = SessionSpeed::default();
+        // The two reads answer; the first of the two writes times out.
+        let h = TimeOutAfter::new(h, 2, 1);
+        speed.select(&h, dir.path(), U, Some(true)).await;
+        assert_eq!(h.inner.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+        assert_eq!(speed.owed(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_selection_that_keeps_timing_out_is_owed_and_applied_at_the_next_agent_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(None, None);
+        *h.time_out_next.lock().unwrap() = u32::MAX;
+        let mut speed = SessionSpeed::default();
+        speed.select(&h, dir.path(), U, Some(true)).await;
+        assert_eq!(h.state(), (None, None));
+        assert_eq!(speed.owed(), Some(U));
+        assert!(!record_path(dir.path(), U).exists(), "nothing was changed");
+
+        // CoreSimulator answers again by the time the agent starts.
+        *h.time_out_next.lock().unwrap() = 0;
+        speed.before_agent_start(&h, dir.path(), U).await;
+        assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+        assert_eq!(speed.owed(), None);
+        let applied = speed.take_applied().expect("applied");
+        restore(&h, &applied, SHUTDOWN_TIMEOUT).await;
+        assert_eq!(h.state(), (None, None), "the originals read at agent start");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_owed_speed_up_that_still_fails_at_agent_start_stays_owed() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(None, None);
+        *h.time_out_next.lock().unwrap() = u32::MAX;
+        let mut speed = SessionSpeed::default();
+        speed.select(&h, dir.path(), U, Some(true)).await;
+        speed.before_agent_start(&h, dir.path(), U).await;
+        assert_eq!(speed.owed(), Some(U));
+        *h.time_out_next.lock().unwrap() = 0;
+        speed.before_agent_start(&h, dir.path(), U).await;
+        assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+        assert_eq!(speed.owed(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn writes_that_never_certainly_land_stay_owed_and_are_applied_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut h = FakeHost::new(None, None);
+        h.fail_writes = true;
+        let mut speed = SessionSpeed::default();
+        speed.select(&h, dir.path(), U, Some(true)).await;
+        assert!(
+            speed.applied().is_some(),
+            "the record is kept for the restore"
+        );
+        assert_eq!(speed.owed(), Some(U));
+        h.fail_writes = false;
+        // Someone undid the flag meanwhile: the agent start sets both again.
+        h.env.lock().unwrap().clear();
+        speed.before_agent_start(&h, dir.path(), U).await;
+        assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+        assert_eq!(speed.owed(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn moving_to_another_simulator_drops_what_was_owed_on_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(None, None);
+        *h.time_out_next.lock().unwrap() = u32::MAX;
+        let mut speed = SessionSpeed::default();
+        speed.select(&h, dir.path(), U, Some(true)).await;
+        assert_eq!(speed.owed(), Some(U));
+        speed.leave();
+        assert_eq!(speed.owed(), None);
+        *h.time_out_next.lock().unwrap() = 0;
+        let before = h.call_count();
+        speed.before_agent_start(&h, dir.path(), U).await;
+        assert_eq!(h.call_count(), before, "nothing owed, nothing applied");
+    }
+
+    #[tokio::test]
+    async fn a_flag_owned_by_someone_else_is_not_owed() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(Some("Other/Flag"), None);
+        let mut speed = SessionSpeed::default();
+        speed.select(&h, dir.path(), U, Some(true)).await;
+        assert_eq!(speed.owed(), None, "not a transient failure: never retried");
+        assert!(speed.applied().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_session_without_the_option_owes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(None, None);
+        *h.time_out_next.lock().unwrap() = u32::MAX;
+        let mut speed = SessionSpeed::default();
+        speed.select(&h, dir.path(), U, None).await;
+        speed.select(&h, dir.path(), U, Some(false)).await;
+        assert_eq!(speed.owed(), None);
+        assert_eq!(h.call_count(), 0);
+    }
+
+    /// Lets `skip` spawns through, then times out the next `fail` (without
+    /// running them), then lets the rest through.
+    struct TimeOutAfter {
+        inner: FakeHost,
+        skip: Mutex<u32>,
+        fail: Mutex<u32>,
+    }
+
+    impl TimeOutAfter {
+        fn new(inner: FakeHost, skip: u32, fail: u32) -> Self {
+            Self {
+                inner,
+                skip: Mutex::new(skip),
+                fail: Mutex::new(fail),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Host for TimeOutAfter {
+        async fn spawn(
+            &self,
+            udid: &str,
+            args: &[&str],
+            timeout: Duration,
+        ) -> anyhow::Result<SpawnOutput> {
+            let fail_this = {
+                let mut skip = self.skip.lock().unwrap();
+                let mut fail = self.fail.lock().unwrap();
+                if *skip > 0 {
+                    *skip -= 1;
+                    false
+                } else if *fail > 0 {
+                    *fail -= 1;
+                    true
+                } else {
+                    false
+                }
+            };
+            if fail_this {
+                anyhow::bail!("simctl spawn timed out after {timeout:?}");
+            }
+            self.inner.spawn(udid, args, timeout).await
+        }
+
+        async fn owner_alive(&self, record: &OwnerRecord) -> bool {
+            self.inner.owner_alive(record).await
+        }
+
+        fn self_pid(&self) -> u32 {
+            self.inner.self_pid()
+        }
+
+        async fn self_started(&self) -> Option<String> {
+            self.inner.self_started().await
+        }
     }
 }
