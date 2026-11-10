@@ -2380,7 +2380,14 @@ impl TapsmithServiceImpl {
                 return false;
             }
         }
-        match self.hid_injector.send(&udid, line).await {
+        // A gesture's down may move to a new helper if the old one's stdin
+        // broke; the rest of the gesture may not.
+        let sent = if is_down {
+            self.hid_injector.send_gesture_start(&udid, line).await
+        } else {
+            self.hid_injector.send(&udid, line).await
+        };
+        match sent {
             Ok(()) => true,
             Err(e) => {
                 warn!(%udid, error = %e, "iOS HID send failed; falling back to agent");
@@ -2475,7 +2482,7 @@ impl TapsmithServiceImpl {
         let _ = interval_ms;
         if self
             .hid_injector
-            .send(&udid, &hid_double_tap_line(x, y, hold_ms))
+            .send_gesture_start(&udid, &hid_double_tap_line(x, y, hold_ms))
             .await
             .is_err()
         {
@@ -2558,7 +2565,10 @@ impl TapsmithServiceImpl {
             // Nothing reached the helper, so nothing was touched.
             Err(HidSendError::NotSent(e)) => return hid_unavailable(&udid, "tap", &e),
             Err(HidSendError::Failed(msg)) => {
-                // Lift whatever may be down before reporting it.
+                // Lift whatever may be down before reporting it. A helper
+                // that stopped answering has been evicted instead, and its
+                // replacement lifts first (PILOT-1036); the tap is not
+                // retried there, since part of it may have landed.
                 let _ = self.hid_injector.send(&udid, "c").await;
                 warn!(%udid, x, y, error = %msg, "HID tap not delivered");
                 return HidOutcome::Refused(AgentResponse {
@@ -2679,7 +2689,11 @@ impl TapsmithServiceImpl {
             return HidOutcome::NotHandled;
         };
         let line = |op: &str, s: &scroll_step::DragSample| format!("{op} {:.1} {:.1}", s.x, s.y);
-        if let Err(e) = self.hid_injector.send(&udid, &line("d", first)).await {
+        if let Err(e) = self
+            .hid_injector
+            .send_gesture_start(&udid, &line("d", first))
+            .await
+        {
             return hid_unavailable(&udid, "scroll drag", &e);
         }
         let started = tokio::time::Instant::now();
@@ -2833,7 +2847,7 @@ impl TapsmithServiceImpl {
             std::time::Duration::from_millis(if duration_ms == 0 { 1000 } else { duration_ms });
         if self
             .hid_injector
-            .send(udid, &format!("d {x} {y}"))
+            .send_gesture_start(udid, &format!("d {x} {y}"))
             .await
             .is_err()
         {

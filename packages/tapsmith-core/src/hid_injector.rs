@@ -10,6 +10,17 @@
 //! `send` writes one protocol line. Any failure drops the child so the next
 //! gesture re-spawns it; the caller falls back to the agent path on `ensure`
 //! failure. macOS-only (CoreSimulator).
+//!
+//! A helper that stops answering (no reply by a waited line's deadline, or
+//! its output ends before the reply) or whose stdin breaks is evicted: killed
+//! and dropped, so the next touch starts a new one instead of queueing behind
+//! the stuck one (PILOT-1036). The new helper's first line lifts at the last
+//! point the old one was sent, in case it left a finger down. A line that
+//! never reached the helper (a broken pipe) is retried once on its
+//! replacement; one that did reach it is not, since part of it may have
+//! landed. After [`MAX_HELPER_RESTARTS`] evictions a device's helper is given
+//! up on for the session: `ensure` fails, and touches use the agent's
+//! synthesized ones.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -24,6 +35,12 @@ use tracing::{debug, info, warn};
 struct Helper {
     child: Child,
     stdin: ChildStdin,
+    /// Which start this is (unique per injector), so a failure seen on one
+    /// helper never evicts the one that replaced it.
+    generation: u64,
+    /// The last point a line put a finger at or lifted it from, as written:
+    /// where the replacement lifts if this helper is evicted.
+    last_point: Option<(String, String)>,
     /// Lines written so far. The helper answers every line with one reply
     /// line (`ok` or `err …`), in order, so the nth reply answers the nth line.
     sent: u64,
@@ -61,6 +78,15 @@ impl std::fmt::Display for HidSendError {
     }
 }
 
+/// How many times a device's helper may be evicted and replaced in one
+/// session. The next failure gives the helper up for the session.
+const MAX_HELPER_RESTARTS: u32 = 3;
+/// How long writing a line may block. The daemon reads every reply, so a
+/// write only blocks once the helper has stopped reading its input and the
+/// pipe has filled: it is stuck, and holding the map lock on it would hold
+/// up every device's touches.
+const WRITE_BOUND: Duration = Duration::from_secs(2);
+
 /// How long a touch that has to start the helper waits for it.
 const TOUCH_START_BOUND: Duration = Duration::from_secs(5);
 /// How long a warm-up waits for the helper. CI logs show simctl calls taking
@@ -86,6 +112,52 @@ pub struct HidInjector {
     /// CoreSimulator can take well over the touch bound to hand the helper
     /// its device.
     warm_start_bound: Duration,
+    /// Per device: helpers evicted for failing, and whether it is given up.
+    health: std::sync::Mutex<HashMap<String, Health>>,
+    /// Source of [`Helper::generation`].
+    next_generation: std::sync::atomic::AtomicU64,
+    max_restarts: u32,
+}
+
+/// A device's record of helpers that failed this session.
+#[derive(Default)]
+struct Health {
+    /// Helpers evicted for not answering or for a broken pipe.
+    evictions: u32,
+    /// Set once evictions pass the cap: why the helper is no longer used.
+    given_up: Option<String>,
+    /// A lift for the next helper to send first: the evicted one may have
+    /// left a finger down.
+    pending_lift: Option<String>,
+}
+
+/// Why `write_line` did not write.
+enum WriteError {
+    /// No helper is running for the device: nothing to retry on.
+    NoHelper(anyhow::Error),
+    /// The helper's stdin broke or stopped taking input. The helper has been
+    /// evicted, and the line did not reach a helper that will act on it.
+    Broken(anyhow::Error),
+}
+
+impl WriteError {
+    fn into_inner(self) -> anyhow::Error {
+        match self {
+            WriteError::NoHelper(e) | WriteError::Broken(e) => e,
+        }
+    }
+}
+
+/// The point a protocol line puts a finger at (`d`/`m`/`t1`/`t2`) or lifts
+/// it from (`u`), as written.
+fn line_point(line: &str) -> Option<(String, String)> {
+    let mut parts = line.split_whitespace();
+    match parts.next()? {
+        "d" | "m" | "u" | "t1" | "t2" => {
+            Some((parts.next()?.to_string(), parts.next()?.to_string()))
+        }
+        _ => None,
+    }
 }
 
 /// Resolve the helper binary as a sibling of the daemon executable (npm package
@@ -119,6 +191,9 @@ impl HidInjector {
             stop_epochs: std::sync::Mutex::new(HashMap::new()),
             touch_start_bound: TOUCH_START_BOUND,
             warm_start_bound: WARM_START_BOUND,
+            health: std::sync::Mutex::new(HashMap::new()),
+            next_generation: std::sync::atomic::AtomicU64::new(0),
+            max_restarts: MAX_HELPER_RESTARTS,
         }
     }
 
@@ -132,6 +207,9 @@ impl HidInjector {
             stop_epochs: std::sync::Mutex::new(HashMap::new()),
             touch_start_bound: TOUCH_START_BOUND,
             warm_start_bound: WARM_START_BOUND,
+            health: std::sync::Mutex::new(HashMap::new()),
+            next_generation: std::sync::atomic::AtomicU64::new(0),
+            max_restarts: MAX_HELPER_RESTARTS,
         }
     }
 
@@ -143,6 +221,10 @@ impl HidInjector {
     /// for real ones (a native double-tap recognizer ignores them on iOS 26 —
     /// PILOT-795), so this is worth seeing.
     pub async fn ensure(&self, udid: &str) -> anyhow::Result<()> {
+        // Reported when it was given up on, not on every touch after.
+        if let Some(why) = self.given_up(udid) {
+            return Err(anyhow::anyhow!(why));
+        }
         let result = self.start_or_reuse(udid, self.touch_start_bound).await;
         match &result {
             Ok(()) => self.note_available(udid),
@@ -178,6 +260,64 @@ impl HidInjector {
             .remove(udid);
     }
 
+    /// Why `udid`'s helper was given up on for the session, if it was.
+    fn given_up(&self, udid: &str) -> Option<String> {
+        let health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+        health.get(udid).and_then(|h| h.given_up.clone())
+    }
+
+    /// Kill and drop `udid`'s helper if it is still `generation` (a newer
+    /// one is left alone), and count it against the device's restarts. The
+    /// caller holds the map lock. Returns what the caller's error should add.
+    fn evict_locked(
+        &self,
+        map: &mut HashMap<String, Helper>,
+        udid: &str,
+        generation: u64,
+        why: &str,
+    ) -> Option<String> {
+        if map.get(udid).map(|h| h.generation) != Some(generation) {
+            return None;
+        }
+        let mut helper = map.remove(udid)?;
+        let _ = helper.child.start_kill();
+        self.queue_lift(udid, helper.last_point.take());
+        let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+        let h = health.entry(udid.to_string()).or_default();
+        h.evictions += 1;
+        if h.evictions <= self.max_restarts {
+            warn!(
+                udid,
+                error = why,
+                restart = h.evictions,
+                max = self.max_restarts,
+                "iOS simulator HID helper failed; stopped it, and the next touch starts a new one"
+            );
+            return Some("the helper was stopped, and the next touch starts a new one".to_string());
+        }
+        // The reason goes into errors too, which under TAPSMITH_REQUIRE_IOS_HID
+        // refuse the touch: what happens instead is said only in the warning.
+        let reason = format!(
+            "the iOS simulator HID helper failed {} times this session (last: {why}), so it is \
+             no longer used for this device",
+            h.evictions
+        );
+        warn!(
+            udid,
+            "{reason}: taps, double taps, long presses and scroll drags use the agent's \
+             synthesized touches instead, which take a few hundred milliseconds longer a tap and \
+             which some native gesture recognizers ignore"
+        );
+        h.given_up = Some(reason);
+        Some("the helper has failed too often and is no longer used this session".to_string())
+    }
+
+    #[cfg(test)]
+    fn with_max_restarts(mut self, max: u32) -> Self {
+        self.max_restarts = max;
+        self
+    }
+
     #[cfg(test)]
     fn with_bounds(mut self, touch: Duration, warm: Duration) -> Self {
         self.touch_start_bound = touch;
@@ -196,7 +336,7 @@ impl HidInjector {
         let Ok(_starting) = gate.try_lock() else {
             return;
         };
-        if self.has_live_helper(udid).await {
+        if self.given_up(udid).is_some() || self.has_live_helper(udid).await {
             return;
         }
         match self.start_locked(udid, self.warm_start_bound, epoch).await {
@@ -217,9 +357,22 @@ impl HidInjector {
         match helper.child.try_wait() {
             Ok(None) => true,
             _ => {
-                map.remove(udid);
+                // Not counted against its restarts (it ended between touches,
+                // costing none), but it may have died with a finger down.
+                if let Some(helper) = map.remove(udid) {
+                    self.queue_lift(udid, helper.last_point);
+                }
                 false
             }
+        }
+    }
+
+    /// Have `udid`'s next helper first lift at `point`, where the one it
+    /// replaces last put or lifted a finger.
+    fn queue_lift(&self, udid: &str, point: Option<(String, String)>) {
+        if let Some((x, y)) = point {
+            let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+            health.entry(udid.to_string()).or_default().pending_lift = Some(format!("u {x} {y}"));
         }
     }
 
@@ -315,6 +468,30 @@ impl HidInjector {
             let _ = child.start_kill();
             return Ok(());
         }
+        let mut stdin = stdin;
+        let mut sent = 0;
+        // The helper this one replaces may have left a finger down: lift it
+        // first. A lift with nothing down presses nothing. Its reply is
+        // counted, not waited on.
+        let lift = {
+            let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+            health.get_mut(udid).and_then(|h| h.pending_lift.take())
+        };
+        if let Some(lift) = lift {
+            let written =
+                tokio::time::timeout(WRITE_BOUND, stdin.write_all(format!("{lift}\n").as_bytes()))
+                    .await;
+            if !matches!(written, Ok(Ok(()))) {
+                let _ = child.start_kill();
+                // Still owed: the next helper sends it.
+                let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+                health.entry(udid.to_string()).or_default().pending_lift = Some(lift);
+                return Err(anyhow::anyhow!(
+                    "helper stopped reading before its first line"
+                ));
+            }
+            sent = 1;
+        }
 
         // Read every reply, so the pipe never fills and blocks the helper,
         // and hand each to the sender waiting on its line, if any.
@@ -344,7 +521,11 @@ impl HidInjector {
             Helper {
                 child,
                 stdin,
-                sent: 0,
+                generation: self
+                    .next_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                last_point: None,
+                sent,
                 replies,
             },
         );
@@ -353,15 +534,39 @@ impl HidInjector {
 
     /// Write one protocol line to the helper for `udid`, without waiting for
     /// the helper to act on it. On write failure the child is dropped so the
-    /// next gesture re-spawns it.
+    /// next gesture re-spawns it. For a line in the middle of a gesture: the
+    /// rest of a gesture cannot move to a new helper.
     pub async fn send(&self, udid: &str, line: &str) -> anyhow::Result<()> {
-        self.write_line(udid, line, None).await
+        self.write_line(udid, line, None)
+            .await
+            .map(|_| ())
+            .map_err(WriteError::into_inner)
+    }
+
+    /// [`Self::send`] for a line that starts a gesture (a down, a double
+    /// tap): if the helper's stdin has broken, the line reached nothing, so
+    /// it is sent once more on a new helper.
+    pub async fn send_gesture_start(&self, udid: &str, line: &str) -> anyhow::Result<()> {
+        match self.write_line(udid, line, None).await {
+            Ok(_) => Ok(()),
+            Err(WriteError::NoHelper(e)) => Err(e),
+            Err(WriteError::Broken(e)) => {
+                debug!(udid, error = %e, "retrying a gesture's first line on a new HID helper");
+                self.ensure(udid).await?;
+                self.send(udid, line).await
+            }
+        }
     }
 
     /// Write one protocol line and wait, up to `deadline`, for the helper's
     /// reply to it: Ok once the helper has injected it (`ok`). The map lock is
     /// not held while waiting, so other devices' (and this device's
     /// fire-and-forget) touches are not held up.
+    ///
+    /// A broken pipe means the line reached nothing: it is sent once more on
+    /// a new helper. No reply by the deadline, or the helper's output ending
+    /// first, evicts the helper, but the line is not sent again: the helper
+    /// had it, and part of it may have landed.
     pub async fn send_and_wait(
         &self,
         udid: &str,
@@ -369,34 +574,55 @@ impl HidInjector {
         deadline: Duration,
     ) -> Result<(), HidSendError> {
         let (tx, rx) = oneshot::channel();
-        self.write_line(udid, line, Some(tx))
-            .await
-            .map_err(HidSendError::NotSent)?;
-        match tokio::time::timeout(deadline, rx).await {
-            Ok(Ok(reply)) if reply == "ok" => Ok(()),
-            Ok(Ok(reply)) => Err(HidSendError::Failed(format!(
-                "the iOS HID helper reported: {reply}"
-            ))),
-            Ok(Err(_)) => Err(HidSendError::Failed(
-                "the iOS HID helper exited before answering".to_string(),
-            )),
-            Err(_) => Err(HidSendError::Failed(format!(
+        let (generation, rx) = match self.write_line(udid, line, Some(tx)).await {
+            Ok(generation) => (generation, rx),
+            Err(WriteError::NoHelper(e)) => return Err(HidSendError::NotSent(e)),
+            Err(WriteError::Broken(e)) => {
+                debug!(udid, error = %e, "retrying a line on a new HID helper");
+                self.ensure(udid).await.map_err(HidSendError::NotSent)?;
+                let (tx, rx) = oneshot::channel();
+                let generation = self
+                    .write_line(udid, line, Some(tx))
+                    .await
+                    .map_err(|e| HidSendError::NotSent(e.into_inner()))?;
+                (generation, rx)
+            }
+        };
+        let failure = match tokio::time::timeout(deadline, rx).await {
+            Ok(Ok(reply)) if reply == "ok" => return Ok(()),
+            // Answering: the helper works, and reported this line failed.
+            Ok(Ok(reply)) => {
+                return Err(HidSendError::Failed(format!(
+                    "the iOS HID helper reported: {reply}"
+                )))
+            }
+            Ok(Err(_)) => "the iOS HID helper exited before answering".to_string(),
+            Err(_) => format!(
                 "the iOS HID helper gave no reply within {} ms",
                 deadline.as_millis()
-            ))),
-        }
+            ),
+        };
+        let mut map = self.helpers.lock().await;
+        Err(HidSendError::Failed(
+            match self.evict_locked(&mut map, udid, generation, &failure) {
+                Some(note) => format!("{failure}; {note}"),
+                None => failure,
+            },
+        ))
     }
 
+    /// Write `line` to `udid`'s helper; Ok with the helper's generation.
     async fn write_line(
         &self,
         udid: &str,
         line: &str,
         waiter: Option<oneshot::Sender<String>>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<u64, WriteError> {
         let mut map = self.helpers.lock().await;
         let helper = map
             .get_mut(udid)
-            .ok_or_else(|| anyhow::anyhow!("no helper running for {udid}"))?;
+            .ok_or_else(|| WriteError::NoHelper(anyhow::anyhow!("no helper running for {udid}")))?;
+        let generation = helper.generation;
         let seq = helper.sent + 1;
         if let Some(waiter) = waiter {
             let mut r = helper.replies.lock().unwrap_or_else(|e| e.into_inner());
@@ -407,16 +633,30 @@ impl HidInjector {
             }
         }
         let payload = format!("{line}\n");
-        if let Err(e) = helper.stdin.write_all(payload.as_bytes()).await {
-            map.remove(udid);
-            return Err(anyhow::anyhow!("write to helper failed: {e}"));
+        let error =
+            match tokio::time::timeout(WRITE_BOUND, helper.stdin.write_all(payload.as_bytes()))
+                .await
+            {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(format!("write to helper failed: {e}")),
+                Err(_) => Some(format!(
+                    "the helper took no input for {} ms",
+                    WRITE_BOUND.as_millis()
+                )),
+            };
+        if let Some(error) = error {
+            self.evict_locked(&mut map, udid, generation, &error);
+            return Err(WriteError::Broken(anyhow::anyhow!(error)));
         }
         helper.sent = seq;
+        if let Some(point) = line_point(line) {
+            helper.last_point = Some(point);
+        }
         // ChildStdin is an unbuffered pipe, so flush() is a no-op; called
         // defensively in case the underlying impl ever buffers. write_all above
         // already pushed the bytes into the kernel pipe buffer.
         let _ = helper.stdin.flush().await;
-        Ok(())
+        Ok(generation)
     }
 
     /// Stop the helper for `udid` (device deselect / sim shutdown).
@@ -616,6 +856,7 @@ mod tests {
         assert!(matches!(result, Err(HidSendError::Failed(_))), "{result:?}");
         // Known as soon as the helper's output ends, not at the deadline.
         assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(!injector.helpers.lock().await.contains_key("UDID-D"));
     }
 
     #[tokio::test]
@@ -772,6 +1013,222 @@ mod tests {
         first.await.unwrap();
         assert_eq!(start_count(&starts), 1);
         injector.shutdown("UDID-W6").await;
+    }
+
+    /// A stub that logs each start to `starts`, comes up, then reads lines
+    /// without ever answering: alive, but stuck.
+    fn silent_stub(starts: &std::path::Path) -> (tempfile::TempDir, PathBuf) {
+        stub_helper(&format!(
+            "echo start >> '{}'\necho 'ready 1 1 1'\ncat >/dev/null\n",
+            starts.display()
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_helper_that_stops_answering_is_replaced_by_the_next_touch() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = silent_stub(&starts);
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-H1").await.unwrap();
+        let result = injector
+            .send_and_wait("UDID-H1", "t1 1 2 10", Duration::from_millis(200))
+            .await;
+        assert!(matches!(result, Err(HidSendError::Failed(_))), "{result:?}");
+        // The silent helper is gone: the next touch starts a new one rather
+        // than queueing behind the stuck one.
+        assert!(!injector.helpers.lock().await.contains_key("UDID-H1"));
+        injector.ensure("UDID-H1").await.unwrap();
+        assert_eq!(start_count(&starts), 2);
+        injector.shutdown("UDID-H1").await;
+    }
+
+    /// A stub whose first start behaves as `first` and later starts log
+    /// every line to `lines` and answer `ok`.
+    fn first_start_stub(log: &std::path::Path, first: &str) -> (tempfile::TempDir, PathBuf) {
+        let starts = log.join("starts");
+        let lines = log.join("lines");
+        stub_helper(&format!(
+            "echo start >> '{s}'\necho 'ready 1 1 1'\n\
+             if [ \"$(wc -l < '{s}')\" -eq 1 ]; then {first}; fi\n\
+             while IFS= read -r line; do echo \"$line\" >> '{l}'; echo ok; done\n",
+            s = starts.display(),
+            l = lines.display(),
+        ))
+    }
+
+    fn logged_lines(log: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(log.join("lines"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Wait until `udid`'s installed helper process has exited, leaving it
+    /// in the map (a fixed sleep raced the stub's exit on loaded runners).
+    async fn wait_for_helper_exit(injector: &HidInjector, udid: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            {
+                let mut map = injector.helpers.lock().await;
+                let helper = map.get_mut(udid).expect("helper installed");
+                if matches!(helper.child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the stub helper did not exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_line_that_hit_a_broken_pipe_is_sent_once_on_a_new_helper() {
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = first_start_stub(log.path(), "exit 0");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-P").await.unwrap();
+        // Let the first helper exit, so the write finds its stdin closed.
+        wait_for_helper_exit(&injector, "UDID-P").await;
+        injector
+            .send_and_wait("UDID-P", "t1 3 4 10", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(start_count(&log.path().join("starts")), 2);
+        assert_eq!(logged_lines(log.path()), vec!["t1 3 4 10"]);
+        injector.shutdown("UDID-P").await;
+    }
+
+    #[tokio::test]
+    async fn a_gesture_start_that_hit_a_broken_pipe_is_sent_once_on_a_new_helper() {
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = first_start_stub(log.path(), "exit 0");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-G").await.unwrap();
+        wait_for_helper_exit(&injector, "UDID-G").await;
+        injector
+            .send_gesture_start("UDID-G", "d 3 4")
+            .await
+            .unwrap();
+        injector
+            .send_and_wait("UDID-G", "u 3 4", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(logged_lines(log.path()), vec!["d 3 4", "u 3 4"]);
+        injector.shutdown("UDID-G").await;
+    }
+
+    #[tokio::test]
+    async fn the_replacement_of_a_silent_helper_first_lifts_where_it_was_pressing() {
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = first_start_stub(log.path(), "cat >/dev/null");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-L").await.unwrap();
+        injector.send("UDID-L", "d 5 6").await.unwrap();
+        let result = injector
+            .send_and_wait("UDID-L", "t1 7 8 10", Duration::from_millis(200))
+            .await;
+        match result {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("no reply"), "{msg}");
+                assert!(msg.contains("next touch starts a new one"), "{msg}");
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+        // Not retried: the stuck helper had the tap.
+        injector.ensure("UDID-L").await.unwrap();
+        injector
+            .send_and_wait("UDID-L", "t1 1 1 10", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(logged_lines(log.path()), vec!["u 7 8", "t1 1 1 10"]);
+        injector.shutdown("UDID-L").await;
+    }
+
+    #[tokio::test]
+    async fn a_helper_that_keeps_failing_is_given_up_for_the_session() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = silent_stub(&starts);
+        let injector = HidInjector::with_helper_path(path).with_max_restarts(1);
+        injector.ensure("UDID-X").await.unwrap();
+        let first = injector
+            .send_and_wait("UDID-X", "t1 1 2 10", Duration::from_millis(100))
+            .await;
+        assert!(matches!(first, Err(HidSendError::Failed(_))), "{first:?}");
+        // One restart is allowed...
+        injector.ensure("UDID-X").await.unwrap();
+        match injector
+            .send_and_wait("UDID-X", "t1 1 2 10", Duration::from_millis(100))
+            .await
+        {
+            Err(HidSendError::Failed(msg)) => assert!(msg.contains("no longer used"), "{msg}"),
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+        // ...then touches fall back to the agent, with the reason.
+        let err = injector.ensure("UDID-X").await.unwrap_err();
+        assert!(err.to_string().contains("failed 2 times"), "{err}");
+        injector.warm("UDID-X", 0).await;
+        assert_eq!(start_count(&starts), 2, "a given-up helper is not started");
+        // Per device.
+        injector.ensure("UDID-Y").await.unwrap();
+        injector.shutdown("UDID-Y").await;
+    }
+
+    #[tokio::test]
+    async fn stopping_a_device_during_a_waited_line_is_not_counted_as_a_failure() {
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = silent_stub(&log.path().join("starts"));
+        let injector = Arc::new(HidInjector::with_helper_path(path).with_max_restarts(0));
+        injector.ensure("UDID-Z").await.unwrap();
+        let waiting = {
+            let injector = Arc::clone(&injector);
+            tokio::spawn(async move {
+                injector
+                    .send_and_wait("UDID-Z", "t1 1 2 10", Duration::from_secs(5))
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        injector.shutdown("UDID-Z").await;
+        assert!(waiting.await.unwrap().is_err());
+        injector.ensure("UDID-Z").await.unwrap();
+        injector.shutdown("UDID-Z").await;
+    }
+
+    #[tokio::test]
+    async fn the_replacement_of_a_helper_that_died_between_touches_lifts_first() {
+        // A helper that dies with a finger down (its process gone, found by
+        // the next touch rather than by a failed write) leaves the touch down
+        // in the simulator: the next tap would only move it.
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = first_start_stub(log.path(), "read -r line; exit 0");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-K").await.unwrap();
+        injector.send("UDID-K", "d 5 6").await.unwrap();
+        wait_for_helper_exit(&injector, "UDID-K").await;
+        injector.ensure("UDID-K").await.unwrap();
+        injector
+            .send_and_wait("UDID-K", "t1 1 1 10", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(logged_lines(log.path()), vec!["u 5 6", "t1 1 1 10"]);
+        injector.shutdown("UDID-K").await;
+    }
+
+    #[test]
+    fn line_point_reads_the_lines_that_place_a_finger() {
+        let p = |x: &str, y: &str| Some((x.to_string(), y.to_string()));
+        assert_eq!(line_point("d 1.5 2"), p("1.5", "2"));
+        assert_eq!(line_point("t1 3 4 20"), p("3", "4"));
+        assert_eq!(line_point("t2 5 6"), p("5", "6"));
+        assert_eq!(line_point("u 7 8"), p("7", "8"));
+        assert_eq!(line_point("c"), None);
+        assert_eq!(line_point("d 1"), None);
+        assert_eq!(line_point(""), None);
     }
 
     #[tokio::test]
