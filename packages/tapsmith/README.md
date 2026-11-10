@@ -41,7 +41,7 @@ iOS alike.
 - **Fast, isolated tests.** A clean app for every test file, [sub-second resets](https://tapsmith.dev/guides/warm-reset/) for React Native apps, and `saveAppState` to log in once.
 - **Many devices at once.** Parallel workers on emulators and simulators Tapsmith boots for you, CI sharding with merged reports, and [multi-device tests](https://tapsmith.dev/guides/multi-device/).
 - **Hybrid apps.** Switch into a WebView and drive it with CSS selectors and web roles.
-- **Built for AI agents.** A built-in [MCP server](https://tapsmith.dev/guides/mcp-server/), the docs inside the package, and `--json` output for every setup command.
+- **Built for AI agents.** A built-in [MCP server](https://tapsmith.dev/guides/mcp-server/), a [plugin for Claude Code, Cursor and Codex](https://tapsmith.dev/guides/mcp-server/#install-the-plugin), the docs inside the package, and `--json` output for every setup command.
 - **One npm install.** The daemon, the device agents and the trace viewer ship in the package. No server to start, no drivers to update.
 
 <img src="https://tapsmith.dev/trace-viewer.png" alt="The Tapsmith trace viewer replaying a test step by step" width="860">

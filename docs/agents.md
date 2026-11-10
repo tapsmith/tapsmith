@@ -56,12 +56,27 @@ installed version without web access: `node_modules/tapsmith/docs/<page>.md`.
 Start with `api-reference.md`, `writing-tests.md` and `locators.md`. Links
 between pages are relative file links.
 
-## MCP server (recommended)
+## The plugin (recommended)
+
+The Tapsmith plugin for Claude Code, Codex and Cursor registers the MCP server
+(below), run from the project's own Tapsmith install, and adds a skill for
+writing and debugging tests that points the agent at the bundled docs:
+
+```bash
+claude plugin marketplace add tapsmith/tapsmith && claude plugin install tapsmith@tapsmith   # Claude Code
+codex plugin marketplace add tapsmith/tapsmith && codex plugin add tapsmith@tapsmith         # Codex
+```
+
+[Install the plugin](mcp-server.md#install-the-plugin) covers Cursor, and which
+project folder the server runs in.
+
+## MCP server
 
 For richer agent workflows — inspecting the live accessibility tree, validating
-locators before committing them, running tests, reading traces — register the
-MCP server. It comes in two forms, registered under two names so an agent can
-have both:
+locators before committing them, running tests, reading traces — the agent
+needs the MCP server. The plugin registers the headless one; without the
+plugin, register it by hand. It comes in two forms, registered under two names
+so an agent can have both:
 
 - **`tapsmith-ui`**, preferred whenever `npx tapsmith test --ui` is running: the
   agent works in the UI session you can see, sharing its device, test tree,
@@ -81,7 +96,8 @@ have both:
   codex mcp add tapsmith-headless -- npx tapsmith mcp-server    # Codex
   ```
 
-The `AGENTS.md` section `tapsmith init` writes tells your agent the same.
+The `AGENTS.md` section `tapsmith init` writes tells your agent the same, and
+`init` lists the plugin install for each coding agent it finds in the project.
 
 Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
 `tapsmith_test_locator`, `tapsmith_run_tests`, `tapsmith_read_trace`,

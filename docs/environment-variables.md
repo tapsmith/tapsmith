@@ -48,6 +48,12 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 | `GITHUB_ACTIONS` | When set (GitHub Actions sets it automatically), Tapsmith auto-adds the `github` reporter for inline annotations on test failures. |
 | `GITHUB_STEP_SUMMARY` | Path to the GitHub Actions step summary file. The GitHub reporter writes a Markdown summary table when this is set. |
 
+## Coding-agent plugin
+
+| Variable | Description |
+|---|---|
+| `TAPSMITH_PROJECT_DIR` | The folder whose Tapsmith the [coding-agent plugin](mcp-server.md#install-the-plugin) starts as its MCP server, when the agent's own project folder is not it (several Tapsmith projects below it, say). Read by the plugin's server command, so set it in the environment you start the agent from. |
+
 ## Android
 
 | Variable | Description |

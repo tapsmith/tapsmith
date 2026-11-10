@@ -41,6 +41,7 @@ import { isPromptCancel, tolerateClosedReadline } from './prompt-cancel.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
+import { detectCodingAgents, pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -1256,9 +1257,11 @@ export function wizardNextSteps(
     app?: string;
     /** A Yarn Plug'n'Play project, which must switch linker before running tests. */
     yarnPnp?: boolean;
+    /** The coding agents the project uses: each gets its plugin install. */
+    agents?: readonly CodingAgent[];
   } = {},
 ): Array<[string, string]> {
-  const { install: installStep, capture: captureStep, app: appStep, yarnPnp } = steps;
+  const { install: installStep, capture: captureStep, app: appStep, yarnPnp, agents = [] } = steps;
   // A Play-image AVD (PILOT-711): the AVD to switch to — before the first
   // run when capture is on, else last, as an option.
   const capture = captureStep ? [[captureStep.label, withTapsmithCommand(captureStep.action, cli)] as [string, string]] : [];
@@ -1272,6 +1275,7 @@ export function wizardNextSteps(
     ['Run your tests', `${cli} test`],
     ['List devices', `${cli} list-devices`],
     ['Health check', `${cli} doctor`],
+    ...pluginInstallSteps(agents),
     ...(captureStep?.optional ? capture : []),
   ];
 }
@@ -1345,7 +1349,7 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
 
       const cwd = process.cwd();
       const missingTapsmith = isTapsmithResolvableFrom(cwd) ? undefined : await tapsmithInstallCommand(cwd);
-      const result = executeInitPlan(plan, parsed, cwd, missingTapsmith, await tapsmithExecCommand(cwd));
+      const result = executeInitPlan(plan, parsed, cwd, missingTapsmith, await tapsmithExecCommand(cwd), detectCodingAgents(cwd));
 
       if (parsed.json) {
         process.stdout.write(formatJson(result));
@@ -1561,6 +1565,7 @@ async function runInitInner(): Promise<void> {
     capture: captureStep,
     app: placeholderNextStep(placeholders),
     yarnPnp,
+    agents: detectCodingAgents(process.cwd()),
   });
   const width = Math.max(...[...steps.map(([l]) => l), ...projects.map((p) => p.label)].map((l) => l.length)) + 3;
   const step = (label: string, cmd: string): void => console.log(`  ${`${label}:`.padEnd(width)}${green(cmd)}`);

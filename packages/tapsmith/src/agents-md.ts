@@ -33,6 +33,8 @@ The docs for the installed Tapsmith version ship in the package: read \`node_mod
 
 ### MCP workflow
 
+The Tapsmith plugin for Claude Code, Codex and Cursor registers the headless MCP server below (run from this project's Tapsmith install) and adds a skill for writing and debugging tests; \`node_modules/tapsmith/docs/mcp-server.md\` says how to install it. Without it, register the servers by hand as below.
+
 Prefer the UI-backed MCP server over the standalone headless server. If the user already has \`npx tapsmith test --ui\` running, ask them for the MCP URL shown in the UI and register it as \`tapsmith-ui\`:
 
 - Claude Code: \`claude mcp add tapsmith-ui --transport http http://localhost:<port>/mcp\`
