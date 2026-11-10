@@ -18,10 +18,10 @@ enum RotationSettle {
     static let turnAttempts = 2
 
     /// Turns the device to `target`: sets it, waits, reads it back, and sets
-    /// it once more if it has not taken. Returns nil when the device turned,
-    /// or when no set failed (a physical device's accelerometer can turn it
-    /// back, and the device's own orientation is a valid state); otherwise
-    /// the error the last failing set gave.
+    /// it once more if it has not taken. Returns nil when a read-back shows
+    /// the device turned, or when the last set raised nothing (a physical
+    /// device's accelerometer can turn it back, and the device's own
+    /// orientation is a valid state); otherwise the error the last set gave.
     ///
     /// `set` returns the error XCTest raised, if any. On a loaded simulator
     /// the setter can raise an automation issue (`kAXErrorIPCTimeout` while

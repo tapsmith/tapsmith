@@ -599,8 +599,8 @@ impl DeviceBackend for IosBackend<'_> {
                      compositor; rebooting the simulator and restarting the agent"
                 );
                 // The HID helper's connection to the simulator does not
-                // survive the reboot: it would answer `err send failed` to
-                // every touch after it (PILOT-1072). Stop it now; a new one
+                // survive the reboot: every touch after it would be rejected
+                // (`err send rejected`) (PILOT-1072). Stop it now; a new one
                 // starts once the simulator is back.
                 self.svc.hid_injector.shutdown(&serial).await;
                 let _ = ios::device::shutdown_simulator(&serial).await;
