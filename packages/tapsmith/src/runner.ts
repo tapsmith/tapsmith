@@ -1248,6 +1248,9 @@ export interface RunOptions {
    * Setup work that runs inside the beforeEach trace group. Use this for
    * any device actions (e.g. session readiness checks) so they appear
    * grouped in the trace viewer instead of as ungrouped top-level events.
+   * Every embedder passes a readiness check (`ensureSessionReady`) on each
+   * device, and nothing else: on Android its idle settle stands in for the
+   * runner's pre-test idle wait on a device it did not relaunch.
    */
   beforeEachTest?: (fullName: string) => Promise<void>;
   abortFileOnError?: (error: Error) => boolean;
@@ -2074,6 +2077,20 @@ async function runTracedAppReset(
 
 function relaunchCounts(opts: RunOptions): Map<string, number> {
   return new Map(resettableDevices(opts).map((rd) => [rd.name, rd.sessionContext.relaunches.count]));
+}
+
+/**
+ * The devices the embedder's readiness check (`beforeEachTest`) has just
+ * settled: on Android its session check waits for the app to go idle before
+ * it reads the screen, and nothing acts on the app after that — unless the
+ * check relaunched it, which starts a fresh launch the pre-test idle wait
+ * still covers. iOS's session check does not wait for idle.
+ */
+function settledByReadinessCheck(opts: RunOptions, relaunchesBefore: Map<string, number>): Set<Device> {
+  return new Set(resettableDevices(opts)
+    .filter((rd) => rd.sessionContext.config.platform !== 'ios'
+      && rd.sessionContext.relaunches.count === relaunchesBefore.get(rd.name))
+    .map((rd) => rd.device));
 }
 
 /**
@@ -2919,6 +2936,7 @@ async function runSuiteContext(
 
           // Setup work that may issue device actions (e.g. ensureSessionReady
           // in UI worker mode). Runs inside the beforeEach group.
+          let settledByReadiness: ReadonlySet<Device> = new Set();
           if (opts.beforeEachTest) {
             const relaunchesBefore = relaunchCounts(opts);
             try {
@@ -2926,6 +2944,7 @@ async function runSuiteContext(
             } finally {
               drainPreflightNotices(opts, traceCollector);
             }
+            settledByReadiness = settledByReadinessCheck(opts, relaunchesBefore);
             await reopenStartRouteAfterRelaunch(opts, relaunchesBefore);
           }
           // The test now owns the screen: a later relaunch is not the reset's.
@@ -2936,8 +2955,10 @@ async function runSuiteContext(
           // hooks and assertions start (flakiness under load, e.g. parallel
           // workers sharing host CPU). Bounded: on a screen that never goes
           // idle the Android agent blocks for the whole budget it is given.
-          // Best effort — don't fail the test if an idle wait times out.
-          await forEachDeviceBestEffort(opts, (d) => d.waitForIdle(PRE_TEST_IDLE_TIMEOUT_MS));
+          // Best effort — don't fail the test if an idle wait times out. A
+          // device the readiness check just settled skips it: a second settle
+          // only doubled the wait on a screen that never goes idle.
+          await forEachDeviceBestEffort(opts, (d) => settledByReadiness.has(d) ? undefined : d.waitForIdle(PRE_TEST_IDLE_TIMEOUT_MS));
 
           if (hasTestScopedFixtures) {
             // Collect the fixture names destructured by the test and its hooks.
