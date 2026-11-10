@@ -223,6 +223,20 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/region-screenshot-tests"
 "$OUT/region-screenshot-tests"
 
+# Pins XCTest's private open-URL request (every warm deep link's delivery).
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/DaemonOpenURLTests/main.swift \
+  TapsmithAgent/DaemonOpenURL.swift \
+  -o "$OUT/daemon-open-url-tests"
+"$OUT/daemon-open-url-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/DeepLinkVerifyTests/main.swift \
+  TapsmithAgent/DeepLinkVerify.swift \
+  -o "$OUT/deep-link-verify-tests"
+"$OUT/deep-link-verify-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/RotationSettleTests/main.swift \
   TapsmithAgent/RotationSettle.swift \
