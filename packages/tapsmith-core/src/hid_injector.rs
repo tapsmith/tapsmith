@@ -14,9 +14,9 @@
 //! A helper that stops answering (no reply by a waited line's deadline, or
 //! its output ends before the reply) or whose stdin breaks is evicted: killed
 //! and dropped, so the next touch starts a new one instead of queueing behind
-//! the stuck one (PILOT-1036). So is one that answers `err` to a waited line
-//! and then fails a lone lift too: its connection to the simulator is gone, as
-//! after a simulator reboot (PILOT-1072). The new helper's first line lifts at the last
+//! the stuck one (PILOT-1036). So is one whose sends the simulator rejects,
+//! a lone lift included: its connection to the simulator is gone, as after a
+//! simulator reboot (PILOT-1072). The new helper's first line lifts at the last
 //! point the old one was sent, in case it left a finger down. A line that
 //! never reached the helper (a broken pipe) is retried once on its
 //! replacement; one that did reach it is not, since part of it may have
@@ -89,7 +89,10 @@ const MAX_HELPER_RESTARTS: u32 = 3;
 /// up every device's touches.
 const WRITE_BOUND: Duration = Duration::from_secs(2);
 
-/// How long the lone lift that checks a helper after an `err` reply may take:
+/// The helper's reply when the simulator refused a send (not merely confirmed
+/// it late): `err send rejected`.
+const REJECTED_REPLY: &str = "err send rejected";
+/// How long the lone lift that checks a helper after a rejected send may take:
 /// the helper waits up to 2 s to confirm a lift.
 const LIFT_CHECK_DEADLINE: Duration = Duration::from_secs(3);
 
@@ -596,16 +599,21 @@ impl HidInjector {
         };
         let failure = match tokio::time::timeout(deadline, rx).await {
             Ok(Ok(reply)) if reply == "ok" => return Ok(()),
-            // Answering, and reported this line failed: check the helper can
-            // still touch the simulator at all.
+            // Answering, and reported this line failed. A send the
+            // simulator rejected may mean the helper cannot touch it at all:
+            // check. One not confirmed in time is a loaded host, and a check
+            // would queue behind the same backlog: the helper is kept.
             Ok(Ok(reply)) => {
                 let failure = format!("the iOS HID helper reported: {reply}");
-                return Err(HidSendError::Failed(
-                    match self.check_after_error(udid, generation, &reply).await {
-                        Some(note) => format!("{failure}; {note}"),
-                        None => failure,
-                    },
-                ));
+                let note = if reply.starts_with(REJECTED_REPLY) {
+                    self.check_after_rejection(udid, generation, &reply).await
+                } else {
+                    None
+                };
+                return Err(HidSendError::Failed(match note {
+                    Some(note) => format!("{failure}; {note}"),
+                    None => failure,
+                }));
             }
             Ok(Err(_)) => "the iOS HID helper exited before answering".to_string(),
             Err(_) => format!(
@@ -622,15 +630,20 @@ impl HidInjector {
         ))
     }
 
-    /// After helper `generation` answered `err` to a line, ask it for a lone
-    /// lift (`c`): it presses nothing, and lifts whatever the failed line may
-    /// have left down. A helper whose connection to the simulator is gone
-    /// fails that too: one started before the simulator rebooted answers
-    /// `err send failed` to every line, so every later touch of the run would
-    /// fail (PILOT-1072). It is evicted, and the next touch starts a new one.
-    /// A helper that lifts is kept: one failed line on a loaded host is not a
-    /// broken helper. Returns what the caller's error should add.
-    async fn check_after_error(&self, udid: &str, generation: u64, reply: &str) -> Option<String> {
+    /// After the simulator rejected a send of helper `generation`, ask it for
+    /// a lone lift (`c`): it presses nothing, and lifts whatever the failed
+    /// line may have left down. A helper whose connection to the simulator is
+    /// gone has that rejected too: one started before the simulator rebooted
+    /// gets every send rejected, so every later touch of the run would fail
+    /// (PILOT-1072). It is evicted, and the next touch starts a new one. A
+    /// helper whose lift goes through, or is only slow to be confirmed, is
+    /// kept. Returns what the caller's error should add.
+    async fn check_after_rejection(
+        &self,
+        udid: &str,
+        generation: u64,
+        reply: &str,
+    ) -> Option<String> {
         let (tx, rx) = oneshot::channel();
         match self.write_line(udid, "c", Some(tx)).await {
             Ok(g) if g == generation => {}
@@ -639,8 +652,10 @@ impl HidInjector {
             _ => return None,
         }
         let why = match tokio::time::timeout(LIFT_CHECK_DEADLINE, rx).await {
-            Ok(Ok(lift)) if lift == "ok" => return None,
-            Ok(Ok(lift)) => format!("it answered `{reply}`, then `{lift}` to a lone lift"),
+            Ok(Ok(lift)) if lift.starts_with(REJECTED_REPLY) => {
+                format!("it answered `{reply}`, then `{lift}` to a lone lift")
+            }
+            Ok(Ok(_)) => return None,
             Ok(Err(_)) => format!("it answered `{reply}`, then exited"),
             Err(_) => format!("it answered `{reply}`, then did not answer a lone lift"),
         };
@@ -857,20 +872,34 @@ mod tests {
         injector.shutdown("UDID-B").await;
     }
 
+    /// A stub that logs its starts and every line, and answers `t1` with
+    /// `t1_reply` and anything else with `other_reply` — on its first start
+    /// only; later starts answer `ok`.
+    fn erring_stub(
+        log: &std::path::Path,
+        t1_reply: &str,
+        other_reply: &str,
+    ) -> (tempfile::TempDir, PathBuf) {
+        stub_helper(&format!(
+            "echo start >> '{s}'\necho 'ready 1 1 1'\n\
+             if [ \"$(wc -l < '{s}')\" -eq 1 ]; then \
+             while IFS= read -r line; do echo \"$line\" >> '{l}'; \
+             case \"$line\" in t1*) echo '{t1}';; *) echo '{o}';; esac; done; fi\n\
+             while IFS= read -r line; do echo \"$line\" >> '{l}'; echo ok; done\n",
+            s = log.join("starts").display(),
+            l = log.join("lines").display(),
+            t1 = t1_reply,
+            o = other_reply,
+        ))
+    }
+
     #[tokio::test]
-    async fn a_helper_that_reports_one_failure_but_still_lifts_is_kept() {
-        // A tap can fail on a healthy helper (a lift confirmed late on a
-        // loaded host): its lone lift still goes through, so it stays.
+    async fn a_helper_that_was_only_slow_is_kept_unchecked() {
+        // `err send failed`: a send not confirmed in time, as on a loaded
+        // host. The helper works; checking it with a lift that would queue
+        // behind the same backlog could evict it wrongly, so it is not checked.
         let log = tempfile::tempdir().unwrap();
-        let starts = log.path().join("starts");
-        let lines = log.path().join("lines");
-        let (_dir, path) = stub_helper(&format!(
-            "echo start >> '{s}'\necho 'ready 1 1 1'\nwhile IFS= read -r line; do \
-             echo \"$line\" >> '{l}'; case \"$line\" in t1*) echo 'err send failed';; \
-             *) echo ok;; esac; done\n",
-            s = starts.display(),
-            l = lines.display(),
-        ));
+        let (_dir, path) = erring_stub(log.path(), "err send failed", "err send failed");
         let injector = HidInjector::with_helper_path(path);
         injector.ensure("UDID-K").await.unwrap();
         match injector
@@ -884,27 +913,40 @@ mod tests {
             other => panic!("expected the helper's error, got {other:?}"),
         }
         assert!(injector.helpers.lock().await.contains_key("UDID-K"));
-        injector.ensure("UDID-K").await.unwrap();
-        assert_eq!(start_count(&starts), 1);
-        assert_eq!(logged_lines(log.path()), vec!["t1 10 20 10", "c"]);
+        assert_eq!(logged_lines(log.path()), vec!["t1 10 20 10"]);
+        assert_eq!(start_count(&log.path().join("starts")), 1);
         injector.shutdown("UDID-K").await;
+    }
+
+    #[tokio::test]
+    async fn a_helper_with_one_rejected_send_that_still_lifts_is_kept() {
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = erring_stub(log.path(), "err send rejected", "ok");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-J").await.unwrap();
+        match injector
+            .send_and_wait("UDID-J", "t1 10 20 10", Duration::from_secs(5))
+            .await
+        {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("send rejected"), "{msg}");
+                assert!(!msg.contains("stopped"), "{msg}");
+            }
+            other => panic!("expected the helper's error, got {other:?}"),
+        }
+        assert!(injector.helpers.lock().await.contains_key("UDID-J"));
+        assert_eq!(logged_lines(log.path()), vec!["t1 10 20 10", "c"]);
+        injector.shutdown("UDID-J").await;
     }
 
     #[tokio::test]
     async fn a_helper_whose_simulator_connection_broke_is_replaced() {
         // PILOT-1072: after a simulator reboot, a helper started before it
-        // answers `err send failed` to every line, lifts included. It is
-        // replaced, so the next touch goes through a new connection instead
-        // of every later tap of the run failing.
+        // has every send rejected, lifts included. It is replaced, so the
+        // next touch goes through a new connection instead of every later
+        // tap of the run failing.
         let log = tempfile::tempdir().unwrap();
-        let starts = log.path().join("starts");
-        let (_dir, path) = stub_helper(&format!(
-            "echo start >> '{s}'\necho 'ready 1 1 1'\n\
-             if [ \"$(wc -l < '{s}')\" -eq 1 ]; then \
-             while IFS= read -r line; do echo 'err send failed'; done; fi\n\
-             while IFS= read -r line; do echo ok; done\n",
-            s = starts.display(),
-        ));
+        let (_dir, path) = erring_stub(log.path(), "err send rejected", "err send rejected");
         let injector = HidInjector::with_helper_path(path);
         injector.ensure("UDID-R").await.unwrap();
         match injector
@@ -912,7 +954,7 @@ mod tests {
             .await
         {
             Err(HidSendError::Failed(msg)) => {
-                assert!(msg.contains("send failed"), "{msg}");
+                assert!(msg.contains("send rejected"), "{msg}");
                 assert!(msg.contains("next touch starts a new one"), "{msg}");
             }
             other => panic!("expected the helper's error, got {other:?}"),
@@ -923,8 +965,22 @@ mod tests {
             .send_and_wait("UDID-R", "t1 10 20 10", Duration::from_secs(5))
             .await
             .unwrap();
-        assert_eq!(start_count(&starts), 2);
+        assert_eq!(start_count(&log.path().join("starts")), 2);
         injector.shutdown("UDID-R").await;
+    }
+
+    #[tokio::test]
+    async fn a_rejected_send_whose_lift_is_only_slow_keeps_the_helper() {
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = erring_stub(log.path(), "err send rejected", "err send failed");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-S").await.unwrap();
+        let result = injector
+            .send_and_wait("UDID-S", "t1 10 20 10", Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(HidSendError::Failed(_))), "{result:?}");
+        assert!(injector.helpers.lock().await.contains_key("UDID-S"));
+        injector.shutdown("UDID-S").await;
     }
 
     #[tokio::test]
