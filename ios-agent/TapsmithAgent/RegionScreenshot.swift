@@ -69,12 +69,21 @@ enum RegionScreenshot {
     /// The method, looked up once.
     static let api: Result<API, Unavailable> = resolve()
 
-    /// Look the method up and make the PNG encoding. The class names are
-    /// parameters so the host test can check the failure answers.
+    /// The same method with a low-quality JPEG encoding, for a large region
+    /// whose exact pixels don't matter (the black-display check reads the
+    /// whole content band; PNG-encoding that costs ~90 ms). Two captures of
+    /// an unchanged region need not compare equal, so never settle on it.
+    static let jpegAPI: Result<API, Unavailable> = resolve(uti: "public.jpeg", quality: 0.3)
+
+    /// Look the method up and make the encoding (`uti` at `quality`, PNG by
+    /// default). The class names are parameters so the host test can check
+    /// the failure answers.
     static func resolve(
         screenClass screenName: String = screenClassName,
         encodingClass encodingName: String = encodingClassName,
-        imageClass imageName: String = imageClassName
+        imageClass imageName: String = imageClassName,
+        uti: String = "public.png",
+        quality: Double = 1.0
     ) -> Result<API, Unavailable> {
         guard let screenClass = NSClassFromString(screenName) else { return .failure(.missingClass(screenName)) }
         guard let encodingClass = NSClassFromString(encodingName) else { return .failure(.missingClass(encodingName)) }
@@ -102,7 +111,7 @@ enum RegionScreenshot {
         guard let allocated = (encodingClass as AnyObject).perform(NSSelectorFromString("alloc"))?
             .takeUnretainedValue() else { return .failure(.encodingNotCreated) }
         let initialize = unsafeBitCast(method_getImplementation(initializer), to: EncodingInitFunction.self)
-        guard let encoding = initialize(allocated, initSelector, "public.png" as NSString, 1.0) else {
+        guard let encoding = initialize(allocated, initSelector, uti as NSString, quality) else {
             return .failure(.encodingNotCreated)
         }
         return .success(API(
@@ -128,9 +137,10 @@ enum RegionScreenshot {
 
     /// The screen inside `rect` (points), at the screen's pixel scale; nil
     /// when the method can't be used, the rect is empty, or the capture
-    /// fails (the caller falls back to the whole screen).
-    static func capture(_ rect: CGRect, of screen: AnyObject) -> CGImage? {
-        guard case .success(let api) = api, !rect.isNull, !rect.isEmpty else { return nil }
+    /// fails (the caller falls back to the whole screen). `chosen` is the
+    /// encoding to capture with: `api` (PNG) or `jpegAPI`.
+    static func capture(_ rect: CGRect, of screen: AnyObject, with chosen: Result<API, Unavailable> = api) -> CGImage? {
+        guard case .success(let api) = chosen, !rect.isNull, !rect.isEmpty else { return nil }
         var error: NSError?
         guard let image = api.shot(screen, api.selector, api.encoding, rect, &error) as? NSObject,
               image.responds(to: NSSelectorFromString(imageDataSelectorName)),

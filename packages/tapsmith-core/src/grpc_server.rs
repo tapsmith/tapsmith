@@ -411,12 +411,64 @@ fn log_agent_command_timing(
     if !crate::timing::enabled() {
         return;
     }
+    let fields = match result {
+        Ok(response) => agent_timing_fields(&response.data),
+        Err(_) => String::new(),
+    };
     crate::timing::timing_log!(
-        "kind=cmd name={} dur_ms={} ok={}",
+        "kind=cmd name={} dur_ms={} ok={}{}",
         command.method_name(),
         started.elapsed().as_millis(),
-        result.is_ok()
+        result.is_ok(),
+        fields
     );
+}
+
+/// The agent's own breakdown of a command, when its response carries one
+/// (the iOS agent's `openDeepLink`: `phasesMs` and `delivery`), as
+/// ` delivery=<how> <phase>_ms=<n>…` for the timing line. Phases come in the
+/// order they run; any others follow sorted. Values that would break the
+/// line's `key=value` format are left out.
+fn agent_timing_fields(data: &Value) -> String {
+    const PHASE_ORDER: [&str; 6] = [
+        "preSnapshot",
+        "activate",
+        "deliver",
+        "verify",
+        "displayCheck",
+        "rebind",
+    ];
+    fn plain(text: &str) -> bool {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }
+    let mut out = String::new();
+    if let Some(delivery) = data.get("delivery").and_then(Value::as_str) {
+        if plain(delivery) {
+            out.push_str(&format!(" delivery={delivery}"));
+        }
+    }
+    let Some(phases) = data.get("phasesMs").and_then(Value::as_object) else {
+        return out;
+    };
+    let mut names: Vec<&String> = phases.keys().filter(|name| plain(name)).collect();
+    names.sort_by_key(|name| {
+        (
+            PHASE_ORDER
+                .iter()
+                .position(|known| known == name)
+                .unwrap_or(PHASE_ORDER.len()),
+            name.as_str(),
+        )
+    });
+    for name in names {
+        if let Some(ms) = phases.get(name).and_then(Value::as_u64) {
+            out.push_str(&format!(" {name}_ms={ms}"));
+        }
+    }
+    out
 }
 
 impl TapsmithServiceImpl {
@@ -7300,6 +7352,31 @@ mod tests {
     use super::*;
     use crate::proto::tapsmith_service_server::TapsmithService;
     use serde_json::json;
+
+    #[test]
+    fn agent_timing_fields_list_reported_phases_in_order() {
+        let data = serde_json::json!({
+            "success": true,
+            "phasesMs": {"verify": 61, "activate": 3, "deliver": 22, "preSnapshot": 40, "bogus": "x"},
+            "delivery": "daemon",
+        });
+        assert_eq!(
+            agent_timing_fields(&data),
+            " delivery=daemon preSnapshot_ms=40 activate_ms=3 deliver_ms=22 verify_ms=61"
+        );
+    }
+
+    #[test]
+    fn agent_timing_fields_are_empty_without_phases() {
+        assert_eq!(
+            agent_timing_fields(&serde_json::json!({"success": true})),
+            ""
+        );
+        assert_eq!(agent_timing_fields(&serde_json::Value::Null), "");
+        // Keys that would break the line's key=value format are dropped.
+        let odd = serde_json::json!({"phasesMs": {"a b": 1, "ok": 2}, "delivery": "x y"});
+        assert_eq!(agent_timing_fields(&odd), " ok_ms=2");
+    }
 
     #[test]
     fn unusable_device_maps_to_proto_with_adb_state() {
