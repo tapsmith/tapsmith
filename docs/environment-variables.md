@@ -52,7 +52,7 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 
 | Variable | Description |
 |---|---|
-| `TAPSMITH_PROJECT_DIR` | The folder whose Tapsmith the [coding-agent plugin](mcp-server.md#install-the-plugin) starts as its MCP server, when the agent's own project folder is not it (several Tapsmith projects below it, say). Read by the plugin's server command, so set it in the environment you start the agent from. |
+| `TAPSMITH_PROJECT_DIR` | The folder whose Tapsmith the [coding-agent plugin](mcp-server.md#install-the-plugin) starts as its MCP server, when the agent's own project folder is not it (several Tapsmith projects below it, say). Read by the plugin's server command, so set it in the environment you start the agent from. Codex does not pass it on to MCP servers: in Codex, start the agent from that folder instead. |
 
 ## Android
 
