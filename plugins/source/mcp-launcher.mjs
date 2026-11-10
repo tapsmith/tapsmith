@@ -7,8 +7,10 @@
 // into Cursor's and Codex's as `node --input-type=module -e <this file> --`:
 // Codex's plugin MCP config has no variable for the plugin's install
 // directory to point at a file with. Keep it to `node:` imports for that
-// reason, and keep its comments on lines of their own (the inline copy drops
-// them).
+// reason, keep its comments on lines of their own (the inline copy drops
+// them), and write no `${` (no template literals): Cursor substitutes
+// `${NAME}` placeholders in a plugin's MCP config, which would rewrite the
+// inline script.
 //
 // The project is TAPSMITH_PROJECT_DIR, else CLAUDE_PROJECT_DIR (Claude Code
 // sets it for plugin MCP servers), else the working directory (Codex and
@@ -88,6 +90,13 @@ function nestedConfigDirs(dir) {
  * says what to do.
  */
 export function locateTapsmith(start) {
+  if (!fs.existsSync(start)) {
+    return {
+      error:
+        'The project folder ' + start + ' does not exist. Check TAPSMITH_PROJECT_DIR (or CLAUDE_PROJECT_DIR), ' +
+        'or start the agent from the folder that holds your Tapsmith config.',
+    };
+  }
   const direct = tapsmithBinFrom(start);
   if (direct) return { dir: start, ...direct };
   const nested = nestedConfigDirs(start)
@@ -97,14 +106,15 @@ export function locateTapsmith(start) {
   if (nested.length > 1) {
     return {
       error:
-        `Tapsmith is installed for several projects below ${start} (${nested.map((c) => path.relative(start, c.dir)).join(', ')}). ` +
+        'Tapsmith is installed for several projects below ' + start + ' (' +
+        nested.map((c) => path.relative(start, c.dir)).join(', ') + '). ' +
         'Start the agent from that project\'s folder, or set TAPSMITH_PROJECT_DIR to it in the environment you start ' +
         'the agent from (Codex passes no such variable on to MCP servers: start Codex from the folder instead).',
     };
   }
   return {
     error:
-      `Tapsmith is not installed in ${start}: the plugin runs the project's own Tapsmith, not a global copy. ` +
+      'Tapsmith is not installed in ' + start + ": the plugin runs the project's own Tapsmith, not a global copy. " +
       'Install it in the project (npm install -D tapsmith) and restart the agent. If it is installed in another ' +
       'folder, start the agent from that folder, or set TAPSMITH_PROJECT_DIR to it in the environment you start the ' +
       'agent from (Codex passes no such variable on to MCP servers: start Codex from the folder instead).',
@@ -117,11 +127,11 @@ export async function main(extraArgs) {
   const found = locateTapsmith(start);
   if (found.error) {
     // stdout carries the MCP protocol: everything else goes to stderr.
-    process.stderr.write(`tapsmith plugin: ${found.error}\n`);
+    process.stderr.write('tapsmith plugin: ' + found.error + '\n');
     process.exitCode = 1;
     return;
   }
-  process.stderr.write(`tapsmith plugin: starting tapsmith ${found.version} mcp-server in ${found.dir}\n`);
+  process.stderr.write('tapsmith plugin: starting tapsmith ' + found.version + ' mcp-server in ' + found.dir + '\n');
   process.chdir(found.dir);
   // In place: Node and Tapsmith read this array when they fork.
   process.execArgv.splice(0, process.execArgv.length, ...childExecArgv(process.execArgv));
