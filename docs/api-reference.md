@@ -317,7 +317,7 @@ const screenshot = await device.takeScreenshot();
 
 ### `device.waitForIdle(timeoutMs?: number): Promise<void>`
 
-Give the app's UI a moment to settle. On Android it waits for accessibility events to go quiet, up to `timeoutMs` (the configured default timeout if none is specified); on iOS it pauses briefly (a quarter of a second at most). It does not prove the screen is idle, so wait for what you need with an assertion.
+Give the app's UI a moment to settle. On Android it waits for accessibility events to go quiet, up to `timeoutMs` (the configured default timeout if none is specified); on iOS it waits until two screenshots taken a couple of frames apart match, up to `timeoutMs` or a quarter of a second, whichever is shorter. It does not prove the screen is idle, so wait for what you need with an assertion.
 
 ```typescript
 await device.waitForIdle();

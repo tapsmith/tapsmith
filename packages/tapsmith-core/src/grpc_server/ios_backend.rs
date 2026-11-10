@@ -10,6 +10,24 @@ pub(super) struct IosBackend<'a> {
     pub(super) svc: &'a TapsmithServiceImpl,
 }
 
+impl IosBackend<'_> {
+    /// `launchApp`/`restartApp` with `waitForIdle` hand back an app that has
+    /// drawn its first screen, as a reset rung's relaunch does
+    /// (`relaunch_app`). The relaunch probe's idle wait ends as soon as the
+    /// screen holds still, and a blank launch screen holds still: without
+    /// this, a non-waiting read made straight after the launch
+    /// (`isVisible()`) answered for the launch screen about half the time.
+    /// Bounded by the launch's idle budget and best-effort, as the reset's
+    /// wait is: a text-free first screen falls through.
+    async fn wait_for_first_render(&self, package_name: &str, idle_timeout_ms: u64) {
+        let timeout = Duration::from_millis(idle_timeout_ms).min(IOS_RENDER_READY_TIMEOUT);
+        let _ = self
+            .svc
+            .wait_for_ios_rendered_content(package_name, timeout)
+            .await;
+    }
+}
+
 #[async_trait::async_trait]
 impl DeviceBackend for IosBackend<'_> {
     async fn terminate_app(&self, request_id: String, package: &str) -> ActionResult {
@@ -780,6 +798,10 @@ impl DeviceBackend for IosBackend<'_> {
                 .action_error(request_id, "LAUNCH_FAILED", error_message)
                 .await);
         }
+        if req.wait_for_idle {
+            self.wait_for_first_render(&req.package_name, idle_timeout_ms)
+                .await;
+        }
 
         Ok(Response::new(proto::ActionResponse {
             request_id,
@@ -817,6 +839,10 @@ impl DeviceBackend for IosBackend<'_> {
                 .svc
                 .action_error(request_id, "LAUNCH_FAILED", error_message)
                 .await);
+        }
+        if req.wait_for_idle {
+            self.wait_for_first_render(&req.package_name, idle_timeout_ms)
+                .await;
         }
 
         Ok(TapsmithServiceImpl::success_action_response(request_id))

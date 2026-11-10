@@ -811,6 +811,18 @@ describe('openDeviceGroup', () => {
     expect(sessions[0].capabilities).not.toBe(sessions[1].capabilities);
   });
 
+  it('bounds the fresh-emulator warm-up idle waits instead of spending the test timeout on each', async () => {
+    // On an app that never goes idle the Android agent holds an idle wait for
+    // its whole budget: with the config timeout that was twice 30 s per session.
+    await openDeviceGroup(
+      [{ name: 'bob', serial: 'emulator-5556', daemonAddress: 'localhost:50053', freshDevice: true }],
+      makeConfig({ timeout: 30_000 }),
+      { claimSession: SESSION, label: 'Worker 0' },
+    );
+    expect(mocks.devices[0].terminateApp).toHaveBeenCalled();
+    expect(mocks.devices[0].waitForIdle.mock.calls).toEqual([[5_000], [5_000]]);
+  });
+
   it('refuses an iOS group that mixes simulators and physical devices', async () => {
     // The agent artifacts are resolved once for the group, from the first
     // member; a simulator xctestrun cannot drive a physical device (and vice

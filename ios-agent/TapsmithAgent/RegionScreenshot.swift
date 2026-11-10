@@ -70,9 +70,9 @@ enum RegionScreenshot {
     static let api: Result<API, Unavailable> = resolve()
 
     /// The same method with a low-quality JPEG encoding, for a large region
-    /// whose exact pixels don't matter (the black-display check reads the
-    /// whole content band; PNG-encoding that costs ~90 ms). Two captures of
-    /// an unchanged region need not compare equal, so never settle on it.
+    /// whose exact pixels don't matter: the black-display check reads the
+    /// whole content band (PNG-encoding that costs ~90 ms), thresholds one
+    /// capture and never compares two.
     static let jpegAPI: Result<API, Unavailable> = resolve(uti: "public.jpeg", quality: 0.3)
 
     /// Look the method up and make the encoding (`uti` at `quality`, PNG by
@@ -147,5 +147,28 @@ enum RegionScreenshot {
               let data = image.value(forKey: imageDataSelectorName) as? Data,
               let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+}
+
+// ─── Settle captures ───
+
+extension RegionScreenshot {
+    /// The same method with a JPEG encoding, for the idle wait (`IdleSettle`),
+    /// which compares two captures of the whole screen as bytes: ~15 ms each,
+    /// against ~95 ms as PNG (the encoding is the cost). JPEG is lossy, but
+    /// encoding the same pixels gives the same bytes: on a simulator, 120 of
+    /// 120 consecutive captures of a still screen matched, at every region
+    /// size tried, while a blinking caret changed them.
+    static let settleJPEGAPI: Result<API, Unavailable> = resolve(uti: "public.jpeg", quality: 0.5)
+
+    /// The screen inside `rect` (points) as the encoded bytes of one capture
+    /// with `chosen`, not decoded; nil when the method or encoding can't be
+    /// used, the rect is empty, or the capture fails.
+    static func captureData(_ rect: CGRect, of screen: AnyObject, with chosen: Result<API, Unavailable>) -> Data? {
+        guard case .success(let api) = chosen, !rect.isNull, !rect.isEmpty else { return nil }
+        var error: NSError?
+        guard let image = api.shot(screen, api.selector, api.encoding, rect, &error) as? NSObject,
+              image.responds(to: NSSelectorFromString(imageDataSelectorName)) else { return nil }
+        return image.value(forKey: imageDataSelectorName) as? Data
     }
 }

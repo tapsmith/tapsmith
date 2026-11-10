@@ -263,6 +263,81 @@ describe('runner app reset (declared isolation)', () => {
     });
   });
 
+  describe('the pre-test idle wait after the embedder\'s readiness check', () => {
+    // On Android the readiness check (ensureSessionReady) settles the app
+    // itself, so a second settle right after it only doubled the wait on a
+    // screen that never goes idle. iOS's readiness check does not settle.
+    function readinessRun(platform: 'android' | 'ios', relaunch: boolean) {
+      const d = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => {});
+      const ctx = popContext();
+      const opts = makeOpts(d, makeConfig({ platform, appReset: 'none' }));
+      const session = opts.devices[0].sessionContext!;
+      opts.beforeEachTest = async () => {
+        d.calls.push('beforeEachTest');
+        if (relaunch) session.relaunches.count++;
+      };
+      d.device.waitForIdle.mockImplementation(async () => { d.calls.push('waitForIdle'); });
+      return { d, run: () => runSuiteContext(ctx, '', [], [], opts) };
+    }
+    /** The idle waits after the readiness check (the scope-entry reset settles too). */
+    const idleAfterCheck = (d: ReturnType<typeof makeDevice>) =>
+      d.calls.slice(d.calls.indexOf('beforeEachTest')).filter((c) => c === 'waitForIdle');
+
+    it('skips it on Android when the check did not relaunch the app', async () => {
+      const { d, run } = readinessRun('android', false);
+      const result = await run();
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed']);
+      expect(idleAfterCheck(d)).toEqual([]);
+    });
+
+    it('keeps it on Android when the check relaunched the app', async () => {
+      const { d, run } = readinessRun('android', true);
+      await run();
+      expect(idleAfterCheck(d)).toEqual(['waitForIdle']);
+    });
+
+    it('keeps it on iOS, whose readiness check does not settle', async () => {
+      const { d, run } = readinessRun('ios', false);
+      await run();
+      expect(idleAfterCheck(d)).toEqual(['waitForIdle']);
+    });
+
+    it('decides per device in a group: skips the settled one, keeps the relaunched one', async () => {
+      const alice = makeDevice();
+      const bob = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => {});
+      const ctx = popContext();
+      const config = makeConfig({ appReset: 'none' });
+      const opts = makeOpts(alice, config);
+      const bobOpts = makeOpts(bob, config);
+      opts.devices = [{ ...opts.devices[0], name: 'alice' }, { ...bobOpts.devices[0], name: 'bob' }];
+      const bobSession = opts.devices[1].sessionContext!;
+      opts.beforeEachTest = async () => {
+        alice.calls.push('beforeEachTest');
+        bob.calls.push('beforeEachTest');
+        bobSession.relaunches.count++;
+      };
+      for (const d of [alice, bob]) d.device.waitForIdle.mockImplementation(async () => { d.calls.push('waitForIdle'); });
+      await runSuiteContext(ctx, '', [], [], opts);
+      const after = (d: ReturnType<typeof makeDevice>) =>
+        d.calls.slice(d.calls.indexOf('beforeEachTest')).filter((c) => c === 'waitForIdle');
+      expect(after(alice)).toEqual([]);
+      expect(after(bob)).toEqual(['waitForIdle']);
+    });
+
+    it('keeps it without a readiness check', async () => {
+      const d = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => {});
+      const ctx = popContext();
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+      expect(d.device.waitForIdle).toHaveBeenCalledWith(1_000);
+    });
+  });
+
   describe('retries under a file-scoped policy (PILOT-715)', () => {
     it('re-runs the file setup before a retry: afterAll, a cold reset, then beforeAll, as a fresh worker would', async () => {
       const d = makeDevice();

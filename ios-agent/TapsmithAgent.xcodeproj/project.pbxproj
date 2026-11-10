@@ -50,6 +50,7 @@
 		9990000000000000000000A1 /* DaemonOpenURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9990000000000000000000A2 /* DaemonOpenURL.swift */; };
 		9990000000000000000000A3 /* DeepLinkVerify.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9990000000000000000000A4 /* DeepLinkVerify.swift */; };
 		9980000000000000000000A1 /* ScrollStepWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9980000000000000000000A2 /* ScrollStepWatch.swift */; };
+		3090000000000000000000A1 /* IdleSettle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3090000000000000000000A2 /* IdleSettle.swift */; };
 		8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */; };
 		9D34B1A2E4F55C7BA08F3D01 /* SwipeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */; };
 		5E9B5E90B9CB725D9CE8F179 /* TextMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC71D08D700ACC6A3E02220B /* TextMatch.swift */; };
@@ -99,6 +100,7 @@
 		9990000000000000000000A2 /* DaemonOpenURL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonOpenURL.swift; sourceTree = "<group>"; };
 		9990000000000000000000A4 /* DeepLinkVerify.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkVerify.swift; sourceTree = "<group>"; };
 		9980000000000000000000A2 /* ScrollStepWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollStepWatch.swift; sourceTree = "<group>"; };
+		3090000000000000000000A2 /* IdleSettle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdleSettle.swift; sourceTree = "<group>"; };
 		8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchPlan.swift; sourceTree = "<group>"; };
 		9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeGeometry.swift; sourceTree = "<group>"; };
 		EC71D08D700ACC6A3E02220B /* TextMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextMatch.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 				9990000000000000000000A2 /* DaemonOpenURL.swift */,
 				9990000000000000000000A4 /* DeepLinkVerify.swift */,
 				9980000000000000000000A2 /* ScrollStepWatch.swift */,
+				3090000000000000000000A2 /* IdleSettle.swift */,
 				8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */,
 				9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */,
 				EC71D08D700ACC6A3E02220B /* TextMatch.swift */,
@@ -314,6 +317,7 @@
 				9990000000000000000000A1 /* DaemonOpenURL.swift in Sources */,
 				9990000000000000000000A3 /* DeepLinkVerify.swift in Sources */,
 				9980000000000000000000A1 /* ScrollStepWatch.swift in Sources */,
+				3090000000000000000000A1 /* IdleSettle.swift in Sources */,
 				8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */,
 				9D34B1A2E4F55C7BA08F3D01 /* SwipeGeometry.swift in Sources */,
 				5E9B5E90B9CB725D9CE8F179 /* TextMatch.swift in Sources */,
