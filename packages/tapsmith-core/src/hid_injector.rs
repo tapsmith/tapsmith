@@ -281,10 +281,10 @@ impl HidInjector {
         }
         let mut helper = map.remove(udid)?;
         let _ = helper.child.start_kill();
+        self.queue_lift(udid, helper.last_point.take());
         let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
         let h = health.entry(udid.to_string()).or_default();
         h.evictions += 1;
-        h.pending_lift = helper.last_point.map(|(x, y)| format!("u {x} {y}"));
         if h.evictions <= self.max_restarts {
             warn!(
                 udid,
@@ -295,14 +295,19 @@ impl HidInjector {
             );
             return Some("the helper was stopped, and the next touch starts a new one".to_string());
         }
+        // The reason goes into errors too, which under TAPSMITH_REQUIRE_IOS_HID
+        // refuse the touch: what happens instead is said only in the warning.
         let reason = format!(
             "the iOS simulator HID helper failed {} times this session (last: {why}), so it is \
-             no longer used: taps, double taps, long presses and scroll drags use the agent's \
-             synthesized touches instead, which take a few hundred milliseconds longer a tap and \
-             which some native gesture recognizers ignore",
+             no longer used for this device",
             h.evictions
         );
-        warn!(udid, "{reason}");
+        warn!(
+            udid,
+            "{reason}: taps, double taps, long presses and scroll drags use the agent's \
+             synthesized touches instead, which take a few hundred milliseconds longer a tap and \
+             which some native gesture recognizers ignore"
+        );
         h.given_up = Some(reason);
         Some("the helper has failed too often and is no longer used this session".to_string())
     }
@@ -352,9 +357,22 @@ impl HidInjector {
         match helper.child.try_wait() {
             Ok(None) => true,
             _ => {
-                map.remove(udid);
+                // Not counted against its restarts (it ended between touches,
+                // costing none), but it may have died with a finger down.
+                if let Some(helper) = map.remove(udid) {
+                    self.queue_lift(udid, helper.last_point);
+                }
                 false
             }
+        }
+    }
+
+    /// Have `udid`'s next helper first lift at `point`, where the one it
+    /// replaces last put or lifted a finger.
+    fn queue_lift(&self, udid: &str, point: Option<(String, String)>) {
+        if let Some((x, y)) = point {
+            let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+            health.entry(udid.to_string()).or_default().pending_lift = Some(format!("u {x} {y}"));
         }
     }
 
@@ -465,6 +483,9 @@ impl HidInjector {
                     .await;
             if !matches!(written, Ok(Ok(()))) {
                 let _ = child.start_kill();
+                // Still owed: the next helper sends it.
+                let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+                health.entry(udid.to_string()).or_default().pending_lift = Some(lift);
                 return Err(anyhow::anyhow!(
                     "helper stopped reading before its first line"
                 ));
@@ -1156,6 +1177,26 @@ mod tests {
         assert!(waiting.await.unwrap().is_err());
         injector.ensure("UDID-Z").await.unwrap();
         injector.shutdown("UDID-Z").await;
+    }
+
+    #[tokio::test]
+    async fn the_replacement_of_a_helper_that_died_between_touches_lifts_first() {
+        // A helper that dies with a finger down (its process gone, found by
+        // the next touch rather than by a failed write) leaves the touch down
+        // in the simulator: the next tap would only move it.
+        let log = tempfile::tempdir().unwrap();
+        let (_dir, path) = first_start_stub(log.path(), "read -r line; exit 0");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-K").await.unwrap();
+        injector.send("UDID-K", "d 5 6").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        injector.ensure("UDID-K").await.unwrap();
+        injector
+            .send_and_wait("UDID-K", "t1 1 1 10", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(logged_lines(log.path()), vec!["u 5 6", "t1 1 1 10"]);
+        injector.shutdown("UDID-K").await;
     }
 
     #[test]
