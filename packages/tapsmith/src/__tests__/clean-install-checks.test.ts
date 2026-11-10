@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ALLOWED_INSTALL_SCRIPTS,
+  bundledDocsProblems,
   deprecationLines,
   disallowedInstallScripts,
   installScriptsOf,
@@ -173,6 +174,29 @@ describe('testPaths', () => {
       { path: 'dist/trace/__tests__/x.js' },
       { path: 'dist/not__tests__x.js' },
     ])).toEqual(['dist/__tests__/device.test.js', 'dist/trace/__tests__/x.js']);
+  });
+});
+
+describe('bundledDocsProblems', () => {
+  const pages = ['api-reference.md', 'getting-started.md'];
+
+  it('passes when every page is shipped and nothing else is in docs/', () => {
+    expect(bundledDocsProblems([
+      { path: 'dist/index.js' },
+      { path: 'docs/api-reference.md' },
+      { path: 'docs/getting-started.md' },
+    ], pages)).toEqual([]);
+  });
+
+  it('names a missing page and an image the bundle should have left out', () => {
+    expect(bundledDocsProblems([
+      { path: 'docs/api-reference.md' },
+      { path: 'docs/images/ui-mode.png' },
+    ], pages)).toEqual(['docs/getting-started.md (not in the tarball)', 'docs/images/ui-mode.png (not a docs page)']);
+  });
+
+  it('finds no docs at all in a tarball built without them', () => {
+    expect(bundledDocsProblems([{ path: 'dist/index.js' }], pages)).toHaveLength(2);
   });
 });
 
