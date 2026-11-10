@@ -87,27 +87,76 @@ jobs:
 
   # Every other job needs this one, so skipping it (a draft PR) skips the run.
   #
-  # It also checks, from an ubuntu runner, whether each macOS build job's
+  # It also computes every cache key that hashes a source tree, once, and
+  # hands them to the other jobs as outputs. On a shard, hashFiles() runs
+  # while the simulator boots and starves the 3-core runner: hashing
+  # packages/tapsmith-core took 54-68 s there (and was billed to the cache
+  # step) against under a second here (PILOT-1133). The keys also stay in one
+  # place instead of being repeated in every job.
+  #
+  # And it checks, from an ubuntu runner, whether each macOS build job's
   # output is already cached. A build job whose output is cached would only
   # restore and re-upload it, but it still has to wait for one of the 5 macOS
   # slots first — which took up to 54 min on a busy day, before the shards
   # queued a second time. The caches restore across Linux and macOS, so this
-  # lookup sees exactly what the shards will restore. The keys repeat the
-  # build jobs' keys verbatim — keep them in sync.
+  # lookup sees exactly what the shards will restore.
   gate:
     name: Gate
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     outputs:
+      daemon-key: ${{ steps.keys.outputs.daemon }}
+      # The agent key ends in the Xcode version and host arch, which only a
+      # macOS runner can read, so this is the sources' prefix; each macOS job
+      # appends its own suffix (see "Resolve Xcode version").
+      agent-key-prefix: ${{ steps.keys.outputs.agent-prefix }}
+      test-app-key: ${{ steps.keys.outputs.test-app }}
+      sdk-key: ${{ steps.keys.outputs.sdk }}
+      auth-state-key: ${{ steps.keys.outputs.auth-state }}
       daemon-cached: ${{ steps.daemon.outputs.cache-hit == 'true' }}
-      # The agent key ends in the Xcode version, which only a macOS runner
-      # can read, so this matches on the sources' prefix: some Xcode's build
-      # of these sources is cached. A shard whose Xcode has no build of its
-      # own builds the agent itself (see the shard's "Build iOS agent").
+      # Matched on the prefix: some Xcode's build of these sources is cached.
+      # A shard whose Xcode has no build of its own builds the agent itself
+      # (see the shard's "Build iOS agent").
       agent-cached: ${{ steps.agent.outputs.cache-matched-key != '' }}
       test-app-cached: ${{ steps.test-app.outputs.cache-hit == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The sdk-dist and ios-daemon-bin keys are shared with the other E2E
+      # workflows' caches; keep those expressions identical to theirs.
+      # The agent cache holds only Build/Products of an arm64-only build; the
+      # `products` prefix replaced the whole-DerivedData `ios-agent-build-`
+      # entries (81 MB → under 2 MB, PILOT-1133).
+      - name: Compute cache keys
+        id: keys
+        env:
+          DAEMON: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
+          AGENT_PREFIX: ios-agent-products-${{ hashFiles('ios-agent/**') }}-
+          TEST_APP: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
+            'test-app/package-lock.json', 'test-app/app.json',
+            'test-app/metro.config.js',
+            'packages/tapsmith-react-native/src/**',
+            'packages/tapsmith-react-native/package.json',
+            'packages/tapsmith-react-native/tsconfig*.json') }}
+          SDK: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
+            'ios-agent/TapsmithAgent/**', 'ios-agent/TapsmithAgent.xcodeproj/**',
+            'ios-agent/create-xcode-project.sh', 'ios-agent/Package.swift') }}
+          # Exact-key match only (see the shard's "Restore cached auth state").
+          AUTH_STATE: auth-state-ios-${{ env.AUTH_STATE_CACHE_VERSION }}-${{
+            hashFiles('test-app/app/**', 'test-app/assets/**',
+            'test-app/package-lock.json', 'test-app/app.json',
+            'test-app/metro.config.js', 'packages/tapsmith-react-native/src/**',
+            'packages/tapsmith-react-native/package.json',
+            'packages/tapsmith-react-native/tsconfig*.json') }}-${{
+            hashFiles('e2e/tests/auth.setup.ts', 'e2e/fixtures.ts', 'e2e/screens/**') }}
+        run: |
+          {
+            echo "daemon=$DAEMON"
+            echo "agent-prefix=$AGENT_PREFIX"
+            echo "test-app=$TEST_APP"
+            echo "sdk=$SDK"
+            echo "auth-state=$AUTH_STATE"
+          } | tee -a "$GITHUB_OUTPUT"
 
       - name: Look up daemon binaries
         id: daemon
@@ -117,16 +166,16 @@ jobs:
           path: |
             packages/tapsmith-core/target/release/tapsmith-core
             packages/tapsmith-core/target/release/tapsmith-ios-hid
-          key: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
+          key: ${{ steps.keys.outputs.daemon }}
 
       - name: Look up iOS agent build
         id: agent
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           lookup-only: true
-          path: ios-agent/.build-sim
-          key: ios-agent-build-${{ hashFiles('ios-agent/**') }}-
-          restore-keys: ios-agent-build-${{ hashFiles('ios-agent/**') }}-
+          path: ios-agent/.build-sim/Build/Products
+          key: ${{ steps.keys.outputs.agent-prefix }}
+          restore-keys: ${{ steps.keys.outputs.agent-prefix }}
 
       - name: Look up test app
         id: test-app
@@ -134,12 +183,7 @@ jobs:
         with:
           lookup-only: true
           path: e2e/fixtures/TapsmithTestApp.app
-          key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
-            'test-app/package-lock.json', 'test-app/app.json',
-            'test-app/metro.config.js',
-            'packages/tapsmith-react-native/src/**',
-            'packages/tapsmith-react-native/package.json',
-            'packages/tapsmith-react-native/tsconfig*.json') }}
+          key: ${{ steps.keys.outputs.test-app }}
 
   # ─── Build prerequisites (parallel) ────────────────────────────────────
 
@@ -158,9 +202,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packages/tapsmith/dist
-          key: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
-            'ios-agent/TapsmithAgent/**', 'ios-agent/TapsmithAgent.xcodeproj/**',
-            'ios-agent/create-xcode-project.sh', 'ios-agent/Package.swift') }}
+          key: ${{ needs.gate.outputs.sdk-key }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.sdk-cache.outputs.cache-hit != 'true'
@@ -185,8 +227,8 @@ jobs:
   # 5 MB daemon, 14–76 s for the agent in the baseline run, vs 1–2 s on
   # ubuntu). Each build job therefore also publishes its output to
   # actions/cache, keyed on its inputs; shards restore from the cache first
-  # and only fall back to the artifact on a miss. The keys below are repeated
-  # verbatim in the shard job — keep them in sync.
+  # and only fall back to the artifact on a miss. Every job reads the keys
+  # from the gate's outputs.
 
   build-daemon:
     name: Build Daemon
@@ -196,8 +238,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # Must run before the Cargo cache restores target/ — hashFiles ignores
-      # .gitignore, so a populated target/ would poison the key.
       - name: Cache daemon binaries
         id: daemon-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -205,7 +245,7 @@ jobs:
           path: |
             packages/tapsmith-core/target/release/tapsmith-core
             packages/tapsmith-core/target/release/tapsmith-ios-hid
-          key: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
+          key: ${{ needs.gate.outputs.daemon-key }}
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         if: steps.daemon-cache.outputs.cache-hit != 'true'
@@ -259,19 +299,24 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      # The xctestrun bundle is tied to the Xcode/SDK that produced it, so the
-      # image's Xcode version is part of the key — last, so the gate (which
-      # cannot read it) can match the sources' prefix.
+      # The xctestrun bundle is tied to the Xcode/SDK that produced it, and the
+      # build holds only the runner's own arch, so both are part of the key —
+      # last, so the gate (which cannot read them) can match the sources'
+      # prefix.
       - name: Resolve Xcode version
         id: xcode
-        run: echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')-$(uname -m)" >> "$GITHUB_OUTPUT"
 
+      # Only Build/Products: the .xctestrun and the bundles it names
+      # (__TESTROOT__-relative), which is all a shard reads. The rest of the
+      # DerivedData (intermediates, index, module cache) was 96% of the old
+      # 81 MB entry.
       - name: Cache agent build
         id: agent-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ios-agent/.build-sim
-          key: ios-agent-build-${{ hashFiles('ios-agent/**') }}-${{ steps.xcode.outputs.version }}
+          path: ios-agent/.build-sim/Build/Products
+          key: ${{ needs.gate.outputs.agent-key-prefix }}${{ steps.xcode.outputs.version }}
 
       - name: Generate Xcode project
         if: steps.agent-cache.outputs.cache-hit != 'true'
@@ -284,19 +329,22 @@ jobs:
         if: steps.agent-cache.outputs.cache-hit != 'true'
         working-directory: ios-agent
         run: |
+          # The runner's arch only, as the SDK's own simulator build does:
+          # a universal build doubles the binaries for an arch no runner uses.
           xcodebuild build-for-testing \
             -project TapsmithAgent.xcodeproj \
             -scheme TapsmithAgentUITests \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath .build-sim \
-            -quiet
+            -quiet \
+            ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=NO
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-agent-build
           retention-days: 1
           include-hidden-files: true
-          path: ios-agent/.build-sim/
+          path: ios-agent/.build-sim/Build/Products/
 
   build-test-app:
     name: Build Test App
@@ -311,12 +359,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: e2e/fixtures/TapsmithTestApp.app
-          key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
-            'test-app/package-lock.json', 'test-app/app.json',
-            'test-app/metro.config.js',
-            'packages/tapsmith-react-native/src/**',
-            'packages/tapsmith-react-native/package.json',
-            'packages/tapsmith-react-native/tsconfig*.json') }}
+          key: ${{ needs.gate.outputs.test-app-key }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.test-app-cache.outputs.cache-hit != 'true'
@@ -382,7 +425,7 @@ jobs:
 
   e2e-test:
     name: "Shard ${{ matrix.shard }}/3"
-    needs: [ build-sdk, build-daemon, build-agent, build-test-app ]
+    needs: [ gate, build-sdk, build-daemon, build-agent, build-test-app ]
     # The gate skips a build job whose output is already cached; a skipped
     # need would otherwise skip this job too.
     if: >-
@@ -435,7 +478,7 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
           # Same normalisation as build-agent's "Resolve Xcode version".
-          echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+          echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')-$(uname -m)" >> "$GITHUB_OUTPUT"
           SIM=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
           echo "Using simulator: $SIM"
           echo "TAPSMITH_IOS_SIMULATOR=$SIM" >> $GITHUB_ENV
@@ -454,11 +497,12 @@ jobs:
           fi
 
       # ─── Fetch build outputs: cache first, artifact on a miss ───
-      # Keys mirror the build jobs' cache steps exactly (see the note above
-      # build-daemon). A build job that ran populated its cache in this same
-      # run, and the gate skips one only when its output is already cached,
-      # so a miss here means a save failed, the entry was evicted after the
-      # gate looked, or (the agent only) this runner's Xcode has no build yet.
+      # The keys are the gate's, as the build jobs use them (see the note
+      # above build-daemon). A build job that ran populated its cache in this
+      # same run, and the gate skips one only when its output is already
+      # cached, so a miss here means a save failed, the entry was evicted after
+      # the gate looked, or (the agent only) this runner's Xcode or arch has no
+      # build yet.
 
       - name: Restore daemon binaries from cache
         id: daemon-cache
@@ -467,7 +511,7 @@ jobs:
           path: |
             packages/tapsmith-core/target/release/tapsmith-core
             packages/tapsmith-core/target/release/tapsmith-ios-hid
-          key: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
+          key: ${{ needs.gate.outputs.daemon-key }}
 
       - name: Download daemon binary
         if: steps.daemon-cache.outputs.cache-hit != 'true' && needs.build-daemon.result == 'success'
@@ -480,15 +524,15 @@ jobs:
         id: agent-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ios-agent/.build-sim
-          key: ios-agent-build-${{ hashFiles('ios-agent/**') }}-${{ steps.xcode.outputs.version }}
+          path: ios-agent/.build-sim/Build/Products
+          key: ${{ needs.gate.outputs.agent-key-prefix }}${{ steps.xcode.outputs.version }}
 
       - name: Download iOS agent
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ios-agent-build
-          path: ios-agent/.build-sim
+          path: ios-agent/.build-sim/Build/Products
 
       # The gate skipped build-agent because a build of these sources is
       # cached for some Xcode, but not for this runner's (a new runner image).
@@ -499,19 +543,22 @@ jobs:
         run: |
           brew install xcodegen 2>/dev/null || true
           ./create-xcode-project.sh
+          # The runner's arch only, as the SDK's own simulator build does:
+          # a universal build doubles the binaries for an arch no runner uses.
           xcodebuild build-for-testing \
             -project TapsmithAgent.xcodeproj \
             -scheme TapsmithAgentUITests \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath .build-sim \
-            -quiet
+            -quiet \
+            ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=NO
 
       # Concurrent shards race to save the same key; the losers only warn.
       - name: Save iOS agent build to cache
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result != 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ios-agent/.build-sim
+          path: ios-agent/.build-sim/Build/Products
           key: ${{ steps.agent-cache.outputs.cache-primary-key }}
 
       - name: Restore test app from cache
@@ -519,12 +566,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: e2e/fixtures/TapsmithTestApp.app
-          key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
-            'test-app/package-lock.json', 'test-app/app.json',
-            'test-app/metro.config.js',
-            'packages/tapsmith-react-native/src/**',
-            'packages/tapsmith-react-native/package.json',
-            'packages/tapsmith-react-native/tsconfig*.json') }}
+          key: ${{ needs.gate.outputs.test-app-key }}
 
       - name: Download test app
         if: steps.test-app-cache.outputs.cache-hit != 'true' && needs.build-test-app.result == 'success'
@@ -548,9 +590,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packages/tapsmith/dist
-          key: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
-            'ios-agent/TapsmithAgent/**', 'ios-agent/TapsmithAgent.xcodeproj/**',
-            'ios-agent/create-xcode-project.sh', 'ios-agent/Package.swift') }}
+          key: ${{ needs.gate.outputs.sdk-key }}
 
       - name: Download SDK build
         if: steps.sdk-cache.outputs.cache-hit != 'true'
@@ -596,9 +636,13 @@ jobs:
           mkdir -p e2e/fixtures
           tar xzf test-app-ios.tar.gz -C e2e/fixtures
 
+      # Production dependencies only: the job runs the prebuilt dist, which
+      # (as published) needs nothing from devDependencies — 172 packages
+      # instead of 387, and 2-3 min less inside the simulator boot's starved
+      # window (PILOT-1133).
       - name: Install SDK dependencies
         working-directory: packages/tapsmith
-        run: npm ci
+        run: npm ci --omit=dev
 
       # Artifacts don't preserve file modes; `npx tapsmith` execs dist/bin.js
       # directly through the npm bin symlink.
@@ -616,13 +660,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.AUTH_STATE_ARCHIVE }}
-          key: auth-state-ios-${{ env.AUTH_STATE_CACHE_VERSION }}-${{
-            hashFiles('test-app/app/**', 'test-app/assets/**',
-            'test-app/package-lock.json', 'test-app/app.json',
-            'test-app/metro.config.js', 'packages/tapsmith-react-native/src/**',
-            'packages/tapsmith-react-native/package.json',
-            'packages/tapsmith-react-native/tsconfig*.json') }}-${{
-            hashFiles('e2e/tests/auth.setup.ts', 'e2e/fixtures.ts', 'e2e/screens/**') }}
+          key: ${{ needs.gate.outputs.auth-state-key }}
 
       - name: Wait for simulator boot
         run: |
@@ -856,7 +894,7 @@ jobs:
   # `continue-on-error`.
   e2e-multi-device:
     name: Multi-device
-    needs: [ build-sdk, build-daemon, build-agent, build-test-app ]
+    needs: [ gate, build-sdk, build-daemon, build-agent, build-test-app ]
     # Skipped builds are fine here too (see e2e-test).
     if: >-
       !cancelled() && needs.build-sdk.result == 'success'
@@ -905,7 +943,7 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
           # Same normalisation as build-agent's "Resolve Xcode version".
-          echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+          echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')-$(uname -m)" >> "$GITHUB_OUTPUT"
           SIM=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
           echo "Using simulator: $SIM"
           echo "TAPSMITH_IOS_SIMULATOR=$SIM" >> $GITHUB_ENV
@@ -930,11 +968,12 @@ jobs:
           fi
 
       # ─── Fetch build outputs: cache first, artifact on a miss ───
-      # Keys mirror the build jobs' cache steps exactly (see the note above
-      # build-daemon). A build job that ran populated its cache in this same
-      # run, and the gate skips one only when its output is already cached,
-      # so a miss here means a save failed, the entry was evicted after the
-      # gate looked, or (the agent only) this runner's Xcode has no build yet.
+      # The keys are the gate's, as the build jobs use them (see the note
+      # above build-daemon). A build job that ran populated its cache in this
+      # same run, and the gate skips one only when its output is already
+      # cached, so a miss here means a save failed, the entry was evicted after
+      # the gate looked, or (the agent only) this runner's Xcode or arch has no
+      # build yet.
 
       - name: Restore daemon binaries from cache
         id: daemon-cache
@@ -943,7 +982,7 @@ jobs:
           path: |
             packages/tapsmith-core/target/release/tapsmith-core
             packages/tapsmith-core/target/release/tapsmith-ios-hid
-          key: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
+          key: ${{ needs.gate.outputs.daemon-key }}
 
       - name: Download daemon binary
         if: steps.daemon-cache.outputs.cache-hit != 'true' && needs.build-daemon.result == 'success'
@@ -956,15 +995,15 @@ jobs:
         id: agent-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ios-agent/.build-sim
-          key: ios-agent-build-${{ hashFiles('ios-agent/**') }}-${{ steps.xcode.outputs.version }}
+          path: ios-agent/.build-sim/Build/Products
+          key: ${{ needs.gate.outputs.agent-key-prefix }}${{ steps.xcode.outputs.version }}
 
       - name: Download iOS agent
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ios-agent-build
-          path: ios-agent/.build-sim
+          path: ios-agent/.build-sim/Build/Products
 
       # The gate skipped build-agent because a build of these sources is
       # cached for some Xcode, but not for this runner's (a new runner image).
@@ -975,19 +1014,22 @@ jobs:
         run: |
           brew install xcodegen 2>/dev/null || true
           ./create-xcode-project.sh
+          # The runner's arch only, as the SDK's own simulator build does:
+          # a universal build doubles the binaries for an arch no runner uses.
           xcodebuild build-for-testing \
             -project TapsmithAgent.xcodeproj \
             -scheme TapsmithAgentUITests \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath .build-sim \
-            -quiet
+            -quiet \
+            ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=NO
 
       # Concurrent shards race to save the same key; the losers only warn.
       - name: Save iOS agent build to cache
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result != 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ios-agent/.build-sim
+          path: ios-agent/.build-sim/Build/Products
           key: ${{ steps.agent-cache.outputs.cache-primary-key }}
 
       - name: Restore test app from cache
@@ -995,12 +1037,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: e2e/fixtures/TapsmithTestApp.app
-          key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
-            'test-app/package-lock.json', 'test-app/app.json',
-            'test-app/metro.config.js',
-            'packages/tapsmith-react-native/src/**',
-            'packages/tapsmith-react-native/package.json',
-            'packages/tapsmith-react-native/tsconfig*.json') }}
+          key: ${{ needs.gate.outputs.test-app-key }}
 
       - name: Download test app
         if: steps.test-app-cache.outputs.cache-hit != 'true' && needs.build-test-app.result == 'success'
@@ -1024,9 +1061,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packages/tapsmith/dist
-          key: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
-            'ios-agent/TapsmithAgent/**', 'ios-agent/TapsmithAgent.xcodeproj/**',
-            'ios-agent/create-xcode-project.sh', 'ios-agent/Package.swift') }}
+          key: ${{ needs.gate.outputs.sdk-key }}
 
       - name: Download SDK build
         if: steps.sdk-cache.outputs.cache-hit != 'true'
@@ -1081,9 +1116,13 @@ jobs:
           mkdir -p e2e/fixtures
           tar xzf test-app-ios.tar.gz -C e2e/fixtures
 
+      # Production dependencies only: the job runs the prebuilt dist, which
+      # (as published) needs nothing from devDependencies — 172 packages
+      # instead of 387, and 2-3 min less inside the simulator boot's starved
+      # window (PILOT-1133).
       - name: Install SDK dependencies
         working-directory: packages/tapsmith
-        run: npm ci
+        run: npm ci --omit=dev
 
       # Artifacts don't preserve file modes; `npx tapsmith` execs dist/bin.js
       # directly through the npm bin symlink.
