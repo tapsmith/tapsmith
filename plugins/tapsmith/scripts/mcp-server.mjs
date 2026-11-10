@@ -48,6 +48,26 @@ function tapsmithBinFrom(dir) {
   return undefined;
 }
 
+/**
+ * `execArgv` without the inline launcher's own options (`--input-type`, and
+ * `-e`/`--eval` or `-p`/`--print` with its script). Tapsmith forks its
+ * children with the parent's execArgv, and Node refuses to start a file
+ * under `--input-type`.
+ */
+function childExecArgv(execArgv) {
+  const kept = [];
+  for (let i = 0; i < execArgv.length; i++) {
+    const arg = execArgv[i];
+    if (['-e', '--eval', '-p', '--print', '--input-type'].includes(arg)) {
+      i++;
+      continue;
+    }
+    if (/^--(input-type|eval|print)=/.test(arg)) continue;
+    kept.push(arg);
+  }
+  return kept;
+}
+
 /** Folders directly below `dir` that hold a Tapsmith config. */
 function nestedConfigDirs(dir) {
   let entries;
@@ -78,14 +98,16 @@ function locateTapsmith(start) {
     return {
       error:
         `Tapsmith is installed for several projects below ${start} (${nested.map((c) => path.relative(start, c.dir)).join(', ')}). ` +
-        'Set TAPSMITH_PROJECT_DIR to the one the agent should use, in the environment you start the agent from.',
+        'Start the agent from that project\'s folder, or set TAPSMITH_PROJECT_DIR to it in the environment you start ' +
+        'the agent from (Codex passes no such variable on to MCP servers: start Codex from the folder instead).',
     };
   }
   return {
     error:
       `Tapsmith is not installed in ${start}: the plugin runs the project's own Tapsmith, not a global copy. ` +
-      'Install it in the project (npm install -D tapsmith) and restart the agent, or set TAPSMITH_PROJECT_DIR ' +
-      'to the folder whose node_modules has it.',
+      'Install it in the project (npm install -D tapsmith) and restart the agent. If it is installed in another ' +
+      'folder, start the agent from that folder, or set TAPSMITH_PROJECT_DIR to it in the environment you start the ' +
+      'agent from (Codex passes no such variable on to MCP servers: start Codex from the folder instead).',
   };
 }
 
@@ -101,6 +123,8 @@ async function main(extraArgs) {
   }
   process.stderr.write(`tapsmith plugin: starting tapsmith ${found.version} mcp-server in ${found.dir}\n`);
   process.chdir(found.dir);
+  // In place: Node and Tapsmith read this array when they fork.
+  process.execArgv.splice(0, process.execArgv.length, ...childExecArgv(process.execArgv));
   process.argv = [process.execPath, found.bin, 'mcp-server', ...extraArgs];
   await import(pathToFileURL(found.bin).href);
 }

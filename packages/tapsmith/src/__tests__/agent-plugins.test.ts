@@ -10,7 +10,7 @@ import * as os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { detectCodingAgents, isOnPath } from '../agent-plugins.js';
-import { locateTapsmith, projectDir } from '../../../../plugins/source/mcp-launcher.mjs';
+import { childExecArgv, locateTapsmith, projectDir } from '../../../../plugins/source/mcp-launcher.mjs';
 import { generatedFiles, staleFiles } from '../../../../plugins/source/sync.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '../../../..');
@@ -46,9 +46,21 @@ function installFakeTapsmith(dir: string, version = '9.9.9'): string {
     exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
   }));
   write(path.join(dir, 'node_modules/tapsmith/dist/index.js'), 'export {};\n');
+  // An ES module child, forked as the real server forks its discovery and run
+  // children: with the parent's execArgv.
+  write(path.join(dir, 'node_modules/tapsmith/dist/child.js'), 'process.exit(0);\n');
   return write(
     path.join(dir, 'node_modules/tapsmith/dist/bin.js'),
-    'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), bin: process.argv[1] }));\n',
+    [
+      "import { fork } from 'node:child_process';",
+      "const child = fork(new URL('./child.js', import.meta.url).pathname, { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });",
+      "let childErr = '';",
+      "child.stderr.on('data', (d) => { childErr += d; });",
+      "child.on('exit', (childExit) => process.stdout.write(JSON.stringify({",
+      "  args: process.argv.slice(2), cwd: process.cwd(), bin: process.argv[1], childExit, childErr,",
+      "})));",
+      '',
+    ].join('\n'),
   );
 }
 
@@ -119,6 +131,15 @@ describe('projectDir', () => {
   });
 });
 
+describe('childExecArgv', () => {
+  it("drops the inline launcher's --input-type and -e script, keeping every other option", () => {
+    expect(childExecArgv(['--input-type=module', '-e', 'code', '--no-warnings'])).toEqual(['--no-warnings']);
+    expect(childExecArgv(['--input-type', 'module', '--eval', 'code'])).toEqual([]);
+    expect(childExecArgv(['--eval=code', '-p', 'x', '--print=y', '--max-old-space-size=4096'])).toEqual(['--max-old-space-size=4096']);
+    expect(childExecArgv([])).toEqual([]);
+  });
+});
+
 describe('locateTapsmith', () => {
   it('finds the tapsmith the project resolves, from a subfolder too', () => {
     const bin = installFakeTapsmith(tmp);
@@ -165,7 +186,16 @@ describe.each(CONFIGS)('the plugin MCP server command in %s', (configFile) => {
     expect(run.stderr).toContain(`starting tapsmith 9.9.9 mcp-server in ${tmp}`);
     expect(run.status).toBe(0);
     // stdout is the MCP protocol: only the server writes to it.
-    expect(JSON.parse(run.stdout)).toEqual({ args: ['mcp-server', '--config', 'tapsmith.config.ios.mjs'], cwd: tmp, bin });
+    expect(JSON.parse(run.stdout)).toMatchObject({ args: ['mcp-server', '--config', 'tapsmith.config.ios.mjs'], cwd: tmp, bin });
+  });
+
+  it('lets the server fork its children: none inherits the launcher\'s own Node options', () => {
+    installFakeTapsmith(tmp);
+    const run = runPluginServer(configFile, tmp);
+    expect(run.status).toBe(0);
+    const out = JSON.parse(run.stdout) as { childExit: number; childErr: string };
+    expect(out.childErr).toBe('');
+    expect(out.childExit).toBe(0);
   });
 
   it('passes no extra arguments when there are none', () => {
