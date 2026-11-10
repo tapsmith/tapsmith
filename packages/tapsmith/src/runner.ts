@@ -425,7 +425,8 @@ function _warnUnfiredRoutes(
       'the network proxy started at the beginning of this file, after the app was already running ' +
         '(the session\'s first test that mocks was written after it started, or the app was launched before ' +
         'the session), and connections the app had already opened bypass it until the app is relaunched ' +
-        '(restarting watch or UI mode starts the proxy before the app launches)',
+        '(relaunch the app — a clear reset or device.restartApp() — or restart watch or UI mode, which then ' +
+        'starts the proxy before the app launches)',
     );
   }
   if (reasons.proxyStartedLate === 'mid-test') {
