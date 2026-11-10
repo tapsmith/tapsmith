@@ -23,9 +23,9 @@ enum IdleSettle {
     static let maxWaitSeconds: TimeInterval = 0.25
 
     /// Room left before the daemon's read deadline: a sample started just
-    /// before the wait's deadline runs past it (a whole-screen screenshot,
-    /// where the region one is unavailable, takes ~120 ms), and the answer
-    /// must still reach the daemon in time.
+    /// before the wait's deadline runs past it (one capture takes ~15–20 ms,
+    /// more on a loaded machine), and the answer must still reach the daemon
+    /// in time.
     static let readDeadlineMarginSeconds: TimeInterval = 0.2
 
     /// When the wait must end: `timeoutMs` (at most `maxWaitSeconds`) from
