@@ -54,6 +54,13 @@ expect("an empty region is not captured",
        RegionScreenshot.capture(.zero, of: NSObject()) == nil)
 expect("a null region is not captured",
        RegionScreenshot.capture(.null, of: NSObject()) == nil)
+expect("an empty region is not captured as JPEG",
+       RegionScreenshot.captureJPEGData(.zero, of: NSObject()) == nil)
+// The idle wait compares these bytes; without the encoding it waits blind.
+if case .success = RegionScreenshot.api {
+    expect("the JPEG encoding is made on the installed XCTest",
+           RegionScreenshot.jpegEncodingAvailable)
+}
 
 func caseOf(_ result: Result<RegionScreenshot.API, RegionScreenshot.Unavailable>) -> RegionScreenshot.Unavailable? {
     if case .failure(let why) = result { return why }

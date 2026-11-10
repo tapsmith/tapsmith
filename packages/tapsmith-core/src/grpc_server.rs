@@ -922,8 +922,9 @@ impl TapsmithServiceImpl {
                 .unwrap_or_else(|| "iOS agent probe failed after relaunch".to_string()));
         }
 
-        // Verify the accessibility tree has content — WaitForIdle on iOS is
-        // just a brief sleep, so the app may still be loading its first screen.
+        // Verify the accessibility tree has content — WaitForIdle on iOS
+        // waits a quarter of a second at most for the screen to hold still,
+        // so the app may still be loading its first screen.
         if wait_for_idle {
             let hierarchy_timeout = idle_timeout_ms.min(5_000);
             let hierarchy = self

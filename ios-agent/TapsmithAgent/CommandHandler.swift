@@ -30,6 +30,10 @@ class CommandHandler {
     /// The screen as the last touch plan's app snapshot saw it (it follows a
     /// rotation, unlike the cached `screenSize`); nil before a plan read one.
     private var plannedScreenSize: CGSize?
+    /// The whole screen in native portrait space, as `waitForIdle` samples it
+    /// (`IdleSettle.screenRegion`). Kept across a rotation, which clears the
+    /// cached screen size but leaves the native space as it was.
+    private var idleRegion: CGRect?
 
     // Interactive-mirror live-drag: iOS can't stream touches, so buffer the
     // path during the drag and dispatch it as one gesture on touchUp.
@@ -904,6 +908,25 @@ class CommandHandler {
         case .offScreen:
             return .unreadable
         }
+    }
+
+    /// `waitForIdle`: wait until the screen holds still, a quarter of a
+    /// second at most (`IdleSettle`).
+    private func waitForScreenIdle(timeoutMs: Int64) {
+        let deadline = IdleSettle.deadline(now: Date(), timeoutMs: timeoutMs, readDeadline: commandReadDeadline)
+        // Only a screen size already cached: reading it afresh queries the
+        // app's window, which can wait on the app.
+        if let region = IdleSettle.screenRegion(actionExecutor.cachedScreenSize) { idleRegion = region }
+        guard let region = idleRegion else {
+            IdleSettle.sleepUntil(deadline, now: Date.init, sleep: Thread.sleep(forTimeInterval:))
+            return
+        }
+        IdleSettle.wait(
+            deadline: deadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            sample: { RegionScreenshot.captureJPEGData(region, of: XCUIScreen.main) }
+        )
     }
 
     private func refuseIfLate(_ clock: TouchPlanClock) throws {
@@ -2704,7 +2727,7 @@ class CommandHandler {
 
         case "waitForIdle":
             let timeout = params["timeout"] as? Int64 ?? 5000
-            waitEngine.waitForIdle(timeoutMs: timeout)
+            waitForScreenIdle(timeoutMs: timeout)
             return ["success": true]
 
         case "waitForElement":

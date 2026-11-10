@@ -71,6 +71,14 @@ xcrun swiftc -sdk "$SDK" \
 "$OUT/scroll-step-watch-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/IdleSettleTests/main.swift \
+  TapsmithAgent/IdleSettle.swift \
+  TapsmithAgent/TouchSettle.swift \
+  TapsmithAgent/TouchPlanClock.swift \
+  -o "$OUT/idle-settle-tests"
+"$OUT/idle-settle-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/LaunchAccessibilityCheckTests/main.swift \
   TapsmithAgent/LaunchAccessibilityCheck.swift \
   -o "$OUT/launch-accessibility-check-tests"
