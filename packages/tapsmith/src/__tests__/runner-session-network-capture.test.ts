@@ -146,18 +146,25 @@ describe('runTestFile — network capture at session start (PILOT-1013)', () => 
     expect(device._networkProxyRunning).toBe(false);
   });
 
-  it('tries once per device: a failed start is not retried at the next file, only on demand', async () => {
-    const { device, startNetworkCapture } = makeDevice([{ success: false, errorMessage: 'no redirector' }]);
+  it('tries once per device and stays silent: a failed start is left to the on-demand start of a test that needs it', async () => {
+    const { device, startNetworkCapture } = makeDevice([
+      { success: false, errorMessage: 'no redirector' },
+      { success: false, errorMessage: 'no redirector' },
+    ]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const a = writeFile('a.test.mjs', `test('a', async () => {});`);
       const b = writeFile('b.test.mjs', `test('b', async () => {});`);
-
       await runTestFile(a, makeOpts([device], true));
       await runTestFile(b, makeOpts([device], true));
-
       expect(startNetworkCapture).toHaveBeenCalledTimes(1);
-      // The failure is reported as any failed start is.
+      // No test needed the proxy: nothing to say.
+      expect(warn.mock.calls.flat().join('\n')).not.toContain('no redirector');
+
+      const c = writeFile('c.test.mjs', `test('c', async ({ device }) => { await device.route('**', (r) => r.abort()).catch(() => {}); });`);
+      await runTestFile(c, makeOpts([device], true));
+      // The test that needs it tries again, and says why it failed.
+      expect(startNetworkCapture).toHaveBeenCalledTimes(2);
       expect(warn.mock.calls.flat().join('\n')).toContain('no redirector');
     } finally {
       warn.mockRestore();
@@ -174,17 +181,20 @@ describe('runTestFile — network capture at session start (PILOT-1013)', () => 
     expect(startNetworkCapture).not.toHaveBeenCalled();
   });
 
-  it("reports the session open's failed start at the first file, and does not start it again", async () => {
-    const { device, startNetworkCapture } = makeDevice([{ success: false, errorMessage: 'redirector not approved' }]);
+  it("reports a running proxy's warnings in the first test, from its per-test start, not at the session start", async () => {
+    const { device } = makeDevice([
+      { success: true, errorMessage: 'IPv6 bypasses capture' },
+      { success: true, errorMessage: 'IPv6 bypasses capture' },
+    ]);
     await device._startNetworkProxyForSession({ requireIsolation: false });
-    expect(startNetworkCapture).toHaveBeenCalledTimes(1);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warned: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { warned.push(`${g.__pilot1013!.length}:${args.join(' ')}`); });
     try {
-      const filePath = writeFile('a.test.mjs', `test('a', async () => {});`);
+      const filePath = writeFile('a.test.mjs', `test('a', async () => { globalThis.__pilot1013.push('test'); });`);
       await runTestFile(filePath, makeOpts([device], true));
-
-      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls.flat().join('\n')).toContain('redirector not approved');
+      // Printed by the second start (the first test's), before its body ran.
+      expect(warned.some((w) => w.startsWith('2:') && w.includes('IPv6 bypasses capture'))).toBe(true);
+      expect(warned.some((w) => w.startsWith('1:'))).toBe(false);
     } finally {
       warn.mockRestore();
     }

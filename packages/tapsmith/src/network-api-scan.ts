@@ -31,16 +31,17 @@ const NETWORK_EVENTS = new Set(['request', 'response']);
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json']);
 
 /**
- * Leaves imports esbuild has no loader for (images, styles, fonts…)
- * unresolved: they hold no test code, and a loader error would end the scan.
+ * Loads the files esbuild has no loader for (images, styles, fonts…) as
+ * empty: they hold no test code, and a loader error would end the scan.
+ * Decided on the resolved path, not the specifier — `./login.page` is a
+ * TypeScript module once resolved, not a `.page` asset.
  */
-const externalAssets: Plugin = {
-  name: 'tapsmith-external-assets',
+const emptyAssets: Plugin = {
+  name: 'tapsmith-empty-assets',
   setup(b) {
-    b.onResolve({ filter: /.*/ }, (args) => {
-      const ext = path.extname(args.path);
-      if (ext === '' || CODE_EXTENSIONS.has(ext)) return undefined;
-      return { path: args.path, external: true };
+    b.onLoad({ filter: /.*/ }, (args) => {
+      if (CODE_EXTENSIONS.has(path.extname(args.path))) return undefined;
+      return { contents: '', loader: 'js' };
     });
   },
 };
@@ -57,7 +58,7 @@ async function localModules(entries: string[]): Promise<string[]> {
     platform: 'node',
     packages: 'external',
     logLevel: 'silent',
-    plugins: [externalAssets],
+    plugins: [emptyAssets],
   });
   const cwd = process.cwd();
   return Object.keys(result.metafile.inputs)

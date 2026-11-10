@@ -221,6 +221,13 @@ pub struct TapsmithServiceImpl {
     /// reported on every `StartNetworkCapture` response — including the
     /// per-test reuse path, which would otherwise lose it after the first test.
     proxy_route: Arc<RwLock<proto::NetworkCaptureRoute>>,
+    /// The non-fatal warnings the running proxy's first start returned (an
+    /// IPv6 bypass, the system HTTP proxy fallback, a CA install that failed,
+    /// …), repeated on every reuse: the start that sees them first may be a
+    /// process whose warnings reach nobody — the SDK now starts the proxy as
+    /// the device session opens, and a watch or MCP re-run, or a UI worker,
+    /// reuses it from a fresh process (PILOT-1013). The SDK prints each once.
+    proxy_start_warnings: Arc<RwLock<Vec<String>>>,
     /// The last Network Extension failure. For `NE_RETRY_AFTER`, later
     /// `start_network_capture` calls skip the 10s `IosRedirect::start` timeout
     /// and go straight to the system-proxy fallback, or to "capture disabled"
@@ -496,6 +503,7 @@ impl TapsmithServiceImpl {
             #[cfg(target_os = "macos")]
             ios_system_proxy: Arc::new(RwLock::new(None)),
             proxy_route: Arc::new(RwLock::new(proto::NetworkCaptureRoute::Unspecified)),
+            proxy_start_warnings: Arc::new(RwLock::new(Vec::new())),
             #[cfg(target_os = "macos")]
             ios_ne_unavailable: Arc::new(RwLock::new(None)),
             ios_app_container_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -1922,6 +1930,7 @@ impl TapsmithServiceImpl {
         self.proxy_http_ports.write().await.clear();
         let used_iptables = std::mem::replace(&mut *self.proxy_uses_iptables.write().await, false);
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
+        self.proxy_start_warnings.write().await.clear();
         drop(proxy_guard);
 
         // Reset macOS system proxy if we set it as a fallback.
@@ -5028,12 +5037,13 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             };
             existing.set_android_emulator(android_emulator).await;
             existing.reset_capture_state().await;
-            // Still tunneling because the device cannot trust the CA: repeat
-            // why, since a watch or MCP re-run starts in a fresh process that
-            // never saw the first start's warning (the runner dedupes it).
-            if let Some(warning) = existing.tunnel_all_tls_warning().await {
-                warnings.push(warning);
-            }
+            // Repeat what the first start warned about, since the caller
+            // may be a fresh process that never saw it (a watch or MCP re-run,
+            // a UI worker); the runner dedupes. That includes still tunneling
+            // all TLS because the device cannot trust the CA.
+            let tunnel_warning = existing.tunnel_all_tls_warning().await;
+            let first_start = self.proxy_start_warnings.read().await.clone();
+            repeat_start_warnings(&mut warnings, &first_start, tunnel_warning);
             // Clone out of the read guard before awaiting — holding a
             // RwLock guard across an await risks starving writers.
             let passthrough_hosts = self.passthrough_hosts.read().await.clone();
@@ -5207,6 +5217,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         *self.proxy_device_serial.write().await = Some(serial);
         *self.proxy_platform.write().await = Some(platform);
         *self.proxy_route.write().await = route;
+        *self.proxy_start_warnings.write().await = warnings.clone();
 
         Ok(Response::new(proto::StartNetworkCaptureResponse {
             request_id,
@@ -5333,6 +5344,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             }));
         };
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
+        self.proxy_start_warnings.write().await.clear();
         let serial = self.proxy_device_serial.write().await.take();
         let platform = self.proxy_platform.write().await.take();
         let reverse_ports = capture_reverse_ports(
@@ -7319,6 +7331,20 @@ fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
     }
 }
 
+/// Add to a reused proxy's `warnings` what its first start warned about
+/// (`first_start`) and why it still tunnels all TLS, each once (PILOT-1013).
+fn repeat_start_warnings(
+    warnings: &mut Vec<String>,
+    first_start: &[String],
+    tunnel_all_tls: Option<String>,
+) {
+    for warning in first_start.iter().cloned().chain(tunnel_all_tls) {
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+}
+
 /// Capture-start warnings as one line each, newline-separated. The runner
 /// dedupes line by line (the set of warnings differs between a fresh start and
 /// the per-test reuse of a running proxy), so a warning that embeds multi-line
@@ -9221,6 +9247,30 @@ mod tests {
             capture_port_update(&[8080], &[], true, Some(1234)),
             Ok(Some(1234))
         );
+    }
+
+    #[test]
+    fn a_reused_proxy_repeats_its_first_start_warnings_once() {
+        let mut warnings = vec!["port update".to_string()];
+        repeat_start_warnings(
+            &mut warnings,
+            &[
+                "IPv6 bypasses capture".to_string(),
+                "CA not trusted".to_string(),
+            ],
+            Some("CA not trusted".to_string()),
+        );
+        assert_eq!(
+            warnings,
+            vec![
+                "port update".to_string(),
+                "IPv6 bypasses capture".to_string(),
+                "CA not trusted".to_string(),
+            ]
+        );
+        let mut none = Vec::new();
+        repeat_start_warnings(&mut none, &[], None);
+        assert!(none.is_empty());
     }
 
     #[test]

@@ -70,14 +70,6 @@ const WEBVIEW_CONNECT_LOG_LIMIT = 80;
 // ─── Pending network waiters (PILOT-543) ───
 
 /** A waitForRequest/waitForResponse still waiting, and how to end it early. */
-/**
- * @internal — How a network capture start went: the daemon's answer, or the
- * error the call threw (PILOT-1013).
- */
-export type NetworkCaptureStartOutcome =
-  | { res: { proxyPort: number; success: boolean; errorMessage: string } }
-  | { err: unknown };
-
 interface PendingWaiter {
   readonly seq: number;
   cancel(): void;
@@ -228,8 +220,6 @@ export class Device {
   private _proxyStartedOnDemand = false;
   /** Whether the session-start proxy start (PILOT-1013) was already tried. */
   private _sessionNetworkStartTried = false;
-  /** How the session open's proxy start went, until the runner reports it. */
-  private _sessionNetworkStartOutcome: NetworkCaptureStartOutcome | undefined;
   /** waitForRequest/waitForResponse calls still waiting. */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
@@ -1153,25 +1143,22 @@ export class Device {
   }
 
   /**
-   * @internal — Start the network proxy as the device session opens, before
-   * the app launches (PILOT-1013), unless a start was already tried. Never
-   * throws: the outcome is kept for the runner, whose first file reports it
-   * the way it reports any start ({@link _takeSessionNetworkStartOutcome}).
+   * @internal — Start the network proxy for the session (PILOT-1013), as the
+   * device session opens or before the runner's first file, unless a start
+   * was already tried. Never throws, and says nothing: outside a test there
+   * is no one to tell on every run path (a UI worker's or MCP child's stderr
+   * reaches no user). What the start warns about is told by the start at
+   * each test's beginning — the daemon repeats a running proxy's first-start
+   * warnings — and a start that failed is tried again, and reported, by the
+   * on-demand start of a test that needs the proxy.
    */
   async _startNetworkProxyForSession(options: { requireIsolation: boolean; httpPorts?: number[] }): Promise<void> {
     if (!this._claimSessionNetworkStart()) return;
     try {
-      this._sessionNetworkStartOutcome = { res: await this._startNetworkCapture(options) };
-    } catch (err) {
-      this._sessionNetworkStartOutcome = { err };
+      await this._startNetworkCapture(options);
+    } catch {
+      // Recorded as `_networkCaptureError`; see above.
     }
-  }
-
-  /** @internal — The outcome {@link _startNetworkProxyForSession} kept, once. */
-  _takeSessionNetworkStartOutcome(): NetworkCaptureStartOutcome | undefined {
-    const outcome = this._sessionNetworkStartOutcome;
-    this._sessionNetworkStartOutcome = undefined;
-    return outcome;
   }
 
   /**

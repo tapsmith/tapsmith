@@ -78,6 +78,15 @@ test('a', async ({ device }) => { await mockApi(device) })
     expect(await testFilesUseNetworkApis([f])).toBe(true);
   });
 
+  it('follows an extensionless import of a dotted module name (a page object)', async () => {
+    write('screens/login.page.ts', `export async function mock(d: any) { await d.route('**/login', () => {}) }\n`);
+    write('fixtures/api.mock.ts', `export const wait = (d: any) => d.waitForResponse('**/api')\n`);
+    const a = write('a.test.ts', `${header}import { mock } from './screens/login.page'\ntest('a', async ({ device }) => { await mock(device) })\n`);
+    const b = write('b.test.ts', `${header}import { wait } from './fixtures/api.mock'\ntest('b', async ({ device }) => { await wait(device) })\n`);
+    expect(await testFilesUseNetworkApis([a])).toBe(true);
+    expect(await testFilesUseNetworkApis([b])).toBe(true);
+  });
+
   it('follows imports transitively (a fixture file that imports a screen object)', async () => {
     write('screens/api.ts', `export class ApiScreen { constructor(private d: any) {}
   async waitForPosts() { return this.d.waitForResponse('**/posts') } }

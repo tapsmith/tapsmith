@@ -17,7 +17,7 @@ import * as os from 'node:os';
 import { NetworkSnapshots } from './trace/network-snapshots.js';
 import { decodeHttpBody, headerValue } from './http-body.js';
 import type { TapsmithConfig, Platform, UseOptions } from './config.js';
-import { pendingWaiterMark, type Device, type NetworkCaptureStartOutcome } from './device.js';
+import { pendingWaiterMark, type Device } from './device.js';
 import type { TapsmithReporter } from './reporter.js';
 import { fileLoadFailureTitle, loadErrorForReport } from './load-failure.js';
 import { APIRequestContext } from './api-request.js';
@@ -327,22 +327,10 @@ function _warnRoutesWithoutProxy(fullName: string, deviceName: string | undefine
  * daemon confirmed capture.
  */
 async function startNetworkCaptureOn(d: Device, multiDevice: boolean, httpPorts: number[] | undefined): Promise<boolean> {
-  try {
-    return reportCaptureStart(d, multiDevice, { res: await d._startNetworkCapture({ requireIsolation: multiDevice, httpPorts }) });
-  } catch (err) {
-    return reportCaptureStart(d, multiDevice, { err });
-  }
-}
-
-/**
- * Warn about one capture start's outcome as {@link startNetworkCaptureOn}
- * does, and say whether the daemon confirmed capture.
- */
-function reportCaptureStart(d: Device, multiDevice: boolean, outcome: NetworkCaptureStartOutcome): boolean {
   const forDevice = (msg: string): string =>
     multiDevice && d._traceDeviceId ? `[${d._traceDeviceId}] ${msg}` : msg;
-  if ('res' in outcome) {
-    const { res } = outcome;
+  try {
+    const res = await d._startNetworkCapture({ requireIsolation: multiDevice, httpPorts });
     if (!res.success && res.errorMessage) {
       _warnCaptureOnce('Network capture disabled', forDevice(res.errorMessage));
     } else if (res.errorMessage) {
@@ -355,13 +343,13 @@ function reportCaptureStart(d: Device, multiDevice: boolean, outcome: NetworkCap
       }
     }
     return res.success;
+  } catch (err) {
+    _warnCaptureOnce(
+      'Network capture failed to start',
+      forDevice(err instanceof Error ? err.message : String(err)),
+    );
+    return false;
   }
-  const { err } = outcome;
-  _warnCaptureOnce(
-    'Network capture failed to start',
-    forDevice(err instanceof Error ? err.message : String(err)),
-  );
-  return false;
 }
 
 /**
@@ -390,23 +378,17 @@ function armOnDemandNetworkCapture(opts: RunOptions): void {
  * already talked to still sees its requests. Once per device — usually the
  * session open already did it, before the app launched; this covers sessions
  * that adopted a running app (watch and MCP re-runs, an adopted UI-mode
- * primary). A failed start warns as any start does and is left to the
- * on-demand start of a test that needs it.
+ * primary). Silent, like the open's start: the start at the beginning of
+ * each test reports a running proxy's warnings inside that test, and a failed
+ * start is tried again, and reported, by the on-demand start of a test that
+ * needs it.
  */
 async function startSessionNetworkCapture(opts: RunOptions): Promise<void> {
   if (!opts.networkApisInRun) return;
   const devices = allDevices(opts);
   const httpPorts = resolveTraceConfig(opts.config.trace).networkHttpPorts;
   for (const d of devices) {
-    // Started by the session open, outside any test file: reported here,
-    // where the runner's warnings reach the user on every run path.
-    const opened = d._takeSessionNetworkStartOutcome?.();
-    if (opened) {
-      reportCaptureStart(d, devices.length > 1, opened);
-      continue;
-    }
-    if (!d._claimSessionNetworkStart?.()) continue;
-    await startNetworkCaptureOn(d, devices.length > 1, httpPorts);
+    await d._startNetworkProxyForSession?.({ requireIsolation: devices.length > 1, httpPorts });
   }
 }
 

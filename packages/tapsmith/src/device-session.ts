@@ -701,8 +701,8 @@ export async function openDeviceSession(
 
     // Before the install, the agent and the launch, so the connections the
     // app opens go through the proxy (on an iOS simulator, once the Network
-    // Extension has picked up the app's process, within about 2 s of launch). The outcome is reported by
-    // the runner at its first file, where warnings reach every run path.
+    // Extension has picked up the app's process, within about 2 s of launch).
+    // Silent: see `Device._startNetworkProxyForSession`.
     if (opts.startNetworkProxy && !opts.adopt) {
       progress('starting the network proxy');
       await device._startNetworkProxyForSession({
