@@ -598,10 +598,19 @@ impl DeviceBackend for IosBackend<'_> {
                     "display is not rendering and an app relaunch cannot recover a dead \
                      compositor; rebooting the simulator and restarting the agent"
                 );
+                // The HID helper's connection to the simulator does not
+                // survive the reboot: it would answer `err send failed` to
+                // every touch after it (PILOT-1072). Stop it now; a new one
+                // starts once the simulator is back.
+                self.svc.hid_injector.shutdown(&serial).await;
                 let _ = ios::device::shutdown_simulator(&serial).await;
                 if let Err(e) = ios::device::boot_simulator(&serial).await {
                     warn!(%serial, error = %e, "simulator reboot failed; continuing with re-delivery");
                 } else {
+                    let hid = Arc::clone(&self.svc.hid_injector);
+                    let udid = serial.to_string();
+                    let epoch = hid.stop_epoch(&udid);
+                    tokio::spawn(async move { hid.warm(&udid, epoch).await });
                     // Give SpringBoard a moment past `Booted` before
                     // asking xcodebuild to install/launch the runner.
                     tokio::time::sleep(Duration::from_secs(5)).await;

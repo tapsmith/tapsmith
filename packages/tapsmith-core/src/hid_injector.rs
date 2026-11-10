@@ -14,7 +14,9 @@
 //! A helper that stops answering (no reply by a waited line's deadline, or
 //! its output ends before the reply) or whose stdin breaks is evicted: killed
 //! and dropped, so the next touch starts a new one instead of queueing behind
-//! the stuck one (PILOT-1036). The new helper's first line lifts at the last
+//! the stuck one (PILOT-1036). So is one that answers `err` to a waited line
+//! and then fails a lone lift too: its connection to the simulator is gone, as
+//! after a simulator reboot (PILOT-1072). The new helper's first line lifts at the last
 //! point the old one was sent, in case it left a finger down. A line that
 //! never reached the helper (a broken pipe) is retried once on its
 //! replacement; one that did reach it is not, since part of it may have
@@ -86,6 +88,10 @@ const MAX_HELPER_RESTARTS: u32 = 3;
 /// pipe has filled: it is stuck, and holding the map lock on it would hold
 /// up every device's touches.
 const WRITE_BOUND: Duration = Duration::from_secs(2);
+
+/// How long the lone lift that checks a helper after an `err` reply may take:
+/// the helper waits up to 2 s to confirm a lift.
+const LIFT_CHECK_DEADLINE: Duration = Duration::from_secs(3);
 
 /// How long a touch that has to start the helper waits for it.
 const TOUCH_START_BOUND: Duration = Duration::from_secs(5);
@@ -590,11 +596,16 @@ impl HidInjector {
         };
         let failure = match tokio::time::timeout(deadline, rx).await {
             Ok(Ok(reply)) if reply == "ok" => return Ok(()),
-            // Answering: the helper works, and reported this line failed.
+            // Answering, and reported this line failed: check the helper can
+            // still touch the simulator at all.
             Ok(Ok(reply)) => {
-                return Err(HidSendError::Failed(format!(
-                    "the iOS HID helper reported: {reply}"
-                )))
+                let failure = format!("the iOS HID helper reported: {reply}");
+                return Err(HidSendError::Failed(
+                    match self.check_after_error(udid, generation, &reply).await {
+                        Some(note) => format!("{failure}; {note}"),
+                        None => failure,
+                    },
+                ));
             }
             Ok(Err(_)) => "the iOS HID helper exited before answering".to_string(),
             Err(_) => format!(
@@ -609,6 +620,32 @@ impl HidInjector {
                 None => failure,
             },
         ))
+    }
+
+    /// After helper `generation` answered `err` to a line, ask it for a lone
+    /// lift (`c`): it presses nothing, and lifts whatever the failed line may
+    /// have left down. A helper whose connection to the simulator is gone
+    /// fails that too: one started before the simulator rebooted answers
+    /// `err send failed` to every line, so every later touch of the run would
+    /// fail (PILOT-1072). It is evicted, and the next touch starts a new one.
+    /// A helper that lifts is kept: one failed line on a loaded host is not a
+    /// broken helper. Returns what the caller's error should add.
+    async fn check_after_error(&self, udid: &str, generation: u64, reply: &str) -> Option<String> {
+        let (tx, rx) = oneshot::channel();
+        match self.write_line(udid, "c", Some(tx)).await {
+            Ok(g) if g == generation => {}
+            // Replaced or gone meanwhile (a broken pipe evicts it): nothing
+            // left to check.
+            _ => return None,
+        }
+        let why = match tokio::time::timeout(LIFT_CHECK_DEADLINE, rx).await {
+            Ok(Ok(lift)) if lift == "ok" => return None,
+            Ok(Ok(lift)) => format!("it answered `{reply}`, then `{lift}` to a lone lift"),
+            Ok(Err(_)) => format!("it answered `{reply}`, then exited"),
+            Err(_) => format!("it answered `{reply}`, then did not answer a lone lift"),
+        };
+        let mut map = self.helpers.lock().await;
+        self.evict_locked(&mut map, udid, generation, &why)
     }
 
     /// Write `line` to `udid`'s helper; Ok with the helper's generation.
@@ -818,6 +855,76 @@ mod tests {
             other => panic!("expected the helper's error, got {other:?}"),
         }
         injector.shutdown("UDID-B").await;
+    }
+
+    #[tokio::test]
+    async fn a_helper_that_reports_one_failure_but_still_lifts_is_kept() {
+        // A tap can fail on a healthy helper (a lift confirmed late on a
+        // loaded host): its lone lift still goes through, so it stays.
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let lines = log.path().join("lines");
+        let (_dir, path) = stub_helper(&format!(
+            "echo start >> '{s}'\necho 'ready 1 1 1'\nwhile IFS= read -r line; do \
+             echo \"$line\" >> '{l}'; case \"$line\" in t1*) echo 'err send failed';; \
+             *) echo ok;; esac; done\n",
+            s = starts.display(),
+            l = lines.display(),
+        ));
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-K").await.unwrap();
+        match injector
+            .send_and_wait("UDID-K", "t1 10 20 10", Duration::from_secs(5))
+            .await
+        {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("send failed"), "{msg}");
+                assert!(!msg.contains("stopped"), "{msg}");
+            }
+            other => panic!("expected the helper's error, got {other:?}"),
+        }
+        assert!(injector.helpers.lock().await.contains_key("UDID-K"));
+        injector.ensure("UDID-K").await.unwrap();
+        assert_eq!(start_count(&starts), 1);
+        assert_eq!(logged_lines(log.path()), vec!["t1 10 20 10", "c"]);
+        injector.shutdown("UDID-K").await;
+    }
+
+    #[tokio::test]
+    async fn a_helper_whose_simulator_connection_broke_is_replaced() {
+        // PILOT-1072: after a simulator reboot, a helper started before it
+        // answers `err send failed` to every line, lifts included. It is
+        // replaced, so the next touch goes through a new connection instead
+        // of every later tap of the run failing.
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = stub_helper(&format!(
+            "echo start >> '{s}'\necho 'ready 1 1 1'\n\
+             if [ \"$(wc -l < '{s}')\" -eq 1 ]; then \
+             while IFS= read -r line; do echo 'err send failed'; done; fi\n\
+             while IFS= read -r line; do echo ok; done\n",
+            s = starts.display(),
+        ));
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-R").await.unwrap();
+        match injector
+            .send_and_wait("UDID-R", "t1 10 20 10", Duration::from_secs(5))
+            .await
+        {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("send failed"), "{msg}");
+                assert!(msg.contains("next touch starts a new one"), "{msg}");
+            }
+            other => panic!("expected the helper's error, got {other:?}"),
+        }
+        assert!(!injector.helpers.lock().await.contains_key("UDID-R"));
+        injector.ensure("UDID-R").await.unwrap();
+        injector
+            .send_and_wait("UDID-R", "t1 10 20 10", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(start_count(&starts), 2);
+        injector.shutdown("UDID-R").await;
     }
 
     #[tokio::test]
