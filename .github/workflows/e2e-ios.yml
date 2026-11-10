@@ -1105,8 +1105,9 @@ jobs:
       # it is warm before the tests start — cloning a cold one after the
       # primary was up took 5 min to boot and then outlasted the agent start
       # timeout on these 3-core runners. It boots after the cache restores on
-      # purpose: two simulators booting during them starved `hashFiles()` past
-      # its 120 s limit.
+      # purpose: two simulators booting during them once starved the restores'
+      # `hashFiles()` past its 120 s limit. The keys now come from the gate,
+      # but two booting simulators still slow everything that runs beside them.
       - name: Boot the second simulator
         run: xcrun simctl boot "$TAPSMITH_IOS_UDID2" 2>/dev/null || true
 

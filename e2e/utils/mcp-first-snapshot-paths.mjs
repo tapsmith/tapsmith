@@ -21,18 +21,36 @@ import { fileURLToPath } from "node:url"
 
 /**
  * Path prefixes the check guards. A trailing `/` means "anything under".
- * Keep this list and the PR description of PILOT-462 in step.
+ *
+ * Only what the PILOT-462 path runs through: the daemon's iOS clearData,
+ * reset and restore (ios/ and the iOS backend), the agent's startup
+ * accessibility probe and relaunch, its dump error and XCTest issue relay,
+ * and the MCP server the check drives. Code every E2E test exercises anyway
+ * (the generic gRPC dispatch in grpc_server.rs, the agent transport in
+ * agent_comms.rs, the Android backend, the agent's locator, touch and
+ * keyboard code) is left out: replayed over the 175 PRs merged from
+ * Oct 10 to Nov 10 2026, the wider list ran the check on 80 of them and
+ * this one on 46 (PILOT-1133). Push to main and manual runs still run it
+ * whatever changed, as the backstop.
  */
 export const GUARDED_PATHS = [
-  // Simulator data-container clearing and app-state restore, agent launch.
+  // Simulator data-container clearing and app-state restore, agent launch
+  // and its launch gate.
   "packages/tapsmith-core/src/ios/",
-  // Where the daemon wires clearData, resets and restore to the ios/ helpers.
-  "packages/tapsmith-core/src/grpc_server.rs",
-  // ...and the platform backends those handlers call.
-  "packages/tapsmith-core/src/grpc_server/",
-  "packages/tapsmith-core/src/agent_comms.rs",
-  // The XCUITest agent: the startup accessibility check and the dump error.
-  "ios-agent/",
+  // The iOS backend the daemon's clearData, reset and restore handlers call.
+  // (grpc_server.rs only dispatches to a platform backend.)
+  "packages/tapsmith-core/src/grpc_server/ios_backend.rs",
+  // The XCUITest agent's startup: the launch gate, the accessibility probe
+  // (with the ObjC exception catcher it runs under) and the relaunch...
+  "ios-agent/TapsmithAgent/TapsmithAgentRunner.swift",
+  "ios-agent/TapsmithAgent/LaunchAccessibilityCheck.swift",
+  "ios-agent/TapsmithAgent/LaunchGate.swift",
+  "ios-agent/TapsmithAgent/ObjCExceptionCatcher.h",
+  "ios-agent/TapsmithAgent/ObjCExceptionCatcher.m",
+  // ...the dump's "not reachable" error, and the relay that turns XCTest's
+  // "Interrupting test" into a failed command instead of a dead agent.
+  "ios-agent/TapsmithAgent/HierarchyDumper.swift",
+  "ios-agent/TapsmithAgent/XCTestIssueRelay.swift",
   // The headless MCP server the check drives.
   "packages/tapsmith/src/mcp/",
   // The check itself and the workflow that runs it.
