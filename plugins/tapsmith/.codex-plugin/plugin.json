@@ -21,7 +21,7 @@
     "playwright"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./mcp-inline.json",
   "interface": {
     "displayName": "Tapsmith",
     "shortDescription": "Mobile tests with a Playwright-style API",

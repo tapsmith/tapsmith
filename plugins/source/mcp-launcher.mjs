@@ -2,11 +2,13 @@
 // (`tapsmith mcp-server`), never a global or npx-cached copy, so the agent
 // drives the Tapsmith version the project's tests run with.
 //
-// sync.mjs inlines this file into each plugin's MCP config as
-// `node --input-type=module -e <this file> ...`, with `await main()` appended:
+// sync.mjs writes it, with `await main(<its arguments>)` appended, into the plugin as
+// scripts/mcp-server.mjs (Claude Code's MCP config runs that file) and inline
+// into Cursor's and Codex's as `node --input-type=module -e <this file> --`:
 // Codex's plugin MCP config has no variable for the plugin's install
-// directory, so the launcher cannot be a file the config points at. Keep it
-// to `node:` imports for that reason.
+// directory to point at a file with. Keep it to `node:` imports for that
+// reason, and keep its comments on lines of their own (the inline copy drops
+// them).
 //
 // The project is TAPSMITH_PROJECT_DIR, else CLAUDE_PROJECT_DIR (Claude Code
 // sets it for plugin MCP servers), else the working directory (Codex and
@@ -87,8 +89,8 @@ export function locateTapsmith(start) {
   };
 }
 
-/** Start the project's `tapsmith mcp-server`, passing on any extra arguments (`--config <file>`). */
-export async function main() {
+/** Start the project's `tapsmith mcp-server`, passing on `extraArgs` (`--config <file>`). */
+export async function main(extraArgs) {
   const start = projectDir(process.env, process.cwd());
   const found = locateTapsmith(start);
   if (found.error) {
@@ -99,6 +101,6 @@ export async function main() {
   }
   process.stderr.write(`tapsmith plugin: starting tapsmith ${found.version} mcp-server in ${found.dir}\n`);
   process.chdir(found.dir);
-  process.argv = [process.execPath, found.bin, 'mcp-server', ...process.argv.slice(1)];
+  process.argv = [process.execPath, found.bin, 'mcp-server', ...extraArgs];
   await import(pathToFileURL(found.bin).href);
 }

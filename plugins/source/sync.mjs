@@ -22,12 +22,34 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 /** The `node -e` source of the MCP server command: the launcher with its exports made local, then run. */
-export function launcherScript(source) {
-  return `${source.replace(/^export /gm, '').trimEnd()}\n\nawait main();\n`;
+export function launcherScript(source, extraArgsFrom = 2) {
+  return `${source.replace(/^export /gm, '').trimEnd()}\n\nawait main(process.argv.slice(${extraArgsFrom}));\n`;
+}
+
+/**
+ * The launcher for `node -e`: without its comments, since the agents show a
+ * server's whole command line in their MCP server lists.
+ */
+export function inlineLauncherScript(source) {
+  // Under `node -e`, the arguments after `--` start at argv[1].
+  return launcherScript(source, 1)
+    .replace(/^\s*\/\*\*[\s\S]*?\*\/\n/gm, '')
+    .replace(/^\s*\/\/.*\n/gm, '')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/^\n+/, '');
 }
 
 /** The plugin's icon, maintained in the plugin (Claude Code finds it there by name). */
 const ICON = './assets/icon.png';
+
+/** The launcher as a file in the plugin (Claude Code's MCP config runs it). */
+const LAUNCHER = 'scripts/mcp-server.mjs';
+
+/**
+ * Cursor's and Codex's MCP config. Not `mcp.json` or `.mcp.json`, the names
+ * each tool would also find by itself in another format.
+ */
+const INLINE_MCP = 'mcp-inline.json';
 
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
@@ -50,13 +72,19 @@ export function generatedFiles(root = ROOT) {
     skills: './skills/',
   };
 
-  const mcp = {
+  const server = manifest.mcpServerName;
+  const launcher = read('plugins/source/mcp-launcher.mjs');
+  // Claude Code: the launcher as a file in the plugin, at ${CLAUDE_PLUGIN_ROOT}.
+  const claudeMcp = {
+    mcpServers: { [server]: { command: 'node', args: [`\${CLAUDE_PLUGIN_ROOT}/${LAUNCHER}`] } },
+  };
+  // Codex's plugin MCP config has no variable for the plugin's directory, and
+  // Cursor's is documented only for another format, so both get the launcher
+  // inline. `--` ends Node's own options, so arguments added after it
+  // (`--config <file>`) reach the launcher.
+  const inlineMcp = {
     mcpServers: {
-      [manifest.mcpServerName]: {
-        command: 'node',
-        // `--` ends Node's own options, so arguments added after it (`--config <file>`) reach the launcher.
-        args: ['--input-type=module', '-e', launcherScript(read('plugins/source/mcp-launcher.mjs')), '--'],
-      },
+      [server]: { command: 'node', args: ['--input-type=module', '-e', inlineLauncherScript(launcher), '--'] },
     },
   };
 
@@ -65,19 +93,20 @@ export function generatedFiles(root = ROOT) {
   return {
     // Claude Code reads .mcp.json at the plugin root by default.
     [`${plugin}/.claude-plugin/plugin.json`]: json(common),
-    // Cursor looks for mcp.json without the dot unless told.
+    [`${plugin}/.mcp.json`]: json(claudeMcp),
+    [`${plugin}/${LAUNCHER}`]: launcherScript(launcher),
     [`${plugin}/.cursor-plugin/plugin.json`]: json({
       ...common,
       displayName: manifest.displayName,
       logo: ICON,
-      mcpServers: './.mcp.json',
+      mcpServers: `./${INLINE_MCP}`,
     }),
     [`${plugin}/.codex-plugin/plugin.json`]: json({
       ...common,
-      mcpServers: './.mcp.json',
+      mcpServers: `./${INLINE_MCP}`,
       interface: { displayName: manifest.displayName, ...manifest.codexInterface, composerIcon: ICON, logo: ICON },
     }),
-    [`${plugin}/.mcp.json`]: json(mcp),
+    [`${plugin}/${INLINE_MCP}`]: json(inlineMcp),
     [`${plugin}/LICENSE`]: read('LICENSE'),
     '.claude-plugin/marketplace.json': json({
       name: manifest.marketplace.name,

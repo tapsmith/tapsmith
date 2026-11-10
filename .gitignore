@@ -43,6 +43,8 @@ pilot-report/
 
 # Claude
 .mcp.json
+# ...except the coding-agent plugin's, which plugins/source/sync.mjs generates.
+!/plugins/tapsmith/.mcp.json
 *-session-prompt.md
 # Personal settings, state and worktrees stay local, at any depth; only the root
 # project skills are shared.
