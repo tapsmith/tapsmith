@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   Alert,
   Modal,
@@ -18,6 +18,18 @@ export default function DialogsScreen() {
   const [modalVisible, setModalVisible] = useState(false)
   const [sheetVisible, setSheetVisible] = useState(false)
   const [confirmResult, setConfirmResult] = useState("")
+  // One pending hide per overlay. The tests in a file share this mounted
+  // screen, so a timer left over from an earlier toast must not hide a newer
+  // one early (PILOT-1127): each show replaces the previous timer.
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const snackbarTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(
+    () => () => {
+      clearTimeout(toastTimer.current)
+      clearTimeout(snackbarTimer.current)
+    },
+    [],
+  )
 
   const showToast = (message: string) => {
     setToastMessage(message)
@@ -26,13 +38,15 @@ export default function DialogsScreen() {
     // simulators: tests assert on the toast after first asserting the modal
     // dismissed, and each step can take seconds on iOS. A 3s toast expired
     // before it was ever observed.
-    setTimeout(() => setToastVisible(false), 10000)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToastVisible(false), 10000)
   }
 
   const showSnackbar = (message: string) => {
     setSnackbarMessage(message)
     setSnackbarVisible(true)
-    setTimeout(() => setSnackbarVisible(false), 4000)
+    clearTimeout(snackbarTimer.current)
+    snackbarTimer.current = setTimeout(() => setSnackbarVisible(false), 4000)
   }
 
   return (
