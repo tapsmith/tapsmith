@@ -1,0 +1,120 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { testFilesUseNetworkApis } from '../network-api-scan.js';
+
+let dir: string;
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-netscan-'));
+});
+
+afterEach(() => {
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function write(rel: string, content: string): string {
+  const file = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+  return file;
+}
+
+const header = `import { test, expect } from 'tapsmith'\n`;
+
+describe('testFilesUseNetworkApis', () => {
+  it('is false for no files', async () => {
+    expect(await testFilesUseNetworkApis([])).toBe(false);
+  });
+
+  it('is false for tests that never use a network API', async () => {
+    const a = write('a.test.ts', `${header}test('a', async ({ device }) => { await device.getByText('x').tap() })\n`);
+    const b = write('b.test.ts', `${header}test('b', async ({ device }) => { await device.launchApp() })\n`);
+    expect(await testFilesUseNetworkApis([a, b])).toBe(false);
+  });
+
+  it.each([
+    ['route()', `await device.route('**/api', (r) => r.abort())`],
+    ['waitForRequest()', `await device.waitForRequest('**/api')`],
+    ['waitForResponse()', `const p = device.waitForResponse(/api/)`],
+    ["on('request')", `device.on('request', () => {})`],
+    ['on("response")', `device.on("response", () => {})`],
+    ['an optional call', `await device?.route?.('**', () => {})`],
+    ['a computed string key', `await device['route']('**', () => {})`],
+    ['a destructured fixture under another name', `const d = devices[1]; await d.waitForRequest('**')`],
+  ])('detects %s in a test file', async (_label, call) => {
+    const plain = write('plain.test.ts', `${header}test('p', async ({ device }) => { await device.launchApp() })\n`);
+    const net = write('net.test.ts', `${header}test('n', async ({ device, devices }) => { ${call} })\n`);
+    expect(await testFilesUseNetworkApis([plain, net])).toBe(true);
+  });
+
+  it("does not count on() for other events", async () => {
+    const f = write('a.test.ts', `${header}test('a', async ({ device }) => { emitter.on('data', () => {}) })\n`);
+    expect(await testFilesUseNetworkApis([f])).toBe(false);
+  });
+
+  it('ignores mentions in comments and strings', async () => {
+    const f = write('a.test.ts', `${header}
+// await device.route('**', () => {})
+/* device.waitForResponse('x') */
+test('a', async ({ device }) => {
+  console.log("device.route('**')")
+  console.log(\`device.waitForRequest('x')\`)
+})
+`);
+    expect(await testFilesUseNetworkApis([f])).toBe(false);
+  });
+
+  it('detects a call in a helper the test imports with a .js specifier', async () => {
+    write('utils/mock.ts', `import type { Device } from 'tapsmith'
+export async function mockApi(device: Device): Promise<void> {
+  await device.route('**/api', (r) => r.fulfill({ status: 500 }))
+}
+`);
+    const f = write('tests/a.test.ts', `${header}import { mockApi } from '../utils/mock.js'
+test('a', async ({ device }) => { await mockApi(device) })
+`);
+    expect(await testFilesUseNetworkApis([f])).toBe(true);
+  });
+
+  it('follows imports transitively (a fixture file that imports a screen object)', async () => {
+    write('screens/api.ts', `export class ApiScreen { constructor(private d: any) {}
+  async waitForPosts() { return this.d.waitForResponse('**/posts') } }
+`);
+    write('fixtures.ts', `import { test as base } from 'tapsmith'
+import { ApiScreen } from './screens/api'
+export const test = base.extend({ apiScreen: async ({ device }, use) => { await use(new ApiScreen(device)) } })
+`);
+    const f = write('a.test.ts', `import { test } from './fixtures.js'\ntest('a', async ({ apiScreen }) => { await apiScreen.waitForPosts() })\n`);
+    expect(await testFilesUseNetworkApis([f])).toBe(true);
+  });
+
+  it('does not scan a helper only another, unselected, file imports', async () => {
+    write('utils/mock.ts', `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`);
+    write('net.test.ts', `import { mockApi } from './utils/mock.js'\nmockApi(null)\n`);
+    const plain = write('plain.test.ts', `${header}test('p', async () => {})\n`);
+    expect(await testFilesUseNetworkApis([plain])).toBe(false);
+  });
+
+  it('reads JavaScript test files and tolerates JSON and asset imports', async () => {
+    write('data.json', `{ "url": "https://example.com" }`);
+    write('logo.png', 'not really a png');
+    const f = write('a.test.js', `import data from './data.json'
+import logo from './logo.png'
+export default async function run(device) { await device.waitForRequest(data.url) }
+`);
+    expect(await testFilesUseNetworkApis([f])).toBe(true);
+  });
+
+  it('still scans the other files when one cannot be bundled', async () => {
+    const broken = write('broken.test.ts', `${header}import { nope } from './missing.js'\ntest('x', async () => {})\n`);
+    const net = write('net.test.ts', `${header}test('n', async ({ device }) => { await device.route('**', () => {}) })\n`);
+    expect(await testFilesUseNetworkApis([broken, net])).toBe(true);
+  });
+
+  it('is false when no file can be read', async () => {
+    const broken = write('broken.test.ts', `this is not ( valid typescript`);
+    expect(await testFilesUseNetworkApis([broken, path.join(dir, 'gone.test.ts')])).toBe(false);
+  });
+});
