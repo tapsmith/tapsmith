@@ -29,6 +29,13 @@ case .failure(let why):
     expect("the private region screenshot resolves on the installed XCTest", false)
 }
 
+// The black-display check captures with a JPEG encoding.
+if case .success = RegionScreenshot.jpegAPI {
+    expect("the JPEG region screenshot encoding resolves", true)
+} else {
+    expect("the JPEG region screenshot encoding resolves", false)
+}
+
 expect("a missing screen class is reported, not crashed on",
        caseOf(RegionScreenshot.resolve(screenClass: "NoSuchScreenClass"))
            == .missingClass("NoSuchScreenClass"))

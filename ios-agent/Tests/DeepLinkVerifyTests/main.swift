@@ -3,6 +3,7 @@
 
 import CoreGraphics
 import Foundation
+import ImageIO
 
 var failures = 0
 
@@ -78,6 +79,23 @@ expect("light text at the very bottom of the band is not black",
        !DeepLinkVerify.appearsBlack(image(band.width, band.height, patches: [CGRect(x: 60, y: 1894, width: 600, height: 51)]), excludingEnds: 0))
 expect("a tiny image is never called black",
        !DeepLinkVerify.appearsBlack(image(4, 4), excludingEnds: 0))
+
+// The band is captured as a quality-0.3 JPEG: its noise must not turn a
+// black band into content, nor wash out a line of light text.
+func jpegRoundTrip(_ image: CGImage) -> CGImage {
+    let data = NSMutableData()
+    let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil)!
+    CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.3] as CFDictionary)
+    CGImageDestinationFinalize(dest)
+    let source = CGImageSourceCreateWithData(data, nil)!
+    return CGImageSourceCreateImageAtIndex(source, 0, nil)!
+}
+expect("a JPEG of an all-black band is black",
+       DeepLinkVerify.appearsBlack(jpegRoundTrip(image(band.width, band.height)), excludingEnds: 0))
+expect("a JPEG of a black band with a line of light text is not black",
+       !DeepLinkVerify.appearsBlack(jpegRoundTrip(image(band.width, band.height, patches: [CGRect(x: 60, y: 900, width: 600, height: 51)])), excludingEnds: 0))
+expect("a JPEG of a black band with dim grey text (40) is not black",
+       !DeepLinkVerify.appearsBlack(jpegRoundTrip(image(band.width, band.height, patches: [CGRect(x: 60, y: 900, width: 600, height: 51)], value: 40)), excludingEnds: 0))
 
 if failures > 0 {
     print("\(failures) DeepLinkVerify test(s) failed")

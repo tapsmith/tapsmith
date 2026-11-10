@@ -376,11 +376,12 @@ class CommandHandler {
     /// `DeepLinkVerify.appearsBlack`. A false positive merely costs a cold
     /// relaunch, never a wrong verdict.
     private func displayAppearsBlack() -> Bool {
-        // The content band alone, through XCTest's region screenshot: ~10x
-        // cheaper than the whole screen, and every warm link runs this.
-        if case .success = RegionScreenshot.api {
+        // The content band alone, through XCTest's region screenshot as a
+        // low-quality JPEG: every warm link runs this, and a full-screen PNG
+        // costs ~115 ms. JPEG noise stays far below the threshold.
+        if case .success = RegionScreenshot.jpegAPI {
             let band = DeepLinkVerify.contentBand(screen: snapshotFinder.screenSize)
-            if !band.isEmpty, let image = RegionScreenshot.capture(band, of: XCUIScreen.main) {
+            if !band.isEmpty, let image = RegionScreenshot.capture(band, of: XCUIScreen.main, with: RegionScreenshot.jpegAPI) {
                 return DeepLinkVerify.appearsBlack(image, excludingEnds: 0)
             }
         }
