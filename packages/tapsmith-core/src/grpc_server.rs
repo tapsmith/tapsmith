@@ -1214,8 +1214,8 @@ impl TapsmithServiceImpl {
         ios::agent_launch::kill_existing_agents_on(serial).await;
         // The SDK's session recovery reboots an unhealthy simulator and then
         // lands here; launchd lost the sped-up animations' flag with it.
-        // No RPC answer carries a warning from here; the daemon log has it,
-        // and the session's next StartAgent repeats it.
+        // No RPC answer carries a warning from here: the daemon log has it,
+        // and only a later fresh StartAgent that is still owed tells the run.
         if !is_physical {
             let _ = self.ensure_ios_animation_speed(serial).await;
         }
