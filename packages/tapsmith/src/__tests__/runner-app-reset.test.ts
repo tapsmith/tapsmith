@@ -304,6 +304,30 @@ describe('runner app reset (declared isolation)', () => {
       expect(idleAfterCheck(d)).toEqual(['waitForIdle']);
     });
 
+    it('decides per device in a group: skips the settled one, keeps the relaunched one', async () => {
+      const alice = makeDevice();
+      const bob = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => {});
+      const ctx = popContext();
+      const config = makeConfig({ appReset: 'none' });
+      const opts = makeOpts(alice, config);
+      const bobOpts = makeOpts(bob, config);
+      opts.devices = [{ ...opts.devices[0], name: 'alice' }, { ...bobOpts.devices[0], name: 'bob' }];
+      const bobSession = opts.devices[1].sessionContext!;
+      opts.beforeEachTest = async () => {
+        alice.calls.push('beforeEachTest');
+        bob.calls.push('beforeEachTest');
+        bobSession.relaunches.count++;
+      };
+      for (const d of [alice, bob]) d.device.waitForIdle.mockImplementation(async () => { d.calls.push('waitForIdle'); });
+      await runSuiteContext(ctx, '', [], [], opts);
+      const after = (d: ReturnType<typeof makeDevice>) =>
+        d.calls.slice(d.calls.indexOf('beforeEachTest')).filter((c) => c === 'waitForIdle');
+      expect(after(alice)).toEqual([]);
+      expect(after(bob)).toEqual(['waitForIdle']);
+    });
+
     it('keeps it without a readiness check', async () => {
       const d = makeDevice();
       pushContext();
