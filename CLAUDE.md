@@ -98,9 +98,9 @@ collect the results for the flake dashboard. It needs the `DASHBOARD_DISPATCH_TO
 Shard 1 of each device workflow also runs `e2e/verify-trace-archive.mjs`, which records one trace
 with `--trace on` and then asserts what is *inside* the archive — screenshots that decode at the
 device's real resolution, hierarchy dumps containing the element each action resolved, and the
-app's real HTTPS traffic. The sharded runs trace only retried attempts (`on-all-retries`), so
-this is the only place a trace that packages cleanly but holds the wrong data gets caught. The
-checks live in `e2e/utils/trace-archive-checks.mjs` and are themselves unit-tested by the
+app's real HTTPS traffic. The sharded runs record every attempt but keep only failed or retried
+ones (`retain-on-failure-and-retries`), so on a green run this is the only place a trace that
+packages cleanly but holds the wrong data gets caught. The checks live in `e2e/utils/trace-archive-checks.mjs` and are themselves unit-tested by the
 `typescript` job's **E2E helper tests** step (`cd e2e && npm test`, no device needed);
 `--verify-only <trace.zip>` re-runs them against a trace downloaded from a CI artifact.
 
