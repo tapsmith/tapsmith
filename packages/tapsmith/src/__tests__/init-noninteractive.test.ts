@@ -852,6 +852,26 @@ describe('executeInitPlan()', () => {
     }
   });
 
+  it('lists the plugin install for the coding agents the project uses instead of the manual MCP registration', () => {
+    const tmp = makeTmp();
+    try {
+      const args = initArgs({ yes: true, platform: 'android', exampleTest: false, agentsMd: false });
+      const plan = resolveInitPlan(args, baseEnv, detectStubs, tmp);
+      const result = executeInitPlan(plan, args, tmp, undefined, 'npx tapsmith', ['claude', 'cursor']);
+      expect(result.nextSteps).toContain(
+        'Install the Claude Code plugin (the Tapsmith MCP server and a test-writing skill): ' +
+          'claude plugin marketplace add tapsmith/tapsmith && claude plugin install tapsmith@tapsmith',
+      );
+      expect(result.nextSteps.some((step) => step.startsWith('Install the Cursor plugin') && step.includes('docs/mcp-server.md'))).toBe(true);
+      expect(result.nextSteps.join('\n')).not.toContain('claude mcp add');
+      // With none found, the manual registration stays.
+      const none = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), { ...args, force: true }, tmp);
+      expect(none.nextSteps).toContain('Register the MCP server for richer agent tooling: claude mcp add tapsmith-headless -- npx tapsmith mcp-server');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   // PILOT-631: no package.json in the project directory.
   it('says why the install step creates a package.json first', () => {
     const tmp = makeTmp();

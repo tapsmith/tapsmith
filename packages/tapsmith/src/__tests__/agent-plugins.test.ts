@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { detectCodingAgents, isOnPath } from '../agent-plugins.js';
 import { locateTapsmith, projectDir } from '../../../../plugins/source/mcp-launcher.mjs';
 import { generatedFiles, staleFiles } from '../../../../plugins/source/sync.mjs';
 
@@ -165,5 +166,32 @@ describe('the plugin MCP server command', () => {
     expect(run.status).toBe(1);
     expect(run.stdout).toBe('');
     expect(run.stderr).toContain('tapsmith plugin: Tapsmith is not installed');
+  });
+});
+
+describe('detectCodingAgents', () => {
+  it('finds an agent by its project files', () => {
+    write('CLAUDE.md', '# notes');
+    write('.cursor/rules/x.mdc', '');
+    expect(detectCodingAgents(tmp, () => false)).toEqual(['claude', 'cursor']);
+  });
+
+  it('finds an agent by its command on PATH', () => {
+    expect(detectCodingAgents(tmp, (cli) => cli === 'codex')).toEqual(['codex']);
+    expect(detectCodingAgents(tmp, () => false)).toEqual([]);
+  });
+});
+
+describe('isOnPath', () => {
+  it('finds an executable file in a PATH directory, not a directory or a plain file', () => {
+    const bin = write('bin/claude', '#!/bin/sh\n');
+    fs.chmodSync(bin, 0o755);
+    write('bin/codex', 'not executable');
+    fs.mkdirSync(path.join(tmp, 'bin/cursor'));
+    const env = { PATH: ['/nonexistent', path.join(tmp, 'bin')].join(path.delimiter) };
+    expect(isOnPath('claude', env, 'darwin')).toBe(true);
+    expect(isOnPath('codex', env, 'darwin')).toBe(false);
+    expect(isOnPath('cursor', env, 'darwin')).toBe(false);
+    expect(isOnPath('claude', {}, 'darwin')).toBe(false);
   });
 });
