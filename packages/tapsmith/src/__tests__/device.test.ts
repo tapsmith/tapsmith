@@ -1312,6 +1312,21 @@ describe('Device.startAgent()', () => {
     expect(startAgent).toHaveBeenCalledWith('com.example.app', '/path/agent.apk', '/path/test.apk', undefined, undefined, false, false);
   });
 
+  it("prints the warning a successful start carries, once per process (PILOT-1073)", async () => {
+    const warning = 'reducedMotion could not be applied on simulator SIM-1073: simctl did not answer';
+    const startAgent = vi.fn(async () => ({ ...successResponse(), errorMessage: warning }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const device = new Device(makeMockClient({ startAgent }));
+      await device.startAgent('com.example.app');
+      await device.startAgent('com.example.app');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(`[tapsmith] ${warning}`);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('throws on failure', async () => {
     const client = makeMockClient({
       startAgent: vi.fn(async () => failureResponse('Agent not installed')),

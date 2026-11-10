@@ -158,6 +158,16 @@ export interface SwipeOptions {
   timeoutMs?: number;
 }
 
+
+/** Warnings a successful StartAgent carried, printed once per process. */
+const _printedStartAgentWarnings = new Set<string>();
+
+function warnStartAgentOnce(message: string): void {
+  if (_printedStartAgentWarnings.has(message)) return;
+  _printedStartAgentWarnings.add(message);
+  console.warn(`[tapsmith] ${message}`);
+}
+
 /**
  * The device under test: the `device` fixture every test receives.
  * Locators come from its `getBy*()` methods and auto-wait when acted on;
@@ -722,6 +732,9 @@ export class Device {
       if (!res.success) {
         throw new Error(res.errorMessage || 'Start agent failed');
       }
+      // A successful start can carry a warning for the run, such as a
+      // reducedMotion speed-up the daemon could not apply (PILOT-1073).
+      if (res.errorMessage) warnStartAgentOnce(res.errorMessage);
       return { appLaunchedFresh: res.appLaunchedFresh === true };
     });
   }

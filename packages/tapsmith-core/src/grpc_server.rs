@@ -1214,8 +1214,10 @@ impl TapsmithServiceImpl {
         ios::agent_launch::kill_existing_agents_on(serial).await;
         // The SDK's session recovery reboots an unhealthy simulator and then
         // lands here; launchd lost the sped-up animations' flag with it.
+        // No RPC answer carries a warning from here; the daemon log has it,
+        // and the session's next StartAgent repeats it.
         if !is_physical {
-            self.ensure_ios_animation_speed(serial).await;
+            let _ = self.ensure_ios_animation_speed(serial).await;
         }
 
         // Physical iOS: re-prime the Wi-Fi MITM proxy before xcodebuild so
@@ -1878,18 +1880,17 @@ impl TapsmithServiceImpl {
     /// (PILOT-1073), or set the sped-up animations' flag again if the
     /// simulator lost it, as a reboot by the SDK's session recovery does.
     /// One `simctl spawn` read when nothing was lost; nothing at all without
-    /// the option.
-    async fn ensure_ios_animation_speed(&self, serial: &str) {
+    /// the option. Returns the warning for the run when the speed-up is still
+    /// owed afterwards.
+    async fn ensure_ios_animation_speed(&self, serial: &str) -> Option<String> {
         let mut speed = self.ios_animation_speed.lock().await;
         if speed.owed().is_none() && speed.applied().is_none_or(|a| a.udid != serial) {
-            return;
+            return None;
         }
-        let Some(dir) = ios::animation_speed::records_dir() else {
-            return;
-        };
+        let dir = ios::animation_speed::records_dir()?;
         speed
             .before_agent_start(&ios::animation_speed::RealHost, &dir, serial)
-            .await;
+            .await
     }
 
     /// Clean up network proxy state: revert device proxy settings, remove CA
@@ -4014,9 +4015,13 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         #[cfg(target_os = "macos")]
         self.agent_predates_hid_tap
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        if platform == Platform::Ios {
-            self.ensure_ios_animation_speed(&serial).await;
-        }
+        // A reducedMotion speed-up that still could not be applied: told to
+        // the run in the successful answer's error_message (PILOT-1073).
+        let speed_warning = if platform == Platform::Ios {
+            self.ensure_ios_animation_speed(&serial).await
+        } else {
+            None
+        };
 
         let launched = match backend
             .launch_agent(request_id.clone(), serial.clone(), &req)
@@ -4037,6 +4042,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 *self.started_agent_config.write().await = Some(desired_agent_config);
                 let mut response = Self::success_action_response(request_id);
                 response.get_mut().app_launched_fresh = launched.app_launched_fresh;
+                if let Some(warning) = speed_warning {
+                    response.get_mut().error_message = warning;
+                }
                 Ok(response)
             }
             Err(e) => {

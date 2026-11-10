@@ -643,18 +643,32 @@ impl SessionSpeed {
 
     /// Before a fresh agent start on `udid`: try an owed speed-up again, or
     /// set the flag again if the simulator lost it since it was applied.
-    pub async fn before_agent_start(&mut self, h: &dyn Host, dir: &Path, udid: &str) {
+    /// Returns the warning for the run when the speed-up is still owed
+    /// afterwards, so a session that runs without it is told so rather than
+    /// only the daemon log.
+    pub async fn before_agent_start(
+        &mut self,
+        h: &dyn Host,
+        dir: &Path,
+        udid: &str,
+    ) -> Option<String> {
         if self.owed.as_deref() == Some(udid) {
             info!(%udid, "Trying again to speed the simulator's animations up (reducedMotion)");
             self.select(h, dir, udid, Some(true)).await;
             if self.owed.is_some() {
                 warn!(%udid, "The app may launch with normal-speed animations: the simulator's animation speed could not be set");
+                return Some(format!(
+                    "reducedMotion could not be applied on simulator {udid}: `xcrun simctl spawn` did not answer in time \
+                     (CoreSimulator may be overloaded), so apps on it may run with normal-speed animations. \
+                     Tapsmith tries again at the next agent start."
+                ));
             }
-            return;
+            return None;
         }
         if let Some(applied) = self.applied.as_ref().filter(|a| a.udid == udid) {
             reapply_if_lost(h, applied).await;
         }
+        None
     }
 }
 
@@ -1239,7 +1253,11 @@ mod tests {
 
         // CoreSimulator answers again by the time the agent starts.
         *h.time_out_next.lock().unwrap() = 0;
-        speed.before_agent_start(&h, dir.path(), U).await;
+        assert_eq!(
+            speed.before_agent_start(&h, dir.path(), U).await,
+            None,
+            "nothing to tell the run"
+        );
         assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
         assert_eq!(speed.owed(), None);
         let applied = speed.take_applied().expect("applied");
@@ -1254,10 +1272,17 @@ mod tests {
         *h.time_out_next.lock().unwrap() = u32::MAX;
         let mut speed = SessionSpeed::default();
         speed.select(&h, dir.path(), U, Some(true)).await;
-        speed.before_agent_start(&h, dir.path(), U).await;
+        let warning = speed
+            .before_agent_start(&h, dir.path(), U)
+            .await
+            .expect("the run is told");
+        assert!(
+            warning.contains("reducedMotion") && warning.contains(U),
+            "{warning}"
+        );
         assert_eq!(speed.owed(), Some(U));
         *h.time_out_next.lock().unwrap() = 0;
-        speed.before_agent_start(&h, dir.path(), U).await;
+        assert_eq!(speed.before_agent_start(&h, dir.path(), U).await, None);
         assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
         assert_eq!(speed.owed(), None);
     }
