@@ -1276,6 +1276,8 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         grep: grepFor(projectName),
         runMode: 'watch',
         networkApisInRun,
+        // The CLI opened the device with the startup scan.
+        proxyStartedBeforeLaunch: ctx.networkApisInRun,
         resetCapabilities: ctx.resetCapabilities,
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {
           groupMembers: ctx.groupMembers.map((m) => ({

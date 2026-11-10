@@ -423,6 +423,15 @@ describe('openDeviceSession', () => {
       });
       expect(mocks.devices[0].setDevice).toHaveBeenCalledWith('emulator-5554', true, [], []);
       expect(session.context.networkTracingEnabled).toBe(true);
+      // Nobody said the app was launched behind the proxy.
+      expect(mocks.devices[0]._launchedBehindProxy).toBeUndefined();
+    });
+
+    it('marks an adopted app the session launched behind the proxy', async () => {
+      await openDeviceSession(spec, makeConfig(), {
+        claimSession: SESSION, startNetworkProxy: { multiDevice: false, startedBeforeLaunch: true }, label: 'Run', adopt: true, adoptVerify: false,
+      });
+      expect(mocks.devices[0]._launchedBehindProxy).toBe(true);
     });
 
     it('asks for an isolated capture for a member of a group', async () => {

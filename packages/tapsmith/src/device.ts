@@ -220,6 +220,18 @@ export class Device {
   private _proxyStartedOnDemand = false;
   /** Whether the session-start proxy start was already tried. */
   private _sessionNetworkStartTried = false;
+  /**
+   * @internal — The proxy came up through the runner's start at a file, after
+   * the app had been launched without it, so connections the app opened
+   * before may bypass it (a reason the runner gives for unfired routes).
+   */
+  _proxyStartedAfterLaunch = false;
+  /**
+   * @internal — The app this Device adopted was launched with the proxy
+   * already up (the session that launched it started it first), so a later
+   * start at a file is not a late one.
+   */
+  _launchedBehindProxy = false;
   /** waitForRequest/waitForResponse calls still waiting. */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
@@ -1152,10 +1164,11 @@ export class Device {
    * warnings — and a start that failed is tried again, and reported, by the
    * on-demand start of a test that needs the proxy.
    */
-  async _startNetworkProxyForSession(options: { requireIsolation: boolean; httpPorts?: number[] }): Promise<void> {
+  async _startNetworkProxyForSession(options: { requireIsolation: boolean; httpPorts?: number[]; appRunning?: boolean }): Promise<void> {
     if (!this._claimSessionNetworkStart()) return;
     try {
-      await this._startNetworkCapture(options);
+      const res = await this._startNetworkCapture({ requireIsolation: options.requireIsolation, httpPorts: options.httpPorts });
+      if (res.success && options.appRunning && !this._launchedBehindProxy) this._proxyStartedAfterLaunch = true;
     } catch {
       // Recorded as `_networkCaptureError`; see above.
     }

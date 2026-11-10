@@ -197,7 +197,8 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
     config,
     {
       claimSession: currentSession(),
-      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0 },
+      // The CLI opened an adopted primary with the same startup scan.
+      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0, startedBeforeLaunch: true },
       label: `UI Worker ${workerId}`,
       launchPhase: 'UI worker startup launch',
       forceInstall: msg.forceInstall,

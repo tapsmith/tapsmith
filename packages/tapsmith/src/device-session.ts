@@ -132,11 +132,13 @@ export interface OpenDeviceSessionOptions {
    * device belongs to a group of two or more (the capture must then be
    * isolated per device). `false` when the run does not use them. With
    * `adopt` the app is already running, so the runner starts the proxy at
-   * its first file instead; the open still tells the daemon a proxy will run.
+   * its first file instead; the open still tells the daemon a proxy will run,
+   * and `startedBeforeLaunch` says whether whoever launched it started the
+   * proxy first (so the runner's start is not named as a late one).
    * Required, like `claimSession`, so no embedder opens a device without
    * deciding.
    */
-  startNetworkProxy: false | { multiDevice: boolean }
+  startNetworkProxy: false | { multiDevice: boolean; startedBeforeLaunch?: boolean }
   onProgress?: (message: string) => void
   /**
    * Step-level progress for embedders with a step UI (the sequential CLI):
@@ -717,6 +719,7 @@ export async function openDeviceSession(
       // Resolve the artifact paths recovery needs, then verify and probe.
       Object.assign(session.context, opts.artifacts ?? await resolveAgentArtifacts(config, spec.serial, progress));
       if (opts.seedCapabilities) Object.assign(capabilities, opts.seedCapabilities);
+      if (opts.startNetworkProxy && opts.startNetworkProxy.startedBeforeLaunch) device._launchedBehindProxy = true;
       if (opts.adoptVerify ?? true) {
         progress('attaching to the device session');
         await ensureSessionReady(session.context, `${opts.label} adopt`);

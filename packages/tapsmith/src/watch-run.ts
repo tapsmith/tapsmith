@@ -92,6 +92,14 @@ export interface WatchRunMessage {
    */
   networkApisInRun: boolean
   /**
+   * Whether the parent started the network proxy before it launched the app
+   * this child adopts (its session-open scan found the network APIs). False
+   * when the app was launched without it — the MCP server's own launch, or a
+   * watch session whose first mocking test was written later — so a failed
+   * test's unfired routes can name the late start. Required.
+   */
+  proxyStartedBeforeLaunch: boolean
+  /**
    * The parent's sticky reset-capability knowledge for the primary device
    * (in-app hooks detected, …). This child is forked fresh per run, so
    * without it every run would start undetected and `appReset: 'auto'` would
@@ -196,7 +204,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
     // open still tells the daemon a proxy will run, for the app's relaunches.
     {
       claimSession: currentSession(),
-      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0 },
+      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0, startedBeforeLaunch: msg.proxyStartedBeforeLaunch },
       label,
       adoptVerify: !config.package,
       connectTimeoutMs: 5_000,

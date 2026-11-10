@@ -1590,6 +1590,8 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         label: 'Run',
         runMode: 'mcp',
         networkApisInRun,
+        // The MCP server launches the app when it connects, without the proxy.
+        proxyStartedBeforeLaunch: false,
         resetCapabilities: this._resetCapabilities.get(target.deviceSerial),
         ...(target.members && target.members.length > 0 ? {
           groupMembers: target.members.map((m) => ({

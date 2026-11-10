@@ -388,7 +388,10 @@ async function startSessionNetworkCapture(opts: RunOptions): Promise<void> {
   const devices = allDevices(opts);
   const httpPorts = resolveTraceConfig(opts.config.trace).networkHttpPorts;
   for (const d of devices) {
-    await d._startNetworkProxyForSession?.({ requireIsolation: devices.length > 1, httpPorts });
+    // The app is already running here: the session open did not start the
+    // proxy before launching it (it adopted a running app, or the run's
+    // first mocking test was written after the session opened).
+    await d._startNetworkProxyForSession?.({ requireIsolation: devices.length > 1, httpPorts, appRunning: true });
   }
 }
 
@@ -397,14 +400,15 @@ async function startSessionNetworkCapture(opts: RunOptions): Promise<void> {
  * the capture shows why (PILOT-775): the device passed HTTPS through
  * uncaptured (a Google Play emulator image cannot trust Tapsmith's CA; a
  * configured or certificate-rejecting host is tunneled), or the proxy only
- * came up with the test's first route, after the app may have opened the
+ * came up with the test's first route, or with its file in a session whose
+ * app was already running, after the app may have opened the
  * connections it went on using. Neither shows: nothing to say — the app may
  * simply not have made the request.
  */
 function _warnUnfiredRoutes(
   fullName: string,
   deviceName: string | undefined,
-  reasons: { passthroughHosts: string[]; proxyStartedMidTest: boolean },
+  reasons: { passthroughHosts: string[]; proxyStartedLate: 'mid-test' | 'after-launch' | undefined },
 ): void {
   const possible: string[] = [];
   if (reasons.passthroughHosts.length > 0) {
@@ -416,7 +420,15 @@ function _warnUnfiredRoutes(
         "Google APIs image —, the host is in trace.networkPassthroughHosts, or the app rejected Tapsmith's certificate)",
     );
   }
-  if (reasons.proxyStartedMidTest) {
+  if (reasons.proxyStartedLate === 'after-launch') {
+    possible.push(
+      'the network proxy started at the beginning of this file, after the app was already running ' +
+        '(the session\'s first test that mocks was written after it started, or the app was launched before ' +
+        'the session), and connections the app had already opened bypass it until the app is relaunched ' +
+        '(restarting watch or UI mode starts the proxy before the app launches)',
+    );
+  }
+  if (reasons.proxyStartedLate === 'mid-test') {
     possible.push(
       'the network proxy started on demand during this test or its hooks, and connections the app had ' +
         'already opened bypass it (Tapsmith starts it with the session when it finds route(), ' +
@@ -2681,7 +2693,7 @@ async function runSuiteContext(
       // (true when the proxy came up on demand during the test), and the
       // HTTPS hosts their proxy passed through uncaptured — the likely
       // reasons (PILOT-775).
-      const unfiredRouteDevices = new Map<Device, boolean>();
+      const unfiredRouteDevices = new Map<Device, 'mid-test' | 'after-launch' | undefined>();
       const passthroughHosts = new Map<Device, Set<string>>();
       const notePassthrough = (d: Device, entries: RawNetworkEntries): void => {
         // Not an OS service's tunnel (PILOT-782): Google Play services passing
@@ -3176,7 +3188,7 @@ async function runSuiteContext(
         } else if ((registered > 0 || d._routeManager?.hasRoutes) && handled === 0) {
           // The test's own routes, or ones a beforeAll or worker fixture keeps
           // live for it.
-          unfiredRouteDevices.set(d, startedOnDemand);
+          unfiredRouteDevices.set(d, startedOnDemand ? 'mid-test' : d._proxyStartedAfterLaunch ? 'after-launch' : undefined);
         }
         if (d._routeManager?.hasTestRoutes) await d._routeManager.removeTestRoutes();
         // device.on() listeners the test added end with it too (PILOT-775).
@@ -3446,10 +3458,10 @@ async function runSuiteContext(
       // never fired: say why when the capture shows a likely reason
       // (PILOT-775). A passing test's unfired route is just a mock the app
       // did not need.
-      for (const [d, startedOnDemand] of status === 'failed' ? unfiredRouteDevices : []) {
+      for (const [d, proxyStartedLate] of status === 'failed' ? unfiredRouteDevices : []) {
         _warnUnfiredRoutes(fullName, d._traceDeviceId, {
           passthroughHosts: [...(passthroughHosts.get(d) ?? [])],
-          proxyStartedMidTest: startedOnDemand,
+          proxyStartedLate,
         });
       }
 

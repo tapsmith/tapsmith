@@ -212,6 +212,49 @@ describe('runTestFile — network capture at session start (PILOT-1013)', () => 
     expect(startNetworkCapture).toHaveBeenCalledTimes(2);
   });
 
+  // QA F1: an adopted session (watch, UI, MCP) whose first mocking test was
+  // written mid-session starts the proxy at the file, after the app has
+  // opened its connections — a failed test says so.
+  it('names the late start as a reason when a failed test\'s routes never fired after a start at the file', async () => {
+    const { device } = makeDevice();
+    const warned: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { warned.push(args.join(' ')); });
+    try {
+      const filePath = writeFile('late.test.mjs', `
+        test('mocks after direct traffic', async ({ device }) => {
+          await device.route('**/posts', (route) => route.fulfill({ status: 500 }));
+          throw new Error('no error alert');
+        });
+      `);
+      const [result] = collectResults(await runTestFile(filePath, makeOpts([device], true)));
+      expect(result!.status).toBe('failed');
+      const line = warned.find((w) => w.includes('handlers never fired')) ?? '';
+      expect(line).toContain('"mocks after direct traffic"');
+      expect(line).toContain('after the app was already running');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('names no late start when the adopted app was launched behind the proxy', async () => {
+    const { device } = makeDevice();
+    device._launchedBehindProxy = true;
+    const warned: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { warned.push(args.join(' ')); });
+    try {
+      const filePath = writeFile('behind.test.mjs', `
+        test('mocks', async ({ device }) => {
+          await device.route('**/posts', (route) => route.fulfill({ status: 500 }));
+          throw new Error('no error alert');
+        });
+      `);
+      await runTestFile(filePath, makeOpts([device], true));
+      expect(warned.join('\n')).not.toContain('after the app was already running');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('starts every device of a group, each asking for device isolation', async () => {
     const first = makeDevice();
     const second = makeDevice();

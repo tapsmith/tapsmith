@@ -48,7 +48,10 @@ const emptyAssets: Plugin = {
 
 /** The local modules `entries` load, themselves included; throws when esbuild cannot resolve them. */
 async function localModules(entries: string[]): Promise<string[]> {
+  // Inputs come back relative to the working directory the build ran in.
+  const cwd = process.cwd();
   const result = await build({
+    absWorkingDir: cwd,
     entryPoints: entries,
     bundle: true,
     write: false,
@@ -60,7 +63,6 @@ async function localModules(entries: string[]): Promise<string[]> {
     logLevel: 'silent',
     plugins: [emptyAssets],
   });
-  const cwd = process.cwd();
   return Object.keys(result.metafile.inputs)
     // Inputs are relative to the working directory; namespaced ones (`ns:…`)
     // are esbuild's own.
@@ -78,11 +80,21 @@ function loaderFor(file: string): Loader | undefined {
   }
 }
 
-function propertyName(member: Node & { computed?: boolean; property?: Node & { name?: string; value?: unknown } }): string | undefined {
+/** A string literal's value, or a template literal's with no `${}` in it. */
+function stringValue(node: Node & Record<string, unknown>): string | undefined {
+  if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+  if (node.type === 'TemplateLiteral' && (node.expressions as unknown[]).length === 0) {
+    const cooked = (node.quasis as Array<{ value: { cooked?: string | null } }>)[0]?.value.cooked;
+    return cooked ?? undefined;
+  }
+  return undefined;
+}
+
+function propertyName(member: Node & { computed?: boolean; property?: Node & Record<string, unknown> }): string | undefined {
   const prop = member.property;
   if (!prop) return undefined;
-  if (!member.computed && prop.type === 'Identifier') return prop.name;
-  if (member.computed && prop.type === 'Literal' && typeof prop.value === 'string') return prop.value;
+  if (!member.computed && prop.type === 'Identifier') return prop.name as string;
+  if (member.computed) return stringValue(prop);
   return undefined;
 }
 
@@ -97,8 +109,9 @@ function containsNetworkCall(node: unknown): boolean {
       const name = propertyName(callee);
       if (name && NETWORK_METHODS.has(name)) return true;
       if (name === 'on') {
-        const first = (n.arguments as Array<Node & { value?: unknown }>)[0];
-        if (first?.type === 'Literal' && typeof first.value === 'string' && NETWORK_EVENTS.has(first.value)) return true;
+        const first = (n.arguments as Array<Node & Record<string, unknown>>)[0];
+        const event = first ? stringValue(first) : undefined;
+        if (event && NETWORK_EVENTS.has(event)) return true;
       }
     }
   }

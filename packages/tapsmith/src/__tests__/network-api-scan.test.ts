@@ -42,6 +42,8 @@ describe('testFilesUseNetworkApis', () => {
     ['on("response")', `device.on("response", () => {})`],
     ['an optional call', `await device?.route?.('**', () => {})`],
     ['a computed string key', `await device['route']('**', () => {})`],
+    ['a computed template-literal key', 'await device[`waitForResponse`](\'**\')'],
+    ['on() with a template-literal event', 'device.on(`request`, () => {})'],
     ['a destructured fixture under another name', `const d = devices[1]; await d.waitForRequest('**')`],
   ])('detects %s in a test file', async (_label, call) => {
     const plain = write('plain.test.ts', `${header}test('p', async ({ device }) => { await device.launchApp() })\n`);

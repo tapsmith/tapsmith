@@ -253,6 +253,7 @@ describe('watch-run IPC protocol', () => {
       filePath: '/test/login.test.ts',
       runMode: 'watch',
       networkApisInRun: false,
+      proxyStartedBeforeLaunch: false,
       grep: { grep: [], grepInvert: [], projectGrep: [], projectGrepInvert: [] },
       config: {
         timeout: 30_000,
