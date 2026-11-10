@@ -243,8 +243,8 @@ class CommandHandler {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            // Read the marker first: a warm delivery is almost always
-            // acknowledged by the time `open(url)` returns, and the
+            // Read the marker first: a warm delivery is usually
+            // acknowledged within a poll or two of the request, and the
             // SpringBoard query for the "Open in" prompt costs ~70 ms that
             // only a delivery the prompt is still gating needs to pay.
             var acknowledged = false
@@ -261,7 +261,7 @@ class CommandHandler {
             if acknowledged { return true }
             // Dialog accepted: re-check at once.
             if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
-            Self.pollWait(0.2)
+            Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return false
     }
@@ -307,7 +307,7 @@ class CommandHandler {
             if let outcome { return outcome }
             // Dialog accepted: re-check at once.
             if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
-            Self.pollWait(0.2)
+            Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return .timedOut
     }
@@ -371,53 +371,75 @@ class CommandHandler {
     /// the broken state into subsequent tests; the cold path's terminate +
     /// relaunch recreates the render surface and recovers.
     ///
-    /// Downscales one screenshot and takes the maximum channel value across
-    /// all sampled pixels, excluding the top and bottom 12% (the status
-    /// bar's clock/battery — and the home indicator — keep rendering even
-    /// when the app's window has stopped compositing). Any visible content,
-    /// including sparse light text on a dark-mode screen, produces bright
-    /// samples; a false positive merely costs a cold relaunch, never a
-    /// wrong verdict.
+    /// Reads the screen less the top and bottom 12% (the status bar and home
+    /// indicator keep rendering over a dead app window) and applies
+    /// `DeepLinkVerify.appearsBlack`. A false positive merely costs a cold
+    /// relaunch, never a wrong verdict.
     private func displayAppearsBlack() -> Bool {
-        let image = XCUIScreen.main.screenshot().image
-        guard let cgImage = image.cgImage, cgImage.width > 8, cgImage.height > 8 else {
-            return false
-        }
-        let sampleWidth = 64
-        let sampleHeight = 128
-        let bytesPerPixel = 4
-        var pixels = [UInt8](repeating: 0, count: sampleWidth * sampleHeight * bytesPerPixel)
-        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
-            guard let context = CGContext(
-                data: buffer.baseAddress,
-                width: sampleWidth,
-                height: sampleHeight,
-                bitsPerComponent: 8,
-                bytesPerRow: sampleWidth * bytesPerPixel,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return false }
-            context.interpolationQuality = .low
-            context.draw(
-                cgImage,
-                in: CGRect(x: 0, y: 0, width: sampleWidth, height: sampleHeight)
-            )
-            return true
-        }
-        guard drawn else { return false }
-
-        // Exclude both vertical ends rather than reasoning about CGContext
-        // row order — the status bar is at one end, the home indicator at
-        // the other, and both keep rendering over a dead app window.
-        let excludedRows = Int(Double(sampleHeight) * 0.12)
-        var maxChannel: UInt8 = 0
-        for row in excludedRows..<(sampleHeight - excludedRows) {
-            for col in 0..<sampleWidth {
-                let offset = (row * sampleWidth + col) * bytesPerPixel
-                maxChannel = max(maxChannel, pixels[offset], pixels[offset + 1], pixels[offset + 2])
+        // The content band alone, through XCTest's region screenshot: ~10x
+        // cheaper than the whole screen, and every warm link runs this.
+        if case .success = RegionScreenshot.api {
+            let band = DeepLinkVerify.contentBand(screen: snapshotFinder.screenSize)
+            if !band.isEmpty, let image = RegionScreenshot.capture(band, of: XCUIScreen.main) {
+                return DeepLinkVerify.appearsBlack(image, excludingEnds: 0)
             }
         }
-        return maxChannel < 10
+        guard let cgImage = XCUIScreen.main.screenshot().image.cgImage else { return false }
+        return DeepLinkVerify.appearsBlack(cgImage, excludingEnds: DeepLinkVerify.excludedEndFraction)
+    }
+
+    /// Hand `url` to the running app `bundleId`, and say how ("daemon",
+    /// "daemon-timeout" or "xctest", for the timing log).
+    ///
+    /// On a simulator this is testmanagerd's open-URL request
+    /// (`DaemonOpenURL`), which returns once the app has the URL;
+    /// `XCUIApplication.open(_:)` makes the same request and then sleeps a
+    /// fixed second. Only when the request can't be made, or reports that it
+    /// failed, does this fall back to `open(_:)`. A request that times out
+    /// may still land, so it is not repeated: the caller's verify decides,
+    /// and its miss sends the daemon down its cold path. Physical devices
+    /// keep `open(_:)` until the request is proven there.
+    @available(iOS 16.4, *)
+    private func deliverWarmURL(_ url: URL, bundleId: String, app: XCUIApplication) -> String {
+        #if targetEnvironment(simulator)
+        switch DaemonOpenURL.open(url, bundleId: bundleId, timeout: Self.daemonOpenURLTimeout) {
+        case .delivered:
+            return "daemon"
+        case .timedOut:
+            NSLog("[TapsmithAgent] open-URL request for %@ had no answer in %.0f s; not delivering it again", url.absoluteString, Self.daemonOpenURLTimeout)
+            return "daemon-timeout"
+        case .failed(let why):
+            NSLog("[TapsmithAgent] open-URL request for %@ failed (%@); delivering through XCUIApplication.open", url.absoluteString, why)
+        case .unavailable(let why):
+            if !Self.loggedDaemonOpenURLUnavailable {
+                Self.loggedDaemonOpenURLUnavailable = true
+                NSLog("[TapsmithAgent] XCTest's open-URL request is unavailable (%@); warm deep links use XCUIApplication.open, ~1 s slower", why)
+            }
+        }
+        #endif
+        _ = ObjCExceptionCatcher.catchException {
+            app.open(url)
+        }
+        return "xctest"
+    }
+
+    /// How long a warm delivery waits for testmanagerd to answer. A warm
+    /// app answers in tens of milliseconds; this plus the 8 s ack wait stays
+    /// under the daemon's 11 s warm-attempt timeout.
+    private static let daemonOpenURLTimeout: TimeInterval = 2.0
+    private static var loggedDaemonOpenURLUnavailable = false
+
+    /// Milliseconds spent in each phase of one command, reported back to the
+    /// daemon for its timing log.
+    private struct PhaseClock {
+        private var last = Date()
+        private(set) var laps: [String: Int] = [:]
+
+        mutating func lap(_ name: String) {
+            let now = Date()
+            laps[name] = Int((now.timeIntervalSince(last) * 1000).rounded())
+            last = now
+        }
     }
 
     /// Dismiss any blocking iOS system dialog currently covering the app
@@ -2858,6 +2880,7 @@ class CommandHandler {
             let targetApp = XCUIApplication(bundleIdentifier: bundleId)
             let stateBefore = safeAppState(targetApp)
             QuiescenceDisabler.disable(for: targetApp)
+            var phases = PhaseClock()
 
             if deliverInProcess {
                 guard #available(iOS 16.4, *) else {
@@ -2885,7 +2908,7 @@ class CommandHandler {
                     preOpenHierarchy = HierarchyDumper(app: targetApp).dump(from: pre)
                 }
 
-                _ = ObjCExceptionCatcher.catchException {
+                let activateError = ObjCExceptionCatcher.catchException {
                     targetApp.activate()
                     // Let an app brought back from the background settle
                     // before the URL arrives. One that was already in front
@@ -2894,11 +2917,17 @@ class CommandHandler {
                     if stateBefore != .runningForeground {
                         Thread.sleep(forTimeInterval: 0.15)
                     }
-                    targetApp.open(url)
                 }
+                phases.lap("activate")
+                // An activate() that raised used to skip the delivery too
+                // (both ran in one catch); the verify below then reports the
+                // miss and the daemon falls back to its cold path.
+                let delivery = activateError == nil ? deliverWarmURL(url, bundleId: bundleId, app: targetApp) : "none"
+                phases.lap("deliver")
 
                 if let epochBefore = ackEpochGreaterThan {
                     let outcome = waitForHooksEpoch(targetApp, greaterThan: epochBefore, bootBefore: ackBootBefore, timeout: 8.0)
+                    phases.lap("verify")
                     switch outcome {
                     case .acknowledged(let epoch):
                         if displayAppearsBlack() {
@@ -2907,8 +2936,10 @@ class CommandHandler {
                                     + "in-process delivery of \(urlString)"
                             )
                         }
+                        phases.lap("displayCheck")
                         _ = rebindApp(bundleId: bundleId)
-                        return ["success": true, "epochAfter": epoch]
+                        phases.lap("rebind")
+                        return ["success": true, "epochAfter": epoch, "phasesMs": phases.laps, "delivery": delivery]
                     case .hookError(let message):
                         throw AgentError.actionFailed("openDeepLink: in-app reset reported an error: \(message)")
                     case .timedOut:
@@ -2921,14 +2952,17 @@ class CommandHandler {
 
                 if let navBefore = ackNavGreaterThan {
                     if waitForHooksNav(targetApp, greaterThan: navBefore, bootBefore: ackBootBefore, timeout: 8.0) {
+                        phases.lap("verify")
                         if displayAppearsBlack() {
                             throw AgentError.actionFailed(
                                 "openDeepLink: display is not rendering after warm "
                                     + "in-process delivery of \(urlString)"
                             )
                         }
+                        phases.lap("displayCheck")
                         _ = rebindApp(bundleId: bundleId)
-                        return ["success": true]
+                        phases.lap("rebind")
+                        return ["success": true, "phasesMs": phases.laps, "delivery": delivery]
                     }
                     throw AgentError.actionFailed(
                         "openDeepLink: navigation was not acknowledged (nav > \(navBefore)) "
@@ -2938,6 +2972,7 @@ class CommandHandler {
 
                 if let before = preOpenHierarchy {
                     if waitForDeepLinkNavigation(targetApp, before: before, timeout: 5.0) {
+                        phases.lap("verify")
                         // The hierarchy check can pass against a display that
                         // has stopped compositing (a11y stays healthy while
                         // the screen shows black); reject so the daemon's
@@ -2948,8 +2983,10 @@ class CommandHandler {
                                     + "in-process delivery of \(urlString)"
                             )
                         }
+                        phases.lap("displayCheck")
                         _ = rebindApp(bundleId: bundleId)
-                        return ["success": true]
+                        phases.lap("rebind")
+                        return ["success": true, "phasesMs": phases.laps, "delivery": delivery]
                     }
                     throw AgentError.actionFailed(
                         "openDeepLink: UI did not change after warm in-process "
