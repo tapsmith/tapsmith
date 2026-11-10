@@ -221,6 +221,10 @@ message ActionResponse {
   string request_id = 1;
   bool success = 2;
   string error_type = 3;
+  // The failure's reason when success is false. On a successful StartAgent
+  // or StartNetworkCapture: a warning for the run, or empty
+  // (StartAgent: a reducedMotion speed-up that could not be applied on an iOS
+  // simulator, PILOT-1073).
   string error_message = 4;
   bytes screenshot = 5;
   // StartAgent only: the agent launched the target app as part of this start
