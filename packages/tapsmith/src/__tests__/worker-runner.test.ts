@@ -213,6 +213,7 @@ describe('worker-runner IPC reporting', () => {
         daemonPort: 19_000,
         config: makeSerializedConfig({ package: 'com.example.app' }),
         forceInstall: false,
+        networkApisInRun: false,
       } satisfies MainToWorkerMessage);
       await ready;
 
@@ -286,6 +287,7 @@ describe('worker-runner init', () => {
         daemonPort: 19_000,
         config: makeSerializedConfig({ package: 'com.example.app', apk: 'app.apk' }),
         forceInstall,
+        networkApisInRun: false,
       } satisfies MainToWorkerMessage);
       await ready;
       // The mocked module outlives resetModules: this init's Device is the latest.

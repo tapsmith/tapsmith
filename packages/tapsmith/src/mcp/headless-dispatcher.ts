@@ -8,6 +8,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { minimatch } from 'minimatch';
 import { platformOfSerial, resolveProjects, scopeDevicePinToPlatform, topologicalSort, type ResolvedProject } from '../project.js';
 import { classifyUnmatchedTestFile, discoverTestFiles } from '../test-file-discovery.js';
+import { createNetworkApiScanner } from '../network-api-scan.js';
 import {
   deserializeTestResult,
   deserializeSuiteResult,
@@ -121,6 +122,12 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * (compiled-in hooks do not vanish mid-session).
    */
   private readonly _resetCapabilities = new Map<string, import('../app-reset.js').ResetCapabilities>();
+  /**
+   * Per device serial, whether its app runs behind the network proxy, as the
+   * last child that started the proxy reported (`appBehindProxy`). Unset
+   * until then: the server launched the app without the proxy.
+   */
+  private readonly _appBehindProxy = new Map<string, boolean>();
   /** Escalation from the cooperative abort to a signal (see `stop`). */
   private _stopEscalationTimer: ReturnType<typeof setTimeout> | null = null;
   private _initialized = false;
@@ -138,6 +145,8 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * refresh forks a child only for what changed.
    */
   private _fileStamps = new Map<string, string>();
+  /** Whether the session's test files use the network APIs, as they are now. */
+  private readonly _scanNetworkApis = createNetworkApiScanner();
   /** The refresh running now, and the one queued behind it (see `refreshTestFiles`). */
   private _syncInFlight: Promise<void> | null = null;
   private _syncQueued: Promise<void> | null = null;
@@ -251,6 +260,8 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    */
   private _startRunRequest(): void {
     this._retriedTargets.clear();
+    // Each run scans the test files afresh (PILOT-1013).
+    this._scanNetworkApis.newRun();
   }
 
   async runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult> {
@@ -1435,6 +1446,17 @@ export class HeadlessTestDispatcher implements TestDispatcher {
 
   // ─── Test execution ───
 
+  /**
+   * Whether any test file of the session uses route(), waitForRequest(),
+   * waitForResponse() or on('request' | 'response'): each run's
+   * child then starts the network proxy before the file's first hook. Every
+   * discovered file counts, not only those a call runs — the device session
+   * outlives the call, and the app keeps the connections an earlier run made.
+   */
+  private _networkApisInRun(): Promise<boolean> {
+    return this._scanNetworkApis(this._testFiles);
+  }
+
   private async _runFileInChild(
     filePath: string,
     projectUseOptions?: RunFileUseOptions,
@@ -1457,6 +1479,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     const runProject = projectName ? this._projects.find((p) => p.name === projectName) : undefined;
     const deviceName = resolveDeviceGroup(runProject?.effectiveConfig ?? this._config ?? {})[0].name;
 
+    const networkApisInRun = await this._networkApisInRun();
     const scripts = this._scripts!;
     return new Promise((resolve, reject) => {
       const child = fork(scripts.watchRunScript, [], {
@@ -1533,6 +1556,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
               Object.assign(store, learned);
               this._resetCapabilities.set(serial, store);
             }
+            if (response.appBehindProxy !== undefined) this._appBehindProxy.set(target.deviceSerial, response.appBehindProxy);
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolveOnce({ results, suite });
@@ -1574,6 +1598,10 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         // script they happen to share.
         label: 'Run',
         runMode: 'mcp',
+        networkApisInRun,
+        // The MCP server launches the app when it connects, without the
+        // proxy; a later child may have relaunched it behind the proxy.
+        proxyStartedBeforeLaunch: this._appBehindProxy.get(target.deviceSerial) ?? false,
         resetCapabilities: this._resetCapabilities.get(target.deviceSerial),
         ...(target.members && target.members.length > 0 ? {
           groupMembers: target.members.map((m) => ({

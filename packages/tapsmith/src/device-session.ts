@@ -16,7 +16,7 @@ import { execFileSync, type ChildProcess, type StdioOptions } from 'node:child_p
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
 import { deviceGroupSize, type TapsmithConfig } from './config.js';
-import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts } from './trace/types.js';
+import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts, resolveTraceConfig } from './trace/types.js';
 import { installedApkMatches, isPackageInstalled, waitForPackageIndexed } from './emulator.js';
 import { installApp, installAppAsync, installedAppMatches, isAppInstalled, probeSimulatorHealth, rebootSimulator } from './ios-simulator.js';
 import { findAgentApk, findAgentTestApk, missingAndroidAgentError } from './agent-resolve.js';
@@ -124,6 +124,21 @@ export interface OpenDeviceSessionOptions {
    * Required so an embedder cannot open a device without claiming it.
    */
   claimSession: SessionIdentity
+  /**
+   * Start the network proxy before the app is installed and launched, because
+   * the run's test files use the network APIs (`testFilesUseNetworkApis`):
+   * connections the app opens before the proxy starts bypass it,
+   * so a route registered later would never see them. `multiDevice` when the
+   * device belongs to a group of two or more (the capture must then be
+   * isolated per device). `false` when the run does not use them. With
+   * `adopt` the app is already running, so the runner starts the proxy at
+   * its first file instead; the open still tells the daemon a proxy will run,
+   * and `startedBeforeLaunch` says whether whoever launched it started the
+   * proxy first (so the runner's start is not named as a late one).
+   * Required, like `claimSession`, so no embedder opens a device without
+   * deciding.
+   */
+  startNetworkProxy: false | { multiDevice: boolean; startedBeforeLaunch?: boolean }
   onProgress?: (message: string) => void
   /**
    * Step-level progress for embedders with a step UI (the sequential CLI):
@@ -597,7 +612,11 @@ export async function openDeviceSession(
 
   const device = new Device(client, config);
   if (opts.tagTraceEvents) device._traceDeviceId = spec.name;
-  const networkTracingEnabled = isNetworkTracingEnabled(config.trace);
+  // Whether this session's app runs behind the network proxy: the trace
+  // records network, or the run's tests use the network APIs (PILOT-1013).
+  // The daemon prepares for it (on an iOS simulator, gRPC's DNS resolver at
+  // every launch; on a physical iPhone, the Wi-Fi proxy) only when told.
+  const networkTracingEnabled = isNetworkTracingEnabled(config.trace) || opts.startNetworkProxy !== false;
   const capabilities: ResetCapabilities = {};
   const session: DeviceSession = {
     name: spec.name,
@@ -682,12 +701,25 @@ export async function openDeviceSession(
       }
     }
 
+    // Before the install, the agent and the launch, so the connections the
+    // app opens go through the proxy (on an iOS simulator, once the Network
+    // Extension has picked up the app's process, within about 2 s of launch).
+    // Silent: see `Device._startNetworkProxyForSession`.
+    if (opts.startNetworkProxy && !opts.adopt) {
+      progress('starting the network proxy');
+      await device._startNetworkProxyForSession({
+        requireIsolation: opts.startNetworkProxy.multiDevice,
+        httpPorts: resolveTraceConfig(config.trace).networkHttpPorts,
+      });
+    }
+
     if (opts.adopt) {
       // The daemon already installed, started the agent and launched (the
       // CLI's primary setup, or a previous run through the same daemon).
       // Resolve the artifact paths recovery needs, then verify and probe.
       Object.assign(session.context, opts.artifacts ?? await resolveAgentArtifacts(config, spec.serial, progress));
       if (opts.seedCapabilities) Object.assign(capabilities, opts.seedCapabilities);
+      if (opts.startNetworkProxy && opts.startNetworkProxy.startedBeforeLaunch) device._launchedBehindProxy = true;
       if (opts.adoptVerify ?? true) {
         progress('attaching to the device session');
         await ensureSessionReady(session.context, `${opts.label} adopt`);

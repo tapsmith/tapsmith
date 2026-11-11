@@ -46,6 +46,7 @@ import { RunQueue, mapKeyToAction, watchUsage } from './watch-queue.js';
 import { preserveEmulatorsForReuse, emulatorsLaunchedThisProcess, type LaunchedEmulator } from './emulator.js';
 import { deviceTargetLabel } from './dispatcher.js';
 import type { ProvisionedTarget, UnavailableTargets } from './unavailable-targets.js';
+import { createNetworkApiScanner } from './network-api-scan.js';
 
 // ─── ANSI helpers ───
 
@@ -81,6 +82,12 @@ export interface WatchModeContext {
    * CLI's primary group, which the CLI already force-installed.
    */
   forceInstall: boolean
+  /**
+   * Whether the session's test files use the network APIs at startup:
+   * every worker starts its devices' proxy before its app
+   * launches. Each run scans the files again for its own children.
+   */
+  networkApisInRun: boolean
   /**
    * Sticky reset capabilities for the primary device, shared with the CLI's
    * startup launch (which probes for in-app hooks). Threaded into every
@@ -217,12 +224,17 @@ export function filesNoWorkerCanRun<T extends { projectName?: string }>(
 // ─── Watch mode coordinator ───
 
 export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
+  // Each run asks again: the user may write the session's first mocking
+  // test while watch runs (PILOT-1013).
+  const scanNetworkApis = createNetworkApiScanner();
   const state = {
     knownFiles: new Set(ctx.testFiles),
     failedFiles: new Set<string>(),
     lastRunFiles: [] as string[],
     watcher: null as FSWatcher | null,
     activeChild: null as ChildProcess | null,
+    /** Whether the primary's app runs behind the proxy, as the last child that started it said. */
+    appBehindProxy: undefined as boolean | undefined,
   };
 
   // Build file → projects lookup for re-runs. A file can belong to multiple
@@ -575,6 +587,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         // adopt), but the CLI already force-installed there this session.
         // Once per device: not again on every retry of a target that keeps failing.
         forceInstall,
+        networkApisInRun: ctx.networkApisInRun,
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({ name: groupNames[i + 1].name, deviceSerial: m.serial, daemonPort: m.daemonPort })),
         } : {}),
@@ -601,6 +614,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     const allResults: TestResult[] = [];
     const allSuites: SuiteResult[] = [];
     const failedFilePaths = new Set<string>();
+    const networkApisInRun = await scanNetworkApis([...state.knownFiles]);
     const activeWorkers = watchWorkers.filter((w) => !w.retired);
 
     // Track per-dispatch listeners so we can remove them without
@@ -662,6 +676,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
             projectUseOptions: next.projectUseOptions,
             projectName: next.projectName,
             grep: grepFor(next.projectName),
+            networkApisInRun,
           } satisfies UIWorkerMessage);
         }
 
@@ -885,6 +900,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
     const totalFiles = [...state.knownFiles].length;
     targetsRetriedThisRun.clear();
+    scanNetworkApis.newRun();
     await reviveTargetsFor((ctx.projects ?? []).filter((p) => p.testFiles.length > 0).map((p) => p.name));
     // Pass the actual worker count to the reporter so it shows worker/project
     // tags and suppresses file headers when running in parallel.
@@ -1118,6 +1134,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     }
 
     targetsRetriedThisRun.clear();
+    scanNetworkApis.newRun();
     await reviveTargetsFor(tagged.map((t) => t.projectName));
 
     const reporterConfig = useParallel()
@@ -1230,12 +1247,13 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     };
   }
 
-  function runFileInChild(
+  async function runFileInChild(
     filePath: string,
     reporter: TapsmithReporter,
     projectUseOptions?: RunFileUseOptions,
     projectName?: string,
   ): Promise<{ results: TestResult[]; suite: SuiteResult }> {
+    const networkApisInRun = await scanNetworkApis([...state.knownFiles]);
     return new Promise((resolve, reject) => {
       const child = fork(resolvedScript, [], {
         stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
@@ -1261,6 +1279,10 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         projectName,
         grep: grepFor(projectName),
         runMode: 'watch',
+        networkApisInRun,
+        // The CLI opened the device with the startup scan; a later child may
+        // have relaunched the app behind the proxy.
+        proxyStartedBeforeLaunch: state.appBehindProxy ?? ctx.networkApisInRun,
         resetCapabilities: ctx.resetCapabilities,
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {
           groupMembers: ctx.groupMembers.map((m) => ({
@@ -1293,6 +1315,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
               const learned = response.groupResetCapabilities?.[member.deviceSerial];
               if (learned) Object.assign(member.resetCapabilities, learned);
             }
+            if (response.appBehindProxy !== undefined) state.appBehindProxy = response.appBehindProxy;
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolve({ results, suite });

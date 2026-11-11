@@ -116,7 +116,7 @@ function makeOpts(group: ReturnType<typeof makeDevice>[], config: TapsmithConfig
     config,
     devices: group.map((g) => g.runDevice),
     resetCapabilities: {},
-    runMode: 'test',
+    runMode: 'test', networkApisInRun: false,
     _applied: {},
     _prepared: new Map(),
     ...extra,

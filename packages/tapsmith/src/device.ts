@@ -228,6 +228,22 @@ export class Device {
   private _onDemandStart: Promise<void> | null = null;
   /** The proxy came up through an on-demand start since the runner last asked. */
   private _proxyStartedOnDemand = false;
+  /** Whether the session-start proxy start was already tried. */
+  private _sessionNetworkStartTried = false;
+  /**
+   * @internal — The proxy came up through the runner's start at a file, after
+   * the app had been launched without it, so connections the app opened
+   * before may bypass it (a reason the runner gives for unfired routes).
+   * Cleared once the app's process is recreated behind the proxy.
+   */
+  _proxyStartedAfterLaunch = false;
+  /**
+   * @internal — The app was launched with the proxy already up: the session
+   * that launched the app this Device adopted started it first, or this
+   * Device recreated the app's process while its proxy ran. A later start at
+   * a file is then not a late one.
+   */
+  _launchedBehindProxy = false;
   /** waitForRequest/waitForResponse calls still waiting. */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
@@ -772,7 +788,7 @@ export class Device {
     return withActionProgress('restartApp', pkg,
       () => this._tracedAction('restartApp', 'device', undefined,
         () => this._client.restartApp(pkg, options?.waitForIdle ?? true),
-        'Restart app failed'));
+        'Restart app failed').then(() => this._appProcessRecreated()));
   }
 
   /**
@@ -783,7 +799,7 @@ export class Device {
     return withActionProgress('launchApp', packageName,
       () => this._tracedAction('launchApp', 'navigation', undefined,
         () => this._client.launchApp(packageName, options),
-        'Launch app failed'));
+        'Launch app failed').then(() => { if (options?.clearData) this._appProcessRecreated(); }));
   }
 
   /**
@@ -833,7 +849,28 @@ export class Device {
           detail: () => (response ? describeAppResetResponse(mode, response, options.target) : undefined),
           skipBeforeCapture: options.skipTraceCapture,
         }));
-    return toAppResetResult(mode, response!);
+    const result = toAppResetResult(mode, response!);
+    if (result.coldLaunch) this._appProcessRecreated();
+    return result;
+  }
+
+  /**
+   * The app's process was stopped or recreated: whatever connections it held
+   * are gone, so a proxy that started after it launched no longer misses them.
+   */
+  private _appProcessRecreated(): void {
+    this._proxyStartedAfterLaunch = false;
+    if (this._networkProxyRunning) this._launchedBehindProxy = true;
+  }
+
+  /**
+   * @internal — Whether the app runs behind this device's proxy, for a
+   * watch-run or MCP child to hand back to its parent, whose next child
+   * adopts the same app. Undefined when this Device never started the proxy,
+   * so it cannot tell.
+   */
+  get _appBehindProxy(): boolean | undefined {
+    return this._networkProxyRunning ? this._launchedBehindProxy : undefined;
   }
 
   /**
@@ -892,7 +929,7 @@ export class Device {
     return withActionProgress('terminateApp', pkg,
       () => this._tracedAction('terminateApp', 'device', undefined,
         () => this._client.terminateApp(pkg),
-        'Terminate app failed'));
+        'Terminate app failed').then(() => this._appProcessRecreated()));
   }
 
   /**
@@ -961,7 +998,7 @@ export class Device {
     return withActionProgress('clearAppData', packageName,
       () => this._tracedAction('clearAppData', 'device', undefined,
         () => this._client.clearAppData(packageName),
-        'Clear app data failed'));
+        'Clear app data failed').then(() => this._appProcessRecreated()));
   }
 
   /** Programmatically grant a permission (Android runtime permission; iOS simulator `simctl privacy` service). */
@@ -1137,6 +1174,40 @@ export class Device {
   _setOnDemandNetworkCapture(start: (() => Promise<void>) | null): void {
     this._onDemandCapture = start;
     this._onDemandTried = false;
+  }
+
+  /**
+   * @internal — Claim this device's one session-start proxy start:
+   * true the first time, when the proxy is not already up, so
+   * the caller starts it now; false after that. The session open (before the
+   * app launches) and the runner's first file (for a session that adopted a
+   * running app) both ask, and whichever asks first starts it. One try: a
+   * start that failed is left to the on-demand start of a test that needs it.
+   */
+  _claimSessionNetworkStart(): boolean {
+    if (this._sessionNetworkStartTried || this._networkProxyRunning) return false;
+    this._sessionNetworkStartTried = true;
+    return true;
+  }
+
+  /**
+   * @internal — Start the network proxy for the session, as the
+   * device session opens or before the runner's first file, unless a start
+   * was already tried. Never throws, and says nothing: outside a test there
+   * is no one to tell on every run path (a UI worker's or MCP child's stderr
+   * reaches no user). What the start warns about is told by the start at
+   * each test's beginning — the daemon repeats a running proxy's first-start
+   * warnings — and a start that failed is tried again, and reported, by the
+   * on-demand start of a test that needs the proxy.
+   */
+  async _startNetworkProxyForSession(options: { requireIsolation: boolean; httpPorts?: number[]; appRunning?: boolean }): Promise<void> {
+    if (!this._claimSessionNetworkStart()) return;
+    try {
+      const res = await this._startNetworkCapture({ requireIsolation: options.requireIsolation, httpPorts: options.httpPorts });
+      if (res.success && options.appRunning && !this._launchedBehindProxy) this._proxyStartedAfterLaunch = true;
+    } catch {
+      // Recorded as `_networkCaptureError`; see above.
+    }
   }
 
   /**
@@ -1356,11 +1427,13 @@ export class Device {
    * `Route` object that can `abort()`, `continue()`, `fulfill()`, or `fetch()`
    * the request.
    *
-   * Routes run on Tapsmith's network proxy. The test runner starts it for a
-   * test whose trace records network traffic, and otherwise on the first
-   * `route()`, `waitForRequest()` or `waitForResponse()` of a test;
-   * it then stays up for the rest of the session. Connections
-   * the app opened before the proxy started bypass it, so register routes
+   * Routes run on Tapsmith's network proxy. The test runner starts it as
+   * the device session starts when the run's test files call `route()`,
+   * `waitForRequest()`, `waitForResponse()` or `on('request' | 'response')`,
+   * for a test whose trace records network traffic, and otherwise on the
+   * first such call of a test; it then stays up for the rest of the session.
+   * Connections the app opened before the proxy started bypass it, and a
+   * route sees only requests made after it is registered, so register routes
    * before the app sends the requests they mock. Outside the test runner
    * nothing starts the proxy, route handlers never fire, and the runner
    * warns at the end of a test whose routes could not fire.
@@ -1547,8 +1620,9 @@ export class Device {
     if (!this._networkProxyRunning) {
       return '. No network capture was running on this device, so no request could be seen: ' +
         'waitForRequest() and waitForResponse() see traffic only through Tapsmith\'s network proxy, ' +
-        'which the test runner starts for a test (on its first route() or network wait, or when its ' +
-        'trace records network). See https://tapsmith.dev/guides/network/#prerequisites';
+        'which the test runner starts with the session when the run\'s test files use these calls, ' +
+        'or for a test (on its first route() or network wait, or when its trace records network). ' +
+        'See https://tapsmith.dev/guides/network/#prerequisites';
     }
     if (!proxyWasRunning) {
       return '. The network proxy started on demand with this wait, and connections the app had ' +

@@ -127,6 +127,11 @@ export interface UiLaunchPlanInput {
    * Defaults to the group `config` itself declares.
    */
   deviceGroupSize?: number;
+  /**
+   * The run's test files use the network APIs (`testFilesUseNetworkApis`),
+   * so the proxy starts with the device session.
+   */
+  networkApisInRun?: boolean;
 }
 
 export interface UiLaunchProgressOptions {
@@ -161,13 +166,16 @@ function platformSummary(
 
 /**
  * How network capture runs (PILOT-775): `captured` when the trace records
- * network for every test, else `on demand` — the proxy starts on a test's
- * first route() or network wait. Projects that differ are listed together.
+ * network for every test, else `at session start` when the run's tests use
+ * the network APIs, else `on demand` — the proxy starts on a
+ * test's first route() or network wait. Projects that differ are listed
+ * together.
  */
 function networkSummary(
   config: TapsmithConfig,
   projects: ResolvedProject[] | undefined,
   mode: "ui" | "test",
+  networkApisInRun: boolean,
 ): string {
   const configs =
     projects && projects.length > 0
@@ -181,7 +189,9 @@ function networkSummary(
       );
       return trace.network && shouldRecord(trace.mode, 0)
         ? "captured"
-        : "on demand";
+        : networkApisInRun
+          ? "at session start"
+          : "on demand";
     }),
   );
   return `network: ${[...modes].sort().join(" + ")}`;
@@ -244,7 +254,7 @@ export function createUiLaunchSteps(input: UiLaunchPlanInput): LaunchStep[] {
     plural(input.testFileCount, "test file"),
     platformSummary(input.config, input.projects),
     projectCount > 0 ? plural(projectCount, "project") : undefined,
-    networkSummary(input.config, input.projects, input.mode ?? "ui"),
+    networkSummary(input.config, input.projects, input.mode ?? "ui", input.networkApisInRun ?? false),
   ]
     .filter(Boolean)
     .join(" | ");

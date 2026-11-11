@@ -34,6 +34,13 @@ export interface InitMessage {
    */
   forceInstall: boolean
   /**
+   * Whether the run's test files use the network APIs: the
+   * worker starts each device's network proxy before the app launches, and
+   * passes it on as `RunOptions.networkApisInRun`. Required, like
+   * `forceInstall`.
+   */
+  networkApisInRun: boolean
+  /**
    * The rest of the device group (`devices[1..]`), each on its own daemon.
    * Present only for group projects (`use.devices`); a single-device worker
    * omits it.

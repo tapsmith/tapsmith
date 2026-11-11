@@ -628,6 +628,8 @@ async function setupSequentialDeviceClaimed(
   cfg: TapsmithConfig,
   forceInstall: boolean,
   signature: string,
+  /** The run's test files use the network APIs: start the proxy before the app launches (PILOT-1013). */
+  networkApisInRun: boolean,
   progress?: LaunchProgressSink,
   /** The group to open (`sharedDeviceGroup` of the target's projects); defaults to what `cfg` declares. */
   deviceGroup?: DeviceGroupEntry[],
@@ -760,6 +762,7 @@ async function setupSequentialDeviceClaimed(
       cfg,
       {
         claimSession: currentSession(),
+        startNetworkProxy: networkApisInRun && { multiDevice: group.length > 1 },
         label: 'Device',
         client,
         forceInstall,
@@ -836,7 +839,7 @@ async function setupSequentialDeviceClaimed(
   if (group.length > 1) {
     device._traceDeviceId = group[0].name;
     try {
-      const members = await openSequentialGroupMembers(cfg, group, launchedEmulators, forceInstall, progress);
+      const members = await openSequentialGroupMembers(cfg, group, launchedEmulators, forceInstall, networkApisInRun, progress);
       sessions = [primarySession, ...members];
     } catch (err) {
       // The primary is up; a group that cannot complete is a failed setup.
@@ -884,12 +887,13 @@ async function openSequentialGroupMembers(
   group: DeviceGroupEntry[],
   launchedEmulators: LaunchedEmulator[],
   forceInstall: boolean,
+  networkApisInRun: boolean,
   progress?: LaunchProgressSink,
 ): Promise<DeviceSession[]> {
   const members = group.slice(1);
   progress?.start('worker-devices', `preparing ${members.length} more device(s) for the group`);
   try {
-    return await openGroupMembersOnFreshDaemons(cfg, group, launchedEmulators, forceInstall, progress);
+    return await openGroupMembersOnFreshDaemons(cfg, group, launchedEmulators, forceInstall, networkApisInRun, progress);
   } catch (err) {
     // Whatever failed — provisioning, a daemon, a session — it is this step's
     // failure. The caller marks the primary failed only when the primary is;
@@ -905,6 +909,7 @@ async function openGroupMembersOnFreshDaemons(
   group: DeviceGroupEntry[],
   launchedEmulators: LaunchedEmulator[],
   forceInstall: boolean,
+  networkApisInRun: boolean,
   progress?: LaunchProgressSink,
 ): Promise<DeviceSession[]> {
   const members = group.slice(1);
@@ -967,6 +972,8 @@ async function openGroupMembersOnFreshDaemons(
 
     const sessions = await openDeviceGroup(specs, cfg, {
       claimSession: currentSession(),
+      // Members only, but always of a group.
+      startNetworkProxy: networkApisInRun && { multiDevice: true },
       label: 'Device',
       forceInstall,
       launchPhase: 'startup launch',
@@ -2466,6 +2473,13 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       process.exit(1);
     }
   }
+  // Whether any file this session can run uses route(), waitForRequest(),
+  // waitForResponse() or on('request' | 'response'): if so every device
+  // session starts the network proxy before the app launches (PILOT-1013).
+  // UI and watch scan every discovered file, since any of them may run in
+  // the session, and scan again for each run.
+  const { testFilesUseNetworkApis } = await import('./network-api-scan.js');
+  const networkApisInRun = await testFilesUseNetworkApis(testFiles);
   printTapsmithBanner();
   // After the tsx re-exec, so it prints exactly once, and before any worker
   // is forked, so no child ever races it (PILOT-330).
@@ -2484,6 +2498,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       mode: args.ui ? 'ui' : 'test',
       projects: hasProjects ? projects : undefined,
       workerPlanWarning,
+      networkApisInRun,
     }), {
       title: args.ui ? 'UI mode' : '',
     })
@@ -2525,6 +2540,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
           testFiles,
           workers: totalWorkers,
           forceInstall: args.forceInstall,
+          networkApisInRun,
           workerCap: budgetCap,
           projects: hasProjects ? projects : undefined,
           projectWaves: hasProjects ? projectWaves : undefined,
@@ -2639,6 +2655,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
           candidate.effectiveConfig,
           args.forceInstall,
           candidate.deviceSignature,
+          networkApisInRun,
           launchProgress,
           bucketGroup(candidate.deviceSignature),
         );
@@ -2773,6 +2790,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         screenshotDir: uiScreenshotDir,
         launchedEmulators,
         forceInstall: args.forceInstall,
+        networkApisInRun,
         projects: hasProjects ? projects : undefined,
         projectWaves: hasProjects ? projectWaves : undefined,
         workers: uiWorkersOverride,
@@ -2863,6 +2881,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         screenshotDir: watchScreenshotDir,
         launchedEmulators,
         forceInstall: args.forceInstall,
+        networkApisInRun,
         // The startup launch already probed for in-app hooks into this shared
         // object; watch-run children seed from it and report back, so warm
         // per-policy resets survive the fresh-child-per-run boundary.
@@ -2989,6 +3008,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
               project.effectiveConfig,
               args.forceInstall,
               project.deviceSignature,
+              networkApisInRun,
               undefined,
               bucketGroup(project.deviceSignature),
             );
@@ -3032,6 +3052,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
             // The state holds the target's largest group; this project runs
             // on the first N of it (the runner checks the count).
             sessions: sessionsForRun(currentSequentialState!.sessions, project.effectiveConfig),
+            networkApisInRun,
             screenshotDir,
             reporter,
             projectUseOptions: project.use,
@@ -3115,6 +3136,8 @@ async function runTestFileWithRecovery(
     config: TapsmithConfig
     /** The device group, primary first. */
     sessions: DeviceSession[]
+    /** `RunOptions.networkApisInRun`. */
+    networkApisInRun: boolean
     screenshotDir: string | undefined
     reporter: ReporterDispatcher
     projectUseOptions?: Record<string, unknown>
@@ -3171,6 +3194,7 @@ async function runTestFileWithRecovery(
         abortFileOnError: isRecoverableInfrastructureError,
         resetCapabilities: sessions[0].capabilities,
         runMode: 'test',
+        networkApisInRun: opts.networkApisInRun,
         // In-process retries need the same ESM cache busting as worker
         // retries; otherwise import() returns the cached module and the
         // retry registers no tests.

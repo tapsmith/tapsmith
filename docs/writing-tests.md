@@ -493,7 +493,7 @@ await device.waitForIdle()
 
 ### Network-dependent flows
 
-For flows that depend on network responses, use `waitForRequest()` or `waitForResponse()` instead of arbitrary timeouts. Start waiting before the action that sends the request (the network proxy starts on demand; see [Network prerequisites](network.md#prerequisites)):
+For flows that depend on network responses, use `waitForRequest()` or `waitForResponse()` instead of arbitrary timeouts. Start waiting before the action that sends the request (see [Network prerequisites](network.md#prerequisites) for when the network proxy starts):
 
 ```typescript
 // Wait for a specific API call to complete

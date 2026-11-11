@@ -1,4 +1,5 @@
 import { NetworkReplayBuffer } from './network-replay.js';
+import { createNetworkApiScanner } from '../network-api-scan.js';
 /**
  * UI mode server.
  *
@@ -187,6 +188,12 @@ export interface UIServerContext {
    * at startup (the CLI already did the primary). Never on a respawn.
    */
   forceInstall: boolean
+  /**
+   * Whether the session's test files use the network APIs:
+   * every worker starts its devices' network proxy before the app launches.
+   * Required, like `forceInstall`.
+   */
+  networkApisInRun: boolean
   projects?: ResolvedProject[]
   /** Dependency-ordered project waves from topologicalSort(). */
   projectWaves?: ResolvedProject[][]
@@ -388,6 +395,9 @@ export async function startUIServer(
 
   /** Devices a target retry already set up with `--force-install`. */
   const forceInstalledSerials = new Set<string>();
+  // Each run asks again whether the session's tests use the network APIs:
+  // the user may write the first mocking test mid-session (PILOT-1013).
+  const scanNetworkApis = createNetworkApiScanner();
   /** Worker ids a failed target retry gave back, for the next attempt. */
   const freeWorkerIds: number[] = [];
   /** Ends a run's wait on a device-target retry (Stop). */
@@ -2400,6 +2410,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           adoptPrimary: !!adopt,
           adoptPrepared: !!adopt && adoptPrepared,
           forceInstall,
+          networkApisInRun: ctx.networkApisInRun,
           ...(members.length > 0 ? {
             groupMembers: members.map((m) => ({
               name: m.name,
@@ -2749,6 +2760,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // A device target that could not start is tried again first; while it
     // still cannot, its files fail with the reason (PILOT-415).
     const unavailable = await reviveTargetsFor(files);
+    // The files as they are now: the user may have written the session's
+    // first mocking test since it started (PILOT-1013).
+    scanNetworkApis.newRun();
+    const networkApisInRun = await scanNetworkApis(ctx.testFiles);
     if (!parallelRunAborted) {
       for (const f of unavailable) {
         const sig = f.projectName ? ctx.bucketByProject?.get(f.projectName) : undefined;
@@ -2900,6 +2915,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           fullNames: next.fullNames ? [...next.fullNames] : undefined,
           grep: serializeGrepFilters(grepFor(next.projectName)),
           preparedFor,
+          networkApisInRun,
         };
         // A worker can die between exit-event delivery and this dispatch; an
         // unguarded send would throw ERR_IPC_CHANNEL_CLOSED out of the

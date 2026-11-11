@@ -55,7 +55,7 @@ function makeConfig(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
 function makeOpts(overrides: Partial<RunOptions> = {}): RunOptions {
   // resetCapabilities is required by design (see RunOptions); unit tests have
   // no device to probe, so an empty object is the honest value.
-  return { config: makeConfig(), devices: [], resetCapabilities: {}, runMode: 'test', ...overrides };
+  return { config: makeConfig(), devices: [], resetCapabilities: {}, runMode: 'test', networkApisInRun: false, ...overrides };
 }
 
 describe('collectResults()', () => {
@@ -1016,7 +1016,7 @@ describe('runner execution', () => {
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).toContain('"mocks the feed without tracing"');
         expect(warnings[0]).toContain('network capture was not running');
-        expect(warnings[0]).toContain('starts on the first route()');
+        expect(warnings[0]).toContain('starts with the session when the run\'s test files call route()');
         // The routes are still cleaned up between tests.
         expect(device._routeManager.removeTestRoutes).toHaveBeenCalled();
       } finally {
