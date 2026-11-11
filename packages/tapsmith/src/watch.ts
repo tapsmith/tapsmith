@@ -233,6 +233,8 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     lastRunFiles: [] as string[],
     watcher: null as FSWatcher | null,
     activeChild: null as ChildProcess | null,
+    /** Whether the primary's app runs behind the proxy, as the last child that started it said. */
+    appBehindProxy: undefined as boolean | undefined,
   };
 
   // Build file → projects lookup for re-runs. A file can belong to multiple
@@ -1276,8 +1278,9 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         grep: grepFor(projectName),
         runMode: 'watch',
         networkApisInRun,
-        // The CLI opened the device with the startup scan.
-        proxyStartedBeforeLaunch: ctx.networkApisInRun,
+        // The CLI opened the device with the startup scan; a later child may
+        // have relaunched the app behind the proxy.
+        proxyStartedBeforeLaunch: state.appBehindProxy ?? ctx.networkApisInRun,
         resetCapabilities: ctx.resetCapabilities,
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {
           groupMembers: ctx.groupMembers.map((m) => ({
@@ -1310,6 +1313,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
               const learned = response.groupResetCapabilities?.[member.deviceSerial];
               if (learned) Object.assign(member.resetCapabilities, learned);
             }
+            if (response.appBehindProxy !== undefined) state.appBehindProxy = response.appBehindProxy;
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolve({ results, suite });

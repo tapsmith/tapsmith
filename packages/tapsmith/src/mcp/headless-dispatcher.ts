@@ -122,6 +122,12 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * (compiled-in hooks do not vanish mid-session).
    */
   private readonly _resetCapabilities = new Map<string, import('../app-reset.js').ResetCapabilities>();
+  /**
+   * Per device serial, whether its app runs behind the network proxy, as the
+   * last child that started the proxy reported (`appBehindProxy`). Unset
+   * until then: the server launched the app without the proxy.
+   */
+  private readonly _appBehindProxy = new Map<string, boolean>();
   /** Escalation from the cooperative abort to a signal (see `stop`). */
   private _stopEscalationTimer: ReturnType<typeof setTimeout> | null = null;
   private _initialized = false;
@@ -1548,6 +1554,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
               Object.assign(store, learned);
               this._resetCapabilities.set(serial, store);
             }
+            if (response.appBehindProxy !== undefined) this._appBehindProxy.set(target.deviceSerial, response.appBehindProxy);
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolveOnce({ results, suite });
@@ -1590,8 +1597,9 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         label: 'Run',
         runMode: 'mcp',
         networkApisInRun,
-        // The MCP server launches the app when it connects, without the proxy.
-        proxyStartedBeforeLaunch: false,
+        // The MCP server launches the app when it connects, without the
+        // proxy; a later child may have relaunched it behind the proxy.
+        proxyStartedBeforeLaunch: this._appBehindProxy.get(target.deviceSerial) ?? false,
         resetCapabilities: this._resetCapabilities.get(target.deviceSerial),
         ...(target.members && target.members.length > 0 ? {
           groupMembers: target.members.map((m) => ({

@@ -238,9 +238,10 @@ export class Device {
    */
   _proxyStartedAfterLaunch = false;
   /**
-   * @internal — The app this Device adopted was launched with the proxy
-   * already up (the session that launched it started it first), so a later
-   * start at a file is not a late one.
+   * @internal — The app was launched with the proxy already up: the session
+   * that launched the app this Device adopted started it first, or this
+   * Device recreated the app's process while its proxy ran. A later start at
+   * a file is then not a late one.
    */
   _launchedBehindProxy = false;
   /** waitForRequest/waitForResponse calls still waiting. */
@@ -859,6 +860,17 @@ export class Device {
    */
   private _appProcessRecreated(): void {
     this._proxyStartedAfterLaunch = false;
+    if (this._networkProxyRunning) this._launchedBehindProxy = true;
+  }
+
+  /**
+   * @internal — Whether the app runs behind this device's proxy, for a
+   * watch-run or MCP child to hand back to its parent, whose next child
+   * adopts the same app. Undefined when this Device never started the proxy,
+   * so it cannot tell.
+   */
+  get _appBehindProxy(): boolean | undefined {
+    return this._networkProxyRunning ? this._launchedBehindProxy : undefined;
   }
 
   /**

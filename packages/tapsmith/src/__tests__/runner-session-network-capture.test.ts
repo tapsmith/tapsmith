@@ -262,9 +262,21 @@ describe('runTestFile — network capture at session start (PILOT-1013)', () => 
       expect(result!.error?.message).toBe('no error alert');
       const line = warned.find((w) => w.includes(`"mocks after ${label}"`)) ?? '';
       expect(line).not.toContain('after the app was already running');
+      // What the parent hands its next child, which adopts this app.
+      expect(device._appBehindProxy).toBe(true);
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it('reports the app as not behind the proxy after a start at the file, and nothing without a start', async () => {
+    const late = makeDevice();
+    await runTestFile(writeFile('late.test.mjs', `test('a', async () => {});`), makeOpts([late.device], true));
+    expect(late.device._appBehindProxy).toBe(false);
+
+    const none = makeDevice();
+    await runTestFile(writeFile('none.test.mjs', `test('a', async () => {});`), makeOpts([none.device], false));
+    expect(none.device._appBehindProxy).toBeUndefined();
   });
 
   it('names no late start when the adopted app was launched behind the proxy', async () => {

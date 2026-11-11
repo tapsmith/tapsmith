@@ -92,11 +92,13 @@ export interface WatchRunMessage {
    */
   networkApisInRun: boolean
   /**
-   * Whether the parent started the network proxy before it launched the app
-   * this child adopts (its session-open scan found the network APIs). False
-   * when the app was launched without it — the MCP server's own launch, or a
-   * watch session whose first mocking test was written later — so a failed
-   * test's unfired routes can name the late start. Required.
+   * Whether the app this child adopts was launched with the network proxy
+   * up: the parent started it first (its session-open scan found the network
+   * APIs), or an earlier child relaunched the app behind it (its
+   * `appBehindProxy`). False when the app was launched without it — the MCP
+   * server's own launch, or a watch session whose first mocking test was
+   * written later — so a failed test's unfired routes can name the late
+   * start. Required.
    */
   proxyStartedBeforeLaunch: boolean
   /**
@@ -130,6 +132,12 @@ export interface WatchRunFileDoneMessage {
   resetCapabilities?: ResetCapabilities
   /** The same, for every device of the group, keyed by serial. */
   groupResetCapabilities?: Record<string, ResetCapabilities>
+  /**
+   * Whether the primary's app now runs behind the network proxy (this run
+   * relaunched it with the proxy up), for the parent's next
+   * `proxyStartedBeforeLaunch`. Omitted when this run never started the proxy.
+   */
+  appBehindProxy?: boolean
 }
 
 export interface WatchRunErrorMessage {
@@ -282,6 +290,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       suite: serializeSuiteResult(suiteResult, 0),
       resetCapabilities: sessions[0].capabilities,
       groupResetCapabilities: Object.fromEntries(sessions.map((s) => [s.serial, s.capabilities])),
+      ...(sessions[0].device._appBehindProxy === undefined ? {} : { appBehindProxy: sessions[0].device._appBehindProxy }),
     });
   } finally {
     disposeActionProgressPrinter();

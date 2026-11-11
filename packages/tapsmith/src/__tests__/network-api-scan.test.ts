@@ -129,6 +129,14 @@ export default async function run(device) { await device.waitForRequest(data.url
     expect(await testFilesUseNetworkApis([f])).toBe(true);
   });
 
+  it('follows the imports it can resolve in a file with one it cannot', async () => {
+    write('screens/net.ts', `export async function mock(device: any) { await device.route('**', () => {}) }\n`);
+    const f = write('tests/a.test.ts', `${header}import { mock } from '../screens/net'\nimport { later } from './not-written'\ntest('a', async ({ device }) => { await mock(device); later() })\n`);
+    const g = write('tests/b.test.ts', `${header}import { mock } from '../screens/net'\nexport async function f() { return import('./missing-dyn') }\ntest('b', async ({ device }) => { await mock(device) })\n`);
+    expect(await testFilesUseNetworkApis([f])).toBe(true);
+    expect(await testFilesUseNetworkApis([g])).toBe(true);
+  });
+
   it('is false when no file can be read', async () => {
     const broken = write('broken.test.ts', `this is not ( valid typescript`);
     expect(await testFilesUseNetworkApis([broken, path.join(dir, 'gone.test.ts')])).toBe(false);
@@ -180,6 +188,31 @@ describe('createNetworkApiScanner', () => {
     expect(await scan([a])).toBe(false);
     write('utils/mock.ts', `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`);
     expect(await scan([a])).toBe(true);
+  });
+
+  it('scans again once a missing import is written into a folder that already exists', async () => {
+    const scan = createNetworkApiScanner();
+    write('utils/other.ts', `export const x = 1\n`);
+    const a = write('a.test.ts', `${header}import { mockApi } from './utils/mock'\ntest('a', async ({ device }) => { await mockApi(device) })\n`);
+    expect(await scan([a])).toBe(false);
+    const helper = write('utils/mock.ts', `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`);
+    // Folder times can be coarse: make the write visible whatever the filesystem.
+    touch(path.dirname(helper), 5_000);
+    expect(await scan([a])).toBe(true);
+  });
+
+  it('reuses its answer while a file stays broken', async () => {
+    const scan = createNetworkApiScanner();
+    const mtime = new Date(2026, 0, 1);
+    const lazy = write('lazy.test.ts', `${header}export async function f() { return import('./never-written') }\ntest('l', async () => {})\n`);
+    const bad = write('bad.test.ts', `this is not ( valid typescript`);
+    const a = write('a.test.ts', `${header}test('a', async ({ device }) => { await device.route('**', () => {}) })\n`);
+    for (const f of [lazy, bad, a]) fs.utimesSync(f, mtime, mtime);
+    expect(await scan([lazy, bad, a])).toBe(true);
+    // Changed on disk without a new modification time: reused, not rescanned.
+    fs.writeFileSync(a, `${header}test('a', async () => {})\n`);
+    fs.utimesSync(a, mtime, mtime);
+    expect(await scan([lazy, bad, a])).toBe(true);
   });
 
   it('scans a file again once it is edited, even one it could not read before', async () => {
