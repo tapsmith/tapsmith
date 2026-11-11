@@ -61,7 +61,7 @@ export interface SessionIdentity {
    * The session gives its devices up to a UI-mode session starting in the
    * same project, when asked: its root process handles the yield signal
    * (`ui-yield.ts`). Set by `tapsmith mcp-server --prefer-ui`, whose requests
-   * go to that UI session once it is up (PILOT-1164).
+   * go to that UI session once it is up.
    */
   yieldsToUi?: boolean
 }

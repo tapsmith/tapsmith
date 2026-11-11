@@ -1,6 +1,6 @@
 /**
  * Hand-over of devices from a coding agent's headless MCP session to a
- * UI-mode session starting in the same project (PILOT-1164).
+ * UI-mode session starting in the same project.
  *
  * `tapsmith mcp-server --prefer-ui` works in the project's UI session when
  * one is running and headless when none is. A headless spell that has used a

@@ -1998,7 +1998,7 @@ export interface UiDaemonPorts {
   daemons?: UiDaemonRecord[]
   owned?: string[]
   devices?: string[]
-  /** The session's MCP endpoint (PILOT-1164). */
+  /** The session's MCP endpoint. */
   mcpUrl?: string
   /** The project the session was started for: see `uiSessionMatchesProject`. */
   project?: UiSessionProject

@@ -1,7 +1,7 @@
 /**
  * `tapsmith mcp-server --prefer-ui`: one stdio MCP server that works in the
  * project's running UI-mode session when there is one, and headless when
- * there is not (PILOT-1164). The Tapsmith plugin registers this, so an agent
+ * there is not. The Tapsmith plugin registers this, so an agent
  * with nothing but the plugin drives the session the user can see.
  *
  * It holds no test or device state of its own. Every request is passed to one
