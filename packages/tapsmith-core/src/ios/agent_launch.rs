@@ -788,8 +788,10 @@ struct LaunchProgress {
     test_started: Option<std::time::Instant>,
     /// The agent's socket listens: "[TapsmithSocket] Listening on port".
     listening: Option<std::time::Instant>,
-    /// The runner's own report of how long it waited at the launch gate.
-    gate_waited_ms: Option<u64>,
+    /// The runner's own report of its launch-gate wait, as the timing
+    /// field it becomes: `gate_waited_ms=<n>` when the gate opened,
+    /// `gate=timed_out` / `gate=unacknowledged` when it launched without it.
+    gate: Option<String>,
 }
 
 impl LaunchProgress {
@@ -800,7 +802,7 @@ impl LaunchProgress {
             runner_started: None,
             test_started: None,
             listening: None,
-            gate_waited_ms: None,
+            gate: None,
         }
     }
 
@@ -816,15 +818,28 @@ impl LaunchProgress {
         if self.listening.is_none() && line.contains("[TapsmithSocket] Listening on port") {
             self.listening = Some(at);
         }
-        if self.gate_waited_ms.is_none() {
-            if let Some(rest) = line.split("Launch gate: opened(waitedMs: ").nth(1) {
-                self.gate_waited_ms = rest.split(')').next().and_then(|n| n.trim().parse().ok());
+        if self.gate.is_none() {
+            if let Some(outcome) = line.split("Launch gate: ").nth(1) {
+                let outcome = outcome.trim();
+                self.gate = if let Some(rest) = outcome.strip_prefix("opened(waitedMs: ") {
+                    rest.split(')')
+                        .next()
+                        .and_then(|n| n.trim().parse::<u64>().ok())
+                        .map(|ms| format!("gate_waited_ms={ms}"))
+                } else if outcome.starts_with("timedOut") {
+                    Some("gate=timed_out".to_string())
+                } else if outcome.starts_with("unacknowledged") {
+                    Some("gate=unacknowledged".to_string())
+                } else {
+                    None
+                };
             }
         }
     }
 
     /// `spawn_to_output_ms=… output_to_runner_ms=… runner_to_test_ms=…
-    /// test_to_listening_ms=… listening_to_ready_ms=… gate_waited_ms=…`. A
+    /// test_to_listening_ms=… listening_to_ready_ms=… gate_waited_ms=…` (or
+    /// `gate=timed_out` when the runner launched without the gate). A
     /// step that was never seen is skipped, and the phase across it named by
     /// the steps on either side (`output_to_timeout_ms`).
     ///
@@ -851,8 +866,8 @@ impl LaunchProgress {
             }
             previous = Some((name, at));
         }
-        if let Some(waited) = self.gate_waited_ms {
-            fields.push(format!("gate_waited_ms={waited}"));
+        if let Some(gate) = &self.gate {
+            fields.push(gate.clone());
         }
         fields.join(" ")
     }
@@ -2069,6 +2084,11 @@ mod tests {
             p.phase_fields(t0 + Duration::from_millis(2_000), "timeout"),
             "spawn_to_output_ms=900 output_to_timeout_ms=1100"
         );
+        // The runner gave up waiting at the gate: said, not left out.
+        p.observe(
+            "2026-11-11 11:33:30.133+0000 TapsmithAgentUITests-Runner[1:2] [TapsmithAgent] Launch gate: timedOut",
+            t0 + Duration::from_millis(2_500),
+        );
         // Another Xcode's wording for the runner's start: the phase spans it.
         p.observe(
             "Test Case '-[A b]' started.",
@@ -2076,7 +2096,7 @@ mod tests {
         );
         assert_eq!(
             p.phase_fields(t0 + Duration::from_millis(3_500), "ready"),
-            "spawn_to_output_ms=900 output_to_test_ms=2100 test_to_ready_ms=500"
+            "spawn_to_output_ms=900 output_to_test_ms=2100 test_to_ready_ms=500 gate=timed_out"
         );
     }
 
