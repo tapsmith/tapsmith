@@ -112,6 +112,8 @@ async function harness(opts: {
   connectUi?: (session: UiSession, info: Implementation) => Promise<Client>
   /** What asking the connected UI session says, when not simply whether it is still the one discovery finds. */
   probe?: () => 'alive' | 'gone' | 'unanswered' | undefined
+  /** How long requests wait for a UI session after a yield (short by default, so tests do not). */
+  yieldWaitMs?: number
 } = {}): Promise<Harness> {
   const ui = probe();
   const headless = probe();
@@ -133,6 +135,8 @@ async function harness(opts: {
       return backend.client;
     },
     log: (line) => { logs.push(line); },
+    yieldWaitMs: opts.yieldWaitMs ?? 40,
+    yieldPollMs: 5,
   });
   const [agentSide, bridgeSide] = InMemoryTransport.createLinkedPair();
   await bridge.server.connect(bridgeSide);
@@ -302,14 +306,63 @@ describe('McpBridge: a UI session that starts or ends after the agent connected'
 });
 
 describe('McpBridge.yieldHeadless', () => {
-  it('ends an idle headless session, and the next call starts another', async () => {
+  it('ends an idle headless session', async () => {
     const h = await harness();
     await who(h.agent);
     expect(h.bridge.yieldHeadless()).toBe(true);
     expect(h.headlessClosed()).toEqual([true]);
     expect(h.bridge.activeBackend).toBeUndefined();
+  });
+
+  // The UI session that asked publishes itself only once it is up. A headless
+  // session started for a call made meanwhile would take the device back.
+  it('holds the next call for the UI session that is starting, and runs it there', async () => {
+    const h = await harness({ yieldWaitMs: 5_000 });
+    await who(h.agent);
+    h.bridge.yieldHeadless();
+    const call = who(h.agent);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 60); });
+    expect(h.headlessStarts()).toBe(1);
+    h.setUiSession(UI_SESSION);
+    expect(await call).toBe('ui');
+    expect(h.headlessStarts()).toBe(1);
+    expect(h.logs).toContain('Waiting for the UI-mode session that is starting for this project.');
+  });
+
+  it('holds a call that was already choosing its backend when the yield arrived', async () => {
+    const found = deferred<UiSession | undefined>();
+    let waiting = false;
+    const h = await harness({ yieldWaitMs: 5_000 });
+    await who(h.agent);
+    const find = (h.bridge as unknown as { _options: { findUiSession: () => Promise<UiSession | undefined> } })._options;
+    const original = find.findUiSession;
+    find.findUiSession = () => {
+      if (waiting) return original();
+      waiting = true;
+      return found.promise;
+    };
+    const call = who(h.agent);
+    await expect.poll(() => waiting).toBe(true);
+    expect(h.bridge.yieldHeadless()).toBe(true);
+    found.resolve(undefined);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 40); });
+    expect(h.headlessStarts()).toBe(1);
+    h.setUiSession(UI_SESSION);
+    expect(await call).toBe('ui');
+    expect(h.headlessStarts()).toBe(1);
+  });
+
+  it('runs headless again when no UI session comes up in time', async () => {
+    const h = await harness({ yieldWaitMs: 40 });
+    await who(h.agent);
+    h.bridge.yieldHeadless();
     expect(await who(h.agent)).toBe('headless');
     expect(h.headlessStarts()).toBe(2);
+    expect(h.logs).toContain('No UI-mode session came up.');
+    // The wait is over: later calls do not wait again.
+    const started = Date.now();
+    expect(await who(h.agent)).toBe('headless');
+    expect(Date.now() - started).toBeLessThan(40);
   });
 
   it('refuses while a headless call is running, and when there is no headless session', async () => {
@@ -469,6 +522,7 @@ async function httpHarness(url: string): Promise<Harness> {
       return backend.client;
     },
     log: (line) => { logs.push(line); },
+    uiLivenessMs: 50,
   });
   const [agentSide, bridgeSide] = InMemoryTransport.createLinkedPair();
   await bridge.server.connect(bridgeSide);
@@ -548,6 +602,27 @@ describe('McpBridge over a real HTTP endpoint', () => {
     expect(await who(h.agent)).toMatch(/^headless/);
     // Sent once: a call that may have run is never sent again.
     expect(p.calls).toEqual(['slow']);
+  });
+
+  // A run in progress has its response stream open, and that stream breaking
+  // does not fail the request: the MCP client only reports a transport error.
+  it('fails a call whose response had started streaming when the UI session died', async () => {
+    const p = probe();
+    const ui = await httpBackend(p);
+    const h = await httpHarness(ui.url);
+    const progressed = deferred();
+    const call = h.agent.callTool({ name: 'slow', arguments: {} }, undefined, { onprogress: () => { progressed.resolve(); } });
+    await progressed.promise;
+    await ui.kill();
+    const result = await call;
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      `The UI-mode session at ${ui.url} ended (or stopped answering) while this call was running, so it may not have completed. `
+      + 'Call again: this server runs headless when no UI-mode session is running for the project.',
+    );
+    expect(p.calls).toEqual(['slow']);
+    h.setUiSession(undefined);
+    expect(await who(h.agent)).toMatch(/^headless/);
   });
 
   it('works against the UI server\'s own MCP router, reconnecting after it drops the session', async () => {

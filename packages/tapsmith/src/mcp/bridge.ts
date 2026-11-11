@@ -83,6 +83,12 @@ export interface McpBridgeOptions {
   connectUi?: (session: UiSession, client: Implementation) => Promise<Client>
   startHeadless?: (client: Implementation) => Promise<Client>
   log?: (line: string) => void
+  /** How long requests wait, after a yield, for the UI session that asked for it (ms). */
+  yieldWaitMs?: number
+  /** How often discovery is asked again during that wait (ms). */
+  yieldPollMs?: number
+  /** How often a UI session with requests running in it is asked whether it is still there (ms). */
+  uiLivenessMs?: number
 }
 
 /** A request's backend went away while it was running. */
@@ -101,6 +107,23 @@ class BackendLostError extends McpError {
  * (The largest delay a Node timer accepts.)
  */
 const NO_TIMEOUT_MS = 2 ** 31 - 1;
+
+/**
+ * After a yield, how long requests wait for the UI session that asked for it
+ * before running headless again. It has to cover the time from the signal to
+ * that session claiming its device, which is seconds: from then on the claim
+ * keeps a new headless session off the device, however long the rest of the
+ * UI session's start takes.
+ */
+const YIELD_WAIT_MS = 30_000;
+const YIELD_POLL_MS = 500;
+/**
+ * How often a UI session is asked whether it is still there while requests
+ * are running in it. A response stream that breaks when the session exits
+ * does not fail its request (the MCP client only reports a transport error),
+ * so without this a call the session died under would never be answered.
+ */
+const UI_LIVENESS_MS = 5_000;
 
 // ─── Failure classification ───
 
@@ -145,6 +168,10 @@ export class McpBridge {
   private _ui: Backend | undefined;
   private _headless: Backend | undefined;
   private _headlessInFlight = 0;
+  private _uiInFlight = 0;
+  private _uiLivenessTimer: ReturnType<typeof setInterval> | undefined;
+  /** Until when requests wait for a UI session rather than start a headless one: set by a yield. */
+  private _awaitUiUntil = 0;
   /** Serialises backend changes: two requests must not each start a headless child. */
   private _lock: Promise<unknown> = Promise.resolve();
   /** Backends being shut down, for `close` to wait on. */
@@ -162,13 +189,13 @@ export class McpBridge {
     );
 
     this.server.setRequestHandler(ListToolsRequestSchema, (request, extra) =>
-      this._forward((client) => client.request({ method: 'tools/list', params: request.params }, ListToolsResultSchema, { signal: extra.signal })).then((r) => r.result));
+      this._forward((client, backend) => client.request({ method: 'tools/list', params: request.params }, ListToolsResultSchema, { signal: AbortSignal.any([extra.signal, backend.lost.signal]) })).then((r) => r.result));
     this.server.setRequestHandler(ListResourcesRequestSchema, (request, extra) =>
-      this._forward((client) => client.request({ method: 'resources/list', params: request.params }, ListResourcesResultSchema, { signal: extra.signal })).then((r) => r.result));
+      this._forward((client, backend) => client.request({ method: 'resources/list', params: request.params }, ListResourcesResultSchema, { signal: AbortSignal.any([extra.signal, backend.lost.signal]) })).then((r) => r.result));
     this.server.setRequestHandler(ListResourceTemplatesRequestSchema, (request, extra) =>
-      this._forward((client) => client.request({ method: 'resources/templates/list', params: request.params }, ListResourceTemplatesResultSchema, { signal: extra.signal })).then((r) => r.result));
+      this._forward((client, backend) => client.request({ method: 'resources/templates/list', params: request.params }, ListResourceTemplatesResultSchema, { signal: AbortSignal.any([extra.signal, backend.lost.signal]) })).then((r) => r.result));
     this.server.setRequestHandler(ReadResourceRequestSchema, (request, extra) =>
-      this._forward((client) => client.request({ method: 'resources/read', params: request.params }, ReadResourceResultSchema, { signal: extra.signal })).then((r) => r.result));
+      this._forward((client, backend) => client.request({ method: 'resources/read', params: request.params }, ReadResourceResultSchema, { signal: AbortSignal.any([extra.signal, backend.lost.signal]) })).then((r) => r.result));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const progressToken = request.params._meta?.progressToken;
@@ -211,13 +238,17 @@ export class McpBridge {
     if (!this._headless || this._headlessInFlight > 0) return false;
     this._log('A UI-mode session is starting for this project: ending the headless session so it can use its devices.');
     this._dropBackend(this._headless);
+    // Requests from here on wait for that session: a headless one started
+    // now would take the device straight back.
+    this._awaitUiUntil = Date.now() + (this._options.yieldWaitMs ?? YIELD_WAIT_MS);
     return true;
   }
 
   /** Shut both backends down and wait for the headless child to exit. */
   async close(): Promise<void> {
     this._closed = true;
-    if (this._ui) this._dropBackend(this._ui);
+    this._stopUiLiveness();
+    if (this._ui) this._loseBackend(this._ui);
     if (this._headless) this._dropBackend(this._headless);
     await Promise.all([...this._closing]);
   }
@@ -273,11 +304,29 @@ export class McpBridge {
       this._loseBackend(ui);
     }
 
-    const session = await (this._options.findUiSession ?? (() => findUiSession(this._options.project)))();
+    const find = this._options.findUiSession ?? (() => findUiSession(this._options.project));
+    let session = await find();
+    // A yield just ended the headless session for a UI session that is still
+    // starting (it publishes itself last): wait for it.
+    if (!session && this._awaitUiUntil > Date.now()) {
+      this._log('Waiting for the UI-mode session that is starting for this project.');
+      while (!session && !this._closed && this._awaitUiUntil > Date.now()) {
+        await new Promise<void>((resolve) => { setTimeout(resolve, this._options.yieldPollMs ?? YIELD_POLL_MS); });
+        session = await find();
+      }
+      if (this._closed) throw new McpError(ErrorCode.ConnectionClosed, 'The Tapsmith MCP server is shutting down.');
+      if (!session) this._log('No UI-mode session came up.');
+    }
     if (session) {
+      this._awaitUiUntil = 0;
       try {
         const client = await (this._options.connectUi ?? connectUiSession)(session, this._clientInfo());
-        this._ui = { kind: 'ui', client, session, lost: new AbortController() };
+        const backend: Backend = { kind: 'ui', client, session, lost: new AbortController() };
+        // A broken response stream reaches the client only as a transport
+        // error, with its request left pending: ask whether the session is
+        // still there.
+        client.onerror = () => { void this._checkUiAlive(backend); };
+        this._ui = backend;
         this._log(`Working in the UI-mode session at ${session.mcpUrl}.`);
         if (this._headless) {
           this._log('Ending the headless session.');
@@ -299,10 +348,41 @@ export class McpBridge {
     return this._headless;
   }
 
+  /**
+   * Fail the requests running in a UI session that has ended. Their response
+   * streams break without failing them, so nothing else would.
+   */
+  private async _checkUiAlive(backend: Backend): Promise<void> {
+    if (this._ui !== backend || !backend.session) return;
+    const state = await (this._options.probeUiSession ?? probeUiSession)(backend.session).catch(() => 'unanswered' as const);
+    if (state !== 'gone' || this._ui !== backend) return;
+    this._log(`The UI-mode session at ${backend.session.mcpUrl} has ended.`);
+    this._loseBackend(backend);
+  }
+
+  private _stopUiLiveness(): void {
+    if (this._uiLivenessTimer) clearInterval(this._uiLivenessTimer);
+    this._uiLivenessTimer = undefined;
+  }
+
+  /** Count a request into (`+1`) or out of (`-1`) the UI session, asking after the session while any is running. */
+  private _countUiRequest(change: 1 | -1): void {
+    this._uiInFlight += change;
+    if (this._uiInFlight > 0 && !this._uiLivenessTimer) {
+      this._uiLivenessTimer = setInterval(() => {
+        if (this._ui) void this._checkUiAlive(this._ui);
+      }, this._options.uiLivenessMs ?? UI_LIVENESS_MS);
+      this._uiLivenessTimer.unref?.();
+    } else if (this._uiInFlight <= 0) {
+      this._stopUiLiveness();
+    }
+  }
+
   /** Send one request to the current backend, moving to the other when that one has gone. */
   private async _forward<T>(send: (client: Client, backend: Backend) => Promise<T>): Promise<{ result: T; backend: Backend }> {
     for (let attempt = 0; ; attempt++) {
       const backend = await this._pick();
+      if (backend.kind === 'ui') this._countUiRequest(1);
       try {
         return { result: await send(backend.client, backend), backend };
       } catch (err) {
@@ -321,6 +401,7 @@ export class McpBridge {
         throw err instanceof BackendLostError ? err : new BackendLostError(lostMessage(backend));
       } finally {
         if (backend.kind === 'headless') this._headlessInFlight--;
+        else this._countUiRequest(-1);
       }
     }
   }

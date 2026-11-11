@@ -66,7 +66,10 @@ describe('yieldingClaimsElsewhere', () => {
 
   it('lists the live claims of other sessions that yield, and no others', () => {
     const me = session({ command: 'tapsmith test --ui' });
-    const agent = session({ yieldsToUi: true });
+    // A root whose start time is on record, as a real session's is.
+    const startToken = ensureClaimSession('x', { env: {}, exitHook: false }).startToken;
+    expect(startToken).toBeDefined();
+    const agent = session({ yieldsToUi: true, startToken });
     const plain = session({ command: 'tapsmith test' });
     const dead = session({ yieldsToUi: true, pid: spawnSync(process.execPath, ['-e', '0']).pid ?? 999_999 });
     claimDevice('emulator-5554', agent, { env });
@@ -75,6 +78,15 @@ describe('yieldingClaimsElsewhere', () => {
     fs.writeFileSync(path.join(dir, 'emulator-5560.json'), JSON.stringify(claim('emulator-5560', dead)));
     expect(yieldingClaimsElsewhere(me, { env }).map((c) => c.device)).toEqual(['emulator-5554']);
     releaseDeviceClaim('emulator-5554', agent, { env });
+    expect(yieldingClaimsElsewhere(me, { env })).toEqual([]);
+  });
+
+  // The signal kills a process that does not handle it, so a root that
+  // cannot be told from whatever now runs under its pid is never signalled.
+  it('leaves out a session whose root cannot be confirmed: no start time on record, or another one now', () => {
+    const me = session({ command: 'tapsmith test --ui' });
+    claimDevice('emulator-5554', session({ yieldsToUi: true }), { env });
+    claimDevice('emulator-5556', session({ yieldsToUi: true, startToken: 'Mon Jan  1 00:00:00 2001' }), { env });
     expect(yieldingClaimsElsewhere(me, { env })).toEqual([]);
   });
 });

@@ -538,14 +538,25 @@ export function listDeviceClaims(opts: ClaimOptions = {}): ListedDeviceClaim[] {
 /**
  * The live claims of other sessions that yield to a UI-mode session
  * ({@link SessionIdentity.yieldsToUi}) and whose root process, the one that
- * takes the yield signal, is running.
+ * takes the yield signal, is confirmed to be running.
  */
 export function yieldingClaimsElsewhere(
   session: SessionIdentity = currentSession(),
   opts: ClaimOptions = {},
 ): DeviceClaim[] {
   return [...heldElsewhere(session, opts).values()]
-    .filter((claim) => claim.session.yieldsToUi === true && processIsLive(claim.session));
+    .filter((claim) => claim.session.yieldsToUi === true && processIsConfirmed(claim.session));
+}
+
+/**
+ * Whether `ref` is certainly still the process it was when recorded: its
+ * start time was recorded and is the same now. Stricter than
+ * {@link processIsLive}, which trusts a running pid whose start time cannot
+ * be read. That is right for leaving a device alone, and wrong for sending
+ * the process a signal: one that does not handle it is killed by it.
+ */
+function processIsConfirmed(ref: ProcessRef): boolean {
+  return ref.startToken !== undefined && pidAlive(ref.pid) && processStartToken(ref.pid) === ref.startToken;
 }
 
 /** Live claims held by sessions other than `session`, by device. */
