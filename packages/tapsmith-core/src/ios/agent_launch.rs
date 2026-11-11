@@ -689,16 +689,30 @@ async fn spawn_agent_xcodebuild(
 ) -> Result<(TrackedAgent, OutputTail, OutputTail, LaunchFailure)> {
     use std::sync::{Arc, Mutex};
 
-    let mut cmd = Command::new("xcodebuild");
-    cmd.args([
-        "test-without-building",
-        "-xctestrun",
-        patched_xctestrun,
-        "-destination",
-        &format!("id={udid}"),
-        "-derivedDataPath",
-        &derived_data_path.to_string_lossy(),
-    ]);
+    // SPIKE (PILOT-1134 A): on a simulator, launch the installed runner with
+    // `simctl launch` instead of xcodebuild. See `agent_direct_launch`.
+    let direct = !is_physical && super::agent_direct_launch::enabled();
+    let mut cmd = if direct {
+        let spec = super::agent_direct_launch::load_runner_spec(patched_xctestrun).await?;
+        super::agent_direct_launch::ensure_installed(udid, &spec).await?;
+        info!(
+            udid,
+            "Starting iOS agent via simctl launch (direct, no xcodebuild)"
+        );
+        super::agent_direct_launch::launch_command(udid, &spec)
+    } else {
+        let mut cmd = Command::new("xcodebuild");
+        cmd.args([
+            "test-without-building",
+            "-xctestrun",
+            patched_xctestrun,
+            "-destination",
+            &format!("id={udid}"),
+            "-derivedDataPath",
+            &derived_data_path.to_string_lossy(),
+        ]);
+        cmd
+    };
 
     // Capture stdout/stderr so we can diagnose failures.
     let mut child = cmd
@@ -726,6 +740,8 @@ async fn spawn_agent_xcodebuild(
         if let Some(stdout) = stdout {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
+                // A pty ends its lines with CRLF.
+                let line = line.trim_end_matches('\r').to_string();
                 info!(target: "xcodebuild", "{}", line);
                 if let Some(error) = runner_launch_failure(&line, &bundle_id) {
                     launch_failure_writer

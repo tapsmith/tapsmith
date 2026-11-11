@@ -698,6 +698,10 @@ jobs:
           # otherwise, so this adds only negligible file I/O.
           TAPSMITH_TIMING_LOG: ${{ runner.temp }}/ios-timing-${{ matrix.shard }}.log
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}.log
+          # DIAGNOSTIC (PILOT-1134, not for merge): direct runner launch on
+          # shards 1 and 2, shard 3 stays on xcodebuild as the control.
+          TAPSMITH_IOS_AGENT_LAUNCH: ${{ matrix.shard != 3 && 'direct' || 'xcodebuild' }}
+          RUST_LOG: tapsmith_core=info,tonic=warn,xcodebuild=info
         run: |
           npx tapsmith test -c tapsmith.config.ios-ci.mjs --shard=${{ matrix.shard }}/${{ env.SHARD_TOTAL }} --workers 1
 
@@ -777,6 +781,8 @@ jobs:
         working-directory: e2e
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}-trace.log
+          TAPSMITH_IOS_AGENT_LAUNCH: direct
+          RUST_LOG: tapsmith_core=info,tonic=warn,xcodebuild=info
         run: node verify-trace-archive.mjs -c tapsmith.config.ios-ci.mjs
 
       - name: Summarize iOS timing breakdown

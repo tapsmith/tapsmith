@@ -1,3 +1,4 @@
+pub mod agent_direct_launch;
 pub mod agent_launch;
 pub mod agent_registry;
 pub mod animation_speed;
