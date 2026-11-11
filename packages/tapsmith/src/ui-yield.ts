@@ -18,7 +18,12 @@ import { uiSessionMatchesProject, type UiSessionProject } from './mcp/ui-session
 /** What a UI session sends a yielding session's root process. */
 export const YIELD_SIGNAL = 'SIGUSR2';
 
-const DEFAULT_WAIT_MS = 10_000;
+/**
+ * How long a UI session waits for the devices to be given up. Also how long a
+ * session that was busy when asked still gives them up once it is free: after
+ * that the UI session has gone on without them.
+ */
+export const YIELD_WAIT_MS = 10_000;
 const POLL_MS = 150;
 
 interface YieldOptions {
@@ -69,7 +74,7 @@ export async function requestHeadlessYield(project: UiSessionProject, opts: Yiel
     }
   }
 
-  const deadline = Date.now() + (opts.timeoutMs ?? DEFAULT_WAIT_MS);
+  const deadline = Date.now() + (opts.timeoutMs ?? YIELD_WAIT_MS);
   for (;;) {
     const left = claimsToYield(read(), project).filter((claim) => roots.has(claim.session.id));
     if (left.length === 0) return [];

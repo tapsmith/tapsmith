@@ -114,6 +114,8 @@ async function harness(opts: {
   probe?: () => 'alive' | 'gone' | 'unanswered' | undefined
   /** How long requests wait for a UI session after a yield (short by default, so tests do not). */
   yieldWaitMs?: number
+  /** How long a yield refused while busy is still honoured. */
+  yieldRequestMs?: number
 } = {}): Promise<Harness> {
   const ui = probe();
   const headless = probe();
@@ -136,6 +138,7 @@ async function harness(opts: {
     },
     log: (line) => { logs.push(line); },
     yieldWaitMs: opts.yieldWaitMs ?? 40,
+    yieldRequestMs: opts.yieldRequestMs,
     yieldPollMs: 5,
   });
   const [agentSide, bridgeSide] = InMemoryTransport.createLinkedPair();
@@ -349,6 +352,41 @@ describe('McpBridge.yieldHeadless', () => {
     expect(h.headlessStarts()).toBe(1);
     h.setUiSession(UI_SESSION);
     expect(await call).toBe('ui');
+    expect(h.headlessStarts()).toBe(1);
+  });
+
+  // The UI session waits ten seconds for the devices: a call that ends inside
+  // that wait must not leave them held by a session with nothing running.
+  it('gives the devices up when the call that was running ends, if asked meanwhile', async () => {
+    const h = await harness({ yieldWaitMs: 5_000 });
+    const started = deferred();
+    h.headless.started.push(started.resolve);
+    const run = h.agent.callTool({ name: 'slow', arguments: {} });
+    await started.promise;
+    expect(h.bridge.yieldHeadless()).toBe(false);
+    expect(h.headlessClosed()).toEqual([false]);
+    h.headless.release.shift()?.();
+    expect(textOf(await run)).toBe('headless:done');
+    expect(h.headlessClosed()).toEqual([true]);
+    // And the next call waits for the UI session, like after any yield.
+    const call = who(h.agent);
+    h.setUiSession(UI_SESSION);
+    expect(await call).toBe('ui');
+    expect(h.headlessStarts()).toBe(1);
+  });
+
+  it('keeps the headless session when the call ends after the UI session stopped waiting', async () => {
+    const h = await harness({ yieldRequestMs: 20 });
+    const started = deferred();
+    h.headless.started.push(started.resolve);
+    const run = h.agent.callTool({ name: 'slow', arguments: {} });
+    await started.promise;
+    expect(h.bridge.yieldHeadless()).toBe(false);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 40); });
+    h.headless.release.shift()?.();
+    await run;
+    expect(h.headlessClosed()).toEqual([false]);
+    expect(await who(h.agent)).toBe('headless');
     expect(h.headlessStarts()).toBe(1);
   });
 

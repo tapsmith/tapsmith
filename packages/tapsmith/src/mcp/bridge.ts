@@ -53,7 +53,7 @@ import {
 import { tapsmithExecCommand } from '../config.js';
 import { markSessionYieldsToUi } from '../device-claims.js';
 import { readSdkVersion } from '../telemetry.js';
-import { YIELD_SIGNAL } from '../ui-yield.js';
+import { YIELD_SIGNAL, YIELD_WAIT_MS as YIELD_REQUEST_MS } from '../ui-yield.js';
 import { BRIDGED_ENV } from './port-file.js';
 import { findUiSession, probeUiSession, type ProjectRef, type UiSession } from './ui-session.js';
 
@@ -85,6 +85,8 @@ export interface McpBridgeOptions {
   log?: (line: string) => void
   /** How long requests wait, after a yield, for the UI session that asked for it (ms). */
   yieldWaitMs?: number
+  /** How long a yield refused while a headless request was running is still honoured once it ends (ms). */
+  yieldRequestMs?: number
   /** How often discovery is asked again during that wait (ms). */
   yieldPollMs?: number
   /** How often a UI session with requests running in it is asked whether it is still there (ms). */
@@ -172,6 +174,8 @@ export class McpBridge {
   private _uiLivenessTimer: ReturnType<typeof setInterval> | undefined;
   /** Until when requests wait for a UI session rather than start a headless one: set by a yield. */
   private _awaitUiUntil = 0;
+  /** Until when a yield asked for while a headless request was running is done as soon as none is. */
+  private _yieldRequestedUntil = 0;
   /** Serialises backend changes: two requests must not each start a headless child. */
   private _lock: Promise<unknown> = Promise.resolve();
   /** Backends being shut down, for `close` to wait on. */
@@ -232,10 +236,18 @@ export class McpBridge {
   /**
    * Give up the headless session's devices for a UI session that is starting
    * (`tapsmith test --ui` asked). Refused while a headless request is running:
-   * that run keeps its device. Returns whether anything was given up.
+   * that run keeps its device, and the devices are given up when it ends if
+   * the UI session is still waiting. Returns whether anything was given up now.
    */
   yieldHeadless(): boolean {
-    if (!this._headless || this._headlessInFlight > 0) return false;
+    if (!this._headless) return false;
+    if (this._headlessInFlight > 0) {
+      // The request keeps its device. If it ends while the UI session is
+      // still waiting, the hand-over happens then.
+      this._yieldRequestedUntil = Date.now() + (this._options.yieldRequestMs ?? YIELD_REQUEST_MS);
+      return false;
+    }
+    this._yieldRequestedUntil = 0;
     this._log('A UI-mode session is starting for this project: ending the headless session so it can use its devices.');
     this._dropBackend(this._headless);
     // Requests from here on wait for that session: a headless one started
@@ -400,8 +412,8 @@ export class McpBridge {
         }
         throw err instanceof BackendLostError ? err : new BackendLostError(lostMessage(backend));
       } finally {
-        if (backend.kind === 'headless') this._headlessInFlight--;
-        else this._countUiRequest(-1);
+        if (backend.kind === 'ui') this._countUiRequest(-1);
+        else if (--this._headlessInFlight === 0 && this._yieldRequestedUntil > Date.now()) this.yieldHeadless();
       }
     }
   }
