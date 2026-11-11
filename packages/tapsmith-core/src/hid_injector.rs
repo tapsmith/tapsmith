@@ -660,7 +660,11 @@ impl HidInjector {
             Err(_) => format!("it answered `{reply}`, then did not answer a lone lift"),
         };
         let mut map = self.helpers.lock().await;
+        // Say what happened in the user's terms.
         self.evict_locked(&mut map, udid, generation, &why)
+            .map(|note| {
+                format!("the simulator refused its touches, as after a simulator reboot; {note}")
+            })
     }
 
     /// Write `line` to `udid`'s helper; Ok with the helper's generation.
