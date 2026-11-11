@@ -1,0 +1,27 @@
+{
+  "name": "tapsmith",
+  "version": "0.7.0",
+  "description": "Write, run and debug Tapsmith mobile tests: the Tapsmith MCP server, run from the project's own install, and a skill for finding locators, structuring tests and reading failed traces.",
+  "author": {
+    "name": "Tapsmith",
+    "url": "https://tapsmith.dev"
+  },
+  "homepage": "https://tapsmith.dev/guides/mcp-server/",
+  "repository": "https://github.com/tapsmith/tapsmith",
+  "license": "Apache-2.0",
+  "keywords": [
+    "tapsmith",
+    "mobile",
+    "testing",
+    "e2e",
+    "android",
+    "ios",
+    "react-native",
+    "mcp",
+    "playwright"
+  ],
+  "skills": "./skills/",
+  "displayName": "Tapsmith",
+  "logo": "./assets/icon.png",
+  "mcpServers": "./mcp-inline.json"
+}

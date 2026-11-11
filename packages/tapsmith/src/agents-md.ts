@@ -16,6 +16,8 @@ export function renderAgentsSection(): string {
 
 This project uses [Tapsmith](https://github.com/tapsmith/tapsmith) for mobile E2E tests (Playwright-style API).
 
+The docs for the installed Tapsmith version ship in the package: read \`node_modules/tapsmith/docs/<page>.md\` (start with \`api-reference.md\`, \`writing-tests.md\` and \`locators.md\`) rather than guessing the API or relying on docs for another version.
+
 ### Running and debugging
 
 - Run all tests: \`npx tapsmith test\`
@@ -30,6 +32,8 @@ This project uses [Tapsmith](https://github.com/tapsmith/tapsmith) for mobile E2
 - Traces are recorded only when tracing is on (\`trace\` in the config, or \`--trace retain-on-failure\`); open one with \`npx tapsmith show-trace <trace.zip>\`. Network mocks (\`device.route()\`) need no trace: the network proxy starts on a test's first route or network wait. Register routes before the app sends the requests they mock.
 
 ### MCP workflow
+
+The Tapsmith plugin for Claude Code, Codex and Cursor registers the headless MCP server below (run from this project's Tapsmith install) and adds a skill for writing and debugging tests; \`node_modules/tapsmith/docs/mcp-server.md\` says how to install it. Without it, register the servers by hand as below.
 
 Prefer the UI-backed MCP server over the standalone headless server. If the user already has \`npx tapsmith test --ui\` running, ask them for the MCP URL shown in the UI and register it as \`tapsmith-ui\`:
 

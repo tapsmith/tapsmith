@@ -2,9 +2,52 @@
 
 Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI coding agents run tests, interact with devices, and inspect results through a standardized tool interface. Both modes expose the same **17 tools** for device interaction, test execution, result browsing, watch mode, and session info.
 
+## Install the plugin
+
+The quickest setup is the Tapsmith plugin for Claude Code, Codex and Cursor. It does two things:
+
+- registers the [stdio server](#stdio-mode) as `tapsmith-headless`, started from the Tapsmith installed in your project, never a global or `npx`-cached copy;
+- adds a `tapsmith` skill that walks the agent through finding locators, screen objects, running one test and reading a failed test's trace, and points it at the docs that ship with the installed version, in `node_modules/tapsmith/docs/`.
+
+Install Tapsmith in the project first (`npm install -D tapsmith`), since the plugin's server runs that copy. `tapsmith init` lists the plugin install for each coding agent it finds in the project.
+
+Claude Code:
+
+```bash
+claude plugin marketplace add tapsmith/tapsmith
+claude plugin install tapsmith@tapsmith
+```
+
+In a session, the same is `/plugin marketplace add tapsmith/tapsmith`, then `/plugin install tapsmith@tapsmith`.
+
+Codex:
+
+```bash
+codex plugin marketplace add tapsmith/tapsmith
+codex plugin add tapsmith@tapsmith
+```
+
+Or add the marketplace, then pick **Tapsmith** in Codex's `/plugins` browser. Start a new session after installing.
+
+Cursor installs plugins from its plugin marketplace rather than a command. A team admin can import this repository (`https://github.com/tapsmith/tapsmith`) as a team marketplace, and the team then installs **Tapsmith** from it. To try it on your own, copy the plugin folder into Cursor's local plugins and reload the window:
+
+```bash
+git clone --depth 1 https://github.com/tapsmith/tapsmith.git tapsmith-plugin-src
+mkdir -p ~/.cursor/plugins/local
+cp -R tapsmith-plugin-src/plugins/tapsmith ~/.cursor/plugins/local/tapsmith
+```
+
+**Which project the server runs in.** In Claude Code, the project the session was opened in (`CLAUDE_PROJECT_DIR`); in Cursor, the workspace's first folder (`WORKSPACE_FOLDER_PATHS`); in Codex, the directory Codex was started in. The server runs there, with the Tapsmith that folder resolves (the way `import "tapsmith"` would), so start the agent from the folder that holds your `tapsmith.config.ts`. When the tests live in a folder one level below with its own Tapsmith config and `node_modules` (an `e2e/` package in a monorepo), that folder is used, as long as there is only one. Otherwise start the agent from the test project's folder, or set `TAPSMITH_PROJECT_DIR` to it in the environment you start the agent from. Codex passes only a few environment variables on to MCP servers, and not this one, so in Codex start it from the folder. When Tapsmith is not installed, the server exits at once and its error (on stderr, shown in the agent's MCP server list or logs) says how to install it.
+
+If you registered `tapsmith-headless` by hand before, remove that registration (`claude mcp remove tapsmith-headless`, `codex mcp remove tapsmith-headless`), so the agent does not see every tool twice.
+
+The plugin's version follows Tapsmith's releases. `claude plugin marketplace update tapsmith` or `codex plugin marketplace upgrade tapsmith` fetches a newer one.
+
+The plugin does not register the UI session's [HTTP endpoint](#http-mode-recommended), whose port is only known once `tapsmith test --ui` is running; register that one by hand as below.
+
 ## Modes
 
-The MCP server operates in two modes. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
+The MCP server operates in two modes. Without the plugin, register them by hand as this section shows. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
 
 ### HTTP mode (recommended)
 
@@ -433,7 +476,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 
 ### Headless stdio workflow
 
-1. **Add the MCP server config:** `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
+1. **Add the MCP server:** [install the plugin](#install-the-plugin), or register it by hand: `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device, and put a locator in test code only once `tapsmith_test_locator` counts exactly 1

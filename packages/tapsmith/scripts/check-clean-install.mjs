@@ -29,6 +29,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  bundledDocsProblems,
   deprecationLines,
   disallowedInstallScripts,
   installScriptsOf,
@@ -39,6 +40,7 @@ import {
   testPaths,
   undeclaredPlatformFields,
 } from './clean-install-checks.mjs';
+import { bundledPage, docPages } from './docs-bundle.mjs';
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmPackagesDir = path.resolve(packageDir, '../../npm-packages');
@@ -171,7 +173,47 @@ function packTapsmith() {
         'The build must emit through tsconfig.build.json, which leaves src/__tests__ out.',
     );
   }
+  checkBundledDocsPacked(info);
   return info;
+}
+
+const repoDocsDir = path.resolve(packageDir, '../../docs');
+
+/**
+ * The tarball ships every docs page in docs/ and nothing else there (no
+ * images), so a coding agent can read node_modules/tapsmith/docs/<page>.md.
+ */
+function checkBundledDocsPacked(info) {
+  const problems = bundledDocsProblems(info.files, docPages(repoDocsDir));
+  if (problems.length > 0) {
+    fail(
+      `${info.filename} does not ship the docs pages as it should: ${problems.slice(0, 5).join(', ')}` +
+        `${problems.length > 5 ? ` and ${problems.length - 5} more` : ''}. \`npm run build\` bundles them ` +
+        '(scripts/docs-bundle.mjs) and package.json `files` must list docs/.',
+    );
+  }
+}
+
+/**
+ * The installed docs are the repo's pages as the bundle writes them: the
+ * same files the website is built from, so an agent reads what the site says
+ * for this version.
+ */
+function checkInstalledDocs(project) {
+  const installed = path.join(project, 'node_modules', 'tapsmith', 'docs');
+  const differing = docPages(repoDocsDir).filter((page) => {
+    const file = path.join(installed, page);
+    return !fs.existsSync(file) ||
+      fs.readFileSync(file, 'utf8') !== bundledPage(fs.readFileSync(path.join(repoDocsDir, page), 'utf8'));
+  });
+  if (differing.length > 0) {
+    fail(
+      `node_modules/tapsmith/docs/ differs from the repo's docs/ for ${differing.join(', ')}. ` +
+        'Rebuild (`npm run build`) so the package bundles this commit\'s docs.',
+    );
+    return;
+  }
+  console.log(`check-clean-install: node_modules/tapsmith/docs/ holds the repo's ${docPages(repoDocsDir).length} docs pages.`);
 }
 
 /**
@@ -314,8 +356,8 @@ function checkBinariesWithoutScripts(tapsmith, core) {
 
 /**
  * The installed package's MCP server must list and serve tapsmith://api-reference.
- * Only dist/ is published, so this fails if the build stops copying
- * docs/api-reference.md into it (PILOT-359). It uses the installed SDK and the
+ * This fails if the build stops bundling docs/api-reference.md into the
+ * package's docs/ (PILOT-359). It uses the installed SDK and the
  * installed MCP SDK, in process, so it needs neither a daemon nor a device.
  * `project` is the --ignore-scripts install checkBinariesWithoutScripts made.
  */
@@ -345,7 +387,7 @@ function checkMcpApiReference(project) {
   if (run.status !== 0) {
     fail(
       `the installed package's MCP server does not serve tapsmith://api-reference (docs/agents.md tells agents to ` +
-        `read it). The build must copy docs/api-reference.md into dist/docs/:\n${run.stdout}${run.stderr}`,
+        `read it). The build must bundle docs/api-reference.md into the package's docs/ (scripts/docs-bundle.mjs):\n${run.stdout}${run.stderr}`,
     );
     return;
   }
@@ -447,14 +489,17 @@ try {
   const agent = packAgentAndroid();
   checkInstallWarnings(tapsmith, core, npmVersion);
   const installed = checkBinariesWithoutScripts(tapsmith, core);
-  if (installed) checkMcpApiReference(installed);
+  if (installed) {
+    checkMcpApiReference(installed);
+    checkInstalledDocs(installed);
+  }
   const pnpmChecked = checkPnpmInstallsAgent(tapsmith, core, agent);
   if (failures.length > 0) {
     exitCode = 1;
   } else {
     console.log(
       `check-clean-install: ${tapsmith.filename} installs into an empty project with no deprecation warnings, ` +
-        `no Tapsmith install scripts, a runnable daemon binary and its MCP API reference (npm ${npmVersion})` +
+        `no Tapsmith install scripts, a runnable daemon binary, its docs pages and its MCP API reference (npm ${npmVersion})` +
         (pnpmChecked ? `, and pnpm ${PNPM_VERSIONS.join(' and ')} install the Android agent.` : '.'),
     );
   }
