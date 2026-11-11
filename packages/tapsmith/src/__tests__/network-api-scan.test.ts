@@ -182,35 +182,50 @@ describe('createNetworkApiScanner', () => {
     expect(await scan([a])).toBe(true);
   });
 
-  it('scans again once a missing import is written, with the test file unchanged', async () => {
-    const scan = createNetworkApiScanner();
-    const a = write('a.test.ts', `${header}import { mockApi } from './utils/mock.js'\ntest('a', async ({ device }) => { await mockApi(device) })\n`);
-    expect(await scan([a])).toBe(false);
-    write('utils/mock.ts', `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`);
-    expect(await scan([a])).toBe(true);
+  const mocks = `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`;
+  it.each([
+    ['a missing relative import is written', (): string => {
+      write('utils/other.ts', `export const x = 1\n`);
+      return `import { mockApi } from './utils/mock'`;
+    }, (): void => { write('utils/mock.ts', mocks); }],
+    ['a missing tsconfig alias target is written', (): string => {
+      write('tsconfig.json', JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@h/*': ['helpers/*'] } } }));
+      return `import { mockApi } from '@h/later'`;
+    }, (): void => { write('helpers/later.ts', mocks); }],
+    ['a missing folder index is written', (): string => {
+      fs.mkdirSync(path.join(dir, 'screens'));
+      return `import { mockApi } from './screens'`;
+    }, (): void => { write('screens/index.ts', mocks); }],
+    ['a broken helper is fixed', (): string => {
+      write('good.ts', mocks);
+      write('bad.ts', `export const y = (\n`);
+      // A side-effect import: TypeScript drops an unused named one.
+      return `import { mockApi } from './good'\nimport './bad'`;
+    }, (): void => { write('bad.ts', `export const y = 1\n`); }],
+  ])('scans afresh at a new run once %s, with the test file unchanged', async (_label, setup, change) => {
+    const cwd = process.cwd();
+    process.chdir(dir); // where esbuild finds the tsconfig
+    try {
+      const scan = createNetworkApiScanner();
+      const a = write('a.test.ts', `${header}${setup()}\ntest('a', async ({ device }) => { await mockApi(device) })\n`);
+      expect(await scan([a])).toBe(false);
+      change();
+      // Later files of the same run reuse the answer…
+      expect(await scan([a])).toBe(false);
+      // …and the next run scans again.
+      scan.newRun();
+      expect(await scan([a])).toBe(true);
+    } finally {
+      process.chdir(cwd);
+    }
   });
 
-  it('scans again once a missing import is written into a folder that already exists', async () => {
+  it('answers each call from its own scan when calls overlap', async () => {
     const scan = createNetworkApiScanner();
-    write('utils/other.ts', `export const x = 1\n`);
-    const a = write('a.test.ts', `${header}import { mockApi } from './utils/mock'\ntest('a', async ({ device }) => { await mockApi(device) })\n`);
-    expect(await scan([a])).toBe(false);
-    const helper = write('utils/mock.ts', `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`);
-    // Folder times can be coarse: make the write visible whatever the filesystem.
-    touch(path.dirname(helper), 5_000);
-    expect(await scan([a])).toBe(true);
-  });
-
-  it('scans again once a broken helper is fixed, with the test file unchanged', async () => {
-    const scan = createNetworkApiScanner();
-    write('good.ts', `export async function mock(device: any) { await device.route('**', () => {}) }\n`);
-    const bad = write('bad.ts', `export const y = (\n`);
-    const t = write('t.test.ts', `${header}import { mock } from './good'\nimport { y } from './bad'\ntest('t', async ({ device }) => { await mock(device); y })\n`);
-    // Mid-edit: the build fails, so the graph cannot be read.
-    expect(await scan([t])).toBe(false);
-    fs.writeFileSync(bad, `export const y = 1\n`);
-    touch(bad, 5_000);
-    expect(await scan([t])).toBe(true);
+    const a = write('a.test.ts', `${header}test('a', async ({ device }) => { await device.route('**', () => {}) })\n`);
+    const g = write('g.test.ts', `${header}test('g', async () => {})\n`);
+    expect(await Promise.all([scan([g]), scan([a])])).toEqual([false, true]);
+    expect(await Promise.all([scan([a]), (scan.newRun(), scan([g]))])).toEqual([true, false]);
   });
 
   it('reuses its answer while a file stays broken', async () => {

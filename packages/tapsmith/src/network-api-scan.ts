@@ -52,39 +52,31 @@ const RESOLVING = Symbol('tapsmith-network-api-scan-resolving');
  * Marks a relative or absolute import esbuild cannot resolve as external, so
  * one missing file (a helper not written yet, a lazy `import()` of a
  * generated path) does not fail the build and drop the rest of the graph.
- * Records the folder the missing file would be written into: writing it
- * changes that folder's modification time, which tells a session scanner to
- * scan again.
  */
-function unresolvedAsExternal(missingFolders: Set<string>): Plugin {
-  return {
-    name: 'tapsmith-unresolved-external',
-    setup(b) {
-      b.onResolve({ filter: /^(\.\.?([\\/]|$)|[\\/])/ }, async (args) => {
-        if (args.kind === 'entry-point' || args.pluginData === RESOLVING) return undefined;
-        const resolved = await b.resolve(args.path, {
-          kind: args.kind,
-          importer: args.importer,
-          resolveDir: args.resolveDir,
-          pluginData: RESOLVING,
-        });
-        if (resolved.errors.length === 0) return undefined; // esbuild resolves it as usual
-        missingFolders.add(path.dirname(path.resolve(args.resolveDir, args.path)));
-        return { path: args.path, external: true };
+const unresolvedAsExternal: Plugin = {
+  name: 'tapsmith-unresolved-external',
+  setup(b) {
+    b.onResolve({ filter: /^(\.\.?([\\/]|$)|[\\/])/ }, async (args) => {
+      if (args.kind === 'entry-point' || args.pluginData === RESOLVING) return undefined;
+      const resolved = await b.resolve(args.path, {
+        kind: args.kind,
+        importer: args.importer,
+        resolveDir: args.resolveDir,
+        pluginData: RESOLVING,
       });
-    },
-  };
-}
+      if (resolved.errors.length === 0) return undefined; // esbuild resolves it as usual
+      return { path: args.path, external: true };
+    });
+  },
+};
 
 /**
- * The local modules `entries` load, themselves included, and the folders of
- * the relative imports that could not be resolved. Throws when esbuild cannot
- * build them (a syntax error, a missing entry, an unresolvable alias).
+ * The local modules `entries` load, themselves included. Throws when esbuild
+ * cannot build them (a syntax error, a missing entry).
  */
-async function localModules(entries: string[]): Promise<{ modules: string[]; missingFolders: string[] }> {
+async function localModules(entries: string[]): Promise<string[]> {
   // Inputs come back relative to the working directory the build ran in.
   const cwd = process.cwd();
-  const missingFolders = new Set<string>();
   const result = await build({
     absWorkingDir: cwd,
     entryPoints: entries,
@@ -96,21 +88,13 @@ async function localModules(entries: string[]): Promise<{ modules: string[]; mis
     platform: 'node',
     packages: 'external',
     logLevel: 'silent',
-    plugins: [unresolvedAsExternal(missingFolders), emptyAssets],
+    plugins: [unresolvedAsExternal, emptyAssets],
   });
-  const modules = Object.keys(result.metafile.inputs)
+  return Object.keys(result.metafile.inputs)
     // Inputs are relative to the working directory; namespaced ones (`ns:…`)
     // are esbuild's own.
     .filter((input) => !/^[a-z-]+:/.test(input))
     .map((input) => path.resolve(cwd, input));
-  return { modules, missingFolders: [...missingFolders] };
-}
-
-/** The files an esbuild build failure points at, absolute. */
-function filesWithErrors(err: unknown): string[] {
-  const errors = (err as { errors?: Array<{ location?: { file?: string } | null }> } | null)?.errors;
-  if (!Array.isArray(errors)) return [];
-  return errors.flatMap((e) => (e.location?.file ? [path.resolve(process.cwd(), e.location.file)] : []));
 }
 
 function loaderFor(file: string): Loader | undefined {
@@ -182,38 +166,29 @@ async function moduleUsesNetworkApis(file: string): Promise<boolean> {
 interface NetworkApiScan {
   uses: boolean
   modules: string[]
-  /** Folders a missing local import would be written into. */
-  missingFolders: string[]
   /** The scan itself failed unexpectedly: its answer is not to be reused. */
   failed: boolean
 }
 
 async function scanNetworkApis(files: readonly string[]): Promise<NetworkApiScan> {
-  if (files.length === 0) return { uses: false, modules: [], missingFolders: [], failed: false };
+  if (files.length === 0) return { uses: false, modules: [], failed: false };
   try {
-    let graph: { modules: string[]; missingFolders: string[] };
+    let modules: string[];
     try {
-      graph = await localModules([...files]);
+      modules = await localModules([...files]);
     } catch {
       // A file esbuild cannot build (a syntax error) fails the whole build:
-      // build the files one by one, so the others still count. A file that
-      // still fails is read on its own, along with the modules the errors
-      // are in, so fixing a broken helper changes a stamp and the answer.
-      const perFile = await Promise.all(files.map((f) => localModules([f]).catch((err: unknown) => ({
-        modules: [path.resolve(f), ...filesWithErrors(err)],
-        missingFolders: [] as string[],
-      }))));
-      graph = {
-        modules: perFile.flatMap((g) => g.modules),
-        missingFolders: perFile.flatMap((g) => g.missingFolders),
-      };
+      // build the files one by one, so the others still count, and read a
+      // file that still fails on its own.
+      const perFile = await Promise.all(files.map((f) => localModules([f]).catch(() => [path.resolve(f)])));
+      modules = perFile.flat();
     }
-    const unique = [...new Set(graph.modules)];
+    const unique = [...new Set(modules)];
     const results = await Promise.all(unique.map(moduleUsesNetworkApis));
-    return { uses: results.some(Boolean), modules: unique, missingFolders: [...new Set(graph.missingFolders)], failed: false };
+    return { uses: results.some(Boolean), modules: unique, failed: false };
   } catch {
     // Only decides when the proxy starts: it still starts on demand.
-    return { uses: false, modules: [], missingFolders: [], failed: true };
+    return { uses: false, modules: [], failed: true };
   }
 }
 
@@ -235,38 +210,57 @@ function modificationTime(file: string): number {
   }
 }
 
+/** {@link createNetworkApiScanner}'s scanner. */
+export interface NetworkApiScanner {
+  /** Whether `files` use the network APIs, as they are now. */
+  (files: readonly string[]): Promise<boolean>
+  /**
+   * A new run starts: its first call scans afresh, whatever the last scan
+   * read, since what a test can import (a helper written since, a tsconfig
+   * alias, a fixed syntax error) is not known from the files the last scan read.
+   */
+  newRun(): void
+}
+
 /**
  * {@link testFilesUseNetworkApis} for a session that outlives its files —
  * watch mode, UI mode, the MCP server — where the user edits tests between
- * runs. Each call answers for the files as they are now, scanning again only
- * when the file list changed, a module the last scan read (a test file, a
- * helper, a fixture) was modified since, or a missing import may have been
- * written (its folder changed); otherwise it costs a stat per module.
+ * runs. The first call of each run ({@link NetworkApiScanner.newRun}) scans;
+ * a later call in the same run (one per file, in watch mode and the MCP
+ * server) reuses that answer unless the file list changed or a module the
+ * scan read (a test file, a helper, a fixture) was modified since, which
+ * costs a stat per module.
  */
-export function createNetworkApiScanner(): (files: readonly string[]) => Promise<boolean> {
+export function createNetworkApiScanner(): NetworkApiScanner {
   let last: {
     files: string; stamps: Array<[string, number]>; scan: Promise<NetworkApiScan>; failed: boolean
   } | undefined;
-  return async (files) => {
+  const scanner = async (files: readonly string[]): Promise<boolean> => {
     const key = JSON.stringify([...files].sort());
-    const fresh = last && last.files === key && !last.failed
-      && last.stamps.every(([module, mtime]) => modificationTime(module) === mtime);
-    if (!fresh) {
-      // Stamped before the scan reads them, so an edit made during the scan
-      // is seen by the next call.
-      const stampsBefore = new Map(files.map((f) => [f, modificationTime(f)] as const));
-      const scan = scanNetworkApis(files);
-      const entry = { files: key, stamps: [...stampsBefore], scan, failed: false };
-      last = entry;
-      const { modules, missingFolders, failed } = await scan;
-      entry.failed = failed;
-      // Only if no later call replaced this entry meanwhile.
-      // The files themselves always count, even one the scan could not read.
-      if (last === entry) {
-        const read = new Set([...files, ...modules, ...missingFolders]);
-        entry.stamps = [...read].map((m) => [m, stampsBefore.get(m) ?? modificationTime(m)] as [string, number]);
-      }
+    if (last && last.files === key && !last.failed
+      && last.stamps.every(([module, mtime]) => modificationTime(module) === mtime)) {
+      return (await last.scan).uses;
     }
-    return (await last!.scan).uses;
+    // The test files are stamped before the scan reads them, so an edit
+    // to one during the scan is seen by the next call.
+    const stampsBefore = new Map(files.map((f) => [f, modificationTime(f)] as const));
+    const scan = scanNetworkApis(files);
+    const entry = { files: key, stamps: [...stampsBefore], scan, failed: false };
+    last = entry;
+    const { modules, failed } = await scan;
+    entry.failed = failed;
+    // Only if no later call replaced this entry meanwhile.
+    // The files themselves always count, even one the scan could not read.
+    if (last === entry) {
+      const read = new Set([...files, ...modules]);
+      entry.stamps = [...read].map((m) => [m, stampsBefore.get(m) ?? modificationTime(m)] as [string, number]);
+    }
+    // This call's own scan, even if a later call or newRun() replaced it.
+    return (await scan).uses;
   };
+  return Object.assign(scanner, {
+    newRun(): void {
+      last = undefined;
+    },
+  });
 }

@@ -260,6 +260,8 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    */
   private _startRunRequest(): void {
     this._retriedTargets.clear();
+    // Each run scans the test files afresh (PILOT-1013).
+    this._scanNetworkApis.newRun();
   }
 
   async runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult> {

@@ -2762,6 +2762,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const unavailable = await reviveTargetsFor(files);
     // The files as they are now: the user may have written the session's
     // first mocking test since it started (PILOT-1013).
+    scanNetworkApis.newRun();
     const networkApisInRun = await scanNetworkApis(ctx.testFiles);
     if (!parallelRunAborted) {
       for (const f of unavailable) {

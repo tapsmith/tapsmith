@@ -11,6 +11,7 @@ import { HeadlessTestDispatcher } from '../mcp/headless-dispatcher.js';
 interface Internals {
   _testFiles: string[]
   _networkApisInRun(): Promise<boolean>
+  _startRunRequest(): void
 }
 
 let dir: string;
@@ -34,6 +35,17 @@ describe('headless MCP: network APIs in the session', () => {
     write('other.test.ts', `test('b', async ({ device }) => { await device.route('**', (r) => r.abort()) })`);
     const later = new Date(Date.now() + 5_000);
     fs.utimesSync(other, later, later);
+    expect(await internals._networkApisInRun()).toBe(true);
+  });
+
+  it('scans afresh at each run request, so a helper written since counts', async () => {
+    const internals = new HeadlessTestDispatcher({}) as unknown as Internals;
+    const a = write('a.test.ts', `import { mock } from './helper'\ntest('a', async ({ device }) => { await mock(device) })`);
+    internals._testFiles = [a];
+    internals._startRunRequest();
+    expect(await internals._networkApisInRun()).toBe(false);
+    fs.writeFileSync(path.join(dir, 'helper.ts'), `export async function mock(device: any) { await device.route('**', () => {}) }\n`);
+    internals._startRunRequest();
     expect(await internals._networkApisInRun()).toBe(true);
   });
 });

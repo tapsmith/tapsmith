@@ -900,6 +900,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
     const totalFiles = [...state.knownFiles].length;
     targetsRetriedThisRun.clear();
+    scanNetworkApis.newRun();
     await reviveTargetsFor((ctx.projects ?? []).filter((p) => p.testFiles.length > 0).map((p) => p.name));
     // Pass the actual worker count to the reporter so it shows worker/project
     // tags and suppresses file headers when running in parallel.
@@ -1133,6 +1134,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     }
 
     targetsRetriedThisRun.clear();
+    scanNetworkApis.newRun();
     await reviveTargetsFor(tagged.map((t) => t.projectName));
 
     const reporterConfig = useParallel()
