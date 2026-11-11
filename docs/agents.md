@@ -58,25 +58,31 @@ between pages are relative file links.
 
 ## The plugin (recommended)
 
-The Tapsmith plugin for Claude Code, Codex and Cursor registers the MCP server
-(below), run from the project's own Tapsmith install, and adds a skill for
-writing and debugging tests that points the agent at the bundled docs:
+Start UI mode (`npx tapsmith test --ui`), install the Tapsmith plugin for
+Claude Code, Codex or Cursor, and the agent works in the UI session you have
+open: you watch its test runs and device actions as they happen.
 
 ```bash
 claude plugin marketplace add tapsmith/tapsmith && claude plugin install tapsmith@tapsmith   # Claude Code
 codex plugin marketplace add tapsmith/tapsmith && codex plugin add tapsmith@tapsmith         # Codex
 ```
 
-[Install the plugin](mcp-server.md#install-the-plugin) covers Cursor, and which
-project folder the server runs in.
+The plugin registers one MCP server, run from the project's own Tapsmith
+install, and adds a skill for writing and debugging tests that points the agent
+at the bundled docs. With no UI session running the server works headless, on
+a device of its own, and it moves to a UI session you start later without a
+restart. [Install the plugin](mcp-server.md#install-the-plugin) covers Cursor,
+which project folder the server runs in, and
+[how the server follows UI mode](mcp-server.md#one-server-that-follows-ui-mode).
 
 ## MCP server
 
 For richer agent workflows — inspecting the live accessibility tree, validating
 locators before committing them, running tests, reading traces — the agent
-needs the MCP server. The plugin registers the headless one; without the
-plugin, register it by hand. It comes in two forms, registered under two names
-so an agent can have both:
+needs the MCP server. The plugin registers it; without the plugin, register it
+by hand. `npx tapsmith mcp-server --prefer-ui` is the server the plugin uses.
+The two modes it chooses between can each be registered under a name of its
+own, so an agent can have both:
 
 - **`tapsmith-ui`**, preferred whenever `npx tapsmith test --ui` is running: the
   agent works in the UI session you can see, sharing its device, test tree,

@@ -2,6 +2,12 @@
 // (`tapsmith mcp-server`), never a global or npx-cached copy, so the agent
 // drives the Tapsmith version the project's tests run with.
 //
+// It asks for the server that works in the project's running UI-mode session
+// and runs headless when there is none (`mcp-server --prefer-ui`), through
+// TAPSMITH_MCP_PREFER_UI rather than the flag: a project on a Tapsmith from
+// before that server ignores the variable and runs headless, where the flag
+// would stop it. A value already set (`0`, to stay headless) is left alone.
+//
 // sync.mjs writes it, with `await main(<its arguments>)` appended, into the plugin as
 // scripts/mcp-server.mjs (Claude Code's MCP config runs that file) and inline
 // into Cursor's and Codex's as `node --input-type=module -e <this file> --`:
@@ -156,6 +162,7 @@ export async function main(extraArgs) {
   }
   process.stderr.write('tapsmith plugin: starting tapsmith ' + found.version + ' mcp-server in ' + found.dir + '\n');
   process.chdir(found.dir);
+  if (!process.env.TAPSMITH_MCP_PREFER_UI) process.env.TAPSMITH_MCP_PREFER_UI = '1';
   // In place: Node and Tapsmith read this array when they fork.
   process.execArgv.splice(0, process.execArgv.length, ...childExecArgv(process.execArgv));
   process.argv = [process.execPath, found.bin, 'mcp-server', ...extraArgs];

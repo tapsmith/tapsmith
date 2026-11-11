@@ -9,7 +9,7 @@
     {
       "name": "tapsmith",
       "source": "./plugins/tapsmith",
-      "description": "Write, run and debug Tapsmith mobile tests: the Tapsmith MCP server, run from the project's own install, and a skill for finding locators, structuring tests and reading failed traces."
+      "description": "Write, run and debug Tapsmith mobile tests: the Tapsmith MCP server, run from the project's own install and working in its UI-mode session when one is running, and a skill for finding locators, structuring tests and reading failed traces."
     }
   ]
 }

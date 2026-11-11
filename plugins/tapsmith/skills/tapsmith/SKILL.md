@@ -37,8 +37,23 @@ suggest `npm install -D tapsmith`, then `npx tapsmith init`. Do not install a gl
 
 ## Tools
 
-The plugin starts the project's own `tapsmith mcp-server` as the **`tapsmith-headless`** MCP
-server. Its key tools:
+The plugin registers one MCP server, **`tapsmith`**, run from the project's own Tapsmith
+install. It works in the session the user can see whenever there is one:
+
+- **UI mode.** With `npx tapsmith test --ui` running in the project, every tool call goes to
+  that session. Runs and device actions show in its window, and the agent shares its device,
+  test tree and results.
+- **Headless.** With no UI session, it runs on a device of its own.
+
+The server checks on every call, so a UI session the user starts or closes later is picked up
+without a restart. `tapsmith_session_info` ends with a `## Mode` section saying which one the
+session is in. Each mode has its own results and watches: after a switch (a tool result says
+when one happened), read them again rather than assuming the earlier ones.
+
+When headless, tell the user they can watch the agent work by running `npx tapsmith test --ui`
+in the project. Do not start a UI session yourself unless asked.
+
+Key tools:
 
 - `tapsmith_snapshot`: the screen's accessibility tree, with locators the device has checked.
 - `tapsmith_test_locator`: how many elements a locator matches right now.
@@ -47,12 +62,9 @@ server. Its key tools:
 - `tapsmith_screenshot`, `tapsmith_tap`, `tapsmith_type`, `tapsmith_swipe`: look at the
   device and get the app to the screen under test.
 
-If the user has `npx tapsmith test --ui` running, prefer that session: ask them for the MCP URL
-the UI shows and register it as `tapsmith-ui` (`mcp-server.md` says how). The agent then works
-in the session they can see. Do not start a UI session yourself unless asked.
-
-The headless server never boots a simulator or launches an emulator. If a tool says the
-configured device is not running, tell the user which one to start (the error names it).
+Headless, the server never boots a simulator or launches an emulator. If a tool says the
+configured device is not running, tell the user which one to start (the error names it), or to
+start `npx tapsmith test --ui`, which boots its own.
 
 ## Finding a locator
 

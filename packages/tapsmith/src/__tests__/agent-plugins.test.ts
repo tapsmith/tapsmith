@@ -58,6 +58,7 @@ function installFakeTapsmith(dir: string, version = '9.9.9'): string {
       "child.stderr.on('data', (d) => { childErr += d; });",
       "child.on('exit', (childExit) => process.stdout.write(JSON.stringify({",
       "  args: process.argv.slice(2), cwd: process.cwd(), bin: process.argv[1], childExit, childErr,",
+      "  preferUi: process.env.TAPSMITH_MCP_PREFER_UI,",
       "})));",
       '',
     ].join('\n'),
@@ -76,13 +77,14 @@ const CONFIGS = ['.mcp.json', 'mcp-inline.json'] as const;
  */
 function runPluginServer(configFile: (typeof CONFIGS)[number], cwd: string, env: Record<string, string> = {}, extraArgs: string[] = []) {
   const config = JSON.parse(generatedFiles(REPO)[`plugins/tapsmith/${configFile}`]!) as McpConfig;
-  const server = config.mcpServers['tapsmith-headless']!;
+  const server = config.mcpServers['tapsmith']!;
   expect(server.command).toBe('node');
   const args = server.args.map((a) => a.replace('${CLAUDE_PLUGIN_ROOT}', path.join(REPO, 'plugins/tapsmith')));
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   if (!('CLAUDE_PROJECT_DIR' in env)) delete childEnv.CLAUDE_PROJECT_DIR;
   if (!('TAPSMITH_PROJECT_DIR' in env)) delete childEnv.TAPSMITH_PROJECT_DIR;
   if (!('WORKSPACE_FOLDER_PATHS' in env)) delete childEnv.WORKSPACE_FOLDER_PATHS;
+  if (!('TAPSMITH_MCP_PREFER_UI' in env)) delete childEnv.TAPSMITH_MCP_PREFER_UI;
   return spawnSync(process.execPath, [...args, ...extraArgs], { cwd, env: childEnv, encoding: 'utf8' });
 }
 
@@ -225,6 +227,25 @@ describe.each(CONFIGS)('the plugin MCP server command in %s', (configFile) => {
     expect(out.childExit).toBe(0);
   });
 
+  // By variable, not by flag: an installed Tapsmith that predates the server
+  // which follows a UI session ignores the variable and runs headless.
+  it('asks for the server that works in a running UI session, without a flag', () => {
+    installFakeTapsmith(tmp);
+    const out = JSON.parse(runPluginServer(configFile, tmp).stdout) as { args: string[]; preferUi?: string };
+    expect(out.preferUi).toBe('1');
+    expect(out.args).toEqual(['mcp-server']);
+  });
+
+  it('leaves a TAPSMITH_MCP_PREFER_UI the user set alone', () => {
+    installFakeTapsmith(tmp);
+    expect(JSON.parse(runPluginServer(configFile, tmp, { TAPSMITH_MCP_PREFER_UI: '0' }).stdout).preferUi).toBe('0');
+  });
+
+  it('registers one server, named tapsmith', () => {
+    const config = JSON.parse(generatedFiles(REPO)[`plugins/tapsmith/${configFile}`]!) as McpConfig;
+    expect(Object.keys(config.mcpServers)).toEqual(['tapsmith']);
+  });
+
   it('passes no extra arguments when there are none', () => {
     installFakeTapsmith(tmp);
     const run = runPluginServer(configFile, tmp);
@@ -258,7 +279,7 @@ describe.each(CONFIGS)('the plugin MCP server command in %s', (configFile) => {
 describe('the inline launcher', () => {
   it('drops the comments, which the agents would show as part of the command', () => {
     const config = JSON.parse(generatedFiles(REPO)['plugins/tapsmith/mcp-inline.json']!) as McpConfig;
-    const script = config.mcpServers['tapsmith-headless']!.args[2]!;
+    const script = config.mcpServers['tapsmith']!.args[2]!;
     expect(script).not.toMatch(/^\s*\/\//m);
     expect(script).not.toContain('/**');
     expect(script.startsWith('import ')).toBe(true);
@@ -266,7 +287,7 @@ describe('the inline launcher', () => {
 
   it('holds no `${`, which Cursor would substitute as a placeholder in a plugin MCP config', () => {
     const config = JSON.parse(generatedFiles(REPO)['plugins/tapsmith/mcp-inline.json']!) as McpConfig;
-    expect(config.mcpServers['tapsmith-headless']!.args.join(' ')).not.toContain('${');
+    expect(config.mcpServers['tapsmith']!.args.join(' ')).not.toContain('${');
   });
 });
 

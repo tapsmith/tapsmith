@@ -2,11 +2,19 @@
 
 Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI coding agents run tests, interact with devices, and inspect results through a standardized tool interface. Both modes expose the same **17 tools** for device interaction, test execution, result browsing, watch mode, and session info.
 
+## Quick start: UI mode and the plugin
+
+1. Start UI mode in your project: `npx tapsmith test --ui`.
+2. Install the Tapsmith plugin in your coding agent ([below](#install-the-plugin)).
+3. Ask the agent to write or fix a test. It works in the UI session you have open: its test runs and device actions show in the UI as they happen, on the device the session is mirroring.
+
+There is no URL to copy and nothing to register. Without a UI session the plugin's server runs [headless](#stdio-mode) on a device of its own, and it moves to a UI session you start later without restarting the agent ([how it follows UI mode](#one-server-that-follows-ui-mode)).
+
 ## Install the plugin
 
-The quickest setup is the Tapsmith plugin for Claude Code, Codex and Cursor. It does two things:
+The Tapsmith plugin for Claude Code, Codex and Cursor does two things:
 
-- registers the [stdio server](#stdio-mode) as `tapsmith-headless`, started from the Tapsmith installed in your project, never a global or `npx`-cached copy;
+- registers one MCP server, `tapsmith`, started from the Tapsmith installed in your project, never a global or `npx`-cached copy. It works in the project's running UI-mode session when there is one, and headless when there is not;
 - adds a `tapsmith` skill that walks the agent through finding locators, screen objects, running one test and reading a failed test's trace, and points it at the docs that ship with the installed version, in `node_modules/tapsmith/docs/`.
 
 Install Tapsmith in the project first (`npm install -D tapsmith`), since the plugin's server runs that copy. `tapsmith init` lists the plugin install for each coding agent it finds in the project.
@@ -39,15 +47,32 @@ cp -R tapsmith-plugin-src/plugins/tapsmith ~/.cursor/plugins/local/tapsmith
 
 **Which project the server runs in.** In Claude Code, the project the session was opened in (`CLAUDE_PROJECT_DIR`); in Cursor, the workspace's first folder (`WORKSPACE_FOLDER_PATHS`); in Codex, the directory Codex was started in. The server runs there, with the Tapsmith that folder resolves (the way `import "tapsmith"` would), so start the agent from the folder that holds your `tapsmith.config.ts`. When the tests live in a folder one level below with its own Tapsmith config and `node_modules` (an `e2e/` package in a monorepo), that folder is used, as long as there is only one. Otherwise start the agent from the test project's folder, or set `TAPSMITH_PROJECT_DIR` to it in the environment you start the agent from. Codex passes only a few environment variables on to MCP servers, and not this one, so in Codex start it from the folder. When Tapsmith is not installed, the server exits at once and its error (on stderr, shown in the agent's MCP server list or logs) says how to install it.
 
-If you registered `tapsmith-headless` by hand before, remove that registration (`claude mcp remove tapsmith-headless`, `codex mcp remove tapsmith-headless`), so the agent does not see every tool twice.
+If you registered `tapsmith-ui` or `tapsmith-headless` by hand before, remove those registrations (`claude mcp remove tapsmith-ui`, `codex mcp remove tapsmith-headless`, and so on), so the agent does not see every tool two or three times.
 
 The plugin's version follows Tapsmith's releases. `claude plugin marketplace update tapsmith` or `codex plugin marketplace upgrade tapsmith` fetches a newer one.
 
-The plugin does not register the UI session's [HTTP endpoint](#http-mode-recommended), whose port is only known once `tapsmith test --ui` is running; register that one by hand as below.
+The server follows UI mode when the project's Tapsmith is a version that has `tapsmith mcp-server --prefer-ui`. With an older one the plugin still works, headless only.
+
+### One server that follows UI mode
+
+The plugin's server is `tapsmith mcp-server --prefer-ui`. It holds no session of its own: before each tool call it looks for a running `tapsmith test --ui` session of the same project and passes the call to it, or to a headless server it starts when there is none.
+
+- **Which UI session.** One started in the folder the server runs in, or with a config file in that folder (so `npx tapsmith test --ui -c e2e/tapsmith.config.ts` from a repo root is found by an agent working in `e2e/`). With several, the one on the server's own `--config` file, else the one started last. UI sessions of other projects are never used.
+- **A UI session started later** is used from the next call. The headless session is ended first, which stops its daemon and frees its device. If that headless session already holds the device the UI session wants, `tapsmith test --ui` asks it to hand over as it starts and waits up to 10 seconds; you will see a line saying so. (macOS and Linux. On Windows, restart the agent's MCP server to free the device.)
+- **A headless test run still going** when the UI session starts keeps running, and keeps its device. Calls made meanwhile (`tapsmith_stop_tests`, `tapsmith_suite_status`) go to that run. The first call after it ends moves to the UI session.
+- **A UI session that ends** is noticed on the next call, which runs headless. If it ends while a call is running, that call fails with a message saying it may not have completed; the server does not send it again by itself.
+- **Each mode has its own state.** Results, the suite board and watches do not carry over, and the first tool result after a switch says that one happened. `tapsmith_session_info` ends with a `## Mode` section naming the mode, and when headless says how to start a UI session to watch the agent work. So do headless errors about a missing or held device.
+
+To use it without the plugin, register that command yourself:
+
+```bash
+claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
+codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
+```
 
 ## Modes
 
-The MCP server operates in two modes. Without the plugin, register them by hand as this section shows. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
+The server above chooses between two modes, and each can also be registered by hand, as this section shows: for an MCP client the plugin does not cover, to connect to a UI session of another project or machine, or to keep an agent headless whatever UI sessions are running. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
 
 ### HTTP mode (recommended)
 
@@ -126,7 +151,7 @@ codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith
 claude mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
 ```
 
-If a UI server is already running, stdio mode will detect it and suggest connecting via HTTP instead. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session.
+If a UI server is already running, stdio mode will detect it and suggest connecting via HTTP instead. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session. With `--prefer-ui` the server makes that choice itself, call by call: see [One server that follows UI mode](#one-server-that-follows-ui-mode).
 
 The session ends when the client closes the server's stdin or sends it SIGINT, SIGTERM or SIGHUP. Either way the server stops any run in progress, stops the daemon it started (and so that daemon's device agent) unless another MCP session in the project is still using it, and exits 0.
 

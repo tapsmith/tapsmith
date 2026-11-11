@@ -44,7 +44,8 @@ describe('the locator loop and Playwright habits (PILOT-849)', () => {
   it('points the agent at the docs of the installed version, and at the plugin', () => {
     const section = renderAgentsSection();
     expect(section).toContain('`node_modules/tapsmith/docs/<page>.md`');
-    expect(section).toContain('The Tapsmith plugin for Claude Code, Codex and Cursor');
+    expect(section).toContain('The Tapsmith plugin for Claude Code, Codex and Cursor registers one MCP server, `tapsmith`');
+    expect(section).toContain('works in the user\'s running `npx tapsmith test --ui` session when there is one');
     expect(section).toContain('`node_modules/tapsmith/docs/mcp-server.md`');
   });
 

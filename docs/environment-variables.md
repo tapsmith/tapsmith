@@ -52,6 +52,7 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 
 | Variable | Description |
 |---|---|
+| `TAPSMITH_MCP_PREFER_UI` | `1` makes `tapsmith mcp-server` work in the project's running UI-mode session when there is one, and headless otherwise, as its `--prefer-ui` flag does ([One server that follows UI mode](mcp-server.md#one-server-that-follows-ui-mode)). The [coding-agent plugin](mcp-server.md#install-the-plugin) sets it. Set it to `0` in the environment you start the agent from to keep the plugin's server headless. |
 | `TAPSMITH_PROJECT_DIR` | The folder whose Tapsmith the [coding-agent plugin](mcp-server.md#install-the-plugin) starts as its MCP server, when the agent's own project folder is not it (several Tapsmith projects below it, say). Read by the plugin's server command, so set it in the environment you start the agent from. Codex does not pass it on to MCP servers: in Codex, start the agent from that folder instead. |
 
 ## Android
