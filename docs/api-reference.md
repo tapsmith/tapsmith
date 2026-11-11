@@ -1936,7 +1936,9 @@ worker before any test runs:
 | `resetAppDeepLink`| `string`                              | Warm-reset deep link (makes `appReset: 'auto'` → `warm`) |
 | `resetAppWaitMs`  | `number`                              | Wait after the reset deep link           |
 
-**Reusable auth state** — mirrors Playwright's `storageState`:
+#### Reusable auth state
+
+Mirrors Playwright's `storageState`:
 
 ```typescript
 // Setup: authenticate once and save state

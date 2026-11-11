@@ -41,7 +41,7 @@ iOS alike.
 - **Fast, isolated tests.** A clean app for every test file, [sub-second resets](https://tapsmith.dev/guides/warm-reset/) for React Native apps, and `saveAppState` to log in once.
 - **Many devices at once.** Parallel workers on emulators and simulators Tapsmith boots for you, CI sharding with merged reports, and [multi-device tests](https://tapsmith.dev/guides/multi-device/).
 - **Hybrid apps.** Switch into a WebView and drive it with CSS selectors and web roles.
-- **Built for AI agents.** A built-in [MCP server](https://tapsmith.dev/guides/mcp-server/), and `--json` output for every setup command.
+- **Built for AI agents.** A built-in [MCP server](https://tapsmith.dev/guides/mcp-server/), the docs inside the package, and `--json` output for every setup command.
 - **One npm install.** The daemon, the device agents and the trace viewer ship in the package. No server to start, no drivers to update.
 
 <img src="https://tapsmith.dev/trace-viewer.png" alt="The Tapsmith trace viewer replaying a test step by step" width="860">
@@ -78,6 +78,7 @@ Plug'n'Play each need one setting first: see [Package manager notes](https://tap
 - **Start here:** [Getting started](https://tapsmith.dev/getting-started/) · [Writing tests](https://tapsmith.dev/writing-tests/) · [Locators](https://tapsmith.dev/guides/locators/) · [Debugging](https://tapsmith.dev/guides/debugging/)
 - **Guides:** [Network](https://tapsmith.dev/guides/network/) · [Trace viewer](https://tapsmith.dev/guides/trace-viewer/) · [UI mode](https://tapsmith.dev/guides/ui-mode/) · [Parallel runs and sharding](https://tapsmith.dev/guides/parallel-and-sharding/) · [AI coding agents](https://tapsmith.dev/guides/agents/)
 - **Migrating:** [From Maestro](https://tapsmith.dev/guides/migrating-from-maestro/) · [From Detox](https://tapsmith.dev/guides/migrating-from-detox/) · [From Appium](https://tapsmith.dev/guides/migrating-from-appium/)
+- **For coding agents:** every docs page ships in the package, so an agent can read the docs of the installed version offline: `node_modules/tapsmith/docs/<page>.md`, starting with `api-reference.md`, `writing-tests.md` and `locators.md`.
 - **Reference:** [API](https://tapsmith.dev/reference/api/locators/) · [CLI](https://tapsmith.dev/reference/api/cli/) · [Configuration](https://tapsmith.dev/reference/configuration/) · [CI setup](https://tapsmith.dev/platform/ci-setup/) · [Telemetry](https://tapsmith.dev/reference/telemetry/)
 
 ## License

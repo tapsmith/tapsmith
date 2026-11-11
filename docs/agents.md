@@ -49,6 +49,13 @@ everything else works unattended.
 npx tapsmith test --reporter json     # writes tapsmith-results/results.json
 ```
 
+## The docs in the package
+
+Every docs page ships in the npm package, so an agent reads the docs of the
+installed version without web access: `node_modules/tapsmith/docs/<page>.md`.
+Start with `api-reference.md`, `writing-tests.md` and `locators.md`. Links
+between pages are relative file links.
+
 ## MCP server (recommended)
 
 For richer agent workflows — inspecting the live accessibility tree, validating

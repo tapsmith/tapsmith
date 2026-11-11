@@ -41,6 +41,11 @@ describe('renderAgentsSection()', () => {
 });
 
 describe('the locator loop and Playwright habits (PILOT-849)', () => {
+  it('points the agent at the docs of the installed version', () => {
+    const section = renderAgentsSection();
+    expect(section).toContain('`node_modules/tapsmith/docs/<page>.md`');
+  });
+
   it('states the loop as a rule', () => {
     const section = renderAgentsSection();
     expect(section).toContain('### The locator loop');
