@@ -621,7 +621,7 @@ class CommandHandler {
         commandReadDeadline = (params["readTimeoutMs"] as? NSNumber)
             .map { Date(timeIntervalSinceNow: $0.doubleValue / 1000) }
         snapshotFinder.commandDeadline = commandReadDeadline
-        hostTouchOffered = (params["hostTouch"] as? Bool) == true
+        hostTouchOffered = (params[HostTouch.offerParam] as? Bool) == true
 
         do {
             var result: [String: Any]?

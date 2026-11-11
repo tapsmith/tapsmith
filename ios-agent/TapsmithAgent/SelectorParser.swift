@@ -51,15 +51,11 @@ enum SelectorParser {
         )
     }
 
-    /// Check whether the params contain any selector field.
-    /// The daemon merges selector fields into params alongside meta keys
-    /// like "screenshot", "hierarchy", and "readTimeoutMs" (stamped on every
-    /// command), so any other key is a selector.
+    /// Check whether the params contain any selector field: any key that
+    /// is not one of the daemon's own (`CommandMeta`).
     static func hasSelector(_ params: [String: Any]) -> Bool {
-        params.keys.contains { !metaKeys.contains($0) }
+        CommandMeta.hasSelectorKeys(params)
     }
-
-    private static let metaKeys: Set<String> = ["screenshot", "hierarchy", "readTimeoutMs"]
 
     /// Return nil for empty strings.
     private static func nonEmpty(_ str: String?) -> String? {

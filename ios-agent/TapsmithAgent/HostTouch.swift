@@ -26,6 +26,9 @@ import Foundation
 /// Kept free of XCUITest and of the socket so the host unit tests can drive
 /// it (`ios-agent/Tests/run-unit-tests.sh`).
 enum HostTouch {
+    /// The param the daemon stamps on a command to offer its taps.
+    static let offerParam = "hostTouch"
+
     enum Outcome: Equatable {
         /// Pressed and lifted.
         case delivered
