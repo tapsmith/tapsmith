@@ -37,6 +37,7 @@ import {
 } from './session-preflight.js';
 import { satisfies, type AppResetPolicy, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import { findDaemonBin } from './daemon-bin.js';
+import { timingLog } from './timing-log.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed, type DaemonStartOutcome } from './daemon-start.js';
 import { DaemonClaimedError, claimDeviceOrThrow, daemonDriverElsewhere, releaseDeviceClaim, type SessionIdentity } from './device-claims.js';
 
@@ -427,6 +428,16 @@ async function installAppUnderTest(
 ): Promise<InstallOutcome> {
   const progress = opts.onProgress ?? (() => {});
   const phase = opts.onPhase ?? (() => {});
+  // Session-start breakdown (PILOT-1134): one timing line per install check,
+  // in the daemon's timing log. `check_ms` is the installed-build comparison,
+  // the rest the install itself.
+  const started = Date.now();
+  let checkMs: number | undefined;
+  const checked = (): void => { checkMs = Date.now() - started; };
+  const timing = (result: string): void => {
+    const check = checkMs === undefined ? '' : ` check_ms=${checkMs}`;
+    timingLog(`kind=boot name=app_install dur_ms=${Date.now() - started} result=${result}${check} platform=${config.platform}`);
+  };
 
   if (config.platform !== 'ios') {
     if (!config.apk) {
@@ -442,9 +453,11 @@ async function installAppUnderTest(
     const buildDiffers = wasInstalled && !!config.package
       && installedApkMatches(serial, config.package, resolvedApk) === false;
     const upToDate = !opts.freshDevice && wasInstalled && !buildDiffers;
+    checked();
     if (upToDate && !opts.forceInstall) {
       progress(`app ${config.package} already installed (matching build), skipping APK install`);
       phase('install', 'complete', `${config.package} already installed (matching build)`);
+      timing('matching');
       return { freshInstall: false };
     }
     const why = buildDiffers ? ' (installed build differs)' : '';
@@ -454,10 +467,12 @@ async function installAppUnderTest(
       if (config.package) await waitForPackageIndexed(serial, config.package);
     } catch (err) {
       phase('install', 'fail', `failed to install ${path.basename(resolvedApk)}`);
+      timing('failed');
       throw new Error(`Failed to install app APK: ${err instanceof Error ? err.message : String(err)}`);
     }
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApk)}`);
+    timing(wasInstalled ? 'reinstalled' : 'installed');
     return { freshInstall: !wasInstalled };
   }
 
@@ -471,9 +486,11 @@ async function installAppUnderTest(
   const { isPhysicalDevice, installAppOnDevice, isAppInstalledOnDevice } = await import('./ios-devicectl.js');
   if (isPhysicalDevice(serial)) {
     const wasInstalled = !!config.package && (await isAppInstalledOnDevice(serial, config.package));
+    checked();
     if (wasInstalled && !opts.forceInstall && !opts.freshDevice) {
       progress(`app ${config.package} already installed, skipping app install`);
       phase('install', 'complete', `${config.package} already installed on device`);
+      timing('present');
       return { freshInstall: false };
     }
     progress(`${wasInstalled ? 'reinstalling' : 'installing'} ${path.basename(resolvedApp)} on device`);
@@ -481,10 +498,12 @@ async function installAppUnderTest(
       await installAppOnDevice(serial, resolvedApp);
     } catch (err) {
       phase('install', 'fail', `failed to install ${path.basename(resolvedApp)}`);
+      timing('failed');
       throw new Error(`Failed to install iOS app: ${err instanceof Error ? err.message : String(err)}`);
     }
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApp)} on ${serial}`);
+    timing(wasInstalled ? 'reinstalled' : 'installed');
     return { freshInstall: !wasInstalled };
   }
   if (opts.appInstalledFresh) {
@@ -498,9 +517,12 @@ async function installAppUnderTest(
   // With --force-install the build is not compared: it is reinstalled anyway.
   const wasInstalled = !!config.package && isAppInstalled(serial, config.package);
   const compared = !opts.freshDevice && !opts.forceInstall && wasInstalled;
-  if (compared && await installedAppMatches(serial, config.package!, resolvedApp)) {
+  const matches = compared && await installedAppMatches(serial, config.package!, resolvedApp);
+  checked();
+  if (matches) {
     progress(`app ${config.package} already installed (matching build), skipping app install`);
     phase('install', 'complete', `${config.package} already installed (matching build)`);
+    timing('matching');
     return { freshInstall: false };
   }
   const why = compared ? ' (installed build differs)' : '';
@@ -511,9 +533,11 @@ async function installAppUnderTest(
     () => {
       progress('app install complete');
       phase('install', 'complete', `installed ${path.basename(resolvedApp)}`);
+      timing(wasInstalled ? 'reinstalled' : 'installed');
     },
     (err: unknown) => {
       phase('install', 'fail', `failed to install ${path.basename(resolvedApp)}`);
+      timing('failed');
       throw new Error(`Failed to install iOS app: ${err instanceof Error ? err.message : String(err)}`);
     },
   );

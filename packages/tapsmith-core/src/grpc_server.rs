@@ -3861,13 +3861,18 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     ) -> Result<Response<proto::ActionResponse>, Status> {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
+        // Session-start breakdown (PILOT-1134): on a just-booted CI simulator
+        // the device list alone took most of 12 s.
+        let mut timer = crate::timing::PhaseTimer::new("boot", "set_device");
 
         let mut dm = self.device_manager.write().await;
+        timer.phase("lock");
 
         // Refresh to make sure the device is known
         dm.refresh()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+        timer.phase("refresh");
 
         // Capture the previously-active serial so we can release stale
         // per-device session state once the active device switches.
@@ -3951,15 +3956,20 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                         )
                         .await;
                 }
+                timer.phase("select");
                 // Pre-arm network tracing on the new device (a no-op when it is
                 // off), before any install or launch can race it.
                 if let Ok(backend) = self.backend().await {
                     backend.prearm_network_tracing(&req).await;
                 }
+                timer.phase("prearm");
                 // Before any install or launch, so the app starts with the
                 // session's animation scales.
                 self.select_animation_scales(&req.serial, req.reduce_motion)
                     .await;
+                timer.phase("animation");
+                timer.note("device_changed", device_changed);
+                timer.succeed();
                 Ok(Response::new(proto::ActionResponse {
                     request_id,
                     success: true,
@@ -4024,6 +4034,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         #[cfg(target_os = "macos")]
         self.agent_predates_hid_tap
             .store(false, std::sync::atomic::Ordering::Relaxed);
+        // Session-start breakdown (PILOT-1134). Not for a reused agent above,
+        // which does no work worth timing.
+        let mut timer = crate::timing::PhaseTimer::new("boot", "start_agent");
+        timer.note("platform", platform);
         // A reducedMotion speed-up that still could not be applied: told to
         // the run in the successful answer's error_message (PILOT-1073).
         let speed_warning = if platform == Platform::Ios {
@@ -4031,6 +4045,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         } else {
             None
         };
+        timer.phase("animation");
 
         let launched = match backend
             .launch_agent(request_id.clone(), serial.clone(), &req)
@@ -4039,12 +4054,15 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             Ok(launched) => launched,
             Err(resp) => return Ok(Response::new(resp)),
         };
+        timer.phase("launch");
 
         // Connect to the agent (iOS: direct TCP, Android: via ADB port forward)
         let mut agent = self.agent.write().await;
         let connect_result = backend.connect_agent(&mut agent, &serial).await;
+        timer.phase("connect");
         match connect_result {
             Ok(()) => {
+                timer.succeed();
                 backend
                     .after_agent_connected(&serial, &desired_agent_config.target_package)
                     .await;
