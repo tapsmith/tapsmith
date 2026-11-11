@@ -201,6 +201,18 @@ describe('createNetworkApiScanner', () => {
     expect(await scan([a])).toBe(true);
   });
 
+  it('scans again once a broken helper is fixed, with the test file unchanged', async () => {
+    const scan = createNetworkApiScanner();
+    write('good.ts', `export async function mock(device: any) { await device.route('**', () => {}) }\n`);
+    const bad = write('bad.ts', `export const y = (\n`);
+    const t = write('t.test.ts', `${header}import { mock } from './good'\nimport { y } from './bad'\ntest('t', async ({ device }) => { await mock(device); y })\n`);
+    // Mid-edit: the build fails, so the graph cannot be read.
+    expect(await scan([t])).toBe(false);
+    fs.writeFileSync(bad, `export const y = 1\n`);
+    touch(bad, 5_000);
+    expect(await scan([t])).toBe(true);
+  });
+
   it('reuses its answer while a file stays broken', async () => {
     const scan = createNetworkApiScanner();
     const mtime = new Date(2026, 0, 1);

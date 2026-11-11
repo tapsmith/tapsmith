@@ -106,6 +106,13 @@ async function localModules(entries: string[]): Promise<{ modules: string[]; mis
   return { modules, missingFolders: [...missingFolders] };
 }
 
+/** The files an esbuild build failure points at, absolute. */
+function filesWithErrors(err: unknown): string[] {
+  const errors = (err as { errors?: Array<{ location?: { file?: string } | null }> } | null)?.errors;
+  if (!Array.isArray(errors)) return [];
+  return errors.flatMap((e) => (e.location?.file ? [path.resolve(process.cwd(), e.location.file)] : []));
+}
+
 function loaderFor(file: string): Loader | undefined {
   switch (path.extname(file)) {
     case '.ts': case '.mts': case '.cts': return 'ts';
@@ -189,10 +196,11 @@ async function scanNetworkApis(files: readonly string[]): Promise<NetworkApiScan
       graph = await localModules([...files]);
     } catch {
       // A file esbuild cannot build (a syntax error) fails the whole build:
-      // build the files one by one, so the others still count, and read a
-      // file that still fails on its own. Its edit is what changes the answer.
-      const perFile = await Promise.all(files.map((f) => localModules([f]).catch(() => ({
-        modules: [path.resolve(f)],
+      // build the files one by one, so the others still count. A file that
+      // still fails is read on its own, along with the modules the errors
+      // are in, so fixing a broken helper changes a stamp and the answer.
+      const perFile = await Promise.all(files.map((f) => localModules([f]).catch((err: unknown) => ({
+        modules: [path.resolve(f), ...filesWithErrors(err)],
         missingFolders: [] as string[],
       }))));
       graph = {
