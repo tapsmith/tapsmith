@@ -2,7 +2,7 @@
  * Opt-in timing lines for performance investigation, the SDK's half of the
  * daemon's `timing.rs`: when `TAPSMITH_TIMING_LOG` names a file, each call
  * appends one `[TIMING] pid=<n> <fields>` line to it, in the same format, so
- * one log holds both sides of a session start (PILOT-1134). Unset, it does
+ * one log holds both sides of a session start. Unset, it does
  * nothing. Never throws: a timing line is never worth failing a run over.
  */
 
