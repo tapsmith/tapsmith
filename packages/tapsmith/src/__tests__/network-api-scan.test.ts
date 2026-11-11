@@ -124,6 +124,11 @@ export default async function run(device) { await device.waitForRequest(data.url
     expect(await testFilesUseNetworkApis([broken, net])).toBe(true);
   });
 
+  it('still scans a file whose own imports cannot be resolved', async () => {
+    const f = write('a.test.ts', `${header}import { helper } from './not-written-yet.js'\ntest('a', async ({ device }) => { await device.route('**', () => {}); await helper() })\n`);
+    expect(await testFilesUseNetworkApis([f])).toBe(true);
+  });
+
   it('is false when no file can be read', async () => {
     const broken = write('broken.test.ts', `this is not ( valid typescript`);
     expect(await testFilesUseNetworkApis([broken, path.join(dir, 'gone.test.ts')])).toBe(false);
@@ -166,6 +171,14 @@ describe('createNetworkApiScanner', () => {
     // Changed on disk without a new modification time: the answer stands.
     fs.writeFileSync(a, `${header}test('a', async () => {})\n`);
     fs.utimesSync(a, mtime, mtime);
+    expect(await scan([a])).toBe(true);
+  });
+
+  it('scans again once a missing import is written, with the test file unchanged', async () => {
+    const scan = createNetworkApiScanner();
+    const a = write('a.test.ts', `${header}import { mockApi } from './utils/mock.js'\ntest('a', async ({ device }) => { await mockApi(device) })\n`);
+    expect(await scan([a])).toBe(false);
+    write('utils/mock.ts', `export async function mockApi(device: any) { await device.route('**', () => {}) }\n`);
     expect(await scan([a])).toBe(true);
   });
 
