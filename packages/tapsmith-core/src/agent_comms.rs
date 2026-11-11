@@ -115,6 +115,8 @@ fn stamp_read_timeout(json: &mut Value, read_timeout: Duration) {
 /// ([`stamp_host_touch`]), so an older daemon is never sent a request, and
 /// an older agent ignores the stamp.
 #[derive(Debug, Clone, PartialEq)]
+// Only the macOS-only HID helper presses a tap.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct HostTap {
     pub x: f64,
     pub y: f64,
@@ -125,6 +127,8 @@ pub(crate) struct HostTap {
 
 /// What became of a [`HostTap`], as the agent is told (`status`).
 #[derive(Debug, Clone, PartialEq)]
+// Only the macOS-only HID helper delivers or fails a tap.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) enum HostTapOutcome {
     /// Pressed and lifted.
     Delivered,

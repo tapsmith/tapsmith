@@ -6528,13 +6528,13 @@ fn hid_required_from(value: Option<&str>) -> bool {
 /// Unlike [`TapsmithServiceImpl::try_hid_tap`] there is no wait after the lift
 /// ([`HID_TAP_BARRIER`]): the agent goes on to watch for what the tap was for
 /// (the field taking focus, the keyboard leaving).
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 struct HidHostTouch {
     injector: Arc<crate::hid_injector::HidInjector>,
     udid: String,
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 impl agent_comms::HostTouch for HidHostTouch {
     fn tap(&self, tap: agent_comms::HostTap) -> agent_comms::HostTapFuture<'_> {
         use agent_comms::HostTapOutcome;
@@ -8132,135 +8132,142 @@ mod tests {
         assert_eq!(long_press_resolve_budget(2_000, 5_000), 0);
     }
 
-    /// A stub HID helper that logs every line it is sent to `log` and
-    /// answers a `t1` line with `t1_reply`, anything else with `ok`.
-    fn logging_hid_stub(
-        log: &std::path::Path,
-        t1_reply: &str,
-    ) -> (tempfile::TempDir, std::path::PathBuf) {
-        crate::hid_injector::stub_helper_for_test(&format!(
-            "echo 'ready 1 1 1'\nwhile IFS= read -r line; do echo \"$line\" >> '{l}'; \
-             case \"$line\" in t1*) echo '{t1}';; *) echo ok;; esac; done\n",
-            l = log.display(),
-            t1 = t1_reply,
-        ))
-    }
+    /// The HID helper as the agent's host touch. macOS only, like the
+    /// helper's module.
+    #[cfg(target_os = "macos")]
+    mod hid_host_touch {
+        use super::*;
 
-    fn host_touch_with(helper: std::path::PathBuf) -> HidHostTouch {
-        HidHostTouch {
-            injector: Arc::new(crate::hid_injector::HidInjector::with_helper_path(helper)),
-            udid: "UDID-HOST".to_string(),
+        /// A stub HID helper that logs every line it is sent to `log` and
+        /// answers a `t1` line with `t1_reply`, anything else with `ok`.
+        fn logging_hid_stub(
+            log: &std::path::Path,
+            t1_reply: &str,
+        ) -> (tempfile::TempDir, std::path::PathBuf) {
+            crate::hid_injector::stub_helper_for_test(&format!(
+                "echo 'ready 1 1 1'\nwhile IFS= read -r line; do echo \"$line\" >> '{l}'; \
+                 case \"$line\" in t1*) echo '{t1}';; *) echo ok;; esac; done\n",
+                l = log.display(),
+                t1 = t1_reply,
+            ))
         }
-    }
 
-    async fn logged_hid_lines(log: &std::path::Path, at_least: usize) -> Vec<String> {
-        // The stub appends a line before it answers it, but a streamed line
-        // (the cancel) is not waited for.
-        for _ in 0..100 {
-            let lines: Vec<String> = std::fs::read_to_string(log)
-                .unwrap_or_default()
-                .lines()
-                .map(str::to_string)
-                .collect();
-            if lines.len() >= at_least {
-                return lines;
+        fn host_touch_with(helper: std::path::PathBuf) -> HidHostTouch {
+            HidHostTouch {
+                injector: Arc::new(crate::hid_injector::HidInjector::with_helper_path(helper)),
+                udid: "UDID-HOST".to_string(),
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("the stub helper never logged {at_least} line(s)");
-    }
 
-    #[tokio::test]
-    async fn a_tap_the_agent_asks_for_is_pressed_by_the_hid_helper() {
-        use agent_comms::{HostTap, HostTapOutcome, HostTouch};
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("lines");
-        let (_stub, helper) = logging_hid_stub(&log, "ok");
-        let host = host_touch_with(helper);
-
-        // The helper is started on demand, as for an element tap.
-        let back_to_back = host
-            .tap(HostTap {
-                x: 201.5,
-                y: 310.0,
-                hold_ms: Some(0),
-            })
-            .await;
-        let held = host
-            .tap(HostTap {
-                x: 40.0,
-                y: 50.0,
-                hold_ms: Some(20),
-            })
-            .await;
-        let default_hold = host
-            .tap(HostTap {
-                x: 1.0,
-                y: 2.0,
-                hold_ms: None,
-            })
-            .await;
-        // A hold past what the helper accepts on a tap's line is cut to it.
-        let too_long = host
-            .tap(HostTap {
-                x: 3.0,
-                y: 4.0,
-                hold_ms: Some(9_000),
-            })
-            .await;
-
-        for outcome in [back_to_back, held, default_hold, too_long] {
-            assert_eq!(outcome, HostTapOutcome::Delivered);
+        async fn logged_hid_lines(log: &std::path::Path, at_least: usize) -> Vec<String> {
+            // The stub appends a line before it answers it, but a streamed line
+            // (the cancel) is not waited for.
+            for _ in 0..100 {
+                let lines: Vec<String> = std::fs::read_to_string(log)
+                    .unwrap_or_default()
+                    .lines()
+                    .map(str::to_string)
+                    .collect();
+                if lines.len() >= at_least {
+                    return lines;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            panic!("the stub helper never logged {at_least} line(s)");
         }
-        assert_eq!(
-            logged_hid_lines(&log, 4).await,
-            vec!["t1 201.5 310 0", "t1 40 50 20", "t1 1 2", "t1 3 4 500"]
-        );
-        host.injector.shutdown(&host.udid).await;
-    }
 
-    #[tokio::test]
-    async fn a_tap_the_helper_does_not_confirm_is_lifted_and_reported_failed() {
-        use agent_comms::{HostTap, HostTapOutcome, HostTouch};
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("lines");
-        let (_stub, helper) = logging_hid_stub(&log, "err tap not confirmed");
-        let host = host_touch_with(helper);
+        #[tokio::test]
+        async fn a_tap_the_agent_asks_for_is_pressed_by_the_hid_helper() {
+            use agent_comms::{HostTap, HostTapOutcome, HostTouch};
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("lines");
+            let (_stub, helper) = logging_hid_stub(&log, "ok");
+            let host = host_touch_with(helper);
 
-        let outcome = host
-            .tap(HostTap {
-                x: 10.0,
-                y: 20.0,
-                hold_ms: Some(0),
-            })
-            .await;
+            // The helper is started on demand, as for an element tap.
+            let back_to_back = host
+                .tap(HostTap {
+                    x: 201.5,
+                    y: 310.0,
+                    hold_ms: Some(0),
+                })
+                .await;
+            let held = host
+                .tap(HostTap {
+                    x: 40.0,
+                    y: 50.0,
+                    hold_ms: Some(20),
+                })
+                .await;
+            let default_hold = host
+                .tap(HostTap {
+                    x: 1.0,
+                    y: 2.0,
+                    hold_ms: None,
+                })
+                .await;
+            // A hold past what the helper accepts on a tap's line is cut to it.
+            let too_long = host
+                .tap(HostTap {
+                    x: 3.0,
+                    y: 4.0,
+                    hold_ms: Some(9_000),
+                })
+                .await;
 
-        match outcome {
-            // Part of it may have landed: the agent must not tap again.
-            HostTapOutcome::Failed(msg) => assert!(msg.contains("tap not confirmed"), "{msg}"),
-            other => panic!("expected a failed tap, got {other:?}"),
+            for outcome in [back_to_back, held, default_hold, too_long] {
+                assert_eq!(outcome, HostTapOutcome::Delivered);
+            }
+            assert_eq!(
+                logged_hid_lines(&log, 4).await,
+                vec!["t1 201.5 310 0", "t1 40 50 20", "t1 1 2", "t1 3 4 500"]
+            );
+            host.injector.shutdown(&host.udid).await;
         }
-        // The cancel that lifts whatever the tap left down.
-        assert_eq!(logged_hid_lines(&log, 2).await, vec!["t1 10 20 0", "c"]);
-        host.injector.shutdown(&host.udid).await;
-    }
 
-    #[tokio::test]
-    async fn a_tap_asked_for_with_no_helper_touches_nothing() {
-        use agent_comms::{HostTap, HostTapOutcome, HostTouch};
-        let dir = tempfile::tempdir().unwrap();
-        let host = host_touch_with(dir.path().join("no-such-helper"));
+        #[tokio::test]
+        async fn a_tap_the_helper_does_not_confirm_is_lifted_and_reported_failed() {
+            use agent_comms::{HostTap, HostTapOutcome, HostTouch};
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("lines");
+            let (_stub, helper) = logging_hid_stub(&log, "err tap not confirmed");
+            let host = host_touch_with(helper);
 
-        let outcome = host
-            .tap(HostTap {
-                x: 10.0,
-                y: 20.0,
-                hold_ms: Some(0),
-            })
-            .await;
+            let outcome = host
+                .tap(HostTap {
+                    x: 10.0,
+                    y: 20.0,
+                    hold_ms: Some(0),
+                })
+                .await;
 
-        // The agent presses with its own touch instead.
-        assert!(matches!(outcome, HostTapOutcome::NotSent(_)), "{outcome:?}");
+            match outcome {
+                // Part of it may have landed: the agent must not tap again.
+                HostTapOutcome::Failed(msg) => assert!(msg.contains("tap not confirmed"), "{msg}"),
+                other => panic!("expected a failed tap, got {other:?}"),
+            }
+            // The cancel that lifts whatever the tap left down.
+            assert_eq!(logged_hid_lines(&log, 2).await, vec!["t1 10 20 0", "c"]);
+            host.injector.shutdown(&host.udid).await;
+        }
+
+        #[tokio::test]
+        async fn a_tap_asked_for_with_no_helper_touches_nothing() {
+            use agent_comms::{HostTap, HostTapOutcome, HostTouch};
+            let dir = tempfile::tempdir().unwrap();
+            let host = host_touch_with(dir.path().join("no-such-helper"));
+
+            let outcome = host
+                .tap(HostTap {
+                    x: 10.0,
+                    y: 20.0,
+                    hold_ms: Some(0),
+                })
+                .await;
+
+            // The agent presses with its own touch instead.
+            assert!(matches!(outcome, HostTapOutcome::NotSent(_)), "{outcome:?}");
+        }
     }
 
     #[test]
