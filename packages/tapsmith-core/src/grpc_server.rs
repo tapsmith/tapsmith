@@ -773,10 +773,16 @@ impl TapsmithServiceImpl {
     async fn send_agent_command(&self, command: &AgentCommand) -> Result<AgentResponse, Status> {
         let params = Self::agent_params(&*self.agent.read().await)?;
         let timeout = Duration::from_secs(30);
+        let host = self.host_touch();
         let started = std::time::Instant::now();
-        let raw =
-            agent_comms::send_with_persistent_cache(&self.agent_stream, &params, command, timeout)
-                .await;
+        let raw = agent_comms::send_with_persistent_cache(
+            &self.agent_stream,
+            &params,
+            command,
+            timeout,
+            host.as_deref(),
+        )
+        .await;
         log_agent_command_timing(command, started, &raw);
         self.recover_agent_on_timeout(command, raw).await
     }
@@ -796,9 +802,44 @@ impl TapsmithServiceImpl {
             DEFAULT_AGENT_COMMAND_TIMEOUT
         };
         let params = Self::agent_params(&*self.agent.read().await)?;
-        agent_comms::send_with_persistent_cache(&self.agent_stream, &params, command, timeout)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))
+        let host = self.host_touch();
+        agent_comms::send_with_persistent_cache(
+            &self.agent_stream,
+            &params,
+            command,
+            timeout,
+            host.as_deref(),
+        )
+        .await
+        .map_err(|e| Status::internal(e.to_string()))
+    }
+
+    /// What presses the taps an agent asks for in the middle of a command
+    /// ([`agent_comms::HostTap`]): the HID helper of the active device when
+    /// it is an iOS simulator, nothing for any other device.
+    ///
+    /// Every agent command passes here, so the device list is never waited
+    /// for: while it is being refreshed (ListDevices, which runs `adb` and
+    /// `simctl`) the command goes out without the offer, and the agent
+    /// presses its own taps.
+    fn host_touch(&self) -> Option<Box<dyn agent_comms::HostTouch>> {
+        #[cfg(target_os = "macos")]
+        {
+            let dm = self.device_manager.try_read().ok()?;
+            match dm.active_device() {
+                Some(d) if d.platform == Platform::Ios && d.is_emulator => {
+                    Some(Box::new(HidHostTouch {
+                        injector: Arc::clone(&self.hid_injector),
+                        udid: d.serial.clone(),
+                    }))
+                }
+                _ => None,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
     }
 
     async fn send_agent_command_with_timeout(
@@ -812,10 +853,16 @@ impl TapsmithServiceImpl {
             DEFAULT_AGENT_COMMAND_TIMEOUT
         };
         let params = Self::agent_params(&*self.agent.read().await)?;
+        let host = self.host_touch();
         let started = std::time::Instant::now();
-        let raw =
-            agent_comms::send_with_persistent_cache(&self.agent_stream, &params, command, timeout)
-                .await;
+        let raw = agent_comms::send_with_persistent_cache(
+            &self.agent_stream,
+            &params,
+            command,
+            timeout,
+            host.as_deref(),
+        )
+        .await;
         log_agent_command_timing(command, started, &raw);
         self.recover_agent_on_timeout(command, raw).await
     }
@@ -941,11 +988,13 @@ impl TapsmithServiceImpl {
             )));
         }
         let params = Self::agent_params(&*self.agent.read().await)?;
+        // A physical device: nothing the daemon can touch from the host.
         agent_comms::send_with_persistent_cache(
             &self.agent_stream,
             &params,
             command,
             Duration::from_secs(30),
+            None,
         )
         .await
         .map_err(|e| {
@@ -6471,6 +6520,60 @@ fn hid_required_from(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some(v) if !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false"))
 }
 
+/// An iOS simulator's HID helper, pressing the taps its agent asks for in the
+/// middle of a command (PILOT-1132): a `typeText`'s focusing tap, a
+/// `hideKeyboard`'s tap on a blank spot. The agent's own XCTest touch costs
+/// ~150 ms a tap; the helper's a few.
+///
+/// Unlike [`TapsmithServiceImpl::try_hid_tap`] there is no wait after the lift
+/// ([`HID_TAP_BARRIER`]): the agent goes on to watch for what the tap was for
+/// (the field taking focus, the keyboard leaving).
+#[cfg(any(target_os = "macos", test))]
+struct HidHostTouch {
+    injector: Arc<crate::hid_injector::HidInjector>,
+    udid: String,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl agent_comms::HostTouch for HidHostTouch {
+    fn tap(&self, tap: agent_comms::HostTap) -> agent_comms::HostTapFuture<'_> {
+        use agent_comms::HostTapOutcome;
+        Box::pin(async move {
+            let udid = self.udid.as_str();
+            let hold_ms = tap.hold_ms.map(|ms| ms.min(HID_MAX_HOLD_MS));
+            // No helper: the agent's own touch presses instead, as an
+            // element tap's does (`hid_unavailable`).
+            if let Err(e) = self.injector.ensure(udid).await {
+                debug!(%udid, error = %e, "iOS HID route unavailable; the agent makes its own tap");
+                return HostTapOutcome::NotSent(e.to_string());
+            }
+            match self
+                .injector
+                .send_and_wait(
+                    udid,
+                    &hid_tap_line(tap.x, tap.y, hold_ms),
+                    hid_tap_reply_deadline(hold_ms),
+                )
+                .await
+            {
+                Ok(()) => {
+                    debug!(%udid, x = tap.x, y = tap.y, ?hold_ms, "agent's tap injected via HID");
+                    HostTapOutcome::Delivered
+                }
+                // Nothing reached the helper, so nothing was touched.
+                Err(HidSendError::NotSent(e)) => HostTapOutcome::NotSent(e.to_string()),
+                Err(HidSendError::Failed(msg)) => {
+                    // Lift whatever may be down. The agent is told the tap
+                    // may have landed, so it does not press again.
+                    let _ = self.injector.send(udid, "c").await;
+                    warn!(%udid, x = tap.x, y = tap.y, error = %msg, "agent's HID tap not delivered");
+                    HostTapOutcome::Failed(msg)
+                }
+            }
+        })
+    }
+}
+
 /// The HID helper's double-tap line: both taps at (`x`, `y`), each held
 /// `hold_ms` (the helper's default when None).
 #[cfg(any(target_os = "macos", test))]
@@ -8027,6 +8130,137 @@ mod tests {
         // A press longer than the timeout leaves no cover wait, not an
         // underflow.
         assert_eq!(long_press_resolve_budget(2_000, 5_000), 0);
+    }
+
+    /// A stub HID helper that logs every line it is sent to `log` and
+    /// answers a `t1` line with `t1_reply`, anything else with `ok`.
+    fn logging_hid_stub(
+        log: &std::path::Path,
+        t1_reply: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        crate::hid_injector::stub_helper_for_test(&format!(
+            "echo 'ready 1 1 1'\nwhile IFS= read -r line; do echo \"$line\" >> '{l}'; \
+             case \"$line\" in t1*) echo '{t1}';; *) echo ok;; esac; done\n",
+            l = log.display(),
+            t1 = t1_reply,
+        ))
+    }
+
+    fn host_touch_with(helper: std::path::PathBuf) -> HidHostTouch {
+        HidHostTouch {
+            injector: Arc::new(crate::hid_injector::HidInjector::with_helper_path(helper)),
+            udid: "UDID-HOST".to_string(),
+        }
+    }
+
+    async fn logged_hid_lines(log: &std::path::Path, at_least: usize) -> Vec<String> {
+        // The stub appends a line before it answers it, but a streamed line
+        // (the cancel) is not waited for.
+        for _ in 0..100 {
+            let lines: Vec<String> = std::fs::read_to_string(log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect();
+            if lines.len() >= at_least {
+                return lines;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the stub helper never logged {at_least} line(s)");
+    }
+
+    #[tokio::test]
+    async fn a_tap_the_agent_asks_for_is_pressed_by_the_hid_helper() {
+        use agent_comms::{HostTap, HostTapOutcome, HostTouch};
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("lines");
+        let (_stub, helper) = logging_hid_stub(&log, "ok");
+        let host = host_touch_with(helper);
+
+        // The helper is started on demand, as for an element tap.
+        let back_to_back = host
+            .tap(HostTap {
+                x: 201.5,
+                y: 310.0,
+                hold_ms: Some(0),
+            })
+            .await;
+        let held = host
+            .tap(HostTap {
+                x: 40.0,
+                y: 50.0,
+                hold_ms: Some(20),
+            })
+            .await;
+        let default_hold = host
+            .tap(HostTap {
+                x: 1.0,
+                y: 2.0,
+                hold_ms: None,
+            })
+            .await;
+        // A hold past what the helper accepts on a tap's line is cut to it.
+        let too_long = host
+            .tap(HostTap {
+                x: 3.0,
+                y: 4.0,
+                hold_ms: Some(9_000),
+            })
+            .await;
+
+        for outcome in [back_to_back, held, default_hold, too_long] {
+            assert_eq!(outcome, HostTapOutcome::Delivered);
+        }
+        assert_eq!(
+            logged_hid_lines(&log, 4).await,
+            vec!["t1 201.5 310 0", "t1 40 50 20", "t1 1 2", "t1 3 4 500"]
+        );
+        host.injector.shutdown(&host.udid).await;
+    }
+
+    #[tokio::test]
+    async fn a_tap_the_helper_does_not_confirm_is_lifted_and_reported_failed() {
+        use agent_comms::{HostTap, HostTapOutcome, HostTouch};
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("lines");
+        let (_stub, helper) = logging_hid_stub(&log, "err tap not confirmed");
+        let host = host_touch_with(helper);
+
+        let outcome = host
+            .tap(HostTap {
+                x: 10.0,
+                y: 20.0,
+                hold_ms: Some(0),
+            })
+            .await;
+
+        match outcome {
+            // Part of it may have landed: the agent must not tap again.
+            HostTapOutcome::Failed(msg) => assert!(msg.contains("tap not confirmed"), "{msg}"),
+            other => panic!("expected a failed tap, got {other:?}"),
+        }
+        // The cancel that lifts whatever the tap left down.
+        assert_eq!(logged_hid_lines(&log, 2).await, vec!["t1 10 20 0", "c"]);
+        host.injector.shutdown(&host.udid).await;
+    }
+
+    #[tokio::test]
+    async fn a_tap_asked_for_with_no_helper_touches_nothing() {
+        use agent_comms::{HostTap, HostTapOutcome, HostTouch};
+        let dir = tempfile::tempdir().unwrap();
+        let host = host_touch_with(dir.path().join("no-such-helper"));
+
+        let outcome = host
+            .tap(HostTap {
+                x: 10.0,
+                y: 20.0,
+                hold_ms: Some(0),
+            })
+            .await;
+
+        // The agent presses with its own touch instead.
+        assert!(matches!(outcome, HostTapOutcome::NotSent(_)), "{outcome:?}");
     }
 
     #[test]
