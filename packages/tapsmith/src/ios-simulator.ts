@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { appBundlesMatch } from './app-bundle-match.js';
 import { withFileLockSync } from './file-lock.js';
 import { iosToolchainBlocker } from './toolchain.js';
+import { timingLog } from './timing-log.js';
 import { DeviceClaimedError, claimDevice, currentSession, devicesHeldElsewhere, withoutHeldDevices } from './device-claims.js';
 
 export interface SimulatorInfo {
@@ -317,6 +318,13 @@ export function installAppIfAbsent(
   appPath: string,
   bundleId: string,
 ): { installed: boolean; outcome: string } {
+  // Session-start breakdown (PILOT-1134): this install happens before the
+  // session opens, so the session's own app_install line does not cover it.
+  const started = Date.now();
+  let checkMs = 0;
+  const timing = (result: string): void => {
+    timingLog(`kind=boot name=app_install dur_ms=${Date.now() - started} result=${result} check_ms=${checkMs} platform=ios stage=boot`);
+  };
   // Only a definite "not installed" counts: simctl's ENOENT exit. A lookup
   // that timed out or failed some other way on a busy simulator says nothing,
   // and installing over an app that is there keeps its data — calling that
@@ -326,18 +334,25 @@ export function installAppIfAbsent(
       timeout: 30_000,
       stdio: 'ignore',
     });
+    checkMs = Date.now() - started;
+    timing('present');
     return { installed: false, outcome: 'already installed' };
   } catch (err) {
+    checkMs = Date.now() - started;
     const { signal, status } = err as { signal?: string | null; status?: number | null };
-    if (signal) return { installed: false, outcome: 'could not tell whether it is installed (lookup timed out)' };
-    if (status !== SIMCTL_APP_NOT_INSTALLED_EXIT) {
-      return { installed: false, outcome: `could not tell whether it is installed (simctl exit ${status ?? 'unknown'})` };
+    if (signal || status !== SIMCTL_APP_NOT_INSTALLED_EXIT) {
+      timing('unknown');
+      return signal
+        ? { installed: false, outcome: 'could not tell whether it is installed (lookup timed out)' }
+        : { installed: false, outcome: `could not tell whether it is installed (simctl exit ${status ?? 'unknown'})` };
     }
   }
   try {
     installApp(udid, appPath);
+    timing('installed');
     return { installed: true, outcome: 'installed' };
   } catch (err) {
+    timing('failed');
     const message = err instanceof Error ? err.message.split('\n')[0] : String(err);
     return { installed: false, outcome: `install failed (${message})` };
   }

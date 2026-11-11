@@ -208,10 +208,12 @@ impl GatedLaunch {
     /// (the start is then not vouched for), and in either case not before
     /// `defaults` are written. Those are not under `deadline`: abandoning them
     /// would let the app launch with password autofill on, and they are
-    /// bounded on their own. Should they outlast the runner's own wait, the
-    /// runner launches without the gate, and that start is not vouched for:
-    /// the caller relaunches the app after the agent start, which waits for
-    /// the defaults.
+    /// bounded on their own (two passes of 20 s at worst). Should they
+    /// outlast the runner's own 30 s wait, which starts only once xcodebuild
+    /// has the runner's test going, the runner launches without the gate and
+    /// that start is not vouched for. A session that wipes the app first then
+    /// clears and relaunches it after the agent start, which waits for the
+    /// defaults; one whose app was just installed keeps the early launch.
     fn start_with(
         gate: LaunchGate,
         prepare: impl std::future::Future<Output = Prepared> + Send + 'static,

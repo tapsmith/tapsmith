@@ -44,6 +44,7 @@ vi.mock('../device-claims.js', async (importOriginal) => {
 });
 
 const bundleMatch = vi.hoisted(() => ({ calls: [] as Array<[string, string]>, result: true }));
+vi.mock('../timing-log.js', () => ({ timingLog: vi.fn() }));
 vi.mock('../app-bundle-match.js', () => ({
   appBundlesMatch: (installed: string, candidate: string) => {
     bundleMatch.calls.push([installed, candidate]);
@@ -558,6 +559,25 @@ describe('installAppIfAbsent (PILOT-496)', () => {
     });
     expect(installAppIfAbsent('A', '/app.app', 'com.example.app')).toEqual({ installed: true, outcome: 'installed' });
     expect(simctl).toEqual(['get_app_container', 'install']);
+  });
+
+  it('writes a boot-stage app_install timing line for each outcome (PILOT-1134)', async () => {
+    const { timingLog } = await import('../timing-log.js');
+    vi.mocked(timingLog).mockClear();
+    mockedExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[1] === 'get_app_container') throw exited(2);
+      return '' as unknown as Buffer;
+    });
+    installAppIfAbsent('A', '/app.app', 'com.example.app');
+    mockedExecFileSync.mockImplementation(() => '' as unknown as Buffer);
+    installAppIfAbsent('A', '/app.app', 'com.example.app');
+    mockedExecFileSync.mockImplementation(() => { throw timedOut(); });
+    installAppIfAbsent('A', '/app.app', 'com.example.app');
+    const lines = vi.mocked(timingLog).mock.calls.map(([line]) => line);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^kind=boot name=app_install dur_ms=\d+ result=installed check_ms=\d+ platform=ios stage=boot$/);
+    expect(lines[1]).toMatch(/ result=present /);
+    expect(lines[2]).toMatch(/ result=unknown /);
   });
 
   it('leaves an installed app to the session, which checks the build', () => {

@@ -507,6 +507,7 @@ async function installAppUnderTest(
     return { freshInstall: !wasInstalled };
   }
   if (opts.appInstalledFresh) {
+    // Timed where it happened (installAppIfAbsent's `stage=boot` line).
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApp)} while booting the simulator`);
     return { freshInstall: true };
