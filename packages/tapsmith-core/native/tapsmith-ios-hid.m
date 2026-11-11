@@ -9,7 +9,8 @@
 // Then loop on stdin, one event per line (coords in LOGICAL POINTS):
 //   d <x> <y>   touch down       m <x> <y>   touch move (contact held)
 //   u <x> <y>   touch up          c           cancel (lift at last point)
-// Prints "ok" or "err <msg>" per line. Exits 0 on stdin EOF.
+// Prints "ok" or "err <msg>" per line: "err send rejected" when the simulator
+// refused a send, "err send failed" when one was not confirmed in time. Exits 0 on stdin EOF.
 // Startup failure: prints "fatal <msg>" to stderr and exits 1.
 //
 // HID mechanism is verbatim from the proven spike docs/superpowers/spikes/
@@ -68,6 +69,13 @@ static MouseNSEventFn gMouseFn = NULL;
  * each t1/t2 and read after its waited final lift: the client delivers in
  * order, so the earlier events' completions have run by then. */
 static atomic_int gNoWaitFailures;
+
+/* Set when a send's completion reported an error, as opposed to a send whose
+ * delivery was not confirmed in time. Reset at the start of each line. A
+ * helper whose simulator rebooted under it gets every send rejected at once,
+ * and says so (`err send rejected`), so the daemon can tell it from one that
+ * is only slow (`err send failed`, PILOT-1072). */
+static atomic_int gRejected;
 
 // Build the canonical 320-byte touch Indigo message (verbatim from the spike).
 static IndigoMessage *makeTouchMessage(double xRatio, double yRatio, int direction) {
@@ -201,7 +209,11 @@ int main(int argc, char **argv) {
       if (!m) return NO;  // couldn't build the touch message — report failure
       __block NSError *serr = nil;
       dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-      void (^completion)(NSError *) = ^(NSError *e) { serr = e; dispatch_semaphore_signal(sem); };
+      void (^completion)(NSError *) = ^(NSError *e) {
+        serr = e;
+        if (e) atomic_store(&gRejected, 1);
+        dispatch_semaphore_signal(sem);
+      };
       ((void(*)(id, SEL, IndigoMessage *, BOOL, dispatch_queue_t, void(^)(NSError *)))objc_msgSend)(
           hidClient, sendSel, m, YES, cq, completion);
       // A timeout must NOT be reported as success: on timeout serr is still nil
@@ -233,7 +245,10 @@ int main(int argc, char **argv) {
       if (!m) return NO;
       ((void(*)(id, SEL, IndigoMessage *, BOOL, dispatch_queue_t, void(^)(NSError *)))objc_msgSend)(
           hidClient, sendSel, m, YES, cq, ^(NSError *e) {
-            if (e) atomic_fetch_add(&gNoWaitFailures, 1);
+            if (e) {
+              atomic_fetch_add(&gNoWaitFailures, 1);
+              atomic_store(&gRejected, 1);
+            }
           });
       return YES;
     };
@@ -263,6 +278,7 @@ int main(int argc, char **argv) {
     char buf[1024];
     while (fgets(buf, sizeof(buf), stdin)) {
       HidEvent ev = hid_parse_line(buf);
+      atomic_store(&gRejected, 0);
       if (ev.cmd != HID_INVALID) {
         uint64_t nowUs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
         if (lastInjectUs != 0 && nowUs - lastInjectUs < kMinEventSpacingUs) {
@@ -281,7 +297,8 @@ int main(int argc, char **argv) {
         // would report a double tap that never happened.
         BOOL lifted = sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
         if (!lifted && ev.cmd == HID_TAP) {
-          printf("err send failed\n"); fflush(stdout);
+          printf(atomic_load(&gRejected) ? "err send rejected\n" : "err send failed\n");
+          fflush(stdout);
           continue;
         }
         contactDown = 0;
@@ -349,7 +366,7 @@ int main(int argc, char **argv) {
       }
       lastInjectUs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
       contactDown = hid_contact_after(ev.cmd, contactDown, ok);
-      printf(ok ? "ok\n" : "err send failed\n");
+      printf(ok ? "ok\n" : atomic_load(&gRejected) ? "err send rejected\n" : "err send failed\n");
       fflush(stdout);
     }
     return 0;

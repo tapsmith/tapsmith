@@ -32,8 +32,10 @@ describe("Toggles screen", () => {
     // The switch sits at the right of its row, so a touch mapped as if the
     // screen were still portrait would miss it.
     const portrait = await togglesScreen.darkModeSwitch.boundingBox()
-    await device.setOrientation("landscape")
     try {
+      // Inside the try: if turning fails part-way, the device may still have
+      // turned, and the tests after this one must start in portrait.
+      await device.setOrientation("landscape")
       await expect(togglesScreen.darkModeSwitch).toBeVisible()
       // Some simulator runtimes turn the device but not the app: then there
       // is no rotated screen to tap on.
