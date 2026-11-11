@@ -472,6 +472,17 @@ async fn start_agent_impl(
             let out_lines = stdout_tail.lock().unwrap().join("\n");
             let err_lines = stderr_tail.lock().unwrap().join("\n");
             let target_kind = if is_physical { "device" } else { "simulator" };
+            // Where the launch got to, for the timing log: on a starved CI
+            // runner this is the line that says which step never came.
+            crate::timing::timing_log!(
+                "kind=boot name=agent dur_ms={} ok=false outcome=timeout pre_spawn_ms={pre_spawn_ms} {} relaunches={} udid={udid}",
+                boot_start.elapsed().as_millis(),
+                progress
+                    .lock()
+                    .unwrap()
+                    .phase_fields(std::time::Instant::now(), "timeout"),
+                1 - relaunches_left
+            );
             bail!(
                 "Timed out waiting for iOS agent to start on {target_kind} {udid} after 150s. \
                  Killed xcodebuild. Check that the XCUITest bundle is built correctly.\n\
@@ -664,7 +675,7 @@ async fn start_agent_impl(
                     "kind=boot name=agent dur_ms={} reused=false fresh_launch={app_launched_fresh} \
                      pre_spawn_ms={pre_spawn_ms} {} defaults_wait_ms={} relaunches={} udid={udid}",
                     boot_start.elapsed().as_millis(),
-                    progress.lock().unwrap().phase_fields(ready_at),
+                    progress.lock().unwrap().phase_fields(ready_at, "ready"),
                     ready_at.elapsed().as_millis(),
                     1 - relaunches_left
                 );
@@ -811,25 +822,32 @@ impl LaunchProgress {
     }
 
     /// `spawn_to_output_ms=… output_to_runner_ms=… runner_to_test_ms=…
-    /// test_to_listening_ms=… listening_to_ready_ms=… gate_waited_ms=…`, each
-    /// phase only when both its ends were seen.
-    fn phase_fields(&self, ready: std::time::Instant) -> String {
+    /// test_to_listening_ms=… listening_to_ready_ms=… gate_waited_ms=…`. A
+    /// step that was never seen is skipped, and the phase across it named by
+    /// the steps on either side (`output_to_timeout_ms`).
+    ///
+    /// `end` is when the launch ended and `end_name` how (`ready` once the
+    /// agent answered, or how it failed).
+    fn phase_fields(&self, end: std::time::Instant, end_name: &'static str) -> String {
         let steps = [
             ("spawn", Some(self.spawned)),
             ("output", self.first_output),
             ("runner", self.runner_started),
             ("test", self.test_started),
             ("listening", self.listening),
-            ("ready", Some(ready)),
+            (end_name, Some(end)),
         ];
         let mut fields = Vec::new();
-        for pair in steps.windows(2) {
-            if let ((from, Some(a)), (to, Some(b))) = (pair[0], pair[1]) {
+        let mut previous: Option<(&str, std::time::Instant)> = None;
+        for (name, at) in steps {
+            let Some(at) = at else { continue };
+            if let Some((from, from_at)) = previous {
                 fields.push(format!(
-                    "{from}_to_{to}_ms={}",
-                    b.saturating_duration_since(a).as_millis()
+                    "{from}_to_{name}_ms={}",
+                    at.saturating_duration_since(from_at).as_millis()
                 ));
             }
+            previous = Some((name, at));
         }
         if let Some(waited) = self.gate_waited_ms {
             fields.push(format!("gate_waited_ms={waited}"));
@@ -2031,14 +2049,14 @@ mod tests {
         // Later lines never move a step already seen.
         p.observe("[TapsmithSocket] Listening on port 18700", at(60_000));
         assert_eq!(
-            p.phase_fields(at(47_300)),
+            p.phase_fields(at(47_300), "ready"),
             "spawn_to_output_ms=4200 output_to_runner_ms=24300 runner_to_test_ms=13000 \
              test_to_listening_ms=5500 listening_to_ready_ms=300 gate_waited_ms=1"
         );
     }
 
     #[test]
-    fn launch_progress_leaves_out_phases_whose_lines_never_came() {
+    fn launch_progress_names_phases_across_steps_whose_lines_never_came() {
         let t0 = std::time::Instant::now();
         let mut p = LaunchProgress::new(t0);
         p.observe(
@@ -2046,8 +2064,17 @@ mod tests {
             t0 + Duration::from_millis(900),
         );
         assert_eq!(
-            p.phase_fields(t0 + Duration::from_millis(2_000)),
-            "spawn_to_output_ms=900"
+            p.phase_fields(t0 + Duration::from_millis(2_000), "timeout"),
+            "spawn_to_output_ms=900 output_to_timeout_ms=1100"
+        );
+        // Another Xcode's wording for the runner's start: the phase spans it.
+        p.observe(
+            "Test Case '-[A b]' started.",
+            t0 + Duration::from_millis(3_000),
+        );
+        assert_eq!(
+            p.phase_fields(t0 + Duration::from_millis(3_500), "ready"),
+            "spawn_to_output_ms=900 output_to_test_ms=2100 test_to_ready_ms=500"
         );
     }
 
