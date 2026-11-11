@@ -113,7 +113,7 @@ export interface CliHandlers {
   init(opts: InitCommandOptions): Promise<number | void>;
   verify(opts: { json: boolean; config?: string }): Promise<number | void>;
   doctor(opts: { json: boolean; config?: string }): Promise<number | void>;
-  mcpServer(opts: { config?: string }): Promise<number | void>;
+  mcpServer(opts: { config?: string; preferUi?: boolean }): Promise<number | void>;
   telemetry(opts: { action?: TelemetryAction; json: boolean; config?: string }): Promise<number | void>;
 }
 
@@ -263,6 +263,7 @@ const MCP_EXAMPLES = `
 Examples:
   codex mcp add tapsmith-headless -- npx tapsmith mcp-server
   claude mcp add tapsmith-headless -- npx tapsmith mcp-server
+  claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
   npx tapsmith mcp-server --config tapsmith.config.ios.mjs`;
 
 const TELEMETRY_HELP = `
@@ -479,8 +480,9 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .command('mcp-server')
     .description('Run the MCP server for LLM/agent integration (stdio transport)')
     .addOption(configOption())
+    .option('--prefer-ui', "Work in this project's running UI-mode session (tapsmith test --ui) when there is one, and headless otherwise")
     .addHelpText('after', MCP_EXAMPLES)
-    .action((opts: { config?: string }) => act('mcp-server', handlers.mcpServer)({ ...opts }));
+    .action((opts: { config?: string; preferUi?: boolean }) => act('mcp-server', handlers.mcpServer)({ ...opts }));
 
   program
     .command('telemetry')

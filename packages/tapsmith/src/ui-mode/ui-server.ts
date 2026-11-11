@@ -379,6 +379,7 @@ export async function startUIServer(
   options: UIServerOptions = {},
 ): Promise<{ port: number; close: () => void }> {
   const clients = new Set<WebSocket>();
+  const sessionStartedAt = new Date().toISOString();
   let testTree: TestTreeNode[] = [];
   let isRunning = false;
   let runStartedAt = 0;
@@ -1424,7 +1425,19 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // A headless MCP server refusing our daemons but then starting its own
     // agent on these devices took them over just the same.
     const devices = [...new Set([...workerGroups.flat(), ...daemons.map((d) => d.deviceSerial)].filter(Boolean))];
-    return { daemons, owned, devices };
+    return {
+      daemons,
+      owned,
+      devices,
+      // Who this session is, for an MCP server that works in the project's UI
+      // session when one is running (`tapsmith mcp-server --prefer-ui`,
+      // PILOT-1164): it asks every UI server on the machine and takes the one
+      // whose project is its own.
+      mcpUrl: mcpPort ? `http://127.0.0.1:${mcpPort}/mcp` : undefined,
+      project: { cwd: process.cwd(), rootDir: resolvedRootDir, configPath: ctx.configPath },
+      pid: process.pid,
+      startedAt: sessionStartedAt,
+    };
   }
 
   configureMcpConnection({ uiMode: true, configFile: ctx.configPath, uiDaemonPorts });

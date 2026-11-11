@@ -21,7 +21,7 @@ import { registerWatchTool } from './tools/watch.js';
 import { registerApiReferenceResource } from './api-reference.js';
 import { closeAllClients, configureMcpConnection } from './connection.js';
 import { readSdkVersion } from '../telemetry.js';
-import { mcpActivityFilePath, uiPortFilePath } from './port-file.js';
+import { BRIDGED_ENV, mcpActivityFilePath, uiPortFilePath } from './port-file.js';
 import {
   McpEventEmitter,
   nextCallId,
@@ -269,10 +269,14 @@ export async function runMcpServer(
 
   if (uiPort) {
     const sseUrl = `http://localhost:${uiPort}/mcp`;
-    process.stderr.write(
-      `[tapsmith-mcp] UI mode detected. For shared-session mode (recommended), connect via SSE instead:\n` +
-      `[tapsmith-mcp]   ${sseUrl}\n`,
-    );
+    // Not for the headless half of `mcp-server --prefer-ui`, which is running
+    // because the server chose headless for now (a run in flight).
+    if (!process.env[BRIDGED_ENV]) {
+      process.stderr.write(
+        `[tapsmith-mcp] UI mode detected. For shared-session mode (recommended), connect via SSE instead:\n` +
+        `[tapsmith-mcp]   ${sseUrl}\n`,
+      );
+    }
     events.onToolCall((event) => {
       postToUiServer(uiPort, '/mcp-events', event);
     });
@@ -365,6 +369,10 @@ export async function runMcpServer(
     cleanup();
     throw err;
   }
+
+  // Started by `mcp-server --prefer-ui` as its headless half: the agent is
+  // connected to that server, and none of the below is for it.
+  if (process.env[BRIDGED_ENV]) return;
 
   const banner = figlet.textSync('Tapsmith', { font: 'Three Point' });
   process.stderr.write('\n' + banner.split('\n').map((line) => `${GREEN}${line}${RESET}`).join('\n') + '\n');

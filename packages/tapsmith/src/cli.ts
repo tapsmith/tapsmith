@@ -1914,7 +1914,14 @@ const cliHandlers: CliHandlers = {
   init: async (opts) => (await import('./init.js')).runInit(opts),
   verify: async (opts) => (await import('./verify.js')).runVerify(opts),
   doctor: async (opts) => (await import('./doctor.js')).runDoctor(opts),
-  mcpServer: async ({ config }) => (await import('./mcp/index.js')).runMcpServer({ configFile: config }),
+  mcpServer: async ({ config, preferUi }) => {
+    // The flag, or the variable the Tapsmith plugin sets: a Tapsmith too old
+    // to know the variable then simply runs headless, where an unknown flag
+    // would stop it.
+    const { PREFER_UI_ENV, runMcpBridge } = await import('./mcp/bridge.js');
+    if (preferUi || ['1', 'true'].includes(process.env[PREFER_UI_ENV] ?? '')) return runMcpBridge({ configFile: config });
+    return (await import('./mcp/index.js')).runMcpServer({ configFile: config });
+  },
   telemetry: async (opts) => (await import('./telemetry-cli.js')).runTelemetryCommand(opts),
 };
 
@@ -1947,7 +1954,7 @@ async function main(): Promise<void> {
  */
 function claimSessionCommand(argv: readonly string[]): string {
   const subcommand = argv.find((a) => !a.startsWith('-'));
-  const modes = argv.filter((a) => a === '--ui' || a === '--watch' || a === '--workers' || a.startsWith('--workers='));
+  const modes = argv.filter((a) => a === '--ui' || a === '--watch' || a === '--prefer-ui' || a === '--workers' || a.startsWith('--workers='));
   return ['tapsmith', ...(subcommand ? [subcommand] : []), ...modes.map((m) => (m.startsWith('--workers') ? '--workers' : m))].join(' ');
 }
 
@@ -2241,6 +2248,18 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     const forwardArgs = process.argv.slice(2).filter((a) => a !== '--__tsx-reexec');
     reExecWithTsx(forwardArgs);
     return;
+  }
+
+  // A coding agent's MCP server that follows this project's UI session
+  // (`mcp-server --prefer-ui`) may be holding the device this session is about
+  // to pick, from before there was a UI session to work in: ask it to let go
+  // (PILOT-1164). After the tsx re-exec, so it is asked once.
+  if (args.ui) {
+    const { requestHeadlessYield } = await import('./ui-yield.js');
+    await requestHeadlessYield(
+      { cwd: process.cwd(), rootDir: config.rootDir, configPath },
+      { log: (line) => { console.error(dim(line)); } },
+    );
   }
 
   // An x64 Node under Rosetta (PILOT-559) runs, translated, but should not
