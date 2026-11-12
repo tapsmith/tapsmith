@@ -194,6 +194,8 @@ describe("authenticated tests", () => {
 })
 ```
 
+Every reset in the scope restores the archive, not just the first one: with `appResetScope: "test"`, that is a restore and a cold relaunch before every test. An app that mounts [`@tapsmith/react-native`](warm-reset.md) does not change that on its own — a plain warm reset would clear the restored data. Give its hooks `track` and `onReload`, and resets after the first become warm whenever the previous test wrote nothing, keeping the restored data instead of restoring it again ([Keeping restored app state between tests](warm-reset.md#keeping-restored-app-state-between-tests)). The trace's **APP RESET** row says which happened and why.
+
 To opt out of restored state in a nested scope, pass an empty string — it means "clear":
 
 ```typescript

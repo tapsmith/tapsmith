@@ -41,7 +41,26 @@ describe('marker', () => {
   });
 });
 
+describe('persisted writes field', () => {
+  it('round-trips through the marker', () => {
+    const marker = formatMarker({ epoch: 2, nav: 1, boot: 'b00710ad', urlPrefix: 'app:///', writes: 3 });
+    expect(marker).toBe('tapsmith-hooks:1;epoch=2;nav=1;boot=b00710ad;url=app:///;writes=3');
+    expect(parseMarker(marker)).toMatchObject({ epoch: 2, writes: 3, urlPrefix: 'app:///' });
+  });
+
+  it('is omitted when the app does not report writes', () => {
+    const marker = formatMarker({ epoch: 0, urlPrefix: 'app:///' });
+    expect(marker).not.toContain('writes=');
+    expect(parseMarker(marker)).not.toHaveProperty('writes');
+  });
+});
+
 describe('reset requests', () => {
+  it('recognises a request to keep persisted data', () => {
+    expect(parseResetRequest('myapp:///?__tapsmith_reset=1&nonce=n&__tapsmith_keep=1')).toEqual({ target: '/', nonce: 'n', keepData: true });
+    expect(parseResetRequest('myapp:///?__tapsmith_reset=1&nonce=n&__tapsmith_keep=0')).toEqual({ target: '/', nonce: 'n' });
+  });
+
   it('recognises the flag and extracts target + nonce', () => {
     expect(parseResetRequest('myapp:///login?__tapsmith_reset=1&nonce=abc')).toEqual({ target: '/login', nonce: 'abc' });
     expect(parseResetRequest('myapp:///?__tapsmith_reset=1&nonce=n')).toEqual({ target: '/', nonce: 'n' });

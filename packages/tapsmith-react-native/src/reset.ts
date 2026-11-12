@@ -26,6 +26,12 @@ export function registeredHandlers(): readonly ResetHandler[] {
  * Clear every store, then run every handler, in order. Throws the first
  * failure.
  *
+ * A request to keep the app's data (`keepData`, between tests that restore
+ * the same `appState`) clears nothing and runs no reset handler: it runs only
+ * `reload`, which drops in-memory state and reads it back from storage. With
+ * no `reload` it fails without touching anything, and Tapsmith restores the
+ * saved state instead.
+ *
  * `settle` (the keyboard dismissal) runs alongside the clear, which still
  * starts first: a screen the reset link mounts reads cleared storage. When
  * `settle` reports that a focused input was blurred, the stores are cleared
@@ -37,7 +43,16 @@ export async function runResetPipeline(
   clear: readonly Clearable[],
   handlers: readonly ResetHandler[],
   settle?: () => Promise<boolean>,
+  reload?: ResetHandler,
 ): Promise<void> {
+  if (request.keepData) {
+    if (!reload) {
+      throw new Error('Tapsmith asked for a reset that keeps the app\'s data, but <TapsmithTestHooks> has no onReload');
+    }
+    if (settle) await settle().catch(() => false);
+    await reload(request);
+    return;
+  }
   const cleared = clearStores(clear);
   const settled = settle ? settle().catch(() => false) : Promise.resolve(false);
   const [, blurred] = await Promise.all([cleared, settled]);

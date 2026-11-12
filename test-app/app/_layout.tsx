@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage"
 import { TapsmithTestHooks } from "@tapsmith/react-native"
 import * as Linking from "expo-linking"
 import { Stack } from "expo-router"
@@ -8,7 +9,8 @@ import { AuthProvider, useAuth } from "./auth-context"
  * Tapsmith's in-app reset hooks. Renders the always-present marker Tapsmith
  * detects (so `appReset: 'auto'` becomes a warm, per-test reset) and handles
  * the reset links it opens: clear app state, then let expo-router land on the
- * requested route. The legacy `/__reset` route stays for the explicit
+ * requested route. Between tests that restore the same saved app state, a
+ * reset that keeps the data reloads the session from storage instead. The legacy `/__reset` route stays for the explicit
  * `resetAppDeepLink` configuration exercised by `tapsmith.config.ios-mixed.mjs`.
  *
  * Enabled in dev builds and in release builds made with
@@ -19,15 +21,22 @@ import { AuthProvider, useAuth } from "./auth-context"
  * (this app links it with `file:`, which would hide that).
  */
 function TapsmithHooks() {
-  const { resetAppState } = useAuth()
+  const { resetAppState, reloadFromStorage } = useAuth()
   return (
     <TapsmithTestHooks
       urlPrefix={Linking.createURL("/")}
       enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
       onReset={resetAppState}
+      // Keep a restored appState between tests that write nothing: count
+      // writes to AsyncStorage (the only store this app persists to) and
+      // reload the session from it instead of clearing it.
+      track={TRACKED_STORES}
+      onReload={reloadFromStorage}
     />
   )
 }
+
+const TRACKED_STORES = [AsyncStorage]
 
 export default function RootLayout() {
   return (

@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
@@ -833,9 +834,116 @@ export async function executeAppReset(
   // an acknowledged in-app reset can carry it).
   let routeReached = false;
 
+  // Set after a cold restore that may let the next restore of the same
+  // archive keep the data: read the write count once the app is ready.
+  let recordBaselineFor: string | undefined;
+  // …or, when the hooks have not been seen yet, once the read after it finds them.
+  let recordIfHooksAppearFor: string | undefined;
+
   if (action.kind === 'restore') {
-    await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
-    await step('restartApp', () => ctx.device.restartApp(pkg));
+    const archiveName = path.basename(action.archive);
+    const plan = await planKeptRestore(ctx, policy, action.archive, options, step);
+    let kept = false;
+    if (plan.keep) {
+      // The data on the device still matches the archive: reset in-memory
+      // state through the hook (`onReload`) instead of restoring and
+      // relaunching. Only the hooks rung can keep data, so no fallback and
+      // no legacy reset link — any failure restores the archive below.
+      const target = policy.route !== undefined ? warmResetTarget(policy.route, ctx.capabilities?.hooksUrlPrefix) : undefined;
+      let result: Awaited<ReturnType<SessionDevice['_resetApp']>> | undefined;
+      try {
+        await step('resetApp', async () => {
+          result = await ctx.device._resetApp(pkg, {
+            mode: 'warm',
+            fallback: false,
+            keepAppData: true,
+            recoverable: true,
+            forceCold: false,
+            // The SDK bounds a run of kept resets itself (planKeptRestore):
+            // a valve relaunch here would only be followed by a restore.
+            coldEveryNResets: 0,
+            skipTraceCapture: true,
+            ...(target !== undefined ? { target } : {}),
+          });
+          for (const s of result.steps) {
+            steps.push({ name: s.name, durationMs: s.durationMs, ok: s.ok, ...(s.detail ? { detail: s.detail } : {}) });
+          }
+        });
+      } catch (err) {
+        reason = `warm reset keeping ${archiveName} failed (${formatError(err)}); restored it cold`;
+      }
+      // A restart keeps the data too (a fresh process reads it back); only a
+      // clear lost it.
+      if (result && result.modeUsed !== 'clear') {
+        kept = true;
+        modeUsed = result.modeUsed;
+        processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
+        routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
+        reason = `kept ${archiveName}: no persisted writes since the restore`;
+        // A process the reset recreated (a cold delivery: the warm-window
+        // valve, or a warm delivery that relaunched) took its count with it:
+        // a write made after the count was read cannot be checked any more.
+        // One that survived dropped no pending timers: a write it had
+        // scheduled before the reset (a debounced save) may have landed
+        // since the count was read. Check again.
+        const baseline = ctx.capabilities?.appStateBaseline;
+        if (result.modeUsed === 'warm' && result.keptAppData !== true) {
+          // The daemon could not pass the keep request on (one older than
+          // this SDK): the hook ran its full reset, which clears data — some
+          // of it possibly where the write count cannot see it (a native
+          // sign-out). Every later attempt would do the same.
+          kept = false;
+          reason = `${DAEMON_CANNOT_KEEP}; restored ${archiveName} cold`;
+          ((ctx.capabilities ??= {}).appStateKeep ??= {}).daemonCannotKeep = true;
+        } else if (processRecreated) {
+          kept = false;
+          reason = `the warm reset relaunched the app (${result.reason ?? 'cold delivery'}), so writes made just before it cannot be ruled out; restored ${archiveName} cold`;
+        } else if (baseline) {
+          let after: ReturnType<typeof parseHooksMarker>;
+          await step('readWriteCount', async () => { after = await readMarker(ctx); });
+          // Unverified is not kept: a write the app made during the reset is
+          // exactly what this read is for, and the next restore would only
+          // catch it after a test had already run on it.
+          if (after?.writes === undefined) {
+            kept = false;
+            reason = `could not read the app's write count after the warm reset; restored ${archiveName} cold`;
+          } else if (after.boot !== baseline.boot) {
+            // Relaunched after all (a delivery that went cold without the
+            // daemon seeing it): as above, the count went with the process.
+            kept = false;
+            reason = `the warm reset relaunched the app, so writes made just before it cannot be ruled out; restored ${archiveName} cold`;
+          } else if (after.writes !== baseline.writes) {
+            kept = false;
+            const n = after.writes - baseline.writes;
+            reason = `the app wrote persisted data during the warm reset (${n} write${n === 1 ? '' : 's'}); restored ${archiveName} cold`;
+            const keepState = ((ctx.capabilities ??= {}).appStateKeep ??= {});
+            keepState.writingKeeps = (keepState.writingKeeps ?? 0) + 1;
+          }
+        }
+        if (kept && baseline) {
+          baseline.kept += 1;
+          if (ctx.capabilities?.appStateKeep) ctx.capabilities.appStateKeep.writingKeeps = 0;
+        }
+      } else if (result) {
+        reason = `warm reset keeping ${archiveName} cleared the app (${result.reason ?? 'no reason given'}); restored it cold`;
+      }
+      if (!kept) {
+        fellBack = true;
+        process.stderr.write(`[tapsmith] ${reason}\n`);
+      }
+    } else {
+      reason = plan.reason;
+    }
+    if (!kept) {
+      modeUsed = 'restore';
+      processRecreated = true;
+      routeReached = false;
+      if (ctx.capabilities) delete ctx.capabilities.appStateBaseline;
+      await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
+      await step('restartApp', () => ctx.device.restartApp(pkg));
+      if (plan.recordBaseline) recordBaselineFor = action.archive;
+      else if (plan.recordIfHooksAppear) recordIfHooksAppearFor = action.archive;
+    }
   } else {
     // warm / restart / clear run the daemon's ladder: it knows whether the app
     // advertises in-app reset hooks, owns the warm-window cold policy, and
@@ -872,7 +980,11 @@ export async function executeAppReset(
     if (result) {
       modeUsed = result.modeUsed;
       fellBack = result.fellBack;
-      reason = result.reason;
+      reason = result.reason
+        // `appState: ''` asks for a clear even where a warm reset could run.
+        ?? (policy.appState === '' && policy.mode === 'warm' && ctx.capabilities?.hooksDetected
+          ? "warm skipped: appState '' clears the app's data"
+          : undefined);
       processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
       routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
       // The daemon seeing the marker is fresh proof of hooks. The reverse is
@@ -935,12 +1047,175 @@ export async function executeAppReset(
     await probeResetCapabilities(ctx, { pollMs: 0 });
     if (action.kind === 'clear') await checkMissingResetHooks(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
   }
+  if (recordIfHooksAppearFor !== undefined) {
+    // The relaunched app is rendering now; the read above covered a session
+    // that already missed the hooks (`false`), this covers one that never
+    // looked (`undefined`).
+    if (ctx.capabilities?.hooksDetected === undefined) await probeResetCapabilities(ctx, { pollMs: 0 });
+    if (ctx.capabilities?.hooksDetected === true) recordBaselineFor = recordIfHooksAppearFor;
+  }
+  if (recordBaselineFor !== undefined) {
+    // Before the start route opens: a screen that writes when it mounts
+    // changes the data the next test would keep.
+    const archive = recordBaselineFor;
+    let marker: ReturnType<typeof parseHooksMarker>;
+    await step('readWriteCount', async () => { marker = await recordAppStateBaseline(ctx, archive); });
+    // A restore with no earlier baseline to compare against: what this read
+    // found is why it could not have been kept.
+    reason ??= marker?.writes === undefined
+      ? (marker ? NO_WRITES_REASON : 'warm skipped: could not read the hooks marker')
+      : `warm skipped: no earlier restore of ${path.basename(archive)} to compare against`;
+  }
   // Last, on a ready app (a link sent into a still-booting app is lost), and
   // after the hooks re-read above, which may have just learnt the URL prefix.
   if (policy.route !== undefined && (!routeReached || relaunched)) {
     await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
   }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
+}
+
+// ─── Keeping a restored appState between tests ───
+
+const DAEMON_CANNOT_KEEP = 'tapsmith-core did not pass the request to keep the app\'s data on to the app (a daemon older than this SDK: check `daemonBin` or the installed @tapsmith/core-* package)';
+
+const NO_WRITES_REASON = 'warm skipped: the app does not report persisted writes (give <TapsmithTestHooks> onReload and track; a tracked store whose methods cannot be wrapped also turns the count off)';
+
+interface KeptRestorePlan {
+  /** The data still matches the archive: reset warm and keep it. */
+  keep: boolean;
+  /**
+   * Why the restore runs cold (trace detail), when warm was possible in
+   * principle. Undefined with `recordBaseline` set: the read after the
+   * restore says why (no baseline yet, or an app that reports no writes).
+   */
+  reason?: string;
+  /**
+   * After a cold restore (including the fallback of a failed keep), read the
+   * write count the next restore compares against.
+   */
+  recordBaseline: boolean;
+  /**
+   * The hooks have not been seen yet under `appReset: 'auto'` (a fresh MCP
+   * session, a probe that ran before the app mounted them): record the
+   * baseline after all if the read after this restore finds them, so the
+   * next restore can already keep.
+   */
+  recordIfHooksAppear?: boolean;
+}
+
+/**
+ * Decide whether a restore of `archive` can keep the data already on the
+ * device. It can when the last cold restore was of the same archive, the app
+ * is still the process that restore launched (`boot`), and the hooks have
+ * counted no persisted write since (`writes`). Anything else — and every
+ * forced-cold reset — restores the archive again. The marker is read only
+ * when a baseline for this archive exists, the one case its answer can
+ * change; every cold restore reads it once after the relaunch instead.
+ */
+async function planKeptRestore(
+  ctx: SessionPreflightContext,
+  policy: AppResetPolicy,
+  archive: string,
+  options: ExecuteAppResetOptions,
+  step: StepRunner,
+): Promise<KeptRestorePlan> {
+  const hooks = ctx.capabilities?.hooksDetected === true;
+  const unseenUnderAuto = !hooks && (ctx.config.appReset ?? 'auto') === 'auto' && !options.forceCold;
+  if (policy.mode !== 'warm') {
+    return {
+      keep: false, recordBaseline: false,
+      ...(hooks ? { reason: `warm skipped: appReset is '${policy.mode}'` } : {}),
+      ...(unseenUnderAuto ? { recordIfHooksAppear: true } : {}),
+    };
+  }
+  if (!hooks) return { keep: false, recordBaseline: false, ...(unseenUnderAuto ? { recordIfHooksAppear: true } : {}) };
+  if (options.forceCold) return { keep: false, recordBaseline: true, reason: 'warm skipped: a retry restores the archive cold' };
+  const learnt = ctx.capabilities?.appStateKeep;
+  // A build's hooks either report writes or they do not: no need to look again.
+  if (learnt?.noWrites) return { keep: false, recordBaseline: false, reason: NO_WRITES_REASON };
+  if (learnt?.daemonCannotKeep) return { keep: false, recordBaseline: false, reason: `warm skipped: ${DAEMON_CANNOT_KEEP}` };
+  // One write during a warm reset can be a save the test had scheduled; two
+  // in a row are the reset itself (an `onReload` that writes back what it
+  // reads), and every later attempt would pay a warm reset on top of the restore.
+  if ((learnt?.writingKeeps ?? 0) >= WRITING_KEEPS_LIMIT) {
+    return { keep: false, recordBaseline: false, reason: 'warm skipped: the app writes persisted data during its warm resets (an onReload that writes, or a save on blur), so restored data cannot be kept' };
+  }
+  const baseline = ctx.capabilities?.appStateBaseline;
+  if (!baseline) return { keep: false, recordBaseline: true };
+  if (baseline.archive !== archive) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: the last restore on this device was of ${path.basename(baseline.archive)}` };
+  }
+  // The same path saved again (a setup project re-run, possibly on another
+  // device) holds other data than this device restored.
+  if (archiveStamp(archive) !== baseline.archiveStamp) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: ${path.basename(archive)} was saved again since it was restored` };
+  }
+  let marker: ReturnType<typeof parseHooksMarker>;
+  await step('readWriteCount', async () => { marker = await readMarker(ctx); });
+  if (!marker) return { keep: false, recordBaseline: true, reason: 'warm skipped: could not read the hooks marker' };
+  if (marker.writes === undefined) return { keep: false, recordBaseline: true, reason: NO_WRITES_REASON };
+  if (marker.boot !== baseline.boot) {
+    return { keep: false, recordBaseline: true, reason: 'warm skipped: the app relaunched since the restore' };
+  }
+  const bound = ctx.config.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY;
+  if (bound > 0 && baseline.kept >= bound) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: ${baseline.kept} resets in a row kept ${path.basename(archive)} (appResetColdEvery)` };
+  }
+  if (marker.writes !== baseline.writes) {
+    // Same process, so the count only grew.
+    const n = marker.writes - baseline.writes;
+    return { keep: false, recordBaseline: true, reason: `warm skipped: the app wrote persisted data since the restore (${n} write${n === 1 ? '' : 's'})` };
+  }
+  return { keep: true, recordBaseline: true };
+}
+
+const WRITING_KEEPS_LIMIT = 2;
+const MARKER_READ_ATTEMPTS = 3;
+const MARKER_READ_RETRY_MS = 250;
+
+/**
+ * Read the hooks marker, trying again briefly on a miss: right after a
+ * relaunch or mid-transition a dump can come back without it, and a miss
+ * costs a cold restore (the daemon's own marker reads retry the same way).
+ */
+async function readMarker(ctx: SessionPreflightContext): Promise<ReturnType<typeof parseHooksMarker>> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const marker = parseHooksMarker((await ctx.client.getUiHierarchy()).hierarchyXml ?? '');
+      if (marker) return marker;
+    } catch { /* a failed read is a miss */ }
+    if (attempt >= MARKER_READ_ATTEMPTS) return undefined;
+    await delay(MARKER_READ_RETRY_MS);
+  }
+}
+
+/**
+ * After a cold restore of `archive`, remember the process it launched and
+ * its write count, so the next restore of the same archive can tell whether
+ * the data changed. A marker without a count records nothing. Returns the
+ * marker read (undefined when none was found).
+ */
+async function recordAppStateBaseline(ctx: SessionPreflightContext, archive: string): Promise<ReturnType<typeof parseHooksMarker>> {
+  const marker = await readMarker(ctx);
+  const stamp = archiveStamp(archive);
+  if (marker?.boot && marker.writes !== undefined && stamp !== undefined) {
+    (ctx.capabilities ??= {}).appStateBaseline = { archive, archiveStamp: stamp, boot: marker.boot, writes: marker.writes, kept: 0 };
+  } else if (marker && marker.writes === undefined) {
+    // The hooks publish the count from their first render, so a marker
+    // without one is this build's answer, not a read taken too early.
+    ((ctx.capabilities ??= {}).appStateKeep ??= {}).noWrites = true;
+  }
+  return marker;
+}
+
+/** The archive file's identity on disk (mtime and size), or undefined when it cannot be read. */
+function archiveStamp(archive: string): string | undefined {
+  try {
+    const st = fs.statSync(archive);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

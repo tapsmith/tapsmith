@@ -21,6 +21,35 @@ describe('reset pipeline', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('keeps persisted data on a keep request: no clear, no reset handlers, only the reload', async () => {
+    const order: string[] = [];
+    const store = { clear: vi.fn(async () => { order.push('clear'); }) };
+    const handler = vi.fn(async () => { order.push('reset'); });
+    const reload = vi.fn(async (req: { target: string }) => { order.push(`reload:${req.target}`); });
+    const settle = vi.fn(async () => { order.push('settle'); return true; });
+
+    await runResetPipeline({ target: '/profile', nonce: 'n', keepData: true }, [store], [handler], settle, reload);
+
+    expect(order).toEqual(['settle', 'reload:/profile']);
+  });
+
+  it('fails a keep request the app has no reload handler for, without touching its data', async () => {
+    const store = { clear: vi.fn() };
+    const handler = vi.fn();
+    await expect(runResetPipeline({ target: '/', nonce: '', keepData: true }, [store], [handler]))
+      .rejects.toThrow(/onReload/);
+    expect(store.clear).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('ignores the reload handler on an ordinary reset', async () => {
+    const reload = vi.fn();
+    const handler = vi.fn();
+    await runResetPipeline({ target: '/', nonce: '' }, [], [handler], undefined, reload);
+    expect(handler).toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it('registerTapsmithReset adds and removes handlers', () => {
     const h = vi.fn();
     const off = registerTapsmithReset(h);

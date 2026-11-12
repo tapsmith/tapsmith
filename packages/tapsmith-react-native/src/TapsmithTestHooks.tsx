@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Keyboard, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
-import { formatMarker, parseResetRequest, resetDedupeKey, BOOT_TOKEN } from './protocol.js';
-import { publishResetEpoch } from './epoch.js';
+import { formatMarker, BOOT_TOKEN } from './protocol.js';
+import { currentResetEpoch, subscribeResetEpoch } from './epoch.js';
+import { claimInitialUrl, handleIncomingUrl, linkState, subscribeLinkState } from './link-state.js';
 import { CARRIER_TEXT_COLOR } from './carrier-color.js';
 import { hooksEnabledByDefault } from './enabled.js';
 import { blurFocusedInput, type KeyboardDeps } from './keyboard.js';
 import { registeredHandlers, runResetPipeline, type Clearable, type ResetHandler } from './reset.js';
+import { persistedWriteCount, subscribePersistedWrites, trackStoreWrites } from './writes.js';
 
 export interface TapsmithTestHooksProps {
   /**
@@ -25,6 +27,29 @@ export interface TapsmithTestHooksProps {
    * and standalone builds). Bare React Native: `'myapp://'`.
    */
   urlPrefix?: string;
+  /**
+   * Resets the app while keeping its persisted data: drop in-memory state
+   * (caches, navigation) and read it back from storage, as a fresh launch
+   * would, refreshing the signed-in session in place rather than signing out
+   * (an auth guard that sees a signed-out moment redirects mid-reset). Tapsmith calls it instead of `clear`, `onReset` and
+   * `registerTapsmithReset` handlers (none of them run, so reset what they
+   * would, and cancel writes the app has scheduled but not made) between tests that restore the same saved app state (`appState`), when
+   * the app has written nothing to its stores since the restore — so the
+   * data still matches the archive and no restore + relaunch is needed.
+   * Requires `track`.
+   */
+  onReload?: ResetHandler;
+  /**
+   * Stores whose writes Tapsmith counts, e.g. `[AsyncStorage]` or `[storage]`
+   * (MMKV): every store the app persists data in. With `onReload`, the count
+   * lets Tapsmith tell whether a test changed the restored data. Report
+   * writes these stores cannot show (native modules, SQLite, files, the
+   * keychain) with `markTapsmithWrite()`; pass `[]` if that covers all of
+   * them. A store that writes through statements or file operations (a
+   * SQLite database, a file system) cannot be counted, and passing one turns
+   * the count off.
+   */
+  track?: readonly object[];
   /** Bare React Native shorthand for `urlPrefix={`${scheme}://`}`. */
   scheme?: string;
   /**
@@ -57,15 +82,39 @@ const keyboardDeps: KeyboardDeps = {
  *
  * Renders nothing and registers nothing when disabled (production).
  */
-export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enabled }: TapsmithTestHooksProps) {
+export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPrefix, scheme, enabled }: TapsmithTestHooksProps) {
   const active = enabled ?? hooksEnabledByDefault();
-  const [epoch, setEpoch] = useState(0);
-  const [nav, setNav] = useState(0);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const seenNonces = useRef(new Set<string>());
-  const initialUrlHandled = useRef(false);
-  const latest = useRef({ onReset, clear });
-  latest.current = { onReset, clear };
+  // Per process, not per mount (see link-state.ts): a remount keeps them.
+  const epoch = useSyncExternalStore(subscribeResetEpoch, currentResetEpoch);
+  const { nav, error } = useSyncExternalStore(subscribeLinkState, linkState);
+  const [writes, setWrites] = useState(persistedWriteCount);
+  // Undefined until the stores are wrapped (an effect, after the first
+  // commit). The count is published from the first render on: Tapsmith may
+  // read the marker before the effect runs, and a marker without a count
+  // there would read as "this app reports no writes".
+  const [trackable, setTrackable] = useState<boolean | undefined>(undefined);
+  const latest = useRef({ onReset, onReload, clear });
+  latest.current = { onReset, onReload, clear };
+  // `track={[AsyncStorage]}` is a new array on every render: re-wrap only
+  // when the stores themselves change.
+  const trackedStores = useRef<readonly object[] | undefined>(undefined);
+  if (!sameStores(trackedStores.current, track)) trackedStores.current = track;
+  const stores = trackedStores.current;
+
+  useEffect(() => {
+    if (!active || !stores) {
+      setTrackable(false);
+      return undefined;
+    }
+    const tracking = trackStoreWrites(stores);
+    setTrackable(tracking.trackable);
+    const unsubscribe = subscribePersistedWrites(setWrites);
+    setWrites(persistedWriteCount());
+    return () => {
+      unsubscribe();
+      tracking.untrack();
+    };
+  }, [active, stores]);
 
   const prefix = normalisePrefix(urlPrefix ?? (scheme ? `${scheme}://` : ''));
 
@@ -73,50 +122,30 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
     if (!active) return;
     let disposed = false;
 
-    // `initial`: the cold-launch URL. It is read once for the component's
-    // lifetime (see below) but resolves asynchronously — under StrictMode
-    // (and any `enabled` toggle) this effect's first pass is already disposed
-    // by then, so that URL must be honoured regardless of `disposed` or a
-    // cold-delivered reset is silently dropped.
-    const handle = async (url: string | null | undefined, initial = false) => {
-      if (!url || (disposed && !initial)) return;
-      // Every received URL bumps `nav` — the ack for plain navigation deep
-      // links (a same-screen link changes nothing else observable).
-      setNav((n) => n + 1);
-      const request = parseResetRequest(url);
-      if (!request) return;
-      // A dropped-and-refired intent must not reset twice. Bounded: only
-      // recent entries matter for redelivery.
-      const dedupeKey = resetDedupeKey(request, url);
-      if (seenNonces.current.has(dedupeKey)) return;
-      seenNonces.current.add(dedupeKey);
-      while (seenNonces.current.size > 64) {
-        seenNonces.current.delete(seenNonces.current.values().next().value as string);
-      }
+    // `initial`: the cold-launch URL. It is read once per process (see below)
+    // but resolves asynchronously — under StrictMode (and any `enabled`
+    // toggle) this effect's first pass is already disposed by then, so that
+    // URL must be honoured regardless of `disposed` or a cold-delivered reset
+    // is silently dropped.
+    const handle = (url: string | null | undefined, initial = false) => handleIncomingUrl(url, {
+      initial,
+      isDisposed: () => disposed,
       // A fresh app has no focused input. A reset that lands on the screen
-      // already showing keeps it mounted, and with it whatever input had focus
-      // and the keyboard over it, which the next test would start under.
-      // Blur it alongside the clear (see runResetPipeline for the order).
-      try {
+      // already showing keeps it mounted, and with it whatever input had
+      // focus and the keyboard over it, which the next test would start
+      // under. Blur it alongside the clear (see runResetPipeline for the order).
+      run: (request) => {
         const handlers: ResetHandler[] = [...(latest.current.onReset ? [latest.current.onReset] : []), ...registeredHandlers()];
-        await runResetPipeline(request, latest.current.clear, handlers, () => blurFocusedInput(keyboardDeps));
-        if (disposed && !initial) return;
-        setError(undefined);
-      } catch (err) {
-        if (disposed && !initial) return;
-        setError(err instanceof Error ? err.message : String(err));
-      }
-      // Always advance the epoch so Tapsmith never waits on a failed reset;
-      // the error rides along in the marker.
-      setEpoch((e) => e + 1);
-    };
+        return runResetPipeline(request, latest.current.clear, handlers, () => blurFocusedInput(keyboardDeps), latest.current.onReload);
+      },
+    });
 
     const sub = Linking.addEventListener('url', ({ url }) => { void handle(url); });
     // A cold launch delivers the URL before any listener exists. Count it
-    // once: a re-run of this effect (`enabled` toggled) re-reads the same
-    // initial URL, which must not bump `nav` again.
-    if (!initialUrlHandled.current) {
-      initialUrlHandled.current = true;
+    // once per process: a re-run of this effect (`enabled` toggled) or a
+    // remount re-reads the same initial URL, which must not bump `nav` or run
+    // its reset again.
+    if (claimInitialUrl()) {
       Linking.getInitialURL().then((url) => { void handle(url, true); }, () => { /* ignore */ });
     }
     return () => {
@@ -125,14 +154,12 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
     };
   }, [active]);
 
-  // Screens keyed by useTapsmithResetEpoch() remount with the marker. Published
-  // from an effect, not the state updater: an update issued to another
-  // component while this one renders is deferred or dropped by React.
-  useEffect(() => { publishResetEpoch(epoch); }, [epoch]);
-
   if (!active) return null;
 
-  const marker = formatMarker({ epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error });
+  // The write count is published only when Tapsmith can act on it: the app
+  // can reset while keeping its data, and every tracked store is counted.
+  const reportsWrites = !!onReload && !!stores && trackable !== false;
+  const marker = formatMarker({ epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error, ...(reportsWrites ? { writes } : {}) });
 
   // The marker. Deliberately screen-sized rather than tucked into a corner: a
   // platform's own UI can sit on top of a corner — Android's three-button
@@ -160,6 +187,12 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
       </Text>
     </View>
   );
+}
+
+function sameStores(a: readonly object[] | undefined, b: readonly object[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((store, i) => store === b[i]);
 }
 
 function normalisePrefix(prefix: string): string {

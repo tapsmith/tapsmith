@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -81,8 +81,8 @@ const iosShell = {
 /** A daemon ResetApp outcome as Device._resetApp reports it. */
 function resetResult(
   mode: 'warm' | 'restart' | 'clear',
-  overrides: Partial<import('../device.js').AppResetResult> = {},
-): import('../device.js').AppResetResult {
+  overrides: Partial<import('../device.js').InternalAppResetResult> = {},
+): import('../device.js').InternalAppResetResult {
   return {
     modeRequested: mode,
     modeUsed: mode,
@@ -722,6 +722,356 @@ describe('session-preflight', () => {
       expect((err as Error).message).toMatch(/appResetRoute '\/settings' is a path/);
       expect((err as Error).message).toMatch(/myapp:\/\/\/settings/);
       expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('keeping a restored appState between tests', () => {
+    // Real files: the baseline records each archive's mtime and size.
+    const archiveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-kept-restore-'));
+    const ARCHIVE = path.join(archiveDir, 'auth.tar.gz');
+    const OTHER_ARCHIVE = path.join(archiveDir, 'admin.tar.gz');
+    fs.writeFileSync(ARCHIVE, 'auth');
+    fs.writeFileSync(OTHER_ARCHIVE, 'admin');
+    afterAll(() => { fs.rmSync(archiveDir, { recursive: true, force: true }); });
+    const RESTORE_WARM: AppResetPolicy = { mode: 'warm', scope: 'test', appState: ARCHIVE };
+    /** A warm reset the hook ran as a keep (the daemon passed the keep flag on). */
+    const keepResult = (overrides: Parameters<typeof resetResult>[1] = {}) =>
+      resetResult('warm', { hooksDetected: true, keptAppData: true, ...overrides });
+
+    /** A hooked app whose marker reports `boot` and `writes` (undefined = no write support). */
+    function hookedApp(initial: { boot: string; writes?: number }) {
+      const app = { ...initial };
+      const ctx = makeContext({ capabilities: { hooksDetected: true, hooksUrlPrefix: 'app:///' } });
+      vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => ({
+        requestId: '1',
+        hierarchyXml: `<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;nav=0;boot=${app.boot};url=app:///${app.writes === undefined ? '' : `;writes=${app.writes}`}" /></hierarchy>`,
+        errorMessage: '',
+      }));
+      // A restore relaunches the app: a new process with its own boot token,
+      // and a write count that starts again from zero.
+      let launches = 0;
+      vi.mocked(ctx.device.restartApp).mockImplementation(async () => {
+        launches += 1;
+        app.boot = `relaunch${launches}`;
+        if (app.writes !== undefined) app.writes = 0;
+      });
+      vi.mocked(ctx.device._resetApp).mockImplementation(async () => keepResult());
+      return { ctx, app };
+    }
+
+    it('restores cold the first time, says why, and records the write count it left', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 4 });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledWith('com.example.app', ARCHIVE);
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: false });
+      expect(report.reason).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+    });
+
+    it('resets warm, keeping the data, while the app has written nothing since the restore', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device.restoreAppState).mockClear();
+      vi.mocked(ctx.device.restartApp).mockClear();
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, route: '/profile' }, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).not.toHaveBeenCalled();
+      expect(ctx.device.restartApp).not.toHaveBeenCalled();
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({
+        mode: 'warm', keepAppData: true, fallback: false, recoverable: true, target: '/profile',
+      }));
+      // The legacy link cannot keep data.
+      expect(vi.mocked(ctx.device._resetApp).mock.calls[0][1]).not.toHaveProperty('resetDeepLink');
+      expect(report).toMatchObject({ origin: 'inline', modeUsed: 'warm', fellBack: false });
+      expect(report.reason).toBe('kept auth.tar.gz: no persisted writes since the restore');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+    });
+
+    it('restores cold again after a test wrote persisted data, and names the drift', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      app.writes = 2;
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report.modeUsed).toBe('restore');
+      expect(report.reason).toBe('warm skipped: the app wrote persisted data since the restore (2 writes)');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('restores cold when the app relaunched since the restore', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      app.boot = 'crashed-and-relaunched';
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toMatch(/^warm skipped: the app relaunched since the restore/);
+    });
+
+    it('restores cold every time for an app that does not report writes, says how to fix it, and reads the marker once', async () => {
+      const { ctx } = hookedApp({ boot: 'b0' });
+      const first = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const second = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.capabilities?.appStateBaseline).toBeUndefined();
+      for (const report of [first, second]) {
+        expect(report.reason).toMatch(/^warm skipped: the app does not report persisted writes \(give <TapsmithTestHooks> onReload and track; a tracked store whose methods cannot be wrapped/);
+      }
+      // One read, after the first relaunch; the build's answer does not change.
+      expect(first.steps.map((s) => s.name)).toEqual(['restoreAppState', 'restartApp', 'ensureSessionReady', 'waitForAppReady', 'readWriteCount']);
+      expect(second.steps.map((s) => s.name)).not.toContain('readWriteCount');
+    });
+
+    it('stops trying to keep once warm resets write themselves twice in a row', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      // An onReload that writes back what it reads.
+      vi.mocked(ctx.device._resetApp).mockImplementation(async () => {
+        app.writes = (app.writes ?? 0) + 1;
+        return keepResult();
+      });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockClear();
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toMatch(/^warm skipped: the app writes persisted data during its warm resets/);
+      expect(report.steps.map((s) => s.name)).not.toContain('readWriteCount');
+    });
+
+    it('bounds a run of kept resets with a cold restore (appResetColdEvery), not a daemon relaunch', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.config = { ...ctx.config, appResetColdEvery: 2 };
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const kept = [
+        await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' }),
+        await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' }),
+      ];
+      const third = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(kept.map((r) => r.modeUsed)).toEqual(['warm', 'warm']);
+      expect(vi.mocked(ctx.device._resetApp).mock.calls.every(([, o]) => o.coldEveryNResets === 0)).toBe(true);
+      expect(third).toMatchObject({ modeUsed: 'restore', fellBack: false });
+      expect(third.reason).toBe('warm skipped: 2 resets in a row kept auth.tar.gz (appResetColdEvery)');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ kept: 0 });
+    });
+
+    it('restores cold on a forced-cold reset (retry, fresh start after a failure)', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test', forceCold: true });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toBe('warm skipped: a retry restores the archive cold');
+    });
+
+    it('restores a different archive cold', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, appState: OTHER_ARCHIVE }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.restoreAppState).toHaveBeenLastCalledWith('com.example.app', OTHER_ARCHIVE);
+      expect(report.reason).toBe('warm skipped: the last restore on this device was of auth.tar.gz');
+    });
+
+    it('never tries warm under a cold policy, and reads no write count for it', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.capabilities = { hooksDetected: true, hooksUrlPrefix: 'app:///', appStateBaseline: { archive: ARCHIVE, archiveStamp: 'x', boot: 'b0', writes: 0, kept: 0 } };
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'restart' }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.modeUsed).toBe('restore');
+      expect(report.reason).toBe("warm skipped: appReset is 'restart'");
+    });
+
+    it('says nothing extra for an app without hooks (nothing was skipped)', async () => {
+      const ctx = makeContext({ capabilities: { hooksDetected: false } });
+
+      const report = await executeAppReset(ctx, { mode: 'clear', scope: 'test', appState: ARCHIVE }, { phase: 'before test' });
+
+      expect(report.reason).toBeUndefined();
+    });
+
+    it('restores the archive when the warm reset fails, and reports the fallback', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockRejectedValueOnce(new Error('in-app reset reported an error: no onReload'));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toMatch(/^warm reset keeping auth\.tar\.gz failed \(.*no onReload\); restored it cold/);
+      expect(report.steps.find((s) => s.name === 'resetApp')?.ok).toBe(false);
+      // The fallback is a cold restore like any other: the next one can keep.
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('restores cold when the app wrote during the warm reset (a save it had scheduled)', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        app.writes = 1;
+        return keepResult();
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe('the app wrote persisted data during the warm reset (1 write); restored auth.tar.gz cold');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('restores the archive when the daemon cleared the app after all', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('clear', { modeRequested: 'warm', fellBack: true, reason: 'boom' }));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+    });
+
+    it('restores cold after a warm reset that relaunched the app: writes just before it cannot be checked', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        app.boot = 'valve';
+        app.writes = 0;
+        return keepResult({ coldLaunch: true, reason: 'cold relaunch: warm-window bound reached (10 resets)' });
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe('the warm reset relaunched the app (cold relaunch: warm-window bound reached (10 resets)), so writes made just before it cannot be ruled out; restored auth.tar.gz cold');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('retries a marker read that misses once', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce({ requestId: '1', hierarchyXml: '', errorMessage: 'snapshot failed' });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(report.modeUsed).toBe('warm');
+    });
+
+    it('restores cold when a warm reset relaunched the app without the daemon noticing (new boot on the re-read)', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        app.boot = 'escalated';
+        return keepResult({ coldLaunch: false });
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe('the warm reset relaunched the app, so writes made just before it cannot be ruled out; restored auth.tar.gz cold');
+    });
+
+    it('restores cold when the re-read after the reset finds no count: a write during the reset cannot be ruled out', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const empty = { requestId: '1', hierarchyXml: '<hierarchy/>', errorMessage: '' };
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce(empty).mockResolvedValueOnce(empty).mockResolvedValueOnce(empty);
+        return keepResult();
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe("could not read the app's write count after the warm reset; restored auth.tar.gz cold");
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+    });
+
+    it('restores cold when the archive was saved again since it was restored', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      fs.writeFileSync(ARCHIVE, 'auth, saved again by a setup re-run');
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toBe('warm skipped: auth.tar.gz was saved again since it was restored');
+    });
+
+    it("explains that appState '' clears even with hooks", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('clear'));
+
+      const report = await executeAppReset(ctx, { mode: 'warm', scope: 'test', appState: '' }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ mode: 'clear' }));
+      expect(report.reason).toBe("warm skipped: appState '' clears the app's data");
+    });
+    it('restores cold, and stops trying, when the daemon cannot pass the keep request on (one older than the SDK)', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      // An old daemon ignores keep_app_data: the hook ran its full reset,
+      // which may clear data the write count cannot see.
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true }));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toMatch(/^tapsmith-core did not pass the request to keep the app's data on to the app \(a daemon older than this SDK.*\); restored auth\.tar\.gz cold$/);
+      vi.mocked(ctx.device._resetApp).mockClear();
+
+      const next = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(next.reason).toMatch(/^warm skipped: tapsmith-core did not pass the request to keep/);
+    });
+
+    it("records the baseline on a restore under appReset 'auto' whose read finds hooks not seen before, so the next restore keeps", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      // A fresh MCP session: nothing probed yet, so 'auto' resolved to clear.
+      ctx.capabilities = {};
+
+      const first = await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'clear' }, { phase: 'before test' });
+
+      expect(ctx.capabilities?.hooksDetected).toBe(true);
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+      expect(first.reason).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
+
+      const second = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(second.modeUsed).toBe('warm');
+      expect(second.reason).toBe('kept auth.tar.gz: no persisted writes since the restore');
+    });
+
+    it("records no baseline under an explicit appReset: 'clear' even when the app has hooks", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.capabilities = {};
+      ctx.config = { ...ctx.config, appReset: 'clear' };
+
+      await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'clear' }, { phase: 'before test' });
+
+      expect(ctx.capabilities?.appStateBaseline).toBeUndefined();
     });
   });
 
