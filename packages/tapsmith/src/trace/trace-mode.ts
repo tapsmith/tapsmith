@@ -6,6 +6,7 @@
  */
 
 import type { TraceMode } from './types.js';
+import type { VideoMode } from '../video/types.js';
 
 /**
  * Whether tracing should be active (recording) for this test attempt.
@@ -72,4 +73,28 @@ export function shouldRetain(
     default:
       return false;
   }
+}
+
+/**
+ * The startup warning for a retry-only trace or video mode that will record
+ * nothing in this run, or `undefined` (PILOT-240). UI mode never retries a
+ * failed test and records a retry-only trace mode as `on` (PILOT-1175), so
+ * there a trace mode never warns and a retry-only video mode always does.
+ *
+ * @param scope - Appended after the retry count, e.g. ` in project "android"`.
+ */
+export function retryOnlyModeWarning(
+  artifact: 'trace' | 'video',
+  mode: TraceMode | VideoMode,
+  retries: number,
+  uiMode: boolean,
+  scope: string,
+): string | undefined {
+  if (!recordsOnlyOnRetry(mode)) return undefined;
+  if (uiMode) {
+    if (artifact === 'trace') return undefined;
+    return `Warning: ${artifact} mode '${mode}' only records retry attempts, and UI mode never retries a failed test — no ${artifact} will be recorded in UI mode.`;
+  }
+  if (retries > 0) return undefined;
+  return `Warning: ${artifact} mode '${mode}' only records retry attempts, but retries is 0${scope} — no ${artifact} will ever be recorded. Set retries to 1 or more to get ${artifact}s.`;
 }
