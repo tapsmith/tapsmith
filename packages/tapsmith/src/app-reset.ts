@@ -72,6 +72,8 @@ export interface ResetCapabilities {
 export interface AppStateBaseline {
   /** Absolute path of the restored archive. */
   archive: string;
+  /** The archive file's mtime and size when it was restored: a re-saved archive holds other data. */
+  archiveStamp: string;
   boot: string;
   writes: number;
 }

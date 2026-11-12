@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
@@ -890,7 +891,12 @@ export async function executeAppReset(
           await step('readWriteCount', async () => { after = await readMarker(ctx); });
           // An unreadable marker right after a reset is a transition, not
           // evidence of a write: the count was checked before the reset.
-          if (after?.writes !== undefined && after.boot === baseline.boot && after.writes !== baseline.writes) {
+          if (after?.boot !== undefined && after.boot !== baseline.boot) {
+            // Relaunched after all (a delivery that went cold without the
+            // daemon seeing it): as above, the count went with the process.
+            kept = false;
+            reason = `the warm reset relaunched the app, so writes made just before it cannot be ruled out; restored ${archiveName} cold`;
+          } else if (after?.writes !== undefined && after.writes !== baseline.writes) {
             kept = false;
             const n = after.writes - baseline.writes;
             reason = `the app wrote persisted data during the warm reset (${n} write${n === 1 ? '' : 's'}); restored ${archiveName} cold`;
@@ -1082,6 +1088,11 @@ async function planKeptRestore(
   if (options.forceCold) return { keep: false, recordBaseline: true, reason: 'warm skipped: a retry restores the archive cold' };
   const baseline = ctx.capabilities?.appStateBaseline;
   if (!baseline || baseline.archive !== archive) return { keep: false, recordBaseline: true };
+  // The same path saved again (a setup project re-run, possibly on another
+  // device) holds other data than this device restored.
+  if (archiveStamp(archive) !== baseline.archiveStamp) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: ${path.basename(archive)} was saved again since it was restored` };
+  }
   let marker: ReturnType<typeof parseHooksMarker>;
   await step('readWriteCount', async () => { marker = await readMarker(ctx); });
   if (!marker) return { keep: false, recordBaseline: true, reason: 'warm skipped: could not read the hooks marker' };
@@ -1124,10 +1135,21 @@ async function readMarker(ctx: SessionPreflightContext): Promise<ReturnType<type
  */
 async function recordAppStateBaseline(ctx: SessionPreflightContext, archive: string): Promise<ReturnType<typeof parseHooksMarker>> {
   const marker = await readMarker(ctx);
-  if (marker?.boot && marker.writes !== undefined) {
-    (ctx.capabilities ??= {}).appStateBaseline = { archive, boot: marker.boot, writes: marker.writes };
+  const stamp = archiveStamp(archive);
+  if (marker?.boot && marker.writes !== undefined && stamp !== undefined) {
+    (ctx.capabilities ??= {}).appStateBaseline = { archive, archiveStamp: stamp, boot: marker.boot, writes: marker.writes };
   }
   return marker;
+}
+
+/** The archive file's identity on disk (mtime and size), or undefined when it cannot be read. */
+function archiveStamp(archive: string): string | undefined {
+  try {
+    const st = fs.statSync(archive);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

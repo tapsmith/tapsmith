@@ -225,6 +225,7 @@ describe('runner app reset (declared isolation)', () => {
 
   it('appState with hooks: restores once, then keeps the archive warm while no test writes, and the trace says which ran', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-kept-restore-'));
+    fs.writeFileSync(path.join(tempRoot, 'auth.tar.gz'), 'archive');
     const d = makeDevice();
     const app = { boot: 'b0', writes: 0 };
     d.client.getUiHierarchy.mockImplementation(async () => ({
