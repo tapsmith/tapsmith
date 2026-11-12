@@ -70,16 +70,16 @@ const codeTheme: CodeTheme = {
 
 const codeSnippet = `import { test, expect } from "tapsmith"
 
-test("user can complete checkout", async ({ device }) => {
-  // mock the payment API
-  await device.route("**/api/payment", async (route) => {
-    await route.fulfill({ json: { status: "success" } })
-  })
+test("user can check out", async ({ device }) => {
+  // Mock the payment API: no mock server, no special build
+  await device.route("**/api/payment", (route) =>
+    route.fulfill({ json: { status: "success" } }),
+  )
 
   await device.getByRole("button", { name: "Add to cart" }).tap()
   await device.getByText("Checkout").tap()
 
-  await expect(device.getByText("Order Confirmed")).toBeVisible()
+  await expect(device.getByText("Order confirmed")).toBeVisible()
 })`
 
 // Cache-busting version for the demo video, written by scripts/sync-promo.mjs
@@ -161,6 +161,80 @@ const threeThings = [
     body: 'Appium means a server, a driver per platform, a capabilities blob, and keeping all three in step with every Xcode and Android release. Tapsmith is one npm package: the daemon, the device agents and the trace viewer come with it, <code>tapsmith init</code> writes your config, and <code>tapsmith doctor</code> tells you what’s missing. No server to start, no drivers to update.',
   },
 ]
+
+// The manifesto lights up word by word as it scrolls
+const manifesto =
+  'Tapsmith takes the parts of Playwright that engineers love, the locators, the auto-waiting, the trace viewer, and rebuilds them for real devices.'.split(
+    ' ',
+  )
+
+const tools = [
+  {
+    id: 'trace',
+    label: 'Trace viewer',
+    img: '/trace-viewer.png',
+    alt: 'Tapsmith trace viewer showing a failed login test: timeline of screenshots, action log with the failed assertion, the app’s error state, and the error with a source snippet',
+    body: 'With tracing on, every test records a full trace. Scrub through a timeline of screenshots, see every tap and gesture overlaid on the screen, and inspect every network request and response. When a test fails in CI, download the trace and replay it locally.',
+    cmd: 'npx tapsmith show-trace trace.zip',
+    href: '/guides/trace-viewer/',
+  },
+  {
+    id: 'ui',
+    label: 'UI mode',
+    img: '/ui-mode.png',
+    alt: 'Tapsmith UI mode running a network-mocking test across Android and iOS, with the test tree, trace actions, mocked network response, and live device mirrors',
+    body: 'A browser-based interactive runner. Click any test to run it, see results stream in live, browse traces and screenshots inline, and mirror the device screen, all without leaving the browser.',
+    cmd: 'npx tapsmith test --ui',
+    href: '/guides/ui-mode/',
+  },
+  {
+    id: 'pick',
+    label: 'Locator picker',
+    img: '/ui-mode-pick-locator.png',
+    alt: 'Pick mode in the live device mirror: the picked element is highlighted on the device and the Locator tab lists suggested locators with match counts',
+    body: 'Click an element on the mirrored device and UI mode suggests locators for it, each one checked against the device so only those that find exactly that element are listed. Edit the locator and the match count updates against the real app.',
+    cmd: 'npx tapsmith test --ui',
+    href: '/guides/ui-mode/#picking-locators-from-the-mirror',
+  },
+  {
+    id: 'report',
+    label: 'HTML report',
+    img: '/html-report.png',
+    alt: 'HTML report with a pass/fail summary, filter chips, and per-test rows including trace and video links for a failed test',
+    body: 'A self-contained page with a pass/fail summary, filtering and per-test durations, with links to each failure’s trace and video. Sharded CI runs merge into one report.',
+    cmd: 'npx tapsmith show-report',
+    href: '/reference/api/reporters/',
+  },
+]
+
+const faqs = [
+  {
+    q: 'Is Tapsmith free?',
+    a: 'Yes. Tapsmith is open source under the Apache-2.0 licence. It runs on your machine and in your CI, against your own emulators, simulators and devices.',
+  },
+  {
+    q: 'Which apps can it test?',
+    a: 'iOS and Android apps, whether they are built natively or with React Native, Expo or Flutter. One test file runs on both platforms, on Android emulators and devices (Android 8.0+), iOS simulators (iOS 17+) and <a href="/platform/ios-physical-devices/">physical iPhones</a>.',
+  },
+  {
+    q: 'Do I need to know Playwright?',
+    a: 'No, but if you do, you already know most of Tapsmith: <code>test</code>, <code>describe</code>, <code>expect</code>, hooks, fixtures, <code>test.extend()</code>, projects, <code>--ui</code> and <code>--trace</code> all work the way you expect.',
+  },
+  {
+    q: 'How do I move from the tool I use today?',
+    a: 'There is a migration guide for each of the usual starting points. Each one maps your current tool onto Tapsmith and ports a test side by side: <a href="/guides/migrating-from-maestro/">from Maestro</a>, <a href="/guides/migrating-from-detox/">from Detox</a> and <a href="/guides/migrating-from-appium/">from Appium</a>.',
+  },
+  {
+    q: 'Does it work with AI coding agents?',
+    a: 'Yes. The <a href="/guides/mcp-server/">MCP server</a> lets an agent drive a device, test locators, run tests and read traces, and the docs ship inside the npm package so an agent can read them offline. See <a href="/guides/agents/">Using Tapsmith with AI coding agents</a>.',
+  },
+  {
+    q: 'Does it run in CI?',
+    a: 'Yes. Tapsmith boots the emulators and simulators it needs, runs workers in parallel, and shards across machines with one merged report at the end. The <a href="/platform/ci-setup/">CI setup guide</a> has working pipelines.',
+  },
+]
+
+const marks: Record<string, string> = { Y: '✓', P: '◐', N: '—' }
 ---
 
 <html lang="en">
@@ -192,7 +266,7 @@ const threeThings = [
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
     <script is:inline>
@@ -303,84 +377,229 @@ const threeThings = [
     </header>
 
     <main>
-      <!-- 2. Hero -->
-      <section class="tp-hero">
-        <div class="tp-container">
+      <!-- 2. Hero: the forge. A touch grid where every tap lands like a hammer strike -->
+      <section class="tp-hero" data-forge-zone>
+        <canvas class="tp-forge" aria-hidden="true"></canvas>
+        <div class="tp-container tp-hero-inner">
           <h1 class="tp-hero-h1">
-            Mobile tests that <span class="tp-muted">feel</span><br />
-            <span class="tp-muted">like</span> web tests.
+            <span class="tp-h1-line">Mobile tests that <span class="tp-muted">feel</span></span>
+            <span class="tp-h1-line tp-h1-indent"
+              ><span class="tp-muted">like</span> web tests.</span
+            >
           </h1>
-
-          <p class="tp-hero-lead">
-            Tapsmith is a test framework for native iOS and Android. We took the parts of Playwright
-            that engineers love: the locators, the auto&#8209;waiting, the trace viewer, and rebuilt
-            them for real devices.
-          </p>
-
-          <div class="tp-hero-ctas">
-            <a href="/getting-started/" class="tp-btn-solid">Get started →</a>
-            <a href="https://www.npmjs.com/package/tapsmith" class="tp-btn-ghost tp-btn-npm">
-              <span class="tp-npm-dollar">$</span>&nbsp; npm i -D tapsmith&nbsp;<span
-                class="tp-npm-icon">⧉</span
+          <div class="tp-hero-foot">
+            <p class="tp-hero-lead">
+              A test framework for iOS and Android apps, built natively or with React Native, Expo
+              or Flutter. If you know Playwright, you already know most of it.
+            </p>
+            <div class="tp-hero-ctas">
+              <a href="/getting-started/" class="tp-btn-solid">Get started →</a>
+              <button
+                type="button"
+                class="tp-copy"
+                data-copy="npm i -D tapsmith"
+                aria-label="Copy install command: npm i -D tapsmith"
               >
-            </a>
-            <span class="tp-hero-req">Requires Node.js 22+</span>
+                <span class="tp-copy-dollar">$</span>
+                <span class="tp-copy-cmd">npm i -D tapsmith</span>
+                <span class="tp-copy-state" aria-hidden="true">copy</span>
+              </button>
+              <span class="tp-hero-req">Open source, Apache-2.0 · Requires Node.js 22+</span>
+            </div>
+          </div>
+        </div>
+        <p class="tp-forge-hint" aria-hidden="true">tap anywhere</p>
+      </section>
+
+      <!-- 3. Manifesto -->
+      <section class="tp-manifesto">
+        <div class="tp-container">
+          <p class="tp-manifesto-text">
+            {
+              manifesto.map((word) => (
+                <Fragment>
+                  <span class="tp-w">{word}</span>{' '}
+                </Fragment>
+              ))
+            }
+          </p>
+        </div>
+      </section>
+
+      <!-- 4. Live demo: the test, the device and the terminal, in step -->
+      <section class="tp-run" id="how-it-runs">
+        <div class="tp-container">
+          <div class="tp-section-head">
+            <h2 class="tp-h2">Watch a test run on a device.</h2>
+            <p class="tp-section-lead">
+              Tapsmith lives in your repo and runs from your terminal and your CI. Each action waits
+              for its element to be visible, enabled and stable, and each assertion retries until it
+              passes. You never write a sleep.
+            </p>
           </div>
 
-          <div class="tp-hero-visual">
-            <div class="tp-code-window">
+          <div class="tp-stage" data-demo>
+            <div class="tp-ide">
               <div class="tp-code-chrome">
-                <div class="tp-chrome-dots">
-                  <span class="tp-chrome-dot"></span>
-                  <span class="tp-chrome-dot"></span>
-                  <span class="tp-chrome-dot"></span>
-                </div>
-                <span class="tp-code-filename">checkout.tapsmith.ts</span>
-                <span class="tp-code-status">
-                  <span class="tp-dot-green"></span>
-                  passed · 1.4s
+                <span class="tp-code-filename">tests/checkout.tapsmith.ts</span>
+                <span class="tp-code-status" data-demo-status>
+                  <span class="tp-dot-status"></span>
+                  <span data-demo-status-text>passed · 1.4s</span>
                 </span>
               </div>
-              <Code class="tp-code-body" code={codeSnippet} lang="ts" theme={codeTheme} />
+              <div class="tp-demo-code">
+                <Code code={codeSnippet} lang="ts" theme={codeTheme} />
+              </div>
+              <div class="tp-term">
+                <div class="tp-term-bar">
+                  <span class="tp-term-tab">zsh</span>
+                  <button type="button" class="tp-term-replay" data-demo-replay>↻ replay</button>
+                </div>
+                <pre
+                  class="tp-term-body"><span class="tp-term-line" data-term="cmd"><span class="tp-term-prompt">$</span> <span data-term-typed>npx tapsmith test</span><span class="tp-term-caret" /></span>
+<span class="tp-term-line" data-term="start">
+Running tests from 1 file(s)
+</span>
+<span class="tp-term-line" data-term="pass">  <span class="tp-term-ok">✓</span> <span class="tp-term-dim">[1] › tests/checkout.tapsmith.ts ›</span> user can check out <span class="tp-term-dim">(1.4s)</span></span>
+<span class="tp-term-line" data-term="summary">
+<b>Summary:</b> <span class="tp-term-ok">1 passed</span> <span class="tp-term-dim">| 1.4s</span></span></pre>
+              </div>
             </div>
-            <div class="tp-hero-phone">
-              <img src="/hero-iphone.png" alt="Tapsmith driving an iOS app" class="tp-phone-img" />
+
+            <div class="tp-device">
+              <div
+                class="tp-phone"
+                data-step="5"
+                role="img"
+                aria-label="A phone running the app under test: Tapsmith taps Add to cart, taps Checkout, and the app shows Order confirmed"
+              >
+                <div class="tp-phone-screen">
+                  <div class="tp-phone-status">
+                    <span>9:41</span>
+                    <span class="tp-phone-island"></span>
+                    <span class="tp-phone-batt"></span>
+                  </div>
+
+                  <div class="tp-app tp-app-product">
+                    <div class="tp-app-bar">
+                      <span class="tp-app-back">‹</span>
+                      <span>Shop</span>
+                      <span class="tp-app-cart">
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          ><circle cx="9" cy="20" r="1.4"></circle><circle cx="18" cy="20" r="1.4"
+                          ></circle><path d="M2 3h3l2.6 12.4h11.2L21 7H6.2"></path></svg
+                        >
+                        <i class="tp-app-badge">1</i>
+                      </span>
+                    </div>
+                    <div class="tp-app-photo">
+                      <svg viewBox="0 0 120 120" width="156" height="156" aria-hidden="true">
+                        <path d="M32 34h56l-7 70a6 6 0 0 1-6 5H45a6 6 0 0 1-6-5z" fill="#a895dd"
+                        ></path>
+                        <path d="M35.5 58h49l-2.4 24H37.9z" fill="#ece9df"></path>
+                        <rect x="27" y="22" width="66" height="14" rx="5" fill="#8d79cf"></rect>
+                        <rect x="38" y="14" width="44" height="10" rx="4" fill="#a895dd"></rect>
+                      </svg>
+                    </div>
+                    <p class="tp-app-name">Reusable Coffee Cup</p>
+                    <p class="tp-app-price">$24.99</p>
+                    <p class="tp-app-desc">Keeps your drinks hot or cold for hours.</p>
+                    <div class="tp-app-actions">
+                      <div class="tp-app-btn tp-app-add" data-target="add">
+                        <span class="tp-app-add-a">Add to cart</span>
+                        <span class="tp-app-add-b">Added ✓</span>
+                      </div>
+                      <div class="tp-app-btn tp-app-checkout" data-target="checkout">Checkout</div>
+                    </div>
+                  </div>
+
+                  <div class="tp-app tp-app-done">
+                    <span class="tp-app-spinner"></span>
+                    <div class="tp-app-confirm">
+                      <span class="tp-app-tick">✓</span>
+                      <p class="tp-app-confirm-title">
+                        <span data-target="confirmed">Order confirmed</span>
+                      </p>
+                      <p class="tp-app-confirm-sub">Your cup is on its way.</p>
+                    </div>
+                  </div>
+
+                  <div class="tp-phone-net">⇄ **/api/payment <b>mocked</b></div>
+                  <span class="tp-probe"><i>getByText("Order confirmed")</i></span>
+                  <span class="tp-tap"></span>
+                  <span class="tp-phone-home"></span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- 2b. Demo video -->
-      <section class="tp-demo" id="demo">
+      <!-- 5. The pain, gone -->
+      <section class="tp-pain">
         <div class="tp-container">
-          <video
-            class="tp-demo-video"
-            src={promoSrc}
-            poster="/promo-poster.jpg"
-            controls
-            preload="metadata"
-            playsinline></video>
-          <p class="tp-demo-caption">
-            Tapsmith in 2 minutes: UI mode, the locator playground, multi-device tests, the MCP
-            server, and the trace viewer.
-          </p>
-        </div>
-      </section>
-
-      <!-- 4. Three things -->
-      <section class="tp-three">
-        <div class="tp-container">
-          <div class="tp-three-header">
-            <h2 class="tp-h2-large">The pain you're used to, gone.</h2>
+          <div class="tp-section-head tp-section-head-row">
+            <div>
+              <h2 class="tp-h2">The pain you’re used to, gone.</h2>
+            </div>
             <a href="/guides/locators/" class="tp-btn-ghost tp-btn-guide">Read the guide →</a>
           </div>
-          <div class="tp-three-rows">
+          <div class="tp-pain-grid">
             {
               threeThings.map((item) => (
-                <div class="tp-three-row">
-                  <span class="tp-three-num">{item.n}</span>
-                  <h3 class="tp-three-title">{item.title}</h3>
-                  <p class="tp-three-body" set:html={item.body} />
+                <article class="tp-pain-cell">
+                  <h3 class="tp-pain-title">{item.title}</h3>
+                  <p class="tp-pain-body" set:html={item.body} />
+                </article>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. API snippets -->
+      <section class="tp-snippets">
+        <div class="tp-container">
+          <div class="tp-section-head tp-section-head-row">
+            <div>
+              <h2 class="tp-h2">An API you can guess your way through.</h2>
+            </div>
+            <div class="tp-tabs" role="tablist" aria-label="Code examples">
+              {
+                Object.keys(snippets).map((key, idx) => (
+                  <button
+                    class:list={['tp-tab', { 'tp-tab-active': idx === 0 }]}
+                    type="button"
+                    role="tab"
+                    aria-selected={idx === 0 ? 'true' : 'false'}
+                    aria-controls={`panel-${key}`}
+                    id={`tab-${key}`}
+                  >
+                    {key[0].toUpperCase() + key.slice(1)}
+                  </button>
+                ))
+              }
+            </div>
+          </div>
+          <div class="tp-snippet-panel">
+            {
+              Object.entries(snippets).map(([key, code], idx) => (
+                <div
+                  class="tp-snippet-code"
+                  role="tabpanel"
+                  id={`panel-${key}`}
+                  aria-labelledby={`tab-${key}`}
+                  hidden={idx !== 0}
+                >
+                  <Code code={code} lang="ts" theme={codeTheme} />
                 </div>
               ))
             }
@@ -388,12 +607,96 @@ const threeThings = [
         </div>
       </section>
 
-      <!-- 5. Comparison table -->
+      <!-- 7. Tooling -->
+      <section class="tp-tools">
+        <div class="tp-container">
+          <div class="tp-section-head tp-section-head-row">
+            <div>
+              <h2 class="tp-h2">See exactly what happened, and when.</h2>
+            </div>
+            <div class="tp-tabs" role="tablist" aria-label="Tooling">
+              {
+                tools.map((tool, idx) => (
+                  <button
+                    class:list={['tp-tab', { 'tp-tab-active': idx === 0 }]}
+                    type="button"
+                    role="tab"
+                    aria-selected={idx === 0 ? 'true' : 'false'}
+                    aria-controls={`tool-${tool.id}`}
+                    id={`tooltab-${tool.id}`}
+                  >
+                    {tool.label}
+                  </button>
+                ))
+              }
+            </div>
+          </div>
+          {
+            tools.map((tool, idx) => (
+              <div
+                class="tp-tool"
+                role="tabpanel"
+                id={`tool-${tool.id}`}
+                aria-labelledby={`tooltab-${tool.id}`}
+                hidden={idx !== 0}
+              >
+                <button
+                  type="button"
+                  class="tp-tool-zoom"
+                  aria-label={`Enlarge ${tool.label} screenshot`}
+                >
+                  <img
+                    src={tool.img}
+                    alt={tool.alt}
+                    class="tp-tool-img"
+                    width="3024"
+                    height="1656"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </button>
+                <div class="tp-tool-meta">
+                  <p class="tp-tool-body">{tool.body}</p>
+                  <div class="tp-tool-side">
+                    <div class="tp-tool-cmd">
+                      <Code class="tp-snippet-code" code={tool.cmd} lang="sh" theme={codeTheme} />
+                    </div>
+                    <a href={tool.href} class="tp-tool-link">
+                      Read the {tool.label.toLowerCase()} guide →
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      </section>
+
+      <!-- 7b. Demo video -->
+      <section class="tp-demo" id="demo">
+        <div class="tp-container">
+          <div class="tp-demo-frame">
+            <video
+              class="tp-demo-video"
+              src={promoSrc}
+              poster="/promo-poster.jpg"
+              controls
+              preload="none"
+              playsinline></video>
+          </div>
+          <p class="tp-demo-caption">
+            Tapsmith in 2 minutes: UI mode, the locator playground, multi-device tests, the MCP
+            server, and the trace viewer.
+          </p>
+        </div>
+      </section>
+
+      <!-- 8. Comparison table -->
       <section class="tp-compare">
         <div class="tp-container">
-          <div class="tp-compare-header">
-            <h2 class="tp-h2-large">We've all tried the others.</h2>
-            <p class="tp-compare-desc">
+          <div class="tp-section-head">
+            <h2 class="tp-h2">We’ve all tried the others.</h2>
+            <p class="tp-section-lead">
               This is a snapshot, not a sales pitch. Every tool in this list does something well; we
               just think the table tilts our way for most teams shipping consumer mobile apps in
               2026.
@@ -409,40 +712,29 @@ const threeThings = [
                 <div class="tp-table-cell tp-table-col">Detox</div>
               </div>
               {
-                comparisonRows.map((row, idx) => (
-                  <div
-                    class:list={[
-                      'tp-table-row',
-                      { 'tp-table-row-last': idx === comparisonRows.length - 1 },
-                    ]}
-                  >
+                comparisonRows.map((row) => (
+                  <div class="tp-table-row">
                     <div class="tp-table-cell tp-table-feature">{row[0]}</div>
-                    <div class="tp-table-cell tp-table-col tp-table-us-col" data-mark={row[1]}>
-                      <span
+                    {row.slice(1).map((mark, col) => (
+                      <div
                         class:list={[
-                          'tp-mark',
-                          `tp-mark-${row[1].toLowerCase()}`,
-                          'tp-mark-highlight',
+                          'tp-table-cell',
+                          'tp-table-col',
+                          { 'tp-table-us-col': col === 0 },
                         ]}
+                        data-mark={mark}
                       >
-                        {row[1] === 'Y' ? '✓' : row[1] === 'P' ? '◐' : '—'}
-                      </span>
-                    </div>
-                    <div class="tp-table-cell tp-table-col" data-mark={row[2]}>
-                      <span class:list={['tp-mark', `tp-mark-${row[2].toLowerCase()}`]}>
-                        {row[2] === 'Y' ? '✓' : row[2] === 'P' ? '◐' : '—'}
-                      </span>
-                    </div>
-                    <div class="tp-table-cell tp-table-col" data-mark={row[3]}>
-                      <span class:list={['tp-mark', `tp-mark-${row[3].toLowerCase()}`]}>
-                        {row[3] === 'Y' ? '✓' : row[3] === 'P' ? '◐' : '—'}
-                      </span>
-                    </div>
-                    <div class="tp-table-cell tp-table-col" data-mark={row[4]}>
-                      <span class:list={['tp-mark', `tp-mark-${row[4].toLowerCase()}`]}>
-                        {row[4] === 'Y' ? '✓' : row[4] === 'P' ? '◐' : '—'}
-                      </span>
-                    </div>
+                        <span
+                          class:list={[
+                            'tp-mark',
+                            `tp-mark-${mark.toLowerCase()}`,
+                            { 'tp-mark-highlight': col === 0 },
+                          ]}
+                        >
+                          {marks[mark]}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 ))
               }
@@ -455,162 +747,54 @@ const threeThings = [
         </div>
       </section>
 
-      <!-- 6. API snippets -->
-      <section class="tp-snippets">
-        <div class="tp-container">
-          <div class="tp-snippets-header">
-            <h2 class="tp-h2-medium">An API you can guess your way through.</h2>
-            <div class="tp-tabs" role="tablist" aria-label="Code examples">
-              <button
-                class="tp-tab tp-tab-active"
-                data-tab="locators"
-                type="button"
-                role="tab"
-                aria-selected="true"
-                aria-controls="panel-locators"
-                id="tab-locators">Locators</button
-              >
-              <button
-                class="tp-tab"
-                data-tab="network"
-                type="button"
-                role="tab"
-                aria-selected="false"
-                aria-controls="panel-network"
-                id="tab-network">Network</button
-              >
-              <button
-                class="tp-tab"
-                data-tab="gestures"
-                type="button"
-                role="tab"
-                aria-selected="false"
-                aria-controls="panel-gestures"
-                id="tab-gestures">Gestures</button
-              >
-            </div>
+      <!-- 9. FAQ -->
+      <section class="tp-faq">
+        <div class="tp-container tp-faq-grid">
+          <div class="tp-section-head">
+            <h2 class="tp-h2">Questions</h2>
           </div>
-          <div class="tp-snippet-panel">
-            <div
-              class="tp-snippet-code"
-              data-snippet="locators"
-              role="tabpanel"
-              id="panel-locators"
-              aria-labelledby="tab-locators"
-            >
-              <Code code={snippets.locators} lang="ts" theme={codeTheme} />
-            </div>
-            <div
-              class="tp-snippet-code"
-              data-snippet="network"
-              role="tabpanel"
-              id="panel-network"
-              aria-labelledby="tab-network"
-              hidden
-            >
-              <Code code={snippets.network} lang="ts" theme={codeTheme} />
-            </div>
-            <div
-              class="tp-snippet-code"
-              data-snippet="gestures"
-              role="tabpanel"
-              id="panel-gestures"
-              aria-labelledby="tab-gestures"
-              hidden
-            >
-              <Code code={snippets.gestures} lang="ts" theme={codeTheme} />
-            </div>
+          <div class="tp-faq-list">
+            {
+              faqs.map((item, idx) => (
+                <details class="tp-faq-item" name="tp-faq" open={idx === 0}>
+                  <summary>
+                    <span class="tp-faq-q">{item.q}</span>
+                    <span class="tp-faq-icon" aria-hidden="true" />
+                  </summary>
+                  <p class="tp-faq-a" set:html={item.a} />
+                </details>
+              ))
+            }
           </div>
         </div>
       </section>
 
-      <!-- 8. Trace viewer + UI mode -->
-      <section class="tp-devtools">
-        <div class="tp-container">
-          <div class="tp-devtools-header">
-            <h2 class="tp-h2-large">See exactly what happened, and when.</h2>
+      <!-- 10. CTA -->
+      <section class="tp-cta" data-forge-zone>
+        <canvas class="tp-forge" aria-hidden="true"></canvas>
+        <div class="tp-container tp-cta-inner">
+          <h2 class="tp-cta-h2">Spend the rest of the afternoon on something more interesting.</h2>
+          <p class="tp-cta-sub">
+            Install Tapsmith, point it at your app, and write your first test in five minutes.
+          </p>
+          <div class="tp-hero-ctas tp-cta-ctas">
+            <a href="/getting-started/" class="tp-btn-solid">Get started →</a>
+            <button
+              type="button"
+              class="tp-copy"
+              data-copy="npm i -D tapsmith"
+              aria-label="Copy install command: npm i -D tapsmith"
+            >
+              <span class="tp-copy-dollar">$</span>
+              <span class="tp-copy-cmd">npm i -D tapsmith</span>
+              <span class="tp-copy-state" aria-hidden="true">copy</span>
+            </button>
           </div>
-          <div class="tp-devtools-grid">
-            <div class="tp-devtools-card">
-              <h3 class="tp-devtools-title">Trace viewer</h3>
-              <p class="tp-devtools-body">
-                With tracing on, every test records a full trace. Scrub through a timeline of
-                screenshots, see every tap and gesture overlaid on the screen, inspect every network
-                request and response. When a test fails in CI, download the trace and replay it
-                locally. No guessing, no "works on my machine."
-              </p>
-              <button
-                type="button"
-                class="tp-devtools-zoom"
-                aria-label="Enlarge trace viewer screenshot"
-              >
-                <img
-                  src="/trace-viewer.png"
-                  alt="Tapsmith trace viewer showing a failed login test: timeline of screenshots, action log with the failed assertion, the app's error state, and the error with a source snippet"
-                  class="tp-devtools-img"
-                />
-              </button>
-              <div class="tp-devtools-code">
-                <Code
-                  class="tp-snippet-code"
-                  code="npx tapsmith show-trace trace.zip"
-                  lang="sh"
-                  theme={codeTheme}
-                />
-              </div>
-            </div>
-            <div class="tp-devtools-card">
-              <h3 class="tp-devtools-title">UI mode</h3>
-              <p class="tp-devtools-body">
-                A browser-based interactive runner. Click any test to run it, see results stream in
-                live, browse traces and screenshots inline, and mirror the device screen, all
-                without leaving the browser.
-              </p>
-              <button
-                type="button"
-                class="tp-devtools-zoom"
-                aria-label="Enlarge UI mode screenshot"
-              >
-                <img
-                  src="/ui-mode.png"
-                  alt="Tapsmith UI mode running a network-mocking test across Android and iOS, with the test tree, trace actions, mocked network response, and live device mirrors"
-                  class="tp-devtools-img"
-                />
-              </button>
-              <div class="tp-devtools-code">
-                <Code
-                  class="tp-snippet-code"
-                  code="npx tapsmith test --ui"
-                  lang="sh"
-                  theme={codeTheme}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 9. CTA card -->
-      <section class="tp-cta">
-        <div class="tp-container">
-          <div class="tp-cta-card">
-            <div class="tp-cta-left">
-              <h2 class="tp-cta-h2">
-                Spend the rest of the afternoon on something more interesting.
-              </h2>
-              <p class="tp-cta-sub">
-                Install Tapsmith, point it at your app, and write your first test in five minutes.
-              </p>
-            </div>
-            <div class="tp-cta-right">
-              <a href="/getting-started/" class="tp-btn-solid">Get started →</a>
-              <span class="tp-cta-alt"
-                >or <a href="/getting-started/#write-your-first-test" class="tp-cta-link"
-                  >see what a first test looks like</a
-                ></span
-              >
-            </div>
-          </div>
+          <span class="tp-cta-alt"
+            >or <a href="/getting-started/#write-your-first-test" class="tp-cta-link"
+              >see what a first test looks like</a
+            ></span
+          >
         </div>
       </section>
     </main>
@@ -620,7 +804,7 @@ const threeThings = [
       <img class="tp-lightbox-img" src="" alt="" />
     </dialog>
 
-    <!-- 10. Footer -->
+    <!-- 11. Footer -->
     <footer class="tp-footer">
       <div class="tp-container">
         <div class="tp-footer-top">
@@ -648,6 +832,7 @@ const threeThings = [
             <a href="/reference/api/locators/">API reference</a>
             <a href="/reference/configuration/">Configuration</a>
             <a href="/platform/ci-setup/">CI setup</a>
+            <a href="/changelog/">Changelog</a>
           </div>
           <div class="tp-footer-col">
             <h4>Guides</h4>
@@ -682,14 +867,20 @@ const threeThings = [
           <span class="tp-footer-meta">v0.7.0</span>
         </div>
       </div>
+      <div class="tp-footer-word" aria-hidden="true">Tapsmith</div>
     </footer>
 
     <script>
+      const root = document.documentElement
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+      // Scroll-lit manifesto words only dim once this script is running
+      root.classList.add('tp-js')
+
+      /* ─── Theme toggle + mobile nav ─── */
       document.querySelectorAll('.tp-theme-toggle').forEach((btn) => {
         btn.addEventListener('click', () => {
-          const current = document.documentElement.getAttribute('data-theme')
-          const next = current === 'dark' ? 'light' : 'dark'
-          document.documentElement.setAttribute('data-theme', next)
+          const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'
+          root.setAttribute('data-theme', next)
           localStorage.setItem('starlight-theme', next)
         })
       })
@@ -697,73 +888,85 @@ const threeThings = [
       const header = document.querySelector('.tp-header')
       const navToggle = document.querySelector('.tp-nav-toggle')
       if (header && navToggle) {
-        navToggle.addEventListener('click', () => {
-          const open = header.classList.toggle('tp-nav-open')
+        const setOpen = (open: boolean) => {
+          header.classList.toggle('tp-nav-open', open)
           navToggle.setAttribute('aria-expanded', String(open))
           navToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu')
+        }
+        navToggle.addEventListener('click', () => {
+          setOpen(!header.classList.contains('tp-nav-open'))
         })
         // Close the menu when a nav link is tapped (same-page anchors don't reload)
         header.querySelectorAll('.tp-nav a').forEach((link) => {
-          link.addEventListener('click', () => {
-            header.classList.remove('tp-nav-open')
-            navToggle.setAttribute('aria-expanded', 'false')
-            navToggle.setAttribute('aria-label', 'Open menu')
-          })
+          link.addEventListener('click', () => setOpen(false))
         })
       }
 
-      const tablist = document.querySelector('[role="tablist"]')
-      if (tablist) {
-        const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'))
+      /* ─── Copy the install command ─── */
+      document.querySelectorAll<HTMLElement>('.tp-copy').forEach((btn) => {
+        const state = btn.querySelector('.tp-copy-state')
+        let timer = 0
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.copy ?? '')
+            if (state) state.textContent = 'copied'
+            btn.classList.add('tp-copied')
+          } catch {
+            if (state) state.textContent = 'select + copy'
+          }
+          window.clearTimeout(timer)
+          timer = window.setTimeout(() => {
+            if (state) state.textContent = 'copy'
+            btn.classList.remove('tp-copied')
+          }, 1800)
+        })
+      })
 
-        function activate(tab: Element) {
+      /* ─── Tabs (every tablist on the page) ─── */
+      document.querySelectorAll('[role="tablist"]').forEach((tablist) => {
+        const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]'))
+        const panelOf = (tab: HTMLElement) =>
+          document.getElementById(tab.getAttribute('aria-controls') ?? '')
+
+        function activate(tab: HTMLElement, focus: boolean) {
           tabs.forEach((t) => {
-            t.classList.remove('tp-tab-active')
-            t.setAttribute('aria-selected', 'false')
-            t.setAttribute('tabindex', '-1')
+            const on = t === tab
+            t.classList.toggle('tp-tab-active', on)
+            t.setAttribute('aria-selected', String(on))
+            t.setAttribute('tabindex', on ? '0' : '-1')
+            const panel = panelOf(t)
+            if (panel) panel.hidden = !on
           })
-          tab.classList.add('tp-tab-active')
-          tab.setAttribute('aria-selected', 'true')
-          tab.setAttribute('tabindex', '0')
-          ;(tab as HTMLElement).focus()
-          const id = tab.getAttribute('data-tab')
-          document.querySelectorAll('[role="tabpanel"]').forEach((panel) => {
-            ;(panel as HTMLElement).hidden = panel.getAttribute('data-snippet') !== id
-          })
+          if (focus) tab.focus()
         }
 
-        tabs.forEach((btn) => {
-          btn.addEventListener('click', () => {
-            activate(btn)
-          })
-          btn.addEventListener('keydown', (e) => {
-            const ke = e as KeyboardEvent
-            const idx = tabs.indexOf(btn)
-            if (ke.key === 'ArrowRight') {
-              e.preventDefault()
-              activate(tabs[(idx + 1) % tabs.length])
-            } else if (ke.key === 'ArrowLeft') {
-              e.preventDefault()
-              activate(tabs[(idx - 1 + tabs.length) % tabs.length])
-            } else if (ke.key === 'Home') {
-              e.preventDefault()
-              activate(tabs[0])
-            } else if (ke.key === 'End') {
-              e.preventDefault()
-              activate(tabs[tabs.length - 1])
-            }
+        tabs.forEach((tab, idx) => {
+          tab.setAttribute('tabindex', idx === 0 ? '0' : '-1')
+          tab.addEventListener('click', () => activate(tab, false))
+          tab.addEventListener('keydown', (e) => {
+            const last = tabs.length - 1
+            const to =
+              e.key === 'ArrowRight'
+                ? (idx + 1) % tabs.length
+                : e.key === 'ArrowLeft'
+                  ? (idx + last) % tabs.length
+                  : e.key === 'Home'
+                    ? 0
+                    : e.key === 'End'
+                      ? last
+                      : -1
+            if (to < 0) return
+            e.preventDefault()
+            activate(tabs[to], true)
           })
         })
+      })
 
-        tabs.forEach((t, i) => {
-          t.setAttribute('tabindex', i === 0 ? '0' : '-1')
-        })
-      }
-
+      /* ─── Lightbox ─── */
       const lightbox = document.getElementById('tp-lightbox') as HTMLDialogElement | null
-      if (lightbox) {
-        const lightboxImg = lightbox.querySelector('.tp-lightbox-img') as HTMLImageElement
-        document.querySelectorAll('.tp-devtools-zoom').forEach((btn) => {
+      const lightboxImg = lightbox?.querySelector<HTMLImageElement>('.tp-lightbox-img')
+      if (lightbox && lightboxImg) {
+        document.querySelectorAll('.tp-tool-zoom').forEach((btn) => {
           btn.addEventListener('click', () => {
             const img = btn.querySelector('img')
             if (!img) return
@@ -773,14 +976,418 @@ const threeThings = [
           })
         })
         // Close on any click (backdrop or image)
-        lightbox.addEventListener('click', () => {
-          lightbox.close()
-        })
+        lightbox.addEventListener('click', () => lightbox.close())
         // Clear the image on close so the next open doesn't flash the old one
         lightbox.addEventListener('close', () => {
           lightboxImg.removeAttribute('src')
           lightboxImg.removeAttribute('alt')
         })
+      }
+
+      /* ─── Manifesto: words light up with scroll ─── */
+      const manifestoEl = document.querySelector<HTMLElement>('.tp-manifesto-text')
+      if (manifestoEl) {
+        const words = Array.from(manifestoEl.querySelectorAll('.tp-w'))
+        let lit = -1
+        const update = () => {
+          const rect = manifestoEl.getBoundingClientRect()
+          const vh = window.innerHeight
+          // 0 as the paragraph's top reaches 82% of the viewport, 1 as its bottom reaches 55%
+          const p = (vh * 0.82 - rect.top) / (rect.height + vh * 0.27)
+          const next = reducedMotion.matches
+            ? words.length
+            : Math.round(Math.min(1, Math.max(0, p)) * words.length)
+          if (next === lit) return
+          lit = next
+          words.forEach((w, i) => w.classList.toggle('tp-w-on', i < lit))
+        }
+        let queued = false
+        const onScroll = () => {
+          if (queued) return
+          queued = true
+          requestAnimationFrame(() => {
+            queued = false
+            update()
+          })
+        }
+        window.addEventListener('scroll', onScroll, { passive: true })
+        window.addEventListener('resize', onScroll)
+        reducedMotion.addEventListener('change', update)
+        update()
+      }
+
+      /* ─── The forge: a touch grid where each tap strikes like a hammer ───
+         Dots sit on a grid like a digitiser. A strike sends a ring outward; dots
+         it passes heat to ember, nudge away from the blow, then cool. */
+      type Strike = { x: number; y: number; t0: number; power: number }
+
+      function forge(zone: HTMLElement, canvas: HTMLCanvasElement) {
+        const context = canvas.getContext('2d')
+        if (!context) return
+        const ctx = context
+        const GAP = 24
+        const LIFE = 2600
+        let w = 0
+        let h = 0
+        let cols = 0
+        let rows = 0
+        let heat = new Float32Array(0)
+        let strikes: Strike[] = []
+        let pointerX = -1e4
+        let pointerY = -1e4
+        let visible = false
+        let raf = 0
+        let last = 0
+        let nextAuto = 0
+        let cold = ''
+        let hot = ''
+        let core = ''
+
+        function readColors() {
+          const cs = getComputedStyle(canvas)
+          cold = cs.getPropertyValue('--tp-dot').trim() || 'rgba(128,128,128,.2)'
+          hot = cs.getPropertyValue('--tp-dot-hot').trim() || '#e8914b'
+          core = cs.getPropertyValue('--tp-dot-core').trim() || '#ffd9a8'
+        }
+
+        function resize() {
+          const rect = canvas.getBoundingClientRect()
+          const dpr = Math.min(window.devicePixelRatio || 1, 2)
+          w = rect.width
+          h = rect.height
+          canvas.width = Math.round(w * dpr)
+          canvas.height = Math.round(h * dpr)
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+          cols = Math.ceil(w / GAP) + 1
+          rows = Math.ceil(h / GAP) + 1
+          heat = new Float32Array(cols * rows)
+        }
+
+        function strike(x: number, y: number, power: number, t0: number) {
+          strikes.push({ x, y, t0, power })
+          if (strikes.length > 8) strikes.shift()
+        }
+
+        function draw(now: number, dt: number) {
+          ctx.clearRect(0, 0, w, h)
+          strikes = strikes.filter((s) => now - s.t0 < LIFE)
+          const decay = Math.exp(-dt / 380)
+          const ox = (w % GAP) / 2
+          const oy = (h % GAP) / 2
+
+          ctx.fillStyle = cold
+          const hotDots: number[] = []
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              const i = r * cols + c
+              const x = ox + c * GAP
+              const y = oy + r * GAP
+              let v = heat[i] * decay
+              let pushX = 0
+              let pushY = 0
+              for (const s of strikes) {
+                const age = now - s.t0
+                const dx = x - s.x
+                const dy = y - s.y
+                const d = Math.sqrt(dx * dx + dy * dy) || 1
+                const ring = age * 0.4
+                const band = 22 + age * 0.012
+                const k = Math.exp(-(((d - ring) / band) ** 2)) * s.power * (1 - age / LIFE) ** 1.5
+                if (k > v) v = k
+                pushX += (dx / d) * k * 5
+                pushY += (dy / d) * k * 5
+              }
+              const pdx = x - pointerX
+              const pdy = y - pointerY
+              const pd = pdx * pdx + pdy * pdy
+              if (pd < 14400) {
+                const k = (1 - Math.sqrt(pd) / 120) * 0.5
+                if (k > v) v = k
+              }
+              heat[i] = v
+              if (v < 0.03) {
+                ctx.fillRect(x - 1, y - 1, 2, 2)
+              } else {
+                hotDots.push(x + pushX, y + pushY, v)
+              }
+            }
+          }
+
+          for (let i = 0; i < hotDots.length; i += 3) {
+            const v = Math.min(1, hotDots[i + 2])
+            ctx.globalAlpha = 0.25 + v * 0.75
+            ctx.fillStyle = v > 0.72 ? core : hot
+            ctx.beginPath()
+            ctx.arc(hotDots[i], hotDots[i + 1], 1 + v * 2.1, 0, Math.PI * 2)
+            ctx.fill()
+          }
+
+          // The tap itself: a touch point and a thin ring, as the trace viewer draws one
+          ctx.strokeStyle = hot
+          ctx.fillStyle = hot
+          ctx.lineWidth = 1.25
+          for (const s of strikes) {
+            const age = now - s.t0
+            if (age > 900) continue
+            const t = age / 900
+            ctx.globalAlpha = (1 - t) * 0.7 * s.power
+            ctx.beginPath()
+            ctx.arc(s.x, s.y, 8 + t * 46, 0, Math.PI * 2)
+            ctx.stroke()
+            if (age < 320) {
+              ctx.globalAlpha = (1 - age / 320) * 0.85
+              ctx.beginPath()
+              ctx.arc(s.x, s.y, 7, 0, Math.PI * 2)
+              ctx.fill()
+            }
+          }
+          ctx.globalAlpha = 1
+        }
+
+        function frame(now: number) {
+          raf = 0
+          if (!visible) return
+          const dt = Math.min(64, now - (last || now))
+          last = now
+          if (now > nextAuto) {
+            strike(
+              w * (0.08 + Math.random() * 0.84),
+              h *
+                (zone.classList.contains('tp-hero')
+                  ? 0.7 + Math.random() * 0.26
+                  : 0.1 + Math.random() * 0.8),
+              0.75 + Math.random() * 0.25,
+              now,
+            )
+            nextAuto = now + 1100 + Math.random() * 1500
+          }
+          draw(now, dt)
+          raf = requestAnimationFrame(frame)
+        }
+
+        // Reduced motion: one still frame, mid-strike
+        function still() {
+          heat.fill(0)
+          strikes = [
+            { x: w * 0.78, y: h * 0.7, t0: -520, power: 1 },
+            { x: w * 0.3, y: h * 0.82, t0: -900, power: 0.85 },
+          ]
+          draw(0, 16)
+        }
+
+        function start() {
+          if (reducedMotion.matches) {
+            cancelAnimationFrame(raf)
+            raf = 0
+            still()
+            return
+          }
+          if (visible && !raf) {
+            last = 0
+            raf = requestAnimationFrame(frame)
+          }
+        }
+
+        const local = (e: PointerEvent) => {
+          const rect = canvas.getBoundingClientRect()
+          return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+        }
+        zone.addEventListener('pointermove', (e) => {
+          const p = local(e)
+          pointerX = p.x
+          pointerY = p.y
+        })
+        zone.addEventListener('pointerleave', () => {
+          pointerX = pointerY = -1e4
+        })
+        zone.addEventListener('pointerdown', (e) => {
+          if (reducedMotion.matches) return
+          const p = local(e)
+          strike(p.x, p.y, 1, performance.now())
+          nextAuto = performance.now() + 2200
+        })
+
+        new IntersectionObserver((entries) => {
+          visible = entries[0].isIntersecting
+          start()
+        }).observe(canvas)
+        new ResizeObserver(() => {
+          resize()
+          start()
+        }).observe(canvas)
+        new MutationObserver(() => {
+          readColors()
+          start()
+        }).observe(root, { attributes: true, attributeFilter: ['data-theme'] })
+        reducedMotion.addEventListener('change', start)
+
+        readColors()
+        resize()
+      }
+
+      document.querySelectorAll<HTMLElement>('[data-forge-zone]').forEach((zone) => {
+        const canvas = zone.querySelector('canvas')
+        if (canvas) forge(zone, canvas)
+      })
+
+      /* ─── Live demo: the code, the device and the terminal run in step ─── */
+      const demo = document.querySelector<HTMLElement>('[data-demo]')
+      if (demo) {
+        const phone = demo.querySelector<HTMLElement>('.tp-phone')
+        const screen = demo.querySelector<HTMLElement>('.tp-phone-screen')
+        const tapEl = demo.querySelector<HTMLElement>('.tp-tap')
+        const probe = demo.querySelector<HTMLElement>('.tp-probe')
+        const status = demo.querySelector<HTMLElement>('[data-demo-status]')
+        const statusText = demo.querySelector<HTMLElement>('[data-demo-status-text]')
+        const typed = demo.querySelector<HTMLElement>('[data-term-typed]')
+        const lines = Array.from(demo.querySelectorAll<HTMLElement>('.tp-demo-code .line'))
+        const term = (name: string) => demo.querySelector<HTMLElement>(`[data-term="${name}"]`)
+        const command = typed?.textContent ?? ''
+        let run = 0
+        let inView = false
+
+        class Cancelled extends Error {}
+        const sleep = (ms: number, id: number) =>
+          new Promise<void>((resolve, reject) => {
+            window.setTimeout(() => (id === run ? resolve() : reject(new Cancelled())), ms)
+          })
+
+        const setStep = (n: number) => phone?.setAttribute('data-step', String(n))
+        const setStatus = (state: string, text: string) => {
+          status?.setAttribute('data-state', state)
+          if (statusText) statusText.textContent = text
+        }
+        // 1-based line numbers, as the editor shows them
+        const mark = (active: number[], done: number[]) => {
+          lines.forEach((line, i) => {
+            line.classList.toggle('tp-line-run', active.includes(i + 1))
+            line.classList.toggle('tp-line-done', done.includes(i + 1))
+          })
+        }
+        const centreOf = (target: string) => {
+          const el = demo.querySelector<HTMLElement>(`[data-target="${target}"]`)
+          if (!el || !screen) return null
+          const a = el.getBoundingClientRect()
+          const b = screen.getBoundingClientRect()
+          return { x: a.left - b.left, y: a.top - b.top, w: a.width, h: a.height }
+        }
+        const tap = (target: string) => {
+          const box = centreOf(target)
+          if (!box || !tapEl) return
+          tapEl.style.left = `${box.x + box.w / 2}px`
+          tapEl.style.top = `${box.y + box.h / 2}px`
+          tapEl.classList.remove('tp-tap-go')
+          void tapEl.offsetWidth
+          tapEl.classList.add('tp-tap-go')
+        }
+        const placeProbe = () => {
+          const box = centreOf('confirmed')
+          if (!box || !probe) return
+          probe.style.left = `${box.x - 6}px`
+          probe.style.top = `${box.y - 4}px`
+          probe.style.width = `${box.w + 12}px`
+          probe.style.height = `${box.h + 8}px`
+        }
+        const showTerm = (names: string[]) => {
+          ;['cmd', 'start', 'pass', 'summary'].forEach((name) => {
+            term(name)?.classList.toggle('tp-term-show', names.includes(name))
+          })
+        }
+
+        function finished() {
+          setStep(5)
+          mark([], [5, 6, 7, 9, 10, 12])
+          if (typed) typed.textContent = command
+          demo?.classList.remove('tp-typing')
+          showTerm(['cmd', 'start', 'pass', 'summary'])
+          setStatus('passed', 'passed · 1.4s')
+          placeProbe()
+        }
+
+        async function play() {
+          const id = ++run
+          try {
+            setStep(0)
+            mark([], [])
+            showTerm(['cmd'])
+            setStatus('idle', 'ready')
+            demo?.classList.add('tp-typing')
+            if (typed) typed.textContent = ''
+            await sleep(500, id)
+            for (let i = 1; i <= command.length; i++) {
+              if (typed) typed.textContent = command.slice(0, i)
+              await sleep(38 + Math.random() * 40, id)
+            }
+            await sleep(350, id)
+            demo?.classList.remove('tp-typing')
+            showTerm(['cmd', 'start'])
+            setStatus('running', 'running')
+            await sleep(700, id)
+
+            mark([5, 6, 7], [])
+            setStep(1)
+            await sleep(1500, id)
+
+            mark([9], [5, 6, 7])
+            tap('add')
+            await sleep(380, id)
+            setStep(2)
+            await sleep(1400, id)
+
+            mark([10], [5, 6, 7, 9])
+            tap('checkout')
+            await sleep(380, id)
+            setStep(3)
+            await sleep(1100, id)
+            setStep(4)
+            await sleep(500, id)
+
+            mark([12], [5, 6, 7, 9, 10])
+            placeProbe()
+            setStep(5)
+            await sleep(1300, id)
+
+            mark([], [5, 6, 7, 9, 10, 12])
+            setStatus('passed', 'passed · 1.4s')
+            showTerm(['cmd', 'start', 'pass'])
+            await sleep(450, id)
+            showTerm(['cmd', 'start', 'pass', 'summary'])
+            await sleep(5200, id)
+            if (inView) void play()
+          } catch (err) {
+            if (!(err instanceof Cancelled)) throw err
+          }
+        }
+
+        const begin = () => {
+          if (reducedMotion.matches) {
+            run++
+            finished()
+          } else if (inView) {
+            void play()
+          }
+        }
+
+        demo.querySelector('[data-demo-replay]')?.addEventListener('click', () => {
+          if (!reducedMotion.matches) void play()
+        })
+        new IntersectionObserver(
+          (entries) => {
+            const now = entries[0].isIntersecting
+            if (now === inView) return
+            inView = now
+            if (inView) begin()
+            else {
+              // Off screen: stop where it is and rest on the finished frame
+              run++
+              finished()
+            }
+          },
+          { threshold: 0.35 },
+        ).observe(demo)
+        reducedMotion.addEventListener('change', begin)
+        window.addEventListener('resize', placeProbe)
+        finished()
       }
     </script>
 
@@ -811,11 +1418,16 @@ const threeThings = [
         --tp-code-bg: #1e1b18;
         --tp-code-border: #302b25;
         --tp-code-fg: #d4cfc8;
-        --tp-code-string: #e8a86c;
         --tp-code-comment: #7a7570;
+        --tp-ember: #e8914b;
         --tp-success: #3fb95c;
         --tp-warning: #b8a24e;
+        --tp-dot: rgba(45, 41, 38, 0.17);
+        --tp-dot-hot: #dd6a2c;
+        --tp-dot-core: #b8562a;
+        --tp-word-off: rgba(45, 41, 38, 0.32);
         --tp-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        --tp-font-display: 'Bricolage Grotesque', 'Inter', -apple-system, sans-serif;
         --tp-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
         --tp-radius-sm: 6px;
         --tp-radius: 8px;
@@ -823,7 +1435,7 @@ const threeThings = [
         --tp-radius-lg: 14px;
         --tp-radius-pill: 999px;
         --tp-shadow-code: 0 30px 80px -20px rgba(11, 16, 32, 0.25);
-        --tp-shadow-phone: 0 30px 60px rgba(11, 16, 32, 0.28);
+        --tp-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
       }
 
       [data-theme='dark'] {
@@ -841,10 +1453,12 @@ const threeThings = [
         --tp-border-2: #282420;
         --tp-border-3: #3a3530;
         --tp-code-bg: #141210;
-        --tp-code-border: #252220;
-        --tp-code-fg: #d4cfc8;
-        --tp-code-string: #e8a86c;
-        --tp-code-comment: #7a7570;
+        --tp-code-border: #2a2520;
+        --tp-dot: rgba(232, 228, 223, 0.13);
+        --tp-dot-hot: #f08a3c;
+        --tp-dot-core: #ffd3a1;
+        --tp-word-off: rgba(232, 228, 223, 0.3);
+        --tp-shadow-code: 0 30px 80px -20px rgba(0, 0, 0, 0.6);
       }
       [data-theme='dark'] .tp-header {
         background: rgba(30, 27, 24, 0.85);
@@ -863,60 +1477,10 @@ const threeThings = [
         display: block;
       }
 
-      /* ─── Theme toggle ─── */
-      .tp-theme-toggle {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        border: 1px solid var(--tp-border-3);
-        border-radius: var(--tp-radius);
-        background: transparent;
-        color: var(--tp-ink-3);
-        cursor: pointer;
-        transition:
-          border-color 0.1s,
-          color 0.1s;
-      }
-      .tp-theme-toggle:hover {
-        border-color: var(--tp-ink-4);
-        color: var(--tp-ink);
-      }
-      .tp-icon-moon {
-        display: none;
-      }
-      [data-theme='dark'] .tp-icon-sun {
-        display: none;
-      }
-      [data-theme='dark'] .tp-icon-moon {
-        display: block;
-      }
-
-      /* ─── Mobile nav toggle ─── */
-      .tp-nav-toggle {
-        display: none;
-        align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        border: 1px solid var(--tp-border-3);
-        border-radius: var(--tp-radius);
-        background: transparent;
-        color: var(--tp-ink-3);
-        cursor: pointer;
-      }
-      .tp-icon-close {
-        display: none;
-      }
-      .tp-nav-open .tp-icon-menu {
-        display: none;
-      }
-      .tp-nav-open .tp-icon-close {
-        display: block;
-      }
-
       /* ─── Base ─── */
+      html {
+        scroll-behavior: smooth;
+      }
       body {
         font-family: var(--tp-font-sans);
         background: var(--tp-bg);
@@ -926,22 +1490,30 @@ const threeThings = [
         letter-spacing: -0.005em;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+        overflow-x: clip;
       }
-
       a {
         color: inherit;
       }
       img {
         display: block;
       }
-
+      ::selection {
+        background: var(--tp-ember);
+        color: #1e1b18;
+      }
+      :focus-visible {
+        outline: 2px solid var(--tp-accent);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
       .tp-container {
-        max-width: 1200px;
+        max-width: 1320px;
         margin: 0 auto;
         padding: 0 56px;
       }
 
-      /* ─── 1. Header ─── */
+      /* ─── Header ─── */
       .tp-header {
         position: sticky;
         top: 0;
@@ -978,7 +1550,7 @@ const threeThings = [
         font-weight: 500;
         color: var(--tp-ink-3);
         text-decoration: none;
-        transition: color 0.1s;
+        transition: color 0.15s;
       }
       .tp-nav a:hover {
         color: var(--tp-ink);
@@ -998,44 +1570,76 @@ const threeThings = [
         gap: 10px;
         align-items: center;
       }
+      .tp-theme-toggle,
+      .tp-nav-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--tp-border-3);
+        border-radius: var(--tp-radius);
+        background: transparent;
+        color: var(--tp-ink-3);
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          color 0.15s;
+      }
+      .tp-theme-toggle:hover {
+        border-color: var(--tp-ink-4);
+        color: var(--tp-ink);
+      }
+      .tp-nav-toggle {
+        display: none;
+      }
+      .tp-icon-moon,
+      .tp-icon-close {
+        display: none;
+      }
+      [data-theme='dark'] .tp-icon-sun {
+        display: none;
+      }
+      [data-theme='dark'] .tp-icon-moon {
+        display: block;
+      }
+      .tp-nav-open .tp-icon-menu {
+        display: none;
+      }
+      .tp-nav-open .tp-icon-close {
+        display: block;
+      }
+
       /* ─── Buttons ─── */
-      .tp-btn-solid {
+      .tp-btn-solid,
+      .tp-btn-ghost {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        height: 44px;
+        height: 46px;
         padding: 0 22px;
         border-radius: var(--tp-radius);
-        background: var(--tp-ink);
-        color: #fff;
         font-size: 14px;
         font-weight: 500;
         letter-spacing: -0.005em;
         text-decoration: none;
         white-space: nowrap;
         cursor: pointer;
+      }
+      .tp-btn-solid {
+        background: var(--tp-ink);
+        color: #fff;
         border: none;
-        transition: opacity 0.1s;
+        transition: opacity 0.15s;
       }
       .tp-btn-solid:hover {
         opacity: 0.88;
       }
       .tp-btn-ghost {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        height: 44px;
-        padding: 0 22px;
-        border-radius: var(--tp-radius);
         background: transparent;
         color: var(--tp-ink);
-        font-size: 14px;
-        font-weight: 500;
-        text-decoration: none;
-        white-space: nowrap;
-        cursor: pointer;
         border: 1px solid var(--tp-border-3);
-        transition: border-color 0.1s;
+        transition: border-color 0.15s;
       }
       .tp-btn-ghost:hover {
         border-color: var(--tp-ink-4);
@@ -1045,233 +1649,773 @@ const threeThings = [
         padding: 0 14px;
         font-size: 13px;
       }
-
-      /* ─── 2. Hero ─── */
-      .tp-hero {
-        padding: 88px 0 72px;
-      }
-
-      .tp-dot-green {
-        width: 6px;
-        height: 6px;
-        border-radius: var(--tp-radius-pill);
-        background: var(--tp-success);
-        flex-shrink: 0;
-      }
-      .tp-hero-h1 {
-        font-size: 64px;
-        line-height: 1.02;
-        letter-spacing: -0.035em;
-        font-weight: 600;
-        max-width: 880px;
-        margin-bottom: 24px;
-      }
-      .tp-muted {
-        color: var(--tp-ink-4);
-      }
-
-      .tp-hero-lead {
-        font-size: 19px;
-        line-height: 1.55;
-        color: var(--tp-ink-2);
-        max-width: 580px;
-        margin-bottom: 36px;
-      }
-
-      .tp-hero-ctas {
-        display: flex;
-        gap: 12px;
-        margin-bottom: 64px;
-      }
-      .tp-btn-npm .tp-npm-dollar {
-        font-family: var(--tp-font-mono);
-        font-size: 13px;
-        color: var(--tp-ink-3);
-      }
-      .tp-btn-npm .tp-npm-icon {
-        margin-left: 12px;
-        color: var(--tp-ink-4);
-        font-size: 16px;
-      }
-      /* The CLI refuses older Node, and npm on older Node can resolve a stale
-         pre-floor release, so the floor sits where people copy the command. */
-      .tp-hero-req {
-        align-self: center;
-        font-size: 13px;
-        color: var(--tp-ink-3);
-        white-space: nowrap;
-      }
-
-      /* Hero visual */
-      .tp-hero-visual {
-        position: relative;
-        padding-top: 40px;
-        padding-right: 200px;
-      }
-
-      /* Code window (shared style) */
-      .tp-code-window {
-        background: var(--tp-code-bg);
-        border-radius: var(--tp-radius-lg);
-        border: 1px solid var(--tp-code-border);
-        box-shadow: var(--tp-shadow-code);
-        overflow: hidden;
-        position: relative;
-        z-index: 1;
-      }
-      .tp-code-chrome {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 18px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      }
-      .tp-chrome-dots {
-        display: flex;
-        gap: 6px;
-      }
-      .tp-chrome-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: var(--tp-radius-pill);
-        background: #4a4540;
-      }
-      .tp-code-filename {
-        font-family: var(--tp-font-mono);
-        font-size: 12px;
-        color: var(--tp-code-comment);
-        margin-left: 8px;
-      }
-      .tp-code-status {
-        margin-left: auto;
-        font-family: var(--tp-font-mono);
-        font-size: 11px;
-        color: var(--tp-ink-3);
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .tp-code-body {
-        margin: 0;
-        padding: 24px 26px;
-        font-family: var(--tp-font-mono);
-        font-size: 13.5px;
-        line-height: 1.85;
-        color: var(--tp-code-fg);
-        overflow-x: auto;
-      }
-      /* Shiki (<Code>) sets an inline background from the theme; the cards own it */
-      .tp-code-body,
-      .tp-snippet-code,
-      .tp-snippet-code .astro-code {
-        background: transparent !important;
-      }
-      .tp-code-body code,
-      .tp-snippet-code code {
-        font-family: inherit;
-        font-size: inherit;
-        line-height: inherit;
-      }
-
-      /* Phone overlay */
-      .tp-hero-phone {
-        position: absolute;
-        right: -20px;
-        top: -20px;
-        bottom: -40px;
-        width: 440px;
-        pointer-events: none;
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        z-index: 2;
-      }
-      .tp-phone-img {
-        width: 420px;
-        filter: drop-shadow(var(--tp-shadow-phone));
-        transform: rotate(2deg);
-      }
-      /* ─── 2b. Demo video ─── */
-      .tp-demo {
-        padding: 1rem 0 4.5rem;
-      }
-      .tp-demo-video {
-        display: block;
-        width: 100%;
-        border-radius: 14px;
-        border: 1px solid var(--tp-border);
-        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
-        background: #171310;
-      }
-      .tp-demo-caption {
-        margin: 1rem 0 0;
-        text-align: center;
-        font-size: 0.9rem;
-        color: var(--tp-ink-3);
-      }
-
-      /* ─── 4. Three things ─── */
-      .tp-three {
-        padding: 96px 0 100px;
-        border-top: 1px solid var(--tp-border);
-      }
-      .tp-three-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-end;
-        margin-bottom: 56px;
-      }
-      .tp-h2-large {
-        font-size: 38px;
-        line-height: 1.1;
-        letter-spacing: -0.03em;
-        font-weight: 600;
-        max-width: 520px;
-      }
-      .tp-h2-medium {
-        font-size: 32px;
-        font-weight: 600;
-        letter-spacing: -0.03em;
-        max-width: 560px;
-      }
       .tp-btn-guide {
         height: 36px;
         padding: 0 16px;
         font-size: 13px;
       }
-      .tp-three-rows {
-        border-top: 1px solid var(--tp-border);
+
+      /* Install command chip */
+      .tp-copy {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        height: 46px;
+        padding: 0 6px 0 16px;
+        border-radius: var(--tp-radius);
+        border: 1px solid var(--tp-border-3);
+        background: var(--tp-surface);
+        color: var(--tp-ink);
+        font-family: var(--tp-font-mono);
+        font-size: 13.5px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: border-color 0.15s;
       }
-      .tp-three-row {
-        display: grid;
-        grid-template-columns: 64px 1fr 1.4fr;
-        gap: 32px;
-        padding: 36px 0;
-        border-bottom: 1px solid var(--tp-border);
-        align-items: flex-start;
+      .tp-copy:hover {
+        border-color: var(--tp-ink-4);
       }
-      .tp-three-num {
-        font-family: var(--tp-font-sans);
-        font-size: 30px;
-        font-weight: 600;
-        letter-spacing: -0.03em;
-        line-height: 1;
-        font-variant-numeric: tabular-nums;
-        color: var(--tp-ink-4);
-        padding-top: 2px;
+      .tp-copy-dollar {
+        color: var(--tp-accent);
       }
-      .tp-three-title {
-        font-size: 20px;
+      .tp-copy-state {
+        min-width: 58px;
+        height: 32px;
+        padding: 0 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--tp-radius-sm);
+        background: var(--tp-bg-2);
+        color: var(--tp-ink-3);
+        font-size: 11.5px;
+        letter-spacing: 0.02em;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .tp-copied .tp-copy-state {
+        background: var(--tp-ember);
+        color: #1e1b18;
+      }
+
+      /* ─── Shared type ─── */
+      .tp-h2 {
+        font-family: var(--tp-font-display);
+        font-size: clamp(32px, 4.6vw, 60px);
+        line-height: 1.02;
+        letter-spacing: -0.04em;
         font-weight: 500;
-        letter-spacing: -0.02em;
-        line-height: 1.3;
+        max-width: 17ch;
+        text-wrap: balance;
       }
-      .tp-three-body {
-        font-size: 15px;
+      .tp-muted {
+        color: var(--tp-ink-4);
+      }
+      .tp-section-head {
+        margin-bottom: 56px;
+      }
+      .tp-section-head-row {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 32px;
+      }
+      .tp-section-lead {
+        font-size: 17px;
+        line-height: 1.6;
+        color: var(--tp-ink-2);
+        max-width: 560px;
+        margin-top: 20px;
+      }
+
+      /* ─── Hero ─── */
+      .tp-hero {
+        position: relative;
+        min-height: min(calc(100svh - 64px), 940px);
+        padding: 96px 0 220px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .tp-forge {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      .tp-hero .tp-forge {
+        -webkit-mask-image: linear-gradient(
+          to bottom,
+          transparent 0,
+          rgba(0, 0, 0, 0.28) 30%,
+          #000 72%,
+          #000 100%
+        );
+        mask-image: linear-gradient(
+          to bottom,
+          transparent 0,
+          rgba(0, 0, 0, 0.28) 30%,
+          #000 72%,
+          #000 100%
+        );
+      }
+      .tp-hero-inner {
+        position: relative;
+        width: 100%;
+      }
+      .tp-hero-h1 {
+        font-family: var(--tp-font-display);
+        font-size: clamp(46px, 8.6vw, 124px);
+        line-height: 0.94;
+        letter-spacing: -0.04em;
+        font-weight: 500;
+        margin: 0 0 44px;
+      }
+      .tp-h1-line {
+        display: block;
+      }
+      .tp-h1-indent {
+        padding-left: 17%;
+      }
+      .tp-hero-foot {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 40px;
+      }
+      .tp-hero-lead {
+        font-size: 19px;
+        line-height: 1.55;
+        color: var(--tp-ink-2);
+        max-width: 540px;
+      }
+      .tp-hero-ctas {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+      /* The CLI refuses older Node, and npm on older Node can resolve a stale
+         pre-floor release, so the floor sits where people copy the command. */
+      .tp-hero-req {
+        flex-basis: 100%;
+        text-align: right;
+        font-family: var(--tp-font-mono);
+        font-size: 12px;
+        color: var(--tp-ink-3);
+      }
+      .tp-forge-hint {
+        position: absolute;
+        right: 56px;
+        bottom: 28px;
+        font-family: var(--tp-font-mono);
+        font-size: 12px;
+        color: var(--tp-ink-4);
+        pointer-events: none;
+      }
+
+      /* ─── Manifesto ─── */
+      .tp-manifesto {
+        padding: 168px 0 176px;
+      }
+      .tp-manifesto-text {
+        font-family: var(--tp-font-display);
+        font-size: clamp(30px, 4.9vw, 68px);
+        line-height: 1.08;
+        letter-spacing: -0.04em;
+        font-weight: 500;
+        max-width: 22ch;
+        color: var(--tp-ink);
+      }
+      .tp-js .tp-w {
+        color: var(--tp-word-off);
+        transition: color 0.35s ease;
+      }
+      .tp-js .tp-w-on {
+        color: var(--tp-ink);
+      }
+
+      /* ─── Live demo ─── */
+      .tp-run {
+        padding: 0 0 168px;
+      }
+      .tp-stage {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 316px;
+        gap: 56px;
+        align-items: center;
+      }
+      .tp-ide {
+        background: var(--tp-code-bg);
+        border: 1px solid var(--tp-code-border);
+        border-radius: var(--tp-radius-lg);
+        box-shadow: var(--tp-shadow-code);
+        overflow: hidden;
+        min-width: 0;
+      }
+      .tp-code-chrome {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .tp-code-filename {
+        font-family: var(--tp-font-mono);
+        font-size: 12px;
+        color: #9a9590;
+      }
+      .tp-code-status {
+        margin-left: auto;
+        font-family: var(--tp-font-mono);
+        font-size: 11px;
+        color: #9a9590;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .tp-dot-status {
+        width: 7px;
+        height: 7px;
+        border-radius: var(--tp-radius-pill);
+        background: var(--tp-success);
+        flex-shrink: 0;
+      }
+      [data-state='idle'] .tp-dot-status {
+        background: #5a5550;
+      }
+      [data-state='running'] .tp-dot-status {
+        background: var(--tp-ember);
+        animation: tp-blink 0.9s ease-in-out infinite;
+      }
+      @keyframes tp-blink {
+        50% {
+          opacity: 0.25;
+        }
+      }
+
+      /* Shiki (<Code>) sets an inline background from the theme; the cards own it */
+      .astro-code {
+        background: transparent !important;
+        margin: 0;
+      }
+      .tp-demo-code {
+        padding: 18px 0;
+        font-family: var(--tp-font-mono);
+        font-size: 13.5px;
+        line-height: 1.9;
+        overflow-x: auto;
+      }
+      .tp-demo-code code,
+      .tp-snippet-code code {
+        font-family: inherit;
+        font-size: inherit;
+        line-height: inherit;
+      }
+      /* One grid row per line, so a running line can be lit edge to edge */
+      .tp-demo-code code {
+        display: grid;
+        counter-reset: tp-line;
+        min-width: max-content;
+      }
+      .tp-demo-code .line {
+        counter-increment: tp-line;
+        padding: 0 24px 0 0;
+        border-left: 2px solid transparent;
+        transition:
+          background 0.25s,
+          border-color 0.25s;
+      }
+      .tp-demo-code .line::before {
+        content: counter(tp-line);
+        display: inline-block;
+        width: 46px;
+        padding-right: 18px;
+        text-align: right;
+        color: #4f4a44;
+        transition: color 0.25s;
+      }
+      .tp-demo-code .line::after {
+        content: '\200b';
+      }
+      .tp-demo-code .tp-line-run {
+        background: rgba(232, 145, 75, 0.13);
+        border-left-color: var(--tp-ember);
+      }
+      .tp-demo-code .tp-line-run::before {
+        color: var(--tp-ember);
+      }
+      .tp-demo-code .tp-line-done::before {
+        color: var(--tp-success);
+      }
+
+      /* Terminal */
+      .tp-term {
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(0, 0, 0, 0.22);
+      }
+      .tp-term-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 10px 0 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .tp-term-tab {
+        font-family: var(--tp-font-mono);
+        font-size: 11.5px;
+        color: #b5b0aa;
+        padding: 9px 0 8px;
+        border-bottom: 1px solid var(--tp-ember);
+        margin-bottom: -1px;
+      }
+      .tp-term-replay {
+        font-family: var(--tp-font-mono);
+        font-size: 11.5px;
+        color: #8a847e;
+        background: none;
+        border: none;
+        padding: 6px 8px;
+        border-radius: var(--tp-radius-sm);
+        cursor: pointer;
+        transition: color 0.15s;
+      }
+      .tp-term-replay:hover {
+        color: #e8e4df;
+      }
+      .tp-term-body {
+        margin: 0;
+        padding: 16px 20px 20px;
+        min-height: 178px;
+        font-family: var(--tp-font-mono);
+        font-size: 12.5px;
+        line-height: 1.7;
+        color: #d4cfc8;
+        overflow-x: auto;
+      }
+      .tp-term-body b {
+        font-weight: 600;
+      }
+      .tp-term-line {
+        visibility: hidden;
+      }
+      .tp-term-show {
+        visibility: visible;
+      }
+      .tp-term-prompt {
+        color: var(--tp-ember);
+      }
+      .tp-term-ok {
+        color: var(--tp-success);
+      }
+      .tp-term-dim {
+        color: #7a7570;
+      }
+      .tp-term-caret {
+        display: none;
+        width: 7px;
+        height: 1.05em;
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        background: #d4cfc8;
+        animation: tp-blink 1s steps(1) infinite;
+      }
+      .tp-typing .tp-term-caret {
+        display: inline-block;
+      }
+
+      /* The device */
+      .tp-device {
+        display: flex;
+        justify-content: center;
+      }
+      .tp-phone {
+        --app: #5b4fc0;
+        --app-ink: #17152b;
+        position: relative;
+        width: 300px;
+        aspect-ratio: 300 / 612;
+        padding: 10px;
+        border-radius: 50px;
+        background: #0e0d0c;
+        box-shadow:
+          0 0 0 1.5px #4a4540,
+          0 40px 80px -24px rgba(0, 0, 0, 0.55);
+        flex-shrink: 0;
+      }
+      .tp-phone-screen {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 40px;
+        background: #fbfaff;
+        color: var(--app-ink);
+        overflow: hidden;
+        font-family: var(--tp-font-sans);
+        letter-spacing: -0.01em;
+      }
+      .tp-phone-status {
+        position: relative;
+        z-index: 3;
+        height: 44px;
+        padding: 6px 24px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .tp-phone-island {
+        position: absolute;
+        left: 50%;
+        top: 10px;
+        width: 84px;
+        height: 24px;
+        margin-left: -42px;
+        border-radius: 14px;
+        background: #0e0d0c;
+      }
+      .tp-phone-batt {
+        width: 21px;
+        height: 10px;
+        border-radius: 3px;
+        background: var(--app-ink);
+      }
+      .tp-phone-home {
+        position: absolute;
+        left: 50%;
+        bottom: 7px;
+        width: 100px;
+        height: 4px;
+        margin-left: -50px;
+        border-radius: 4px;
+        background: var(--app-ink);
+        opacity: 0.85;
+        z-index: 3;
+      }
+      .tp-app {
+        position: absolute;
+        inset: 44px 0 0;
+        padding: 6px 18px 28px;
+        display: flex;
+        flex-direction: column;
+        transition:
+          transform 0.5s var(--tp-ease),
+          opacity 0.4s;
+      }
+      .tp-app-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 14px;
+        font-weight: 600;
+        height: 34px;
+      }
+      .tp-app-back {
+        font-size: 22px;
+        line-height: 1;
+        width: 28px;
+      }
+      .tp-app-cart {
+        position: relative;
+        width: 28px;
+        display: flex;
+        justify-content: flex-end;
+      }
+      .tp-app-badge {
+        position: absolute;
+        top: -7px;
+        right: -8px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--app);
+        color: #fff;
+        font-size: 10px;
+        font-style: normal;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform: scale(0);
+        transition: transform 0.35s cubic-bezier(0.3, 1.6, 0.5, 1);
+      }
+      .tp-app-photo {
+        margin-top: 8px;
+        flex: 1;
+        min-height: 0;
+        border-radius: 18px;
+        background: #efecfb;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .tp-app-name {
+        margin-top: 14px;
+        font-size: 17px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .tp-app-price {
+        font-size: 14px;
+        margin-top: 2px;
+      }
+      .tp-app-desc {
+        font-size: 12px;
+        line-height: 1.45;
+        color: #5d5a70;
+        margin-top: 6px;
+      }
+      .tp-app-actions {
+        position: relative;
+        margin-top: 14px;
+        height: 96px;
+      }
+      .tp-app-btn {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 44px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 600;
+        transition:
+          background 0.3s,
+          color 0.3s,
+          transform 0.45s var(--tp-ease),
+          opacity 0.3s;
+      }
+      .tp-app-add {
+        top: 0;
+        background: var(--app);
+        color: #fff;
+      }
+      .tp-app-add-b {
+        display: none;
+      }
+      .tp-app-checkout {
+        top: 52px;
+        background: var(--app-ink);
+        color: #fff;
+        opacity: 0;
+        transform: translateY(14px);
+      }
+      .tp-app-done {
+        background: #fbfaff;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        transform: translateX(100%);
+      }
+      .tp-app-spinner {
+        position: absolute;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: 3px solid #e2def5;
+        border-top-color: var(--app);
+        animation: tp-spin 0.8s linear infinite;
+        transition: opacity 0.25s;
+      }
+      @keyframes tp-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .tp-app-confirm {
+        opacity: 0;
+        transform: scale(0.94);
+        transition:
+          opacity 0.35s,
+          transform 0.45s var(--tp-ease);
+      }
+      .tp-app-tick {
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 38px;
+        border-radius: 50%;
+        background: #e3f6e8;
+        color: #1f9d48;
+        font-size: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .tp-app-confirm-title {
+        font-size: 19px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .tp-app-confirm-sub {
+        font-size: 12.5px;
+        color: #5d5a70;
+        margin-top: 6px;
+      }
+      /* What Tapsmith adds on top of the app: the mocked route, the tap, the assertion */
+      .tp-phone-net {
+        position: absolute;
+        z-index: 4;
+        left: 50%;
+        top: 98px;
+        transform: translate(-50%, -8px);
+        padding: 4px 10px;
+        border-radius: var(--tp-radius-pill);
+        background: #1e1b18;
+        color: #d4cfc8;
+        font-family: var(--tp-font-mono);
+        font-size: 9.5px;
+        letter-spacing: 0;
+        white-space: nowrap;
+        opacity: 0;
+        transition:
+          opacity 0.3s,
+          transform 0.4s var(--tp-ease);
+      }
+      .tp-phone-net b {
+        color: var(--tp-ember);
+        font-weight: 500;
+      }
+      .tp-tap {
+        position: absolute;
+        z-index: 5;
+        width: 44px;
+        height: 44px;
+        margin: -22px 0 0 -22px;
+        border-radius: 50%;
+        pointer-events: none;
+        opacity: 0;
+        background: rgba(232, 145, 75, 0.38);
+        box-shadow: 0 0 0 1.5px var(--tp-ember);
+      }
+      .tp-tap-go {
+        animation: tp-tap 0.75s ease-out;
+      }
+      @keyframes tp-tap {
+        0% {
+          opacity: 0;
+          transform: scale(0.3);
+        }
+        25% {
+          opacity: 1;
+          transform: scale(0.75);
+        }
+        100% {
+          opacity: 0;
+          transform: scale(1.7);
+        }
+      }
+      .tp-probe {
+        position: absolute;
+        z-index: 4;
+        border: 1.5px solid var(--tp-ember);
+        border-radius: 6px;
+        background: rgba(232, 145, 75, 0.12);
+        opacity: 0;
+        transition: opacity 0.3s;
+        pointer-events: none;
+      }
+      .tp-probe i {
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 7px);
+        transform: translateX(-50%);
+        padding: 3px 8px;
+        border-radius: 5px;
+        background: #1e1b18;
+        color: #e8a86c;
+        font-family: var(--tp-font-mono);
+        font-size: 9.5px;
+        font-style: normal;
+        letter-spacing: 0;
+        white-space: nowrap;
+      }
+      /* Steps: 1 route mocked · 2 added to cart · 3 checking out · 4 confirmed · 5 asserted */
+      .tp-phone[data-step='1'] .tp-phone-net,
+      .tp-phone[data-step='2'] .tp-phone-net,
+      .tp-phone[data-step='3'] .tp-phone-net {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+      .tp-phone:is([data-step='2'], [data-step='3'], [data-step='4'], [data-step='5'])
+        .tp-app-badge {
+        transform: scale(1);
+      }
+      .tp-phone:is([data-step='2'], [data-step='3'], [data-step='4'], [data-step='5']) .tp-app-add {
+        background: #e7e3f8;
+        color: var(--app);
+      }
+      .tp-phone:is([data-step='2'], [data-step='3'], [data-step='4'], [data-step='5'])
+        .tp-app-add-a {
+        display: none;
+      }
+      .tp-phone:is([data-step='2'], [data-step='3'], [data-step='4'], [data-step='5'])
+        .tp-app-add-b {
+        display: inline;
+      }
+      .tp-phone:is([data-step='2'], [data-step='3'], [data-step='4'], [data-step='5'])
+        .tp-app-checkout {
+        opacity: 1;
+        transform: none;
+      }
+      .tp-phone:is([data-step='3'], [data-step='4'], [data-step='5']) .tp-app-product {
+        transform: translateX(-30%);
+        opacity: 0;
+      }
+      .tp-phone:is([data-step='3'], [data-step='4'], [data-step='5']) .tp-app-done {
+        transform: none;
+      }
+      .tp-phone:is([data-step='4'], [data-step='5']) .tp-app-spinner {
+        opacity: 0;
+      }
+      .tp-phone:is([data-step='4'], [data-step='5']) .tp-app-confirm {
+        opacity: 1;
+        transform: none;
+      }
+      .tp-phone[data-step='5'] .tp-probe {
+        opacity: 1;
+      }
+
+      /* ─── The pain, gone ─── */
+      .tp-pain {
+        padding: 0 0 168px;
+      }
+      .tp-pain-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-top: 1px solid var(--tp-border-3);
+      }
+      .tp-pain-cell {
+        position: relative;
+        padding: 40px 48px 48px 0;
+        border-bottom: 1px solid var(--tp-border-3);
+      }
+      .tp-pain-cell:nth-child(even) {
+        padding-left: 48px;
+        padding-right: 0;
+        border-left: 1px solid var(--tp-border-3);
+      }
+      .tp-pain-title {
+        font-family: var(--tp-font-display);
+        font-size: clamp(22px, 2.3vw, 30px);
+        font-weight: 500;
+        letter-spacing: -0.03em;
+        line-height: 1.12;
+        margin: 0 0 14px;
+        max-width: 18ch;
+      }
+      .tp-pain-body {
+        font-size: 15.5px;
         color: var(--tp-ink-2);
         line-height: 1.7;
+        max-width: 52ch;
       }
-      .tp-three-body code {
+      .tp-pain-body code,
+      .tp-faq-a code {
         font-family: var(--tp-font-mono);
         font-size: 0.85em;
         color: var(--tp-ink);
@@ -1279,20 +2423,178 @@ const threeThings = [
         border: 1px solid var(--tp-border);
         border-radius: var(--tp-radius-sm);
         padding: 1px 6px;
+        -webkit-box-decoration-break: clone;
+        box-decoration-break: clone;
       }
 
-      /* ─── 5. Comparison table ─── */
-      .tp-compare {
-        padding: 40px 0 120px;
+      /* ─── Tabs ─── */
+      .tp-tabs {
+        display: flex;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--tp-border);
+        border-radius: var(--tp-radius-md);
+        background: var(--tp-surface);
+        flex-shrink: 0;
+        max-width: 100%;
+        overflow-x: auto;
       }
-      .tp-compare-header {
-        margin-bottom: 40px;
+      .tp-tab {
+        padding: 7px 15px;
+        border-radius: var(--tp-radius);
+        border: none;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: var(--tp-font-sans);
+        white-space: nowrap;
+        background: transparent;
+        color: var(--tp-ink-3);
+        transition:
+          background 0.15s,
+          color 0.15s;
       }
-      .tp-compare-desc {
-        font-size: 16px;
+      .tp-tab:hover {
+        color: var(--tp-ink);
+      }
+      .tp-tab-active,
+      .tp-tab-active:hover {
+        background: var(--tp-ink);
+        color: var(--tp-bg);
+      }
+
+      /* ─── Snippets ─── */
+      .tp-snippets {
+        padding: 0 0 168px;
+      }
+      .tp-snippet-panel {
+        background: var(--tp-code-bg);
+        border-radius: var(--tp-radius-lg);
+        padding: 36px 40px;
+        border: 1px solid var(--tp-code-border);
+        box-shadow: var(--tp-shadow-code);
+      }
+      .tp-snippet-code {
+        margin: 0;
+        font-family: var(--tp-font-mono);
+        font-size: 14.5px;
+        line-height: 1.85;
+        color: var(--tp-code-fg);
+        /* Long unbreakable tokens must scroll, not widen the mobile layout viewport */
+        overflow-x: auto;
+      }
+      .tp-snippet-code .astro-code,
+      pre.tp-snippet-code {
+        white-space: pre-wrap;
+        overflow-x: auto;
+      }
+
+      /* ─── Tooling ─── */
+      .tp-tools {
+        padding: 0 0 96px;
+      }
+      .tp-tool-zoom {
+        display: block;
+        width: 100%;
+        padding: 0;
+        border: 1px solid var(--tp-border-3);
+        border-radius: var(--tp-radius-lg);
+        background: var(--tp-surface);
+        overflow: hidden;
+        cursor: zoom-in;
+        box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.35);
+      }
+      .tp-tool-img {
+        width: 100%;
+        height: auto;
+      }
+      .tp-tool-meta {
+        display: grid;
+        grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+        gap: 56px;
+        padding-top: 32px;
+        align-items: start;
+      }
+      .tp-tool-body {
+        font-size: 17px;
+        line-height: 1.6;
         color: var(--tp-ink-2);
-        line-height: 1.65;
-        margin-top: 14px;
+        max-width: 60ch;
+      }
+      .tp-tool-side {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .tp-tool-cmd {
+        background: var(--tp-code-bg);
+        border-radius: var(--tp-radius);
+        padding: 14px 18px;
+        border: 1px solid var(--tp-code-border);
+      }
+      .tp-tool-cmd .tp-snippet-code {
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .tp-tool-link {
+        font-size: 13.5px;
+        font-weight: 500;
+        color: var(--tp-ink-2);
+        text-decoration: none;
+      }
+      .tp-tool-link:hover,
+      .tp-faq-a a:hover,
+      .tp-cta-link:hover {
+        color: var(--tp-accent);
+      }
+      .tp-lightbox {
+        border: none;
+        padding: 0;
+        margin: auto;
+        max-width: min(1400px, 92vw);
+        max-height: 92vh;
+        background: transparent;
+        overflow: visible;
+        outline: none;
+      }
+      .tp-lightbox::backdrop {
+        background: rgba(10, 10, 12, 0.82);
+        -webkit-backdrop-filter: blur(4px);
+        backdrop-filter: blur(4px);
+      }
+      .tp-lightbox-img {
+        display: block;
+        max-width: 100%;
+        max-height: 92vh;
+        border-radius: var(--tp-radius);
+        cursor: zoom-out;
+        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+      }
+
+      /* ─── Demo video ─── */
+      .tp-demo {
+        padding: 0 0 168px;
+      }
+      .tp-demo-video {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: var(--tp-radius-lg);
+        border: 1px solid var(--tp-border-3);
+        box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.45);
+        background: #171310;
+      }
+      .tp-demo-caption {
+        margin-top: 18px;
+        text-align: center;
+        font-family: var(--tp-font-mono);
+        font-size: 12px;
+        color: var(--tp-ink-3);
+      }
+
+      /* ─── Comparison table ─── */
+      .tp-compare {
+        padding: 0 0 168px;
       }
       .tp-table-wrap {
         overflow-x: auto;
@@ -1304,9 +2606,12 @@ const threeThings = [
         overflow: hidden;
         min-width: 700px;
       }
-      .tp-table-head {
+      .tp-table-head,
+      .tp-table-row {
         display: grid;
         grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+      }
+      .tp-table-head {
         background: var(--tp-bg-2);
         border-bottom: 1px solid var(--tp-border);
       }
@@ -1328,14 +2633,17 @@ const threeThings = [
       .tp-table-head .tp-table-us {
         color: var(--tp-ink);
         background: var(--tp-surface);
+        box-shadow: inset 0 2px 0 var(--tp-ember);
       }
       .tp-table-row {
-        display: grid;
-        grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
         border-bottom: 1px solid var(--tp-border-2);
+        transition: background 0.15s;
       }
-      .tp-table-row-last {
+      .tp-table-row:last-child {
         border-bottom: none;
+      }
+      .tp-table-row:hover {
+        background: var(--tp-bg-2);
       }
       .tp-table-row .tp-table-feature {
         padding: 14px 20px;
@@ -1367,217 +2675,150 @@ const threeThings = [
       .tp-table-legend {
         font-size: 12px;
         color: var(--tp-ink-4);
-        margin-top: 12px;
+        margin-top: 14px;
         font-family: var(--tp-font-mono);
-      }
-      /* ─── 6. Snippets ─── */
-      .tp-snippets {
-        padding: 0 0 120px;
-      }
-      .tp-snippets-header {
-        margin-bottom: 32px;
-        display: flex;
-        align-items: flex-end;
-        justify-content: space-between;
-      }
-      .tp-tabs {
-        display: flex;
-        gap: 4px;
-        padding: 4px;
-        border: 1px solid var(--tp-border);
-        border-radius: var(--tp-radius-pill);
-        background: var(--tp-surface);
-      }
-      .tp-tab {
-        padding: 6px 14px;
-        border-radius: var(--tp-radius-pill);
-        border: none;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-        font-family: var(--tp-font-sans);
-        background: transparent;
-        color: var(--tp-ink-3);
-        transition:
-          background 0.1s,
-          color 0.1s;
-      }
-      .tp-tab-active {
-        background: var(--tp-ink);
-        color: var(--tp-bg);
-      }
-      .tp-snippet-panel {
-        background: var(--tp-code-bg);
-        border-radius: var(--tp-radius-lg);
-        padding: 32px 36px;
-        border: 1px solid var(--tp-code-border);
-      }
-      .tp-snippet-code {
-        margin: 0;
-        font-family: var(--tp-font-mono);
-        font-size: 14px;
-        line-height: 1.8;
-        color: var(--tp-code-fg);
-        white-space: pre-wrap;
-        /* Long unbreakable tokens must scroll, not widen the mobile layout viewport */
-        overflow-x: auto;
-      }
-      /* the tab panels are wrappers around Shiki's <pre>: whitespace lives in the pre only */
-      div.tp-snippet-code {
-        white-space: normal;
-      }
-      .tp-snippet-code .astro-code {
-        margin: 0;
-        white-space: pre-wrap;
-        overflow-x: auto;
       }
 
-      /* ─── 8. Dev tools ─── */
-      .tp-devtools {
-        padding: 40px 0 120px;
+      /* ─── FAQ ─── */
+      .tp-faq {
+        padding: 0 0 168px;
       }
-      .tp-devtools-header {
-        margin-bottom: 40px;
-        max-width: 620px;
-      }
-      .tp-devtools-grid {
+      .tp-faq-grid {
         display: grid;
-        grid-template-columns: 1fr;
-        gap: 32px;
+        grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+        gap: 64px;
+        align-items: start;
       }
-      .tp-devtools-card {
-        border: 1px solid var(--tp-border);
-        border-radius: var(--tp-radius-lg);
-        background: var(--tp-surface);
-        padding: 32px;
+      .tp-faq .tp-section-head {
+        margin-bottom: 0;
+        position: sticky;
+        top: 112px;
+      }
+      .tp-faq-list {
+        border-top: 1px solid var(--tp-border-3);
+      }
+      .tp-faq-item {
+        border-bottom: 1px solid var(--tp-border-3);
+      }
+      .tp-faq-item summary {
         display: grid;
-        grid-template-columns: 320px 1fr;
-        grid-template-rows: auto 1fr auto;
-        gap: 8px 32px;
+        grid-template-columns: 1fr 36px;
+        align-items: center;
+        gap: 12px;
+        padding: 26px 0;
+        cursor: pointer;
+        list-style: none;
       }
-      .tp-devtools-card .tp-devtools-title {
-        grid-column: 1;
+      .tp-faq-item summary::-webkit-details-marker {
+        display: none;
       }
-      .tp-devtools-card .tp-devtools-body {
-        grid-column: 1;
-      }
-      .tp-devtools-card .tp-devtools-zoom {
-        grid-column: 2;
-        grid-row: 1 / -1;
-        align-self: center;
-      }
-      .tp-devtools-card .tp-devtools-code {
-        grid-column: 1;
-      }
-      .tp-devtools-title {
-        font-size: 20px;
+      .tp-faq-q {
+        font-family: var(--tp-font-display);
+        font-size: clamp(18px, 1.7vw, 22px);
         font-weight: 500;
         letter-spacing: -0.02em;
       }
-      .tp-devtools-body {
-        font-size: 15px;
-        color: var(--tp-ink-2);
-        line-height: 1.7;
-      }
-      .tp-devtools-zoom {
-        display: block;
-        padding: 0;
-        margin: 0;
-        border: none;
-        background: none;
-        cursor: zoom-in;
+      .tp-faq-icon {
+        position: relative;
+        width: 36px;
+        height: 36px;
         border-radius: var(--tp-radius);
-      }
-      .tp-devtools-img {
-        display: block;
-        width: 100%;
-        border-radius: var(--tp-radius);
+        background: var(--tp-bg-2);
         border: 1px solid var(--tp-border);
-        box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.1);
+        transition:
+          background 0.2s,
+          border-color 0.2s;
       }
-      .tp-lightbox {
-        border: none;
-        padding: 0;
-        margin: auto;
-        max-width: min(1400px, 92vw);
-        max-height: 92vh;
-        background: transparent;
-        overflow: visible;
-        outline: none;
+      .tp-faq-icon::before,
+      .tp-faq-icon::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 12px;
+        height: 1.5px;
+        margin: -0.75px 0 0 -6px;
+        background: var(--tp-ink);
+        transition:
+          transform 0.3s var(--tp-ease),
+          background 0.2s;
       }
-      .tp-lightbox::backdrop {
-        background: rgba(10, 10, 12, 0.82);
-        -webkit-backdrop-filter: blur(4px);
-        backdrop-filter: blur(4px);
+      .tp-faq-icon::after {
+        transform: rotate(90deg);
       }
-      .tp-lightbox-img {
-        display: block;
-        max-width: 100%;
-        max-height: 92vh;
-        border-radius: var(--tp-radius);
-        cursor: zoom-out;
-        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+      .tp-faq-item[open] .tp-faq-icon {
+        background: var(--tp-ink);
+        border-color: var(--tp-ink);
       }
-      .tp-devtools-code {
-        margin-top: auto;
-        background: var(--tp-code-bg);
-        border-radius: var(--tp-radius);
-        padding: 14px 18px;
-        border: 1px solid var(--tp-code-border);
+      .tp-faq-item[open] .tp-faq-icon::before,
+      .tp-faq-item[open] .tp-faq-icon::after {
+        background: var(--tp-bg);
       }
-      .tp-devtools-code .tp-snippet-code {
-        font-size: 13px;
-        line-height: 1.5;
+      .tp-faq-item[open] .tp-faq-icon::after {
+        transform: rotate(0deg);
+      }
+      .tp-faq-a {
+        padding: 0 48px 30px 0;
+        font-size: 15.5px;
+        line-height: 1.7;
+        color: var(--tp-ink-2);
+        max-width: 64ch;
+      }
+      .tp-faq-a a {
+        color: var(--tp-ink);
+        text-underline-offset: 3px;
       }
 
-      /* ─── 9. CTA card ─── */
+      /* ─── CTA ─── */
       .tp-cta {
-        padding: 0 0 120px;
+        position: relative;
+        padding: 168px 0 176px;
+        border-top: 1px solid var(--tp-border);
+        overflow: hidden;
       }
-      .tp-cta-card {
-        border: 1px solid var(--tp-border);
-        border-radius: var(--tp-radius-lg);
-        background: var(--tp-surface);
-        padding: 48px 56px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 40px;
+      .tp-cta .tp-forge {
+        -webkit-mask-image: linear-gradient(to right, transparent 30%, #000 85%);
+        mask-image: linear-gradient(to right, transparent 30%, #000 85%);
       }
-      .tp-cta-left {
-        max-width: 520px;
-      }
-      .tp-cta-h2 {
-        font-size: 28px;
-        font-weight: 600;
-        letter-spacing: -0.025em;
-        margin-bottom: 8px;
-      }
-      .tp-cta-sub {
-        font-size: 15px;
-        color: var(--tp-ink-3);
-      }
-      .tp-cta-right {
+      .tp-cta-inner {
+        position: relative;
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        align-items: flex-end;
-        flex-shrink: 0;
+        align-items: flex-start;
+      }
+      .tp-cta-h2 {
+        font-family: var(--tp-font-display);
+        font-size: clamp(34px, 5.4vw, 76px);
+        line-height: 1;
+        letter-spacing: -0.045em;
+        font-weight: 500;
+        max-width: 17ch;
+        text-wrap: balance;
+      }
+      .tp-cta-sub {
+        font-size: 18px;
+        color: var(--tp-ink-2);
+        margin: 26px 0 36px;
+        max-width: 44ch;
       }
       .tp-cta-alt {
+        margin-top: 20px;
         font-family: var(--tp-font-mono);
         font-size: 12px;
-        color: var(--tp-ink-4);
+        color: var(--tp-ink-3);
       }
       .tp-cta-link {
-        color: var(--tp-ink-4);
+        color: var(--tp-ink-2);
+        text-underline-offset: 3px;
       }
 
-      /* ─── 10. Footer ─── */
+      /* ─── Footer ─── */
       .tp-footer {
+        position: relative;
         background: var(--tp-bg);
         border-top: 1px solid var(--tp-border);
-        padding: 48px 0;
+        padding: 56px 0 0;
+        overflow: hidden;
       }
       .tp-footer-top {
         display: grid;
@@ -1602,24 +2843,22 @@ const threeThings = [
         gap: 10px;
       }
       .tp-footer-col h4 {
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
         color: var(--tp-ink-4);
         margin-bottom: 4px;
       }
       .tp-footer-col a {
-        font-size: 13px;
+        font-size: 13.5px;
         color: var(--tp-ink-2);
         text-decoration: none;
-        transition: color 0.1s;
+        transition: color 0.15s;
       }
       .tp-footer-col a:hover {
         color: var(--tp-ink);
       }
       .tp-footer-bottom {
-        margin-top: 40px;
+        margin-top: 48px;
         padding-top: 20px;
         border-top: 1px solid var(--tp-border);
         display: flex;
@@ -1630,55 +2869,63 @@ const threeThings = [
       .tp-footer-meta {
         font-family: var(--tp-font-mono);
       }
+      /* The name, set large and quiet */
+      .tp-footer-word {
+        font-family: var(--tp-font-display);
+        font-weight: 600;
+        font-size: 25.5vw;
+        line-height: 0.74;
+        letter-spacing: -0.06em;
+        text-align: center;
+        white-space: nowrap;
+        margin: 56px 0 -0.06em;
+        user-select: none;
+        color: var(--tp-border);
+      }
 
       /* ─── Responsive ─── */
-      @media (max-width: 900px) {
+      @media (max-width: 1000px) {
         .tp-container {
           padding: 0 24px;
         }
-        .tp-hero-h1 {
-          font-size: clamp(40px, 8vw, 64px);
+        .tp-forge-hint {
+          right: 24px;
         }
-        .tp-hero-visual {
-          padding-right: 0;
-        }
-        .tp-hero-phone {
-          display: none;
-        }
-        .tp-three-header {
+        .tp-hero-foot {
           flex-direction: column;
+          align-items: flex-start;
+          gap: 28px;
+        }
+        .tp-hero-req {
+          text-align: left;
+        }
+        .tp-section-head-row {
+          flex-direction: column;
+          align-items: flex-start;
           gap: 24px;
-          align-items: flex-start;
         }
-        .tp-three-row {
-          grid-template-columns: 48px 1fr;
-          gap: 16px;
+        .tp-stage {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 40px;
         }
-        .tp-three-body {
-          grid-column: 2;
-        }
-        .tp-snippets-header {
-          flex-direction: column;
-          gap: 20px;
-          align-items: flex-start;
-        }
-        .tp-devtools-card {
+        .tp-pain-grid {
           grid-template-columns: 1fr;
         }
-        .tp-devtools-card .tp-devtools-zoom {
-          grid-column: 1;
-          grid-row: auto;
+        .tp-pain-cell,
+        .tp-pain-cell:nth-child(even) {
+          padding: 32px 0 36px;
+          border-left: none;
         }
-        .tp-devtools-card .tp-devtools-code {
-          grid-column: 1;
+        .tp-tool-meta {
+          grid-template-columns: 1fr;
+          gap: 24px;
         }
-        .tp-cta-card {
-          flex-direction: column;
-          text-align: center;
-          padding: 36px 28px;
+        .tp-faq-grid {
+          grid-template-columns: 1fr;
+          gap: 40px;
         }
-        .tp-cta-right {
-          align-items: center;
+        .tp-faq .tp-section-head {
+          position: static;
         }
         .tp-footer-top {
           grid-template-columns: 1fr 1fr;
@@ -1725,92 +2972,129 @@ const threeThings = [
           padding: 12px 0;
           font-size: 15px;
         }
-        /* Hero */
-        .tp-hero {
-          padding: 48px 0 56px;
+        .tp-container {
+          padding: 0 16px;
         }
-        .tp-hero-h1 br {
-          display: none;
+        .tp-hero {
+          padding-top: 56px;
+          min-height: 0;
+          padding-bottom: 120px;
+        }
+        /* Let the headline flow as one sentence instead of two set lines */
+        .tp-h1-line {
+          display: inline;
+        }
+        .tp-h1-indent {
+          padding-left: 0;
+        }
+        .tp-copy-cmd {
+          flex: 1;
+          text-align: left;
+        }
+        /* Device first, so the taps and the lines that cause them share a screen */
+        .tp-device {
+          order: -1;
+        }
+        .tp-hero-h1 {
+          margin: 0 0 28px;
         }
         .tp-hero-lead {
           font-size: 17px;
         }
         .tp-hero-ctas {
-          flex-direction: column;
-          margin-bottom: 48px;
+          width: 100%;
         }
-        .tp-hero-visual {
-          padding-top: 0;
+        .tp-hero-ctas .tp-btn-solid,
+        .tp-hero-ctas .tp-copy {
+          width: 100%;
+          justify-content: space-between;
         }
-        .tp-code-body {
-          padding: 16px 18px;
-          font-size: 12.5px;
-          line-height: 1.75;
+        .tp-hero-ctas .tp-btn-solid {
+          justify-content: center;
         }
-
-        /* Section rhythm */
-        .tp-three {
-          padding: 72px 0 64px;
+        .tp-forge-hint {
+          right: 16px;
+          bottom: 20px;
         }
-        .tp-three-header {
-          margin-bottom: 32px;
+        .tp-manifesto {
+          padding: 96px 0 104px;
         }
-        .tp-three-row {
-          grid-template-columns: 1fr;
-          gap: 8px;
-          padding: 28px 0;
+        .tp-run,
+        .tp-pain,
+        .tp-snippets,
+        .tp-demo,
+        .tp-compare,
+        .tp-faq {
+          padding-bottom: 104px;
         }
-        .tp-three-num {
-          display: block;
+        .tp-tools {
+          padding-bottom: 64px;
         }
-        .tp-three-body {
-          grid-column: 1;
+        .tp-section-head {
+          margin-bottom: 36px;
         }
-        .tp-compare {
-          padding: 24px 0 80px;
+        .tp-section-lead,
+        .tp-tool-body {
+          font-size: 16px;
         }
-        .tp-snippets {
-          padding: 0 0 80px;
+        .tp-demo-code {
+          font-size: 12px;
+          line-height: 1.8;
         }
-        .tp-devtools {
-          padding: 24px 0 80px;
+        .tp-demo-code .line::before {
+          width: 34px;
+          padding-right: 12px;
         }
-        .tp-cta {
-          padding: 0 0 80px;
+        .tp-term-body {
+          font-size: 11.5px;
+          padding: 14px 16px 18px;
         }
-
-        /* Comparison table: edge-to-edge scroll, tighter cells */
-        .tp-table-wrap {
-          margin: 0 -24px;
-          padding: 0 24px;
+        .tp-phone {
+          width: 236px;
+          border-radius: 42px;
+          padding: 8px;
         }
-        .tp-table {
-          min-width: 580px;
+        .tp-phone-screen {
+          border-radius: 34px;
         }
-        .tp-table-head .tp-table-feature,
-        .tp-table-head .tp-table-col {
-          padding: 12px 14px;
+        .tp-app-photo svg {
+          width: 96px;
+          height: 96px;
         }
-        .tp-table-row .tp-table-feature {
-          padding: 12px 14px;
-          font-size: 13px;
-        }
-        .tp-table-row .tp-table-col {
-          padding: 12px 14px;
-        }
-
-        /* Code panels */
         .tp-snippet-panel {
           padding: 20px 18px;
         }
         .tp-snippet-code {
           font-size: 13px;
         }
-        .tp-devtools-card {
-          padding: 20px;
+        .tp-table-wrap {
+          margin: 0 -16px;
+          padding: 0 16px;
         }
-
-        /* Footer */
+        .tp-table {
+          min-width: 580px;
+        }
+        .tp-table-head .tp-table-feature,
+        .tp-table-head .tp-table-col,
+        .tp-table-row .tp-table-feature,
+        .tp-table-row .tp-table-col {
+          padding: 12px 14px;
+        }
+        .tp-table-row .tp-table-feature {
+          font-size: 13px;
+        }
+        .tp-faq-item summary {
+          padding: 20px 0;
+        }
+        .tp-faq-a {
+          padding: 0 0 24px;
+        }
+        .tp-cta {
+          padding: 104px 0 112px;
+        }
+        .tp-cta-sub {
+          font-size: 16px;
+        }
         .tp-footer-top {
           grid-template-columns: 1fr;
         }
@@ -1818,13 +3102,26 @@ const threeThings = [
           flex-direction: column;
           gap: 8px;
         }
+      }
 
-        /* Type scale */
-        .tp-h2-large {
-          font-size: 28px;
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
         }
-        .tp-h2-medium {
-          font-size: 24px;
+        .tp-app-spinner,
+        .tp-term-caret,
+        [data-state='running'] .tp-dot-status {
+          animation: none;
+        }
+        .tp-forge-hint {
+          display: none;
+        }
+        .tp-app,
+        .tp-app-btn,
+        .tp-app-confirm,
+        .tp-app-badge,
+        .tp-btn-solid {
+          transition: none;
         }
       }
     </style>
