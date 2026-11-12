@@ -67,6 +67,13 @@ export interface ResetCapabilities {
    * child never vouches for a different process.
    */
   appStateBaseline?: AppStateBaseline;
+  /**
+   * What this session learnt about keeping restored data, so resets stop
+   * paying for attempts that cannot succeed: the app reports no writes (its
+   * build has no `onReload`/`track`), or its warm resets keep writing
+   * themselves (an `onReload` that writes back what it reads).
+   */
+  appStateKeep?: { noWrites?: boolean; writingKeeps?: number };
 }
 
 export interface AppStateBaseline {
@@ -76,6 +83,13 @@ export interface AppStateBaseline {
   archiveStamp: string;
   boot: string;
   writes: number;
+  /**
+   * Warm resets that kept this restore since it ran. The SDK bounds them
+   * itself (`appResetColdEvery`) by restoring cold, rather than letting the
+   * daemon's warm-window valve relaunch the app during a keep and then
+   * restore on top of it.
+   */
+  kept: number;
 }
 
 /**

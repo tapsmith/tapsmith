@@ -857,7 +857,9 @@ export async function executeAppReset(
             keepAppData: true,
             recoverable: true,
             forceCold: false,
-            coldEveryNResets: ctx.config.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY,
+            // The SDK bounds a run of kept resets itself (planKeptRestore):
+            // a valve relaunch here would only be followed by a restore.
+            coldEveryNResets: 0,
             skipTraceCapture: true,
             ...(target !== undefined ? { target } : {}),
           });
@@ -904,7 +906,13 @@ export async function executeAppReset(
             kept = false;
             const n = after.writes - baseline.writes;
             reason = `the app wrote persisted data during the warm reset (${n} write${n === 1 ? '' : 's'}); restored ${archiveName} cold`;
+            const keepState = ((ctx.capabilities ??= {}).appStateKeep ??= {});
+            keepState.writingKeeps = (keepState.writingKeeps ?? 0) + 1;
           }
+        }
+        if (kept && baseline) {
+          baseline.kept += 1;
+          if (ctx.capabilities?.appStateKeep) ctx.capabilities.appStateKeep.writingKeeps = 0;
         }
       } else if (result) {
         reason = `warm reset keeping ${archiveName} cleared the app (${result.reason ?? 'no reason given'}); restored it cold`;
@@ -1090,6 +1098,15 @@ async function planKeptRestore(
   }
   if (!hooks) return { keep: false, recordBaseline: false };
   if (options.forceCold) return { keep: false, recordBaseline: true, reason: 'warm skipped: a retry restores the archive cold' };
+  const learnt = ctx.capabilities?.appStateKeep;
+  // A build's hooks either report writes or they do not: no need to look again.
+  if (learnt?.noWrites) return { keep: false, recordBaseline: false, reason: NO_WRITES_REASON };
+  // One write during a warm reset can be a save the test had scheduled; two
+  // in a row are the reset itself (an `onReload` that writes back what it
+  // reads), and every later attempt would pay a warm reset on top of the restore.
+  if ((learnt?.writingKeeps ?? 0) >= WRITING_KEEPS_LIMIT) {
+    return { keep: false, recordBaseline: false, reason: 'warm skipped: the app writes persisted data during its warm resets (an onReload that writes, or a save on blur), so restored data cannot be kept' };
+  }
   const baseline = ctx.capabilities?.appStateBaseline;
   if (!baseline) return { keep: false, recordBaseline: true };
   if (baseline.archive !== archive) {
@@ -1107,6 +1124,10 @@ async function planKeptRestore(
   if (marker.boot !== baseline.boot) {
     return { keep: false, recordBaseline: true, reason: 'warm skipped: the app relaunched since the restore' };
   }
+  const bound = ctx.config.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY;
+  if (bound > 0 && baseline.kept >= bound) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: ${baseline.kept} resets in a row kept ${path.basename(archive)} (appResetColdEvery)` };
+  }
   if (marker.writes !== baseline.writes) {
     // Same process, so the count only grew.
     const n = marker.writes - baseline.writes;
@@ -1115,6 +1136,7 @@ async function planKeptRestore(
   return { keep: true, recordBaseline: true };
 }
 
+const WRITING_KEEPS_LIMIT = 2;
 const MARKER_READ_ATTEMPTS = 3;
 const MARKER_READ_RETRY_MS = 250;
 
@@ -1144,7 +1166,11 @@ async function recordAppStateBaseline(ctx: SessionPreflightContext, archive: str
   const marker = await readMarker(ctx);
   const stamp = archiveStamp(archive);
   if (marker?.boot && marker.writes !== undefined && stamp !== undefined) {
-    (ctx.capabilities ??= {}).appStateBaseline = { archive, archiveStamp: stamp, boot: marker.boot, writes: marker.writes };
+    (ctx.capabilities ??= {}).appStateBaseline = { archive, archiveStamp: stamp, boot: marker.boot, writes: marker.writes, kept: 0 };
+  } else if (marker && marker.writes === undefined) {
+    // The hooks publish the count from their first render, so a marker
+    // without one is this build's answer, not a read taken too early.
+    ((ctx.capabilities ??= {}).appStateKeep ??= {}).noWrites = true;
   }
   return marker;
 }
