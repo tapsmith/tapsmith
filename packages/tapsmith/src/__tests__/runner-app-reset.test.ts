@@ -236,7 +236,7 @@ describe('runner app reset (declared isolation)', () => {
     d.device.restartApp.mockImplementation(async () => { d.calls.push('restartApp'); app.boot = `p${d.calls.length}`; app.writes = 0; });
     d.device._resetApp.mockImplementation(async (_pkg: string, opts: { mode?: 'warm' | 'restart' | 'clear'; keepAppData?: boolean }) => {
       d.calls.push(`resetApp:${opts.mode ?? 'warm'}${opts.keepAppData ? ':keep' : ''}`);
-      return { modeRequested: 'warm', modeUsed: 'warm', fellBack: false, coldLaunch: false, durationMs: 5, hooksDetected: true, steps: [{ name: 'warm' as const, durationMs: 5, ok: true }] };
+      return { modeRequested: 'warm', modeUsed: 'warm', fellBack: false, coldLaunch: false, durationMs: 5, hooksDetected: true, steps: [{ name: 'warm' as const, durationMs: 5, ok: true }], ...(opts.keepAppData ? { keptAppData: true } : {}) };
     });
     try {
       pushContext();
@@ -263,7 +263,7 @@ describe('runner app reset (declared isolation)', () => {
       ]);
       const detail = (t: (typeof tests)[number]) => traceEvents(t.tracePath!)
         .find((e) => e.type === 'action' && e.action === 'appReset')?.detail;
-      expect(detail(tests[0])).toMatch(/^warm skipped: first restore of auth\.tar\.gz/);
+      expect(detail(tests[0])).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
       expect(detail(tests[1])).toBe('kept auth.tar.gz: no persisted writes since the restore');
       expect(detail(tests[2])).toBe('warm skipped: the app wrote persisted data since the restore (1 write)');
     } finally {

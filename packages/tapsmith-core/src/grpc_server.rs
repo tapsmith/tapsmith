@@ -4642,6 +4642,12 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 && ops
                     .target_reached
                     .load(std::sync::atomic::Ordering::Relaxed),
+            // `reset_deep_link` is blanked for a keep request (above), so a
+            // successful warm rung here was the hook acknowledging a link
+            // that carried the keep flag.
+            kept_app_data: req.keep_app_data
+                && outcome.error.is_none()
+                && outcome.mode_used == app_reset::ResetMode::Warm,
             hooks_detected: marker.is_some()
                 || self
                     .last_hooks_marker

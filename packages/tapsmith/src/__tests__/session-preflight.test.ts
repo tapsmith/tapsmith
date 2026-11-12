@@ -81,8 +81,8 @@ const iosShell = {
 /** A daemon ResetApp outcome as Device._resetApp reports it. */
 function resetResult(
   mode: 'warm' | 'restart' | 'clear',
-  overrides: Partial<import('../device.js').AppResetResult> = {},
-): import('../device.js').AppResetResult {
+  overrides: Partial<import('../device.js').InternalAppResetResult> = {},
+): import('../device.js').InternalAppResetResult {
   return {
     modeRequested: mode,
     modeUsed: mode,
@@ -734,6 +734,9 @@ describe('session-preflight', () => {
     fs.writeFileSync(OTHER_ARCHIVE, 'admin');
     afterAll(() => { fs.rmSync(archiveDir, { recursive: true, force: true }); });
     const RESTORE_WARM: AppResetPolicy = { mode: 'warm', scope: 'test', appState: ARCHIVE };
+    /** A warm reset the hook ran as a keep (the daemon passed the keep flag on). */
+    const keepResult = (overrides: Parameters<typeof resetResult>[1] = {}) =>
+      resetResult('warm', { hooksDetected: true, keptAppData: true, ...overrides });
 
     /** A hooked app whose marker reports `boot` and `writes` (undefined = no write support). */
     function hookedApp(initial: { boot: string; writes?: number }) {
@@ -752,7 +755,7 @@ describe('session-preflight', () => {
         app.boot = `relaunch${launches}`;
         if (app.writes !== undefined) app.writes = 0;
       });
-      vi.mocked(ctx.device._resetApp).mockImplementation(async () => resetResult('warm', { hooksDetected: true }));
+      vi.mocked(ctx.device._resetApp).mockImplementation(async () => keepResult());
       return { ctx, app };
     }
 
@@ -764,7 +767,7 @@ describe('session-preflight', () => {
       expect(ctx.device.restoreAppState).toHaveBeenCalledWith('com.example.app', ARCHIVE);
       expect(ctx.device._resetApp).not.toHaveBeenCalled();
       expect(report).toMatchObject({ modeUsed: 'restore', fellBack: false });
-      expect(report.reason).toMatch(/^warm skipped: first restore of auth\.tar\.gz/);
+      expect(report.reason).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
       expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
     });
 
@@ -834,7 +837,7 @@ describe('session-preflight', () => {
       // An onReload that writes back what it reads.
       vi.mocked(ctx.device._resetApp).mockImplementation(async () => {
         app.writes = (app.writes ?? 0) + 1;
-        return resetResult('warm', { hooksDetected: true });
+        return keepResult();
       });
       await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
       await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
@@ -924,7 +927,7 @@ describe('session-preflight', () => {
       await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
       vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
         app.writes = 1;
-        return resetResult('warm', { hooksDetected: true });
+        return keepResult();
       });
 
       const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
@@ -952,7 +955,7 @@ describe('session-preflight', () => {
       vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
         app.boot = 'valve';
         app.writes = 0;
-        return resetResult('warm', { hooksDetected: true, coldLaunch: true, reason: 'cold relaunch: warm-window bound reached (10 resets)' });
+        return keepResult({ coldLaunch: true, reason: 'cold relaunch: warm-window bound reached (10 resets)' });
       });
 
       const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
@@ -978,7 +981,7 @@ describe('session-preflight', () => {
       await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
       vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
         app.boot = 'escalated';
-        return resetResult('warm', { hooksDetected: true, coldLaunch: false });
+        return keepResult({ coldLaunch: false });
       });
 
       const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
@@ -994,7 +997,7 @@ describe('session-preflight', () => {
       const empty = { requestId: '1', hierarchyXml: '<hierarchy/>', errorMessage: '' };
       vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
         vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce(empty).mockResolvedValueOnce(empty).mockResolvedValueOnce(empty);
-        return resetResult('warm', { hooksDetected: true });
+        return keepResult();
       });
 
       const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
@@ -1023,6 +1026,52 @@ describe('session-preflight', () => {
 
       expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ mode: 'clear' }));
       expect(report.reason).toBe("warm skipped: appState '' clears the app's data");
+    });
+    it('restores cold, and stops trying, when the daemon cannot pass the keep request on (one older than the SDK)', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      // An old daemon ignores keep_app_data: the hook ran its full reset,
+      // which may clear data the write count cannot see.
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true }));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toMatch(/^tapsmith-core did not pass the request to keep the app's data on to the app \(a daemon older than this SDK.*\); restored auth\.tar\.gz cold$/);
+      vi.mocked(ctx.device._resetApp).mockClear();
+
+      const next = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(next.reason).toMatch(/^warm skipped: tapsmith-core did not pass the request to keep/);
+    });
+
+    it("records the baseline on a restore under appReset 'auto' whose read finds hooks not seen before, so the next restore keeps", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      // A fresh MCP session: nothing probed yet, so 'auto' resolved to clear.
+      ctx.capabilities = {};
+
+      const first = await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'clear' }, { phase: 'before test' });
+
+      expect(ctx.capabilities?.hooksDetected).toBe(true);
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+      expect(first.reason).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
+
+      const second = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(second.modeUsed).toBe('warm');
+      expect(second.reason).toBe('kept auth.tar.gz: no persisted writes since the restore');
+    });
+
+    it("records no baseline under an explicit appReset: 'clear' even when the app has hooks", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.capabilities = {};
+      ctx.config = { ...ctx.config, appReset: 'clear' };
+
+      await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'clear' }, { phase: 'before test' });
+
+      expect(ctx.capabilities?.appStateBaseline).toBeUndefined();
     });
   });
 

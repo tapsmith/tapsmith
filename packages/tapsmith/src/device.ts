@@ -813,7 +813,7 @@ export class Device {
   }
 
   /** @internal — runner/preflight entry point with policy inputs. */
-  async _resetApp(packageName: string, options: InternalAppResetOptions): Promise<AppResetResult> {
+  async _resetApp(packageName: string, options: InternalAppResetOptions): Promise<InternalAppResetResult> {
     const mode = options.mode ?? 'warm';
     let response: ResetAppResponse | undefined;
     const request: ResetAppRequestOptions = {
@@ -855,8 +855,9 @@ export class Device {
     if (options.recoverable && !response!.success) {
       throw new Error(response!.errorMessage || 'App reset failed');
     }
-    const result = toAppResetResult(mode, response!);
+    const result: InternalAppResetResult = toAppResetResult(mode, response!);
     if (result.coldLaunch) this._appProcessRecreated();
+    if (options.keepAppData) result.keptAppData = response!.success && response!.keptAppData === true;
     return result;
   }
 
@@ -2393,6 +2394,16 @@ export interface InternalAppResetOptions extends AppResetOptions {
    * still throws.
    */
   recoverable?: boolean;
+}
+
+/** @internal — `_resetApp`'s result: the public one plus what only the runner needs. */
+export interface InternalAppResetResult extends AppResetResult {
+  /**
+   * Set for a `keepAppData` request: the in-app hook reset the app keeping
+   * its data. False when the daemon could not pass the request on (one that
+   * predates it runs the hook's full, data-clearing reset instead).
+   */
+  keptAppData?: boolean;
 }
 
 /** What `device.resetApp()` did: the rung that ran, why, and how long it took. */

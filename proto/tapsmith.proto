@@ -945,6 +945,11 @@ message ResetAppResponse {
   // its launch route), a legacy reset deep link, or a hooks reset the daemon
   // had to re-deliver to "/" because the target screen hid the marker.
   bool target_reached = 16;
+  // The request asked to keep the app's persisted data (`keep_app_data`) and
+  // the in-app hook acknowledged a reset link that carried
+  // `__tapsmith_keep=1`. A daemon that predates the field leaves it false, so
+  // the SDK never mistakes that daemon's data-clearing reset for a keep.
+  bool kept_app_data = 17;
 }
 
 // ─── App State Snapshot (PILOT-115) ───

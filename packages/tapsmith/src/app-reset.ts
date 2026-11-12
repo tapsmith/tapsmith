@@ -71,9 +71,10 @@ export interface ResetCapabilities {
    * What this session learnt about keeping restored data, so resets stop
    * paying for attempts that cannot succeed: the app reports no writes (its
    * build has no `onReload`/`track`), or its warm resets keep writing
-   * themselves (an `onReload` that writes back what it reads).
+   * themselves (an `onReload` that writes back what it reads), or the
+   * daemon cannot pass a keep request on (one older than the SDK).
    */
-  appStateKeep?: { noWrites?: boolean; writingKeeps?: number };
+  appStateKeep?: { noWrites?: boolean; writingKeeps?: number; daemonCannotKeep?: boolean };
 }
 
 export interface AppStateBaseline {
