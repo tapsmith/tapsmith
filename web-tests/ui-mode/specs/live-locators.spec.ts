@@ -411,6 +411,9 @@ test.describe("Live locators come from the device", () => {
     ])
     await ui.open()
     await device.selectWorkerView("Pixel_A")
+    // The tab re-arms its loading placeholder after the click; a frame that
+    // lands first would be overtaken and leave the picker disabled.
+    await expect(device.mirrorStatus).toHaveText("Starting mirror…")
     ui.sendFrame({ ...screenFrame(240, 500), workerId: 0 })
     await device.enablePickMode()
     await ui.waitForMessage("request-hierarchy")

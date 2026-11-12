@@ -46,7 +46,7 @@ The live device mirror is interactive -- drive the device straight from the brow
 
 These drive the same coordinate gestures exposed in the SDK (`device.tapXY`, `device.dragXY`, `device.longPressXY`, `device.inputText` -- see the [API reference](api-reference.md)).
 
-**Lock toggle.** A lock control in the mirror header governs interactivity. It's unlocked (interactive) by default and **auto-locks while a run is active** so your input can't interfere with a running test. You can override it at any time -- an explicit lock sticks until you unlock, while an unlock during a run lasts only for that run.
+**Lock toggle.** A lock control in the mirror header governs interactivity. It's unlocked (interactive) by default and **auto-locks while a test runs on the device it shows** so your input can't interfere with a running test. With several devices, the lock follows the device the mirror shows, and in the "All" grid each device locks only while it runs a test. You can override it at any time -- an explicit lock sticks until you unlock, while an unlock during a run lasts only for that run.
 
 ### Picking locators from the mirror
 
@@ -62,7 +62,9 @@ The Locator tab has a **Trace | Live** toggle showing which hierarchy it is boun
 
 A recorded hierarchy has no device to ask, so the `Trace` source -- like the standalone trace viewer's Locator tab -- matches with a re-implementation of the agents' rules, and says so: its counts are approximate, and the device decides at run time. It takes one getter, optionally followed by `.first()`, `.last()` or `.nth(n)`; a chained call shows an error naming the call. For an answer you can rely on, use the Live source.
 
-Picking works even while the mirror is locked (it's read-only), and it works against whatever is on screen: drive the app to the screen you care about, then pick. In multi-device mode, the picker targets the device tab you're viewing (it's unavailable in the "All" grid view).
+Picking is read-only, so an explicit lock doesn't stop it, and it works against whatever is on screen: drive the app to the screen you care about, then pick. In multi-device mode, the picker targets the device tab you're viewing (it's unavailable in the "All" grid view).
+
+While a test runs on the mirrored device, the picker and the Live source leave the device alone, because each reads the screen through the same agent the test is driving. The pick button is disabled (an armed pick is cancelled, and a pick the device is still checking is dropped), and the Locator tab says its Live checks are paused. They resume when the run ends. To pick or check a locator mid-run anyway, unlock the mirror for that run, or pick from the trace's screenshot instead.
 
 ## MCP integration
 

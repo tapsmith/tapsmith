@@ -665,6 +665,18 @@ export interface SuggestLocatorsCommand {
   deviceIndex?: number
 }
 
+/**
+ * Stop the asking tab's live locator work on a device: a test
+ * started on it. Its pick check stops between candidates and its waiting
+ * evaluation is never run; neither is answered.
+ */
+export interface CancelLiveLocatorsCommand {
+  type: 'cancel-live-locators'
+  clientId?: string
+  workerId?: number
+  deviceIndex?: number
+}
+
 export interface RequestSourceCommand {
   type: 'request-source'
   /** Absolute path of the source file to read from disk. */
@@ -843,6 +855,7 @@ export type ClientMessage =
   | RequestHierarchyCommand
   | EvaluateLocatorCommand
   | SuggestLocatorsCommand
+  | CancelLiveLocatorsCommand
   | RequestSourceCommand
   | MirrorTapCommand
   | MirrorLongPressCommand
