@@ -1057,11 +1057,10 @@ pub async fn boot_simulator(udid: &str) -> Result<()> {
 ///
 /// **Caller's responsibility** to skip this for physical devices — invoking
 /// it against a real device's UDID is wasted work (the simctl spawns will
-/// fail) but won't cause data loss. The `grpc_server::start_agent` handler
-/// already branches on `is_active_ios_physical()` and skips this call on
-/// physical-device runs to keep the simulator hot path free of any extra
-/// devicectl latency.
+/// fail) but won't cause data loss. `agent_launch::start_agent` runs it on
+/// simulators only, alongside the agent's launch.
 pub async fn configure_simulator(udid: &str) {
+    let started = std::time::Instant::now();
     // Disable "Save Password?" dialog which blocks the UI during login tests.
     // The setting must be written to multiple domains because Apple has moved
     // the password autofill control across iOS versions and frameworks.
@@ -1072,7 +1071,7 @@ pub async fn configure_simulator(udid: &str) {
         "com.apple.Password", // Passwords framework (iOS 26+)
     ];
 
-    // Best-effort, but bounded: this runs inside StartAgent, and an unbounded
+    // Best-effort, but bounded: StartAgent waits for it, and an unbounded
     // `simctl spawn` against a wedged CoreSimulator was observed stalling
     // agent start past its whole 240s client deadline. The domains are
     // written concurrently so the worst case is one bound rather than four,
@@ -1082,7 +1081,9 @@ pub async fn configure_simulator(udid: &str) {
     // then covered the first sign-in of the run (both failing iOS shard-5
     // runs of Sep 2026 show the timed-out writes in the daemon log).
     let mut pending: Vec<&'static str> = AUTOFILL_DOMAINS.to_vec();
+    let mut passes = 0;
     for pass in 1..=AUTOFILL_WRITE_PASSES {
+        passes = pass;
         let handles: Vec<_> = pending
             .drain(..)
             .map(|domain| {
@@ -1113,6 +1114,12 @@ pub async fn configure_simulator(udid: &str) {
             "password autofill could not be disabled; the Keychain \"Save Password?\" sheet may appear after a sign-in"
         );
     }
+    crate::timing::timing_log!(
+        "kind=boot name=configure_simulator dur_ms={} ok={} passes={passes} failed={}",
+        started.elapsed().as_millis(),
+        pending.is_empty(),
+        pending.len()
+    );
 }
 
 /// Bound for one `simctl spawn defaults write`. Generous enough to survive

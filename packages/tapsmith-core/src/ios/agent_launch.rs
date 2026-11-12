@@ -82,6 +82,7 @@ pub async fn start_agent(
             force: false,
             attach_to_running_app: false,
             clear_app_data_first,
+            apply_simulator_defaults: true,
         },
         agent_port,
         is_physical,
@@ -107,6 +108,8 @@ pub async fn start_agent_fresh(
             force: true,
             attach_to_running_app: true,
             clear_app_data_first: false,
+            // A restart within a session: the session's start applied them.
+            apply_simulator_defaults: false,
         },
         agent_port,
         is_physical,
@@ -122,6 +125,50 @@ struct StartMode {
     /// The runner attaches to the running app instead of launching it.
     attach_to_running_app: bool,
     clear_app_data_first: bool,
+    /// On a simulator, write the test-friendly defaults
+    /// ([`super::device::configure_simulator`]) alongside the launch.
+    apply_simulator_defaults: bool,
+}
+
+/// The simulator's test-friendly defaults (password autofill off), written
+/// while the agent starts instead of before it (PILOT-1134): on a just-booted
+/// CI simulator the `simctl spawn defaults write` calls took 13–16 s, all of
+/// it in front of the xcodebuild spawn. The app under test must still never
+/// launch before they are written, so the launch gate waits for them (see
+/// [`GatedLaunch`]), and the agent start does not return before them.
+struct SimulatorDefaults {
+    done: tokio::sync::watch::Receiver<bool>,
+}
+
+impl SimulatorDefaults {
+    fn start(udid: &str) -> Self {
+        let udid = udid.to_string();
+        Self::start_with(async move { super::device::configure_simulator(&udid).await })
+    }
+
+    /// [`SimulatorDefaults::start`] with the writes passed in.
+    fn start_with(write: impl std::future::Future<Output = ()> + Send + 'static) -> Self {
+        let (tx, done) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            write.await;
+            let _ = tx.send(true);
+        });
+        Self { done }
+    }
+
+    /// Wait until the writes are done. They are bounded
+    /// ([`super::device::configure_simulator`]); a task that died without
+    /// finishing (its sender dropped) does not hold anyone up either.
+    async fn applied(&self) {
+        let mut done = self.done.clone();
+        let _ = done.wait_for(|d| *d).await;
+    }
+
+    fn clone_handle(&self) -> Self {
+        Self {
+            done: self.done.clone(),
+        }
+    }
 }
 
 /// A launch gate and the task that opens it (see [`launch_gate`]).
@@ -139,31 +186,51 @@ impl GatedLaunch {
     /// app" on a busy SpringBoard) and, when asked, wipe its data, then open
     /// the gate. All of it overlaps xcodebuild's start, seconds before the
     /// runner's test even begins.
-    fn start(udid: &str, target_bundle_id: &str, agent_port: u16, wipe: bool) -> Self {
+    fn start(
+        udid: &str,
+        target_bundle_id: &str,
+        agent_port: u16,
+        wipe: bool,
+        defaults: Option<SimulatorDefaults>,
+    ) -> Self {
         let udid = udid.to_string();
         let bundle_id = target_bundle_id.to_string();
         Self::start_with(
             LaunchGate::new_in(&std::env::temp_dir(), agent_port),
             async move { prepare_app_launch(&udid, &bundle_id, wipe).await },
             launch_gate::PREPARE_DEADLINE,
+            defaults,
         )
     }
 
     /// [`GatedLaunch::start`] with the pre-launch work and its deadline
     /// passed in. The gate opens once `prepare` is done, or at `deadline`
-    /// (the start is then not vouched for).
+    /// (the start is then not vouched for), and in either case not before
+    /// `defaults` are written. Those are not under `deadline`: abandoning them
+    /// would let the app launch with password autofill on, and they are
+    /// bounded on their own (two passes of 20 s at worst). Should they
+    /// outlast the runner's own 30 s wait, which starts only once xcodebuild
+    /// has the runner's test going, the runner launches without the gate and
+    /// that start is not vouched for. A session that wipes the app first then
+    /// clears and relaunches it after the agent start, which waits for the
+    /// defaults; one whose app was just installed keeps the early launch.
     fn start_with(
         gate: LaunchGate,
         prepare: impl std::future::Future<Output = Prepared> + Send + 'static,
         deadline: Duration,
+        defaults: Option<SimulatorDefaults>,
     ) -> Self {
         let path = gate.path().to_path_buf();
         let task = tokio::spawn(async move {
             let started = std::time::Instant::now();
             let prepared = tokio::time::timeout(deadline, prepare).await.ok();
+            let prepare_ms = started.elapsed().as_millis();
+            if let Some(defaults) = &defaults {
+                defaults.applied().await;
+            }
             launch_gate::open_at(&path);
             crate::timing::timing_log!(
-                "kind=boot name=launch_gate dur_ms={} prepared={:?}",
+                "kind=boot name=launch_gate dur_ms={} prepare_ms={prepare_ms} prepared={:?}",
                 started.elapsed().as_millis(),
                 prepared
             );
@@ -237,8 +304,13 @@ async fn start_agent_impl(
         force,
         attach_to_running_app,
         clear_app_data_first,
+        apply_simulator_defaults,
     } = mode;
     let boot_start = std::time::Instant::now();
+    // First, so the writes overlap everything below; awaited before any
+    // successful return, and by the launch gate before the app launches.
+    let defaults =
+        (apply_simulator_defaults && !is_physical).then(|| SimulatorDefaults::start(udid));
     // Agents orphaned by a SIGKILLed daemon are stopped before we look for a
     // running one, so we never adopt an agent the reaper is about to kill.
     #[cfg(target_os = "macos")]
@@ -269,9 +341,14 @@ async fn start_agent_impl(
             AgentPortOwner::Serves | AgentPortOwner::Unknown => {}
         }
         info!("iOS agent is already running");
+        let defaults_wait = std::time::Instant::now();
+        if let Some(defaults) = &defaults {
+            defaults.applied().await;
+        }
         crate::timing::timing_log!(
-            "kind=boot name=agent dur_ms={} reused=true udid={udid}",
-            boot_start.elapsed().as_millis()
+            "kind=boot name=agent dur_ms={} reused=true defaults_wait_ms={} udid={udid}",
+            boot_start.elapsed().as_millis(),
+            defaults_wait.elapsed().as_millis()
         );
         // For physical devices, pingable-on-localhost means the caller's
         // iproxy tunnel is still up; no new handle is returned and the
@@ -303,6 +380,7 @@ async fn start_agent_impl(
             target_bundle_id,
             agent_port,
             clear_app_data_first,
+            defaults.as_ref().map(SimulatorDefaults::clone_handle),
         ))
     } else {
         None
@@ -352,14 +430,16 @@ async fn start_agent_impl(
     };
 
     // Launch xcodebuild test-without-building in background.
-    let (mut child, mut stdout_tail, mut stderr_tail, mut launch_failure) = spawn_agent_xcodebuild(
-        &patched_xctestrun,
-        udid,
-        &derived_data_path,
-        is_physical,
-        target_bundle_id,
-    )
-    .await?;
+    let pre_spawn_ms = boot_start.elapsed().as_millis();
+    let (mut child, mut stdout_tail, mut stderr_tail, mut launch_failure, mut progress) =
+        spawn_agent_xcodebuild(
+            &patched_xctestrun,
+            udid,
+            &derived_data_path,
+            is_physical,
+            target_bundle_id,
+        )
+        .await?;
 
     // Wait for the agent to start accepting connections.
     // Freshly booted/cloned simulators can take 90+ seconds for xcodebuild to
@@ -394,6 +474,17 @@ async fn start_agent_impl(
             let out_lines = stdout_tail.lock().unwrap().join("\n");
             let err_lines = stderr_tail.lock().unwrap().join("\n");
             let target_kind = if is_physical { "device" } else { "simulator" };
+            // Where the launch got to, for the timing log: on a starved CI
+            // runner this is the line that says which step never came.
+            crate::timing::timing_log!(
+                "kind=boot name=agent dur_ms={} ok=false outcome=timeout pre_spawn_ms={pre_spawn_ms} {} relaunches={} udid={udid}",
+                boot_start.elapsed().as_millis(),
+                progress
+                    .lock()
+                    .unwrap()
+                    .phase_fields(std::time::Instant::now(), "timeout"),
+                1 - relaunches_left
+            );
             bail!(
                 "Timed out waiting for iOS agent to start on {target_kind} {udid} after 150s. \
                  Killed xcodebuild. Check that the XCUITest bundle is built correctly.\n\
@@ -437,14 +528,15 @@ async fn start_agent_impl(
                 if let Some(g) = gated.as_mut() {
                     g.before_relaunch().await;
                 }
-                (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
-                    &patched_xctestrun,
-                    udid,
-                    &derived_data_path,
-                    is_physical,
-                    target_bundle_id,
-                )
-                .await?;
+                (child, stdout_tail, stderr_tail, launch_failure, progress) =
+                    spawn_agent_xcodebuild(
+                        &patched_xctestrun,
+                        udid,
+                        &derived_data_path,
+                        is_physical,
+                        target_bundle_id,
+                    )
+                    .await?;
                 continue;
             }
             drop(iproxy_handle);
@@ -489,14 +581,15 @@ async fn start_agent_impl(
                 if let Some(g) = gated.as_mut() {
                     g.before_relaunch().await;
                 }
-                (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
-                    &patched_xctestrun,
-                    udid,
-                    &derived_data_path,
-                    is_physical,
-                    target_bundle_id,
-                )
-                .await?;
+                (child, stdout_tail, stderr_tail, launch_failure, progress) =
+                    spawn_agent_xcodebuild(
+                        &patched_xctestrun,
+                        udid,
+                        &derived_data_path,
+                        is_physical,
+                        target_bundle_id,
+                    )
+                    .await?;
                 continue;
             }
         }
@@ -538,14 +631,15 @@ async fn start_agent_impl(
                     if let Some(g) = gated.as_mut() {
                         g.before_relaunch().await;
                     }
-                    (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
-                        &patched_xctestrun,
-                        udid,
-                        &derived_data_path,
-                        is_physical,
-                        target_bundle_id,
-                    )
-                    .await?;
+                    (child, stdout_tail, stderr_tail, launch_failure, progress) =
+                        spawn_agent_xcodebuild(
+                            &patched_xctestrun,
+                            udid,
+                            &derived_data_path,
+                            is_physical,
+                            target_bundle_id,
+                        )
+                        .await?;
                     continue;
                 }
                 drop(iproxy_handle);
@@ -572,10 +666,20 @@ async fn start_agent_impl(
                     Some(g) => g.app_launched_fresh().await,
                     None => false,
                 };
+                let ready_at = std::time::Instant::now();
+                // The gate waited for the defaults already; this covers a
+                // start without one (no app to launch).
+                if let Some(defaults) = &defaults {
+                    defaults.applied().await;
+                }
                 info!(udid, app_launched_fresh, "iOS agent is ready");
                 crate::timing::timing_log!(
-                    "kind=boot name=agent dur_ms={} reused=false fresh_launch={app_launched_fresh} udid={udid}",
-                    boot_start.elapsed().as_millis()
+                    "kind=boot name=agent dur_ms={} reused=false fresh_launch={app_launched_fresh} \
+                     pre_spawn_ms={pre_spawn_ms} {} defaults_wait_ms={} relaunches={} udid={udid}",
+                    boot_start.elapsed().as_millis(),
+                    progress.lock().unwrap().phase_fields(ready_at, "ready"),
+                    ready_at.elapsed().as_millis(),
+                    1 - relaunches_left
                 );
                 // Hand the child off to a reaper task so the kernel can collect
                 // it once xcodebuild eventually exits — without this, dropping
@@ -667,6 +771,107 @@ type OutputTail = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 /// rolling tail: xcodebuild prints a dozen more lines right after it, which
 /// can roll it out of the tail before the wait loop looks.
 type LaunchFailure = std::sync::Arc<std::sync::Mutex<Option<String>>>;
+type LaunchProgressHandle = std::sync::Arc<std::sync::Mutex<LaunchProgress>>;
+
+/// How far one xcodebuild agent launch got, and when, read from its output
+/// (PILOT-1134), for the `kind=boot name=agent` timing line. Each step is the
+/// first line that shows it; a step whose line never came (another Xcode's
+/// wording, a runner that died) stays `None` and its phases are left out.
+#[derive(Debug)]
+struct LaunchProgress {
+    spawned: std::time::Instant,
+    /// xcodebuild printed anything at all (stdout or stderr).
+    first_output: Option<std::time::Instant>,
+    /// The runner process is up: its "Running tests..." line.
+    runner_started: Option<std::time::Instant>,
+    /// XCTest started the runner's test: "Test Case '…' started.".
+    test_started: Option<std::time::Instant>,
+    /// The agent's socket listens: "[TapsmithSocket] Listening on port".
+    listening: Option<std::time::Instant>,
+    /// The runner's own report of its launch-gate wait, as the timing
+    /// field it becomes: `gate_waited_ms=<n>` when the gate opened,
+    /// `gate=timed_out` / `gate=unacknowledged` when it launched without it.
+    gate: Option<String>,
+}
+
+impl LaunchProgress {
+    fn new(spawned: std::time::Instant) -> Self {
+        Self {
+            spawned,
+            first_output: None,
+            runner_started: None,
+            test_started: None,
+            listening: None,
+            gate: None,
+        }
+    }
+
+    fn observe(&mut self, line: &str, at: std::time::Instant) {
+        self.first_output.get_or_insert(at);
+        if self.runner_started.is_none() && line.contains("Running tests...") {
+            self.runner_started = Some(at);
+        }
+        if self.test_started.is_none() && line.contains("Test Case '") && line.contains("' started")
+        {
+            self.test_started = Some(at);
+        }
+        if self.listening.is_none() && line.contains("[TapsmithSocket] Listening on port") {
+            self.listening = Some(at);
+        }
+        if self.gate.is_none() {
+            if let Some(outcome) = line.split("Launch gate: ").nth(1) {
+                let outcome = outcome.trim();
+                self.gate = if let Some(rest) = outcome.strip_prefix("opened(waitedMs: ") {
+                    rest.split(')')
+                        .next()
+                        .and_then(|n| n.trim().parse::<u64>().ok())
+                        .map(|ms| format!("gate_waited_ms={ms}"))
+                } else if outcome.starts_with("timedOut") {
+                    Some("gate=timed_out".to_string())
+                } else if outcome.starts_with("unacknowledged") {
+                    Some("gate=unacknowledged".to_string())
+                } else {
+                    None
+                };
+            }
+        }
+    }
+
+    /// `spawn_to_output_ms=… output_to_runner_ms=… runner_to_test_ms=…
+    /// test_to_listening_ms=… listening_to_ready_ms=… gate_waited_ms=…` (or
+    /// `gate=timed_out` when the runner launched without the gate). A
+    /// step that was never seen is skipped, and the phase across it named by
+    /// the steps on either side (`output_to_timeout_ms`).
+    ///
+    /// `end` is when the launch ended and `end_name` how (`ready` once the
+    /// agent answered, or how it failed).
+    fn phase_fields(&self, end: std::time::Instant, end_name: &'static str) -> String {
+        let steps = [
+            ("spawn", Some(self.spawned)),
+            ("output", self.first_output),
+            ("runner", self.runner_started),
+            ("test", self.test_started),
+            ("listening", self.listening),
+            (end_name, Some(end)),
+        ];
+        let mut fields = Vec::new();
+        let mut previous: Option<(&str, std::time::Instant)> = None;
+        for (name, at) in steps {
+            let Some(at) = at else { continue };
+            if let Some((from, from_at)) = previous {
+                fields.push(format!(
+                    "{from}_to_{name}_ms={}",
+                    at.saturating_duration_since(from_at).as_millis()
+                ));
+            }
+            previous = Some((name, at));
+        }
+        if let Some(gate) = &self.gate {
+            fields.push(gate.clone());
+        }
+        fields.join(" ")
+    }
+}
 
 /// Spawn `xcodebuild test-without-building` for the agent and drain its
 /// stdout/stderr into rolling 20-line tails for error reporting.
@@ -686,7 +891,13 @@ async fn spawn_agent_xcodebuild(
     derived_data_path: &std::path::Path,
     is_physical: bool,
     target_bundle_id: &str,
-) -> Result<(TrackedAgent, OutputTail, OutputTail, LaunchFailure)> {
+) -> Result<(
+    TrackedAgent,
+    OutputTail,
+    OutputTail,
+    LaunchFailure,
+    LaunchProgressHandle,
+)> {
     use std::sync::{Arc, Mutex};
 
     let mut cmd = Command::new("xcodebuild");
@@ -701,6 +912,7 @@ async fn spawn_agent_xcodebuild(
     ]);
 
     // Capture stdout/stderr so we can diagnose failures.
+    let spawned = std::time::Instant::now();
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -720,6 +932,9 @@ async fn spawn_agent_xcodebuild(
     let launch_failure: LaunchFailure = Arc::new(Mutex::new(None));
     let launch_failure_writer = launch_failure.clone();
     let bundle_id = target_bundle_id.to_string();
+    let progress: LaunchProgressHandle = Arc::new(Mutex::new(LaunchProgress::new(spawned)));
+    let stdout_progress = progress.clone();
+    let stderr_progress = progress.clone();
 
     tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
@@ -727,6 +942,10 @@ async fn spawn_agent_xcodebuild(
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
                 info!(target: "xcodebuild", "{}", line);
+                stdout_progress
+                    .lock()
+                    .unwrap()
+                    .observe(&line, std::time::Instant::now());
                 if let Some(error) = runner_launch_failure(&line, &bundle_id) {
                     launch_failure_writer
                         .lock()
@@ -747,6 +966,10 @@ async fn spawn_agent_xcodebuild(
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
                 info!(target: "xcodebuild::stderr", "{}", line);
+                stderr_progress
+                    .lock()
+                    .unwrap()
+                    .observe(&line, std::time::Instant::now());
                 let mut tail = stderr_tail_writer.lock().unwrap();
                 tail.push(line);
                 if tail.len() > 20 {
@@ -758,7 +981,7 @@ async fn spawn_agent_xcodebuild(
 
     let child =
         TrackedAgent::track(child, udid, is_physical, super::agent_registry::global()).await?;
-    Ok((child, stdout_tail, stderr_tail, launch_failure))
+    Ok((child, stdout_tail, stderr_tail, launch_failure, progress))
 }
 
 /// Kill any existing xcodebuild test-without-building processes and the agent.
@@ -1711,6 +1934,7 @@ mod tests {
                 wiped()
             },
             Duration::from_secs(5),
+            None,
         );
         let path = gated.gate.path().to_path_buf();
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -1729,6 +1953,7 @@ mod tests {
             LaunchGate::new_in(dir.path(), 18700),
             std::future::pending::<Prepared>(),
             Duration::from_millis(30),
+            None,
         );
         let path = gated.gate.path().to_path_buf();
         // Never finishes, yet settles: the deadline ends the task.
@@ -1748,6 +1973,7 @@ mod tests {
             LaunchGate::new_in(dir.path(), 18700),
             async { wiped() },
             Duration::from_secs(5),
+            None,
         );
         gated.settle().await;
         let path = gated.gate.path().to_path_buf();
@@ -1756,6 +1982,122 @@ mod tests {
         assert!(path.exists(), "the second runner finds the gate open");
         std::fs::remove_file(&path).unwrap();
         assert!(!gated.app_launched_fresh().await);
+    }
+
+    #[tokio::test]
+    async fn the_gate_waits_for_the_defaults_past_the_prepare_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let (written, written_flag) = flag();
+        let defaults = SimulatorDefaults::start_with(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            written_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut gated = GatedLaunch::start_with(
+            LaunchGate::new_in(dir.path(), 18700),
+            async { wiped() },
+            Duration::from_millis(20),
+            Some(defaults.clone_handle()),
+        );
+        let path = gated.gate.path().to_path_buf();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(
+            !path.exists(),
+            "a finished prepare does not open the gate before the defaults"
+        );
+        gated.settle().await;
+        assert!(is_set(&written), "the defaults were written first");
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            gated.app_launched_fresh().await,
+            "slow defaults do not make the launch unvouched for"
+        );
+        // The start's own wait returns at once now.
+        tokio::time::timeout(Duration::from_millis(50), defaults.applied())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_defaults_task_that_died_does_not_hold_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let defaults = SimulatorDefaults::start_with(async { panic!("simctl went away") });
+        let mut gated = GatedLaunch::start_with(
+            LaunchGate::new_in(dir.path(), 18700),
+            async { wiped() },
+            Duration::from_secs(5),
+            Some(defaults.clone_handle()),
+        );
+        tokio::time::timeout(Duration::from_secs(2), gated.settle())
+            .await
+            .unwrap();
+        assert!(gated.gate.path().exists());
+        tokio::time::timeout(Duration::from_secs(2), defaults.applied())
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn launch_progress_reads_the_steps_of_an_xcodebuild_launch() {
+        let t0 = std::time::Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let mut p = LaunchProgress::new(t0);
+        p.observe("Command line invocation:", at(4_200));
+        p.observe(
+            "2026-11-10 11:05:17.504909+0000 TapsmithAgentUITests-Runner[48479:127324] [Default] Running tests...",
+            at(28_500),
+        );
+        p.observe(
+            "Test Suite 'All tests' started at 2026-11-10 11:05:21.134.",
+            at(41_400),
+        );
+        p.observe(
+            "Test Case '-[TapsmithAgentUITests.TapsmithAgentRunner testRunAgent]' started.",
+            at(41_500),
+        );
+        p.observe(
+            "2026-11-10 11:05:22.890264+0000 TapsmithAgentUITests-Runner[48479:127324] [TapsmithAgent] Launch gate: opened(waitedMs: 1)",
+            at(43_000),
+        );
+        p.observe(
+            "2026-11-10 11:05:26.774591+0000 TapsmithAgentUITests-Runner[48479:129561] [TapsmithSocket] Listening on port 18700",
+            at(47_000),
+        );
+        // Later lines never move a step already seen.
+        p.observe("[TapsmithSocket] Listening on port 18700", at(60_000));
+        assert_eq!(
+            p.phase_fields(at(47_300), "ready"),
+            "spawn_to_output_ms=4200 output_to_runner_ms=24300 runner_to_test_ms=13000 \
+             test_to_listening_ms=5500 listening_to_ready_ms=300 gate_waited_ms=1"
+        );
+    }
+
+    #[test]
+    fn launch_progress_names_phases_across_steps_whose_lines_never_came() {
+        let t0 = std::time::Instant::now();
+        let mut p = LaunchProgress::new(t0);
+        p.observe(
+            "xcodebuild: error: something",
+            t0 + Duration::from_millis(900),
+        );
+        assert_eq!(
+            p.phase_fields(t0 + Duration::from_millis(2_000), "timeout"),
+            "spawn_to_output_ms=900 output_to_timeout_ms=1100"
+        );
+        // The runner gave up waiting at the gate: said, not left out.
+        p.observe(
+            "2026-11-11 11:33:30.133+0000 TapsmithAgentUITests-Runner[1:2] [TapsmithAgent] Launch gate: timedOut",
+            t0 + Duration::from_millis(2_500),
+        );
+        // Another Xcode's wording for the runner's start: the phase spans it.
+        p.observe(
+            "Test Case '-[A b]' started.",
+            t0 + Duration::from_millis(3_000),
+        );
+        assert_eq!(
+            p.phase_fields(t0 + Duration::from_millis(3_500), "ready"),
+            "spawn_to_output_ms=900 output_to_test_ms=2100 test_to_ready_ms=500 gate=timed_out"
+        );
     }
 
     #[tokio::test]
@@ -1770,6 +2112,7 @@ mod tests {
                 wiped()
             },
             Duration::from_secs(5),
+            None,
         );
         let path = gated.gate.path().to_path_buf();
         drop(gated);

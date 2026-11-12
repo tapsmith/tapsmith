@@ -682,6 +682,32 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     expect(installedAppMatches).not.toHaveBeenCalled();
   });
 
+  it('writes one app_install timing line per install check to TAPSMITH_TIMING_LOG (PILOT-1134)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-timing-'));
+    const log = path.join(dir, 'timing.log');
+    const saved = process.env.TAPSMITH_TIMING_LOG;
+    process.env.TAPSMITH_TIMING_LOG = log;
+    try {
+      const open = () => openDeviceSession(
+        { name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50052' },
+        makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' }),
+        { claimSession: SESSION, startNetworkProxy: false, label: 'Device' },
+      );
+      mocks.simAppMatches = false;
+      await open();
+      mocks.simAppMatches = true;
+      await open();
+      const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatch(/^\[TIMING\] pid=\d+ kind=boot name=app_install dur_ms=\d+ result=reinstalled check_ms=\d+ platform=ios$/);
+      expect(lines[1]).toMatch(/ result=matching check_ms=\d+ platform=ios$/);
+    } finally {
+      if (saved === undefined) delete process.env.TAPSMITH_TIMING_LOG;
+      else process.env.TAPSMITH_TIMING_LOG = saved;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('trusts an install made right after the simulator booted: no recheck, no reinstall, and a fresh-install launch (PILOT-496)', async () => {
     // The sequential CLI installs the app straight after booting a simulator
     // that lacked it. The session must neither check and reinstall it nor

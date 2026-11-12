@@ -1671,10 +1671,11 @@ impl DeviceBackend for IosBackend<'_> {
         // ─── iOS: launch XCUITest agent ───
         let is_physical = self.svc.is_active_ios_physical().await;
 
-        // Test-friendly defaults are applied every time the agent starts (below,
-        // alongside it), not just on first boot — reused simulators may have
-        // stale config. Skipped entirely on physical devices: the simctl
-        // spawns would fail, and the device's defaults are user-owned anyway.
+        // Test-friendly defaults are applied every time the agent starts (by
+        // `start_agent`, alongside it), not just on first boot — reused
+        // simulators may have stale config. Skipped entirely on physical
+        // devices: the simctl spawns would fail, and the device's defaults are
+        // user-owned anyway.
 
         // Drop any prior iproxy tunnel BEFORE start_agent so the
         // existing host port is free when start_agent tries to bind
@@ -1709,11 +1710,9 @@ impl DeviceBackend for IosBackend<'_> {
         }
 
         let agent_port = self.svc.agent.read().await.port();
-        // Written before anything starts: the app must never launch before
-        // them, and their retry pass can outlast any launch-gate bound.
-        if !is_physical {
-            ios::device::configure_simulator(&serial).await;
-        }
+        // On a simulator, `start_agent` also writes the test-friendly defaults,
+        // alongside xcodebuild's start rather than before it, and keeps the app
+        // from launching until they are written (PILOT-1134).
         let started = ios::agent_launch::start_agent(
             &serial,
             &req.ios_xctestrun_path,
