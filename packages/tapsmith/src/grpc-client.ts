@@ -339,6 +339,11 @@ export interface ResetAppRequestOptions {
    * `device.resetApp()` calls keep the gentler restart fallback.
    */
   fallbackToClear?: boolean;
+  /**
+   * Ask the in-app hook to keep the app's persisted data (reset in-memory
+   * state only). Set between tests that restore the same `appState`.
+   */
+  keepAppData?: boolean;
 }
 
 export interface ResetAppStep {
@@ -1050,6 +1055,7 @@ export class TapsmithGrpcClient {
       idleTimeoutMs: options.idleTimeoutMs ?? 0,
       targetPath: options.targetPath ?? '/',
       fallbackToClear: options.fallbackToClear ?? false,
+      keepAppData: options.keepAppData ?? false,
     }, 600_000);
   }
 

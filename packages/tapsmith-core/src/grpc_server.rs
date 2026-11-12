@@ -4525,7 +4525,13 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     mode,
                     marker: marker.as_ref(),
                     remembered_marker: remembered.as_ref(),
-                    reset_deep_link: &req.reset_deep_link,
+                    // The legacy link resets the app however it likes; only
+                    // the hooks rung can keep persisted data.
+                    reset_deep_link: if req.keep_app_data {
+                        ""
+                    } else {
+                        &req.reset_deep_link
+                    },
                     force_cold: req.force_cold,
                     cold_every_n: req.cold_every_n_resets,
                     supports_cold_delivery,
@@ -4563,6 +4569,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             } else {
                 req.target_path.clone()
             },
+            keep_app_data: req.keep_app_data,
             wait_for_idle: req.wait_for_idle,
             idle_timeout_ms,
             target_reached: std::sync::atomic::AtomicBool::new(false),
@@ -7035,6 +7042,9 @@ struct ServiceResetOps<'a> {
     package: String,
     marker: Option<app_reset::HooksMarker>,
     target_path: String,
+    /// Ask the in-app hook to keep the app's persisted data
+    /// (`ResetAppRequest.keep_app_data`).
+    keep_app_data: bool,
     wait_for_idle: bool,
     idle_timeout_ms: u64,
     /// Set when the warm-hooks rung was acknowledged on `target_path` itself,
@@ -7064,6 +7074,7 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
             &marker.url_prefix,
             &self.target_path,
             &Uuid::new_v4().simple().to_string(),
+            self.keep_app_data,
         );
         // A warm reset onto a non-root route may land on a screen that hides
         // the marker (see below), where no amount of relaunching can read the
@@ -7117,6 +7128,7 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
                     &marker.url_prefix,
                     "/",
                     &Uuid::new_v4().simple().to_string(),
+                    self.keep_app_data,
                 );
                 if let Ok(retry) = self
                     .svc

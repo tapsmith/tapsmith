@@ -905,6 +905,12 @@ message ResetAppRequest {
   // promise is state-clearing, and a restart keeps persisted data. Explicit
   // `device.resetApp()` calls leave this false and keep the gentler ladder.
   bool fallback_to_clear = 11;
+  // Ask the in-app hook to keep the app's persisted data: the reset link
+  // carries `__tapsmith_keep=1`, and the hook resets in-memory state only.
+  // Set by the runner between tests that restore the same `appState` archive
+  // once the hook reports no persisted writes since the restore. Only the
+  // hooks rung can keep data, so the legacy `reset_deep_link` is ignored.
+  bool keep_app_data = 12;
 }
 
 message ResetStep {

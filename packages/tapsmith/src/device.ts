@@ -832,6 +832,7 @@ export class Device {
       waitForIdle: options.waitForIdle,
       targetPath: options.target,
       fallbackToClear: options.fallbackToClear,
+      keepAppData: options.keepAppData,
     };
     if (mode !== 'warm') await this._disposeWebViewManager();
     await withActionProgress('resetApp', packageName,
@@ -2374,6 +2375,12 @@ export interface InternalAppResetOptions extends AppResetOptions {
    * public `device.resetApp()` keeps the gentler restart fallback.
    */
   fallbackToClear?: boolean;
+  /**
+   * Keep the app's persisted data: the in-app hook resets in-memory state
+   * only (its `onReload`). Set by the runner between tests that restore the
+   * same `appState`, once the hook reports no writes since the restore.
+   */
+  keepAppData?: boolean;
 }
 
 /** What `device.resetApp()` did: the rung that ran, why, and how long it took. */
