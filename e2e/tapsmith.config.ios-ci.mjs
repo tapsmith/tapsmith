@@ -10,6 +10,8 @@ export default defineConfig({
   // setting and restore on every run (reduced-motion.ios.test.ts checks the setting).
   reducedMotion: "reduce",
   typingDelay: 10,
+  // PILOT-1131 trial: 0 disables the periodic cold delivery of every Nth warm reset.
+  appResetColdEvery: 0,
   // Two retries (Playwright's CI convention): runner-scoped outages
   // (compositor stalls, input-injection drops) can outlast a single retry
   // even after the framework's own recovery escalations.
