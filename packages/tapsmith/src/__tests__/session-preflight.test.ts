@@ -815,9 +815,10 @@ describe('session-preflight', () => {
       expect(ctx.device._resetApp).not.toHaveBeenCalled();
       expect(ctx.capabilities?.appStateBaseline).toBeUndefined();
       for (const report of [first, second]) {
-        expect(report.reason).toBe('warm skipped: the app does not report persisted writes (pass onReload and track to <TapsmithTestHooks>)');
-        // No second read after the restore: the relaunched build reports no writes either.
-        expect(report.steps.filter((s) => s.name === 'readWriteCount')).toHaveLength(1);
+        expect(report.reason).toMatch(/^warm skipped: the app does not report persisted writes \(give <TapsmithTestHooks> onReload and track; a tracked store whose methods cannot be wrapped/);
+        // One read, after the relaunch: with no baseline, a read before the
+        // restore could not change what happens.
+        expect(report.steps.map((s) => s.name)).toEqual(['restoreAppState', 'restartApp', 'ensureSessionReady', 'waitForAppReady', 'readWriteCount']);
       }
     });
 
@@ -916,21 +917,31 @@ describe('session-preflight', () => {
       expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
     });
 
-    it('keeps the data through a cold-delivered warm reset, then restores cold next time and says why', async () => {
+    it('restores cold after a warm reset that relaunched the app: writes just before it cannot be checked', async () => {
       const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
       await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
       vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
         app.boot = 'valve';
-        return resetResult('warm', { hooksDetected: true, coldLaunch: true });
+        app.writes = 0;
+        return resetResult('warm', { hooksDetected: true, coldLaunch: true, reason: 'cold relaunch: warm-window bound reached (10 resets)' });
       });
 
-      const kept = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
-      const next = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
 
-      expect(kept.modeUsed).toBe('warm');
       expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
-      // A new process may have written at launch, after the counted writes.
-      expect(next.reason).toBe('warm skipped: the app relaunched since the restore');
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe('the warm reset relaunched the app (cold relaunch: warm-window bound reached (10 resets)), so writes made just before it cannot be ruled out; restored auth.tar.gz cold');
+      expect(ctx.capabilities?.appStateBaseline).toEqual({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('retries a marker read that misses once', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce({ requestId: '1', hierarchyXml: '', errorMessage: 'snapshot failed' });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(report.modeUsed).toBe('warm');
     });
 
     it("explains that appState '' clears even with hooks", async () => {

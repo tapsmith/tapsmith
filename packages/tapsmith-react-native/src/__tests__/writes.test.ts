@@ -56,6 +56,24 @@ describe('persisted write tracking', () => {
     expect(persistedWriteCount()).toBe(start + 3);
   });
 
+  it('counts the write verbs of other stores, and leaves listener registration alone', () => {
+    const realmLike = {
+      objects: () => [],
+      write: (fn: () => void) => fn(),
+      create: () => undefined,
+      delete: () => undefined,
+      addListener: () => undefined,
+    };
+    const tracking = trackStoreWrites([realmLike]);
+    const start = persistedWriteCount();
+    realmLike.addListener();
+    realmLike.objects();
+    expect(persistedWriteCount()).toBe(start);
+    realmLike.write(() => realmLike.create());
+    expect(persistedWriteCount()).toBe(start + 2);
+    tracking.untrack();
+  });
+
   it('restores an own method that was there before', async () => {
     const original = vi.fn(async () => undefined);
     const store = { setItem: original };

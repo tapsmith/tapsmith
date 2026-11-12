@@ -42,13 +42,18 @@ export function subscribePersistedWrites(listener: (count: number) => void): () 
 /**
  * Method names that change a store's data: AsyncStorage (`setItem`,
  * `removeItem`, `mergeItem`, `clear`, `multiSet`, `multiRemove`,
- * `multiMerge`), MMKV (`set`, `delete`, `clearAll`, `recrypt`),
- * expo-secure-store (`setItemAsync`, `deleteItemAsync`) and the `set*` /
- * `remove*` families of other key-value stores. Counting a method that turns
- * out not to write only costs a restore; missing one would leak data
- * between tests, so the match is deliberately broad.
+ * `multiMerge`), MMKV (`set`, `delete`, `clearAll`, `recrypt`, `trim`,
+ * `importAllFrom`), expo-secure-store (`setItemAsync`, `deleteItemAsync`),
+ * keychain-style `reset*`, Realm-style `write`/`create`, and the
+ * `put`/`save`/`insert`/`update`/`add`/`append`/`move`/`copy`/`rename`/
+ * `unlink` families of other stores. Counting a method that turns out not
+ * to write only costs a restore; missing one would leak data between tests,
+ * so the match is deliberately broad. Listener registration (`addListener`,
+ * `addOnValueChangedListener`) changes no data and is left alone: components
+ * subscribe while tests run.
  */
-const WRITE_METHOD = /^(set|remove|delete|clear|merge|multiSet|multiRemove|multiMerge|recrypt)/;
+const WRITE_METHOD = /^(set|remove|delete|clear|merge|multiSet|multiRemove|multiMerge|recrypt|trim|import|reset|write|create|put|save|insert|update|add|append|move|copy|rename|unlink)/;
+const NOT_A_WRITE = /Listener$/;
 
 export interface StoreTracking {
   /**
@@ -108,7 +113,7 @@ function writeMethodNames(store: object): string[] {
   const names = new Set<string>();
   for (let o: object | null = store; o && o !== Object.prototype && o !== Function.prototype; o = Object.getPrototypeOf(o) as object | null) {
     for (const name of Object.getOwnPropertyNames(o)) {
-      if (name === 'constructor' || !WRITE_METHOD.test(name)) continue;
+      if (name === 'constructor' || !WRITE_METHOD.test(name) || NOT_A_WRITE.test(name)) continue;
       let value: unknown;
       try { value = (store as Record<string, unknown>)[name]; } catch { continue; }
       if (typeof value === 'function') names.add(name);

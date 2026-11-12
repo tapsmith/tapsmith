@@ -310,6 +310,14 @@ impl ResetPolicyState {
         }
     }
 
+    /// The app was relaunched outside the reset ladder (`RestartApp`, as the
+    /// runner's `appState` restore does): like a cold rung, it starts a fresh
+    /// warm window. Without this, warm resets kept between restores would hit
+    /// the window bound counted across those relaunches.
+    pub fn note_relaunch(&mut self) {
+        self.warm_resets_since_cold = 0;
+    }
+
     /// A warm attempt failed verification. Recorded whether or not the ladder
     /// then recovered with a restart/clear: [`Self::record`] leaves the streak
     /// alone on such recoveries, so two failures in a row reach
@@ -861,6 +869,20 @@ mod tests {
             build_reset_url("myapp:///", "", "n4", false),
             "myapp:///?__tapsmith_reset=1&nonce=n4"
         );
+    }
+
+    #[test]
+    fn a_relaunch_outside_the_ladder_starts_a_fresh_warm_window() {
+        let mut state = ResetPolicyState {
+            warm_resets_since_cold: 10,
+            consecutive_warm_failures: 1,
+            valve_relaunches: 0,
+        };
+        assert!(state.cold_reason(false, 10).is_some());
+        state.note_relaunch();
+        assert_eq!(state.cold_reason(false, 10), None);
+        // The failure streak is about the hook, not the window: kept.
+        assert_eq!(state.consecutive_warm_failures, 1);
     }
 
     #[test]

@@ -88,7 +88,7 @@ export default function HomeScreen() {
 
 ## Keeping restored app state between tests
 
-A scope that restores saved app state (`test.use({ appState })`, typically a project that reuses a logged-in session) needs the archive's data on the device before every reset, not empty stores. A plain warm reset cannot give it that: it clears the stores and runs `onReset`, which signs the user out. So by default every reset in such a scope restores the archive and relaunches the app, cold, even with the hooks mounted. The trace's **APP RESET** section says so: `warm skipped: the app does not report persisted writes (pass onReload and track to <TapsmithTestHooks>)`.
+A scope that restores saved app state (`test.use({ appState })`, typically a project that reuses a logged-in session) needs the archive's data on the device before every reset, not empty stores. A plain warm reset cannot give it that: it clears the stores and runs `onReset`, which signs the user out. So by default every reset in such a scope restores the archive and relaunches the app, cold, even with the hooks mounted. The trace's **APP RESET** section says so: `warm skipped: the app does not report persisted writes (give <TapsmithTestHooks> onReload and track; …)`.
 
 Most tests only read that data, though. If nothing was written since the restore, the data on the device still matches the archive, and only the app's in-memory state needs resetting. Pass `track` and `onReload` and Tapsmith does exactly that:
 
@@ -116,11 +116,11 @@ What happens, per device:
 
 1. The first reset that restores an archive restores it cold, then reads the hooks' write count.
 2. Each later reset that restores the **same** archive reads the count again. If the app is still the process that restore launched and its count has not moved, the reset is warm: Tapsmith opens a reset link that asks the hooks to keep the data (`__tapsmith_keep=1`), and the hooks run `onReload` instead of `clear` and `onReset`. The trace row reads *"kept auth.tar.gz: no persisted writes since the restore"*.
-3. Otherwise it restores the archive cold again, and the row says why: *"warm skipped: the app wrote persisted data since the restore (2 writes)"*, *"… the app relaunched since the restore"*, *"… a retry restores the archive cold"*, or *"… first restore of auth.tar.gz on this device"*. If the warm reset itself fails, Tapsmith restores the archive and reports the fallback.
+3. Otherwise it restores the archive cold again, and the row says why: *"warm skipped: the app wrote persisted data since the restore (2 writes)"*, *"… the app relaunched since the restore"*, *"… a retry restores the archive cold"*, or *"… first restore of auth.tar.gz on this device"*. If the warm reset itself fails, or the daemon delivered it by relaunching the app (its periodic cold-launch valve), Tapsmith restores the archive and reports the fallback: a relaunch loses the count, so a write made just before it could not be checked.
 
 Retries and the fresh start after a failure always restore cold. So does a policy that is not warm: an explicit `appReset: 'clear'` or `'restart'` keeps restoring cold. `appState: ''` always clears the app's data.
 
-**Report every write.** Keeping the data is only as honest as the count. The hooks count calls to the write methods of the stores in `track` (`setItem`, `removeItem`, `mergeItem`, `clear`, `multiSet`, …; MMKV's `set`, `delete`, `clearAll`; expo-secure-store's `setItemAsync`, `deleteItemAsync`), whether the call came from your code, a library or the reset itself. Writes they cannot see — a native module, SQLite, files, the iOS keychain — must be reported with `markTapsmithWrite()`:
+**Report every write.** Keeping the data is only as honest as the count. The hooks count calls to the write methods of the stores in `track` (`setItem`, `removeItem`, `mergeItem`, `clear`, `multiSet`, …; MMKV's `set`, `delete`, `clearAll`; expo-secure-store's `setItemAsync`, `deleteItemAsync`; and any method named `write*`, `create*`, `put*`, `save*`, `insert*`, `update*`, `add*`, `reset*`, … on other stores), whether the call came from your code, a library or the reset itself, as long as it goes through the store object. They wrap the store's methods when `<TapsmithTestHooks>` mounts, so a reference taken before that (`const { setItem } = AsyncStorage`, `storage.set.bind(storage)` at module level) calls the unwrapped method: call through the store instead, or report those writes with `markTapsmithWrite()`. Writes they cannot see — a native module, SQLite, files, the iOS keychain — must be reported with `markTapsmithWrite()`:
 
 ```tsx
 import { markTapsmithWrite } from "@tapsmith/react-native"
@@ -129,7 +129,7 @@ await db.runAsync("INSERT INTO drafts …")
 markTapsmithWrite()
 ```
 
-Tapsmith reads the count before the reset and again right after it, so a deferred save that lands during the reset is caught; one that lands later is not. An app that defers writes (a throttled persister, a debounced autosave) should call `markTapsmithWrite()` when it schedules the write, or have `onReload` cancel it. A missed write means the next test sees data an earlier test left behind. If you cannot account for every write, leave `onReload` out: the scope then restores cold every time, as before. If a store's methods cannot be wrapped (a frozen object), the hooks publish no count at all, with the same result. Pass `track={[]}` only when `markTapsmithWrite()` reports every write the app makes.
+Tapsmith reads the count before the reset and again right after it, so a deferred save that lands during the reset is caught; one that lands later is not. An app that defers writes (a throttled persister, a debounced autosave) should call `markTapsmithWrite()` when it schedules the write, or have `onReload` cancel it. A missed write means the next test sees data an earlier test left behind. If you cannot account for every write, leave `onReload` out: the scope then restores cold every time, as before. If a store's methods cannot be wrapped (a frozen object), or it has none of those names, the hooks publish no count at all, with the same result, and the trace says the app reports no writes. Pass `track={[]}` only when `markTapsmithWrite()` reports every write the app makes.
 
 ## How a warm reset works
 

@@ -4676,7 +4676,13 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         Self::validate_package_name(&req.package_name)?;
 
         let backend = self.backend().await?;
-        backend.restart_app(request_id, serial, &req).await
+        let resp = backend.restart_app(request_id, serial, &req).await?;
+        if resp.get_ref().success {
+            // A relaunch outside the reset ladder (the runner's appState
+            // restore) starts a fresh warm window like one inside it.
+            self.reset_policy.write().await.note_relaunch();
+        }
+        Ok(resp)
     }
 
     #[instrument(skip_all, fields(request_id))]

@@ -875,14 +875,17 @@ export async function executeAppReset(
         processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
         routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
         reason = `kept ${archiveName}: no persisted writes since the restore`;
-        // A process recreated by the reset (a cold delivery) may write at
-        // launch, after the count the baseline holds; the baseline keeps the
-        // old boot token, so the next restore sees the relaunch and goes cold.
+        // A process the reset recreated (a cold delivery: the warm-window
+        // valve, or a warm delivery that relaunched) took its count with it:
+        // a write made after the count was read cannot be checked any more.
         // One that survived dropped no pending timers: a write it had
         // scheduled before the reset (a debounced save) may have landed
         // since the count was read. Check again.
         const baseline = ctx.capabilities?.appStateBaseline;
-        if (!processRecreated && baseline) {
+        if (processRecreated) {
+          kept = false;
+          reason = `the warm reset relaunched the app (${result.reason ?? 'cold delivery'}), so writes made just before it cannot be ruled out; restored ${archiveName} cold`;
+        } else if (baseline) {
           let after: ReturnType<typeof parseHooksMarker>;
           await step('readWriteCount', async () => { after = await readMarker(ctx); });
           // An unreadable marker right after a reset is a transition, not
@@ -1019,7 +1022,13 @@ export async function executeAppReset(
     // Before the start route opens: a screen that writes when it mounts
     // changes the data the next test would keep.
     const archive = recordBaselineFor;
-    await step('readWriteCount', () => recordAppStateBaseline(ctx, archive));
+    let marker: ReturnType<typeof parseHooksMarker>;
+    await step('readWriteCount', async () => { marker = await recordAppStateBaseline(ctx, archive); });
+    // A restore with no earlier baseline to compare against: what this read
+    // found is why it could not have been kept.
+    reason ??= marker?.writes === undefined
+      ? (marker ? NO_WRITES_REASON : 'warm skipped: could not read the hooks marker')
+      : `warm skipped: first restore of ${path.basename(archive)} on this device`;
   }
   // Last, on a ready app (a link sent into a still-booting app is lost), and
   // after the hooks re-read above, which may have just learnt the URL prefix.
@@ -1031,12 +1040,16 @@ export async function executeAppReset(
 
 // ─── Keeping a restored appState between tests ───
 
-const NO_WRITES_REASON = 'warm skipped: the app does not report persisted writes (pass onReload and track to <TapsmithTestHooks>)';
+const NO_WRITES_REASON = 'warm skipped: the app does not report persisted writes (give <TapsmithTestHooks> onReload and track; a tracked store whose methods cannot be wrapped also turns the count off)';
 
 interface KeptRestorePlan {
   /** The data still matches the archive: reset warm and keep it. */
   keep: boolean;
-  /** Why the restore runs cold (trace detail), when warm was possible in principle. */
+  /**
+   * Why the restore runs cold (trace detail), when warm was possible in
+   * principle. Undefined with `recordBaseline` set: the read after the
+   * restore says why (no baseline yet, or an app that reports no writes).
+   */
   reason?: string;
   /**
    * After a cold restore (including the fallback of a failed keep), read the
@@ -1050,9 +1063,9 @@ interface KeptRestorePlan {
  * device. It can when the last cold restore was of the same archive, the app
  * is still the process that restore launched (`boot`), and the hooks have
  * counted no persisted write since (`writes`). Anything else — and every
- * forced-cold reset — restores the archive again. The marker is read every
- * time (one hierarchy dump against a restore and relaunch), so nothing about
- * the app is assumed from an earlier read.
+ * forced-cold reset — restores the archive again. The marker is read only
+ * when a baseline for this archive exists, the one case its answer can
+ * change; every cold restore reads it once after the relaunch instead.
  */
 async function planKeptRestore(
   ctx: SessionPreflightContext,
@@ -1067,16 +1080,12 @@ async function planKeptRestore(
   }
   if (!hooks) return { keep: false, recordBaseline: false };
   if (options.forceCold) return { keep: false, recordBaseline: true, reason: 'warm skipped: a retry restores the archive cold' };
+  const baseline = ctx.capabilities?.appStateBaseline;
+  if (!baseline || baseline.archive !== archive) return { keep: false, recordBaseline: true };
   let marker: ReturnType<typeof parseHooksMarker>;
   await step('readWriteCount', async () => { marker = await readMarker(ctx); });
   if (!marker) return { keep: false, recordBaseline: true, reason: 'warm skipped: could not read the hooks marker' };
-  // This build of the app reports no writes; the relaunch a restore does
-  // will not change that, so reading again after it would find nothing.
-  if (marker.writes === undefined) return { keep: false, recordBaseline: false, reason: NO_WRITES_REASON };
-  const baseline = ctx.capabilities?.appStateBaseline;
-  if (!baseline || baseline.archive !== archive) {
-    return { keep: false, recordBaseline: true, reason: `warm skipped: first restore of ${path.basename(archive)} on this device` };
-  }
+  if (marker.writes === undefined) return { keep: false, recordBaseline: true, reason: NO_WRITES_REASON };
   if (marker.boot !== baseline.boot) {
     return { keep: false, recordBaseline: true, reason: 'warm skipped: the app relaunched since the restore' };
   }
@@ -1088,24 +1097,37 @@ async function planKeptRestore(
   return { keep: true, recordBaseline: true };
 }
 
+const MARKER_READ_ATTEMPTS = 3;
+const MARKER_READ_RETRY_MS = 250;
+
+/**
+ * Read the hooks marker, trying again briefly on a miss: right after a
+ * relaunch or mid-transition a dump can come back without it, and a miss
+ * costs a cold restore (the daemon's own marker reads retry the same way).
+ */
 async function readMarker(ctx: SessionPreflightContext): Promise<ReturnType<typeof parseHooksMarker>> {
-  try {
-    return parseHooksMarker((await ctx.client.getUiHierarchy()).hierarchyXml ?? '');
-  } catch {
-    return undefined;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const marker = parseHooksMarker((await ctx.client.getUiHierarchy()).hierarchyXml ?? '');
+      if (marker) return marker;
+    } catch { /* a failed read is a miss */ }
+    if (attempt >= MARKER_READ_ATTEMPTS) return undefined;
+    await delay(MARKER_READ_RETRY_MS);
   }
 }
 
 /**
  * After a cold restore of `archive`, remember the process it launched and
  * its write count, so the next restore of the same archive can tell whether
- * the data changed. A marker without a count records nothing.
+ * the data changed. A marker without a count records nothing. Returns the
+ * marker read (undefined when none was found).
  */
-async function recordAppStateBaseline(ctx: SessionPreflightContext, archive: string): Promise<void> {
+async function recordAppStateBaseline(ctx: SessionPreflightContext, archive: string): Promise<ReturnType<typeof parseHooksMarker>> {
   const marker = await readMarker(ctx);
   if (marker?.boot && marker.writes !== undefined) {
     (ctx.capabilities ??= {}).appStateBaseline = { archive, boot: marker.boot, writes: marker.writes };
   }
+  return marker;
 }
 
 /**
