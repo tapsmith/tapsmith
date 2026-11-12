@@ -1291,7 +1291,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         package: ctx.config.package,
         device: singleWorkerDisplayName ?? ctx.deviceSerial,
         timeout: ctx.config.timeout,
-        retries: ctx.config.retries,
+        // UI mode never retries a failed test, whatever is configured (PILOT-1175).
+        retries: 0,
         projects,
         deviceTargets,
         configPath: ctx.configPath,
