@@ -2781,6 +2781,183 @@ describe('retries', () => {
   });
 });
 
+// ─── UI mode runs each test once (PILOT-1175) ───
+//
+// Playwright's UI runner overrides retries to 0: a failure stays on screen for
+// inspection and the user reruns it explicitly. Every level a retry count can
+// come from must lose to that, and every other run path keeps its retries.
+describe('UI mode never retries a failed test (PILOT-1175)', () => {
+  function alwaysFails(counter: { calls: number }): void {
+    tapsmithTest('always fails', async () => {
+      counter.calls++;
+      throw new Error('boom');
+    });
+  }
+
+  function makeTracingDevice() {
+    const tracing = new Tracing(async () => undefined, async () => undefined);
+    const device = {
+      tracing,
+      waitForIdle: vi.fn(async () => {}),
+      _startDeviceLogStream: vi.fn(),
+      _stopDeviceLogStream: vi.fn(),
+      _startDaemonLogStream: vi.fn(),
+      _stopDaemonLogStream: vi.fn(),
+    };
+    return { device, startManaged: vi.spyOn(tracing, '_startManaged') };
+  }
+
+  it('ignores the config retries', async () => {
+    const counter = { calls: 0 };
+    pushContext();
+    alwaysFails(counter);
+    const ctx = popContext();
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+      config: makeConfig({ retries: 2 }),
+      runMode: 'ui',
+    }));
+    expect(counter.calls).toBe(1);
+    expect(result.tests[0].status).toBe('failed');
+    expect(result.tests[0].error?.message).toBe('boom');
+    expect(result.tests[0].retry).toBeUndefined();
+  });
+
+  it('ignores a project use retries (applied as the root scope options)', async () => {
+    const counter = { calls: 0 };
+    pushContext();
+    alwaysFails(counter);
+    const ctx = popContext();
+    // runTestFile layers `projectUseOptions` under the root scope's own.
+    ctx.useOptions = { retries: 2 };
+    await runSuiteContext(ctx, '', [], [], makeOpts({ runMode: 'ui' }));
+    expect(counter.calls).toBe(1);
+  });
+
+  it('ignores test.use({ retries })', async () => {
+    const counter = { calls: 0 };
+    pushContext();
+    tapsmithDescribe('scoped', () => {
+      tapsmithTest.use({ retries: 3 });
+      alwaysFails(counter);
+    });
+    const ctx = popContext();
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts({ runMode: 'ui' }));
+    expect(counter.calls).toBe(1);
+    expect(collectResults(result)[0].status).toBe('failed');
+  });
+
+  it('ignores test.describe.configure({ retries })', async () => {
+    const counter = { calls: 0 };
+    pushContext();
+    tapsmithDescribe('configured', () => {
+      tapsmithTest.describe.configure({ retries: 2 });
+      alwaysFails(counter);
+    });
+    const ctx = popContext();
+    await runSuiteContext(ctx, '', [], [], makeOpts({ runMode: 'ui' }));
+    expect(counter.calls).toBe(1);
+  });
+
+  it('announces the test once, so the UI never sees a second attempt', async () => {
+    const starts: string[] = [];
+    pushContext();
+    alwaysFails({ calls: 0 });
+    const ctx = popContext();
+    await runSuiteContext(ctx, '', [], [], makeOpts({
+      config: makeConfig({ retries: 2 }),
+      runMode: 'ui',
+      onTestStart: async (fullName) => { starts.push(fullName); },
+    }));
+    expect(starts).toEqual(['always fails']);
+  });
+
+  for (const runMode of ['test', 'test-parallel', 'watch', 'mcp'] as const) {
+    it(`keeps the configured retries under runMode '${runMode}'`, async () => {
+      const counter = { calls: 0 };
+      pushContext();
+      tapsmithDescribe('configured', () => {
+        tapsmithTest.describe.configure({ retries: 1 });
+        alwaysFails(counter);
+      });
+      const ctx = popContext();
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+        config: makeConfig({ retries: 2 }),
+        runMode,
+      }));
+      expect(counter.calls).toBe(2);
+      expect(collectResults(result)[0].retry).toBe(1);
+    });
+  }
+
+  // With no retry to record, a retry-only trace mode would leave UI mode
+  // with no live trace at all; it records the one attempt instead.
+  for (const mode of ['on-first-retry', 'on-all-retries'] as const) {
+    it(`records the single attempt under trace '${mode}'`, async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-ui-retry-trace-'));
+      const { device, startManaged } = makeTracingDevice();
+      try {
+        pushContext();
+        alwaysFails({ calls: 0 });
+        const ctx = popContext();
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+          config: makeConfig({
+            rootDir: tempRoot,
+            outputDir: 'out',
+            retries: 2,
+            trace: { mode, network: false, screenshots: false, snapshots: false, sources: false },
+          }),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner tracing mock
+          devices: [{ name: 'device-1', device: device as any }],
+          runMode: 'ui',
+        }));
+        expect(result.tests[0].status).toBe('failed');
+        expect(startManaged).toHaveBeenCalledTimes(1);
+        expect(result.tests[0].tracePath).toBeTruthy();
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it('records a beforeAll under trace on-first-retry in UI mode', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-ui-retry-ba-'));
+    const { device } = makeTracingDevice();
+    let collectorInBeforeAll = false;
+    try {
+      pushContext();
+      tapsmithBeforeAll(async () => { collectorInBeforeAll = getActiveTraceCollector() != null; });
+      tapsmithTest('passes', async () => {});
+      const ctx = popContext();
+      await runSuiteContext(ctx, '', [], [], makeOpts({
+        config: makeConfig({
+          rootDir: tempRoot,
+          outputDir: 'out',
+          trace: { mode: 'on-first-retry', network: false, screenshots: false, snapshots: false, sources: false },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner tracing mock
+        devices: [{ name: 'device-1', device: device as any }],
+        runMode: 'ui',
+      }));
+      expect(collectorInBeforeAll).toBe(true);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('still records nothing under trace on-first-retry outside UI mode with retries 0', async () => {
+    const { device, startManaged } = makeTracingDevice();
+    pushContext();
+    alwaysFails({ calls: 0 });
+    const ctx = popContext();
+    await runSuiteContext(ctx, '', [], [], makeOpts({
+      config: makeConfig({ trace: { mode: 'on-first-retry', network: false, screenshots: false, snapshots: false, sources: false } }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner tracing mock
+      devices: [{ name: 'device-1', device: device as any }],
+    }));
+    expect(startManaged).not.toHaveBeenCalled();
+  });
+});
+
 describe('beforeAll trace replay into packaged traces', () => {
   it('includes beforeAll actions in every test trace of a headless run', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-ba-trace-'));

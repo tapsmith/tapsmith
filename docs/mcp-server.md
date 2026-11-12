@@ -461,7 +461,7 @@ Get configuration and environment info for the current test session. Useful for 
 
 No parameters.
 
-Returns session details: the config file backing the session, device serial, platform, app package, timeout, retries, and per-project settings (name, platform, package, test file count, dependencies).
+Returns session details: the config file backing the session, device serial, platform, app package, timeout, retries (always 0 in UI mode, which [never retries](ui-mode.md#each-test-runs-once)), and per-project settings (name, platform, package, test file count, dependencies).
 
 Check the `Config:` line first — everything else is derived from it. A headless
 session started outside a project directory may pick up a config you did not

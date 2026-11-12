@@ -24,7 +24,7 @@ import { APIRequestContext } from './api-request.js';
 import { flushSoftErrors } from './expect.js';
 import { FixtureRegistry, resolveFixtures, fixtureParameterNames, functionHasParameters, type FixtureDefinitions, type BuiltinFixtures } from './fixtures.js';
 import { resolveTraceConfig, type TraceConfig } from './trace/types.js';
-import { shouldRecord, shouldRetain } from './trace/trace-mode.js';
+import { shouldRecord, shouldRetain, uiModeTraceMode } from './trace/trace-mode.js';
 import { resolveVideoConfig } from './video/types.js';
 import { appendEventsToTrace, packageTrace, readTraceActionCount } from './trace/trace-packager.js';
 import { TraceCollector, extractSourceLocation, screenshotFileName, setActiveTraceCollector, withActiveTraceCollector } from './trace/trace-collector.js';
@@ -1607,6 +1607,33 @@ function validateHookFixtures(
  * in which case the scope's hooks and app reset must not run either (they
  * would cost seconds and have no test to be attributed to).
  */
+// ─── UI-mode run policy (PILOT-1175) ───
+
+/**
+ * How many times a failed test is retried in this run: the scope's resolved
+ * `retries` (config, project `use`, `test.use()`, `describe.configure()`),
+ * except in UI mode, which never retries — as Playwright's UI runner
+ * overrides `retries` to 0. A failure stays on screen to inspect, and the
+ * user reruns it explicitly, which replaces it. Session recovery
+ * (`abortFileOnError`, the UI worker's file recovery) and auto-waiting are
+ * separate mechanisms and unaffected. Keyed on `runMode`, which is required
+ * and set to 'ui' by the UI worker alone, so every UI entry point (single
+ * test, file, Run all, UI watch, the UI server's MCP) gets the same policy.
+ */
+function testRetries(opts: RunOptions): number {
+  return opts.runMode === 'ui' ? 0 : opts.config.retries;
+}
+
+/**
+ * The trace config a scope records with: in UI mode a retry-only mode
+ * records as `on` (`uiModeTraceMode`), as the UI worker already turns `off`
+ * into `on`, since the live view is built from the trace.
+ */
+function runTraceConfig(opts: RunOptions): TraceConfig {
+  const config = resolveTraceConfig(opts.config.trace);
+  return opts.runMode === 'ui' ? { ...config, mode: uiModeTraceMode(config.mode) } : config;
+}
+
 /**
  * Apply a scope's `test.use()` overrides. `timeout` is handled separately via
  * the device (it only affects assertion/action auto-wait, not the test-level
@@ -2312,7 +2339,7 @@ async function runSuiteContext(
   let beforeAllCollector: TraceCollector | null = null;
   let beforeAllFirstFullName: string | undefined;
   if (scopeHasRunnable && (ctx.beforeAll.length > 0 || needsScopeReset || freshStartAtEntry) && primary) {
-    const traceConfig = resolveTraceConfig(opts.config.trace);
+    const traceConfig = runTraceConfig(opts);
     if (shouldRecord(traceConfig.mode, 0)) {
       // Tag beforeAll trace events with the first test that will run in
       // this scope — possibly inside a nested describe. An enclosing scope
@@ -2608,7 +2635,7 @@ async function runSuiteContext(
     let screenshotPath: string | undefined;
     let tracePath: string | undefined;
     let videoPath: string | undefined;
-    const maxRetries = opts.config.retries;
+    const maxRetries = testRetries(opts);
     let lastAttempt = 0;
     let attemptStart = testStart;
     // First failed attempt's error + artifacts. When the test ultimately
@@ -2622,7 +2649,7 @@ async function runSuiteContext(
       screenshotPath?: string;
       videoPath?: string;
     } | undefined;
-    const traceConfig = resolveTraceConfig(opts.config.trace);
+    const traceConfig = runTraceConfig(opts);
     const videoConfig = resolveVideoConfig(opts.config.video);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -3676,7 +3703,7 @@ async function runSuiteContext(
   // the test finished — beforeAll-style replay into a live collector is no
   // longer possible at this point).
   if (scopeHasRunnable && ctx.afterAll.length > 0 && primary) {
-    const traceConfig = resolveTraceConfig(opts.config.trace);
+    const traceConfig = runTraceConfig(opts);
     // Find the last test that actually ran, to tag events. Derived from the
     // recorded results (which include nested suites, already executed by
     // this point) rather than re-deriving skip/.only/filter predicates —

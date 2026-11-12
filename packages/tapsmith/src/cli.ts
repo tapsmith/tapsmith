@@ -41,7 +41,7 @@ import {
   isNetworkTracingEnabled,
 } from './trace/types.js';
 import { resolveVideoConfig } from './video/types.js';
-import { recordsOnlyOnRetry } from './trace/trace-mode.js';
+import { retryOnlyModeWarning } from './trace/trace-mode.js';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 
 import {
@@ -2335,19 +2335,17 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // the run silently record nothing (PILOT-240; same caveat Playwright
   // documents for its `on-first-retry` video mode). Placed after the tsx
   // re-exec so each warning prints exactly once.
+  // UI mode never retries, and records a retry-only trace mode as `on`
+  // (PILOT-1175): `retryOnlyModeWarning` knows both.
   for (const project of projects) {
     const cfg = project.effectiveConfig;
-    if (cfg.retries > 0) continue;
     const scope = projects.length > 1 ? ` in project "${project.name}"` : '';
     for (const [artifact, mode] of [
       ['video', resolveVideoConfig(cfg.video).mode],
       ['trace', resolveTraceConfig(cfg.trace).mode],
     ] as const) {
-      if (recordsOnlyOnRetry(mode)) {
-        console.error(yellow(
-          `Warning: ${artifact} mode '${mode}' only records retry attempts, but retries is 0${scope} — no ${artifact} will ever be recorded. Set retries to 1 or more to get ${artifact}s.`,
-        ));
-      }
+      const warning = retryOnlyModeWarning(artifact, mode, cfg.retries, !!args.ui, scope);
+      if (warning) console.error(yellow(warning));
     }
   }
 

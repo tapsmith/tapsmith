@@ -145,6 +145,9 @@ describe('createUiLaunchSteps', () => {
     expect(detail({})).toContain('network: captured');
     expect(detail({ trace: 'off' })).toContain('network: captured');
     expect(detail({ trace: { mode: 'on', network: false } })).toContain('network: on demand');
+    // UI mode never retries, so it records a retry-only mode as 'on' (PILOT-1175).
+    expect(detail({ trace: 'on-first-retry' })).toContain('network: captured');
+    expect(detail({ trace: { mode: 'on-all-retries' } })).toContain('network: captured');
   });
 
   it('lists each network state once across projects', () => {

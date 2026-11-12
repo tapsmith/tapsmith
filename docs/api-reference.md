@@ -1904,7 +1904,7 @@ describe("custom config", () => {
 | ------------ | ------------------------------------------- | -------------------------------------------- |
 | `timeout`    | `number`                                    | Action/assertion timeout (ms)                |
 | `screenshot` | `'always' \| 'only-on-failure' \| 'never'` | Screenshot capture mode                      |
-| `retries`    | `number`                                    | Retry count for failed tests. A retry starts from a reset app ([details](writing-tests.md#retries-start-from-a-fresh-app)) |
+| `retries`    | `number`                                    | Retry count for failed tests. A retry starts from a reset app ([details](writing-tests.md#retries-start-from-a-fresh-app)). [UI mode](ui-mode.md#each-test-runs-once) never retries |
 | `trace`      | `TraceMode \| Partial<TraceConfig>`         | Trace recording configuration. See [configuration.md](./configuration.md#traceconfig) for the full `TraceConfig` shape (includes `network`, `networkHttpPorts`, `networkHosts`, `networkIgnoreHosts`, `networkPassthroughHosts`, `screenshots`, etc.). |
 | `video`      | `VideoMode \| Partial<VideoConfig>`         | Video recording configuration. See the [Video recording](#video-recording) section below. |
 | `appState`   | `string`                                    | Path to saved app state archive to restore; `""` means clear |
@@ -2088,7 +2088,7 @@ test.describe.configure({ mode: "serial", retries: 1 });
 | Option | Type | Description |
 |---|---|---|
 | `mode` | `'default' \| 'serial' \| 'parallel'` | `'serial'` makes the scope a serial group (see `test.describe.serial`); `'default'` turns that off for a describe declared with `test.describe.serial`. A serial group covers everything nested inside it, so a nested describe cannot leave its enclosing group with `'default'` or `'parallel'`. `'parallel'` is accepted for Playwright compatibility and runs the tests in order: Tapsmith runs the tests of a file one after another on one device, and runs files in parallel with `--workers`. |
-| `retries` | `number` | Retry count for failed tests in the scope. Same as `test.use({ retries })`. |
+| `retries` | `number` | Retry count for failed tests in the scope. Same as `test.use({ retries })`, so [UI mode](ui-mode.md#each-test-runs-once) ignores it too. |
 | `timeout` | `number` | Same as `test.use({ timeout })`: the action and assertion timeout for the scope (ms), which also raises each test's safety timeout. |
 
 Any other option throws.
@@ -3355,7 +3355,8 @@ afterwards. `on-first-retry` starts no recorder at all on the first attempt,
 eliminating encode load on healthy runs while still producing a video for
 any test flaky or broken enough to be retried. The trade-off: it requires
 `retries >= 1` to ever produce a video (the runner warns at startup if
-`retries` is 0), and the recorded retry won't show first-attempt-only
+`retries` is 0, and in [UI mode](ui-mode.md#each-test-runs-once), which never
+retries, whatever `retries` is), and the recorded retry won't show first-attempt-only
 failures. This mirrors Playwright's `on-first-retry` caveat.
 
 ### Implementation
