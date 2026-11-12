@@ -261,9 +261,10 @@ Examples:
 
 const MCP_EXAMPLES = `
 Examples:
-  codex mcp add tapsmith-headless -- npx tapsmith mcp-server
-  claude mcp add tapsmith-headless -- npx tapsmith mcp-server
   claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
+  codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
+  claude mcp add tapsmith-headless -- npx tapsmith mcp-server
+  codex mcp add tapsmith-headless -- npx tapsmith mcp-server
   npx tapsmith mcp-server --config tapsmith.config.ios.mjs`;
 
 const TELEMETRY_HELP = `

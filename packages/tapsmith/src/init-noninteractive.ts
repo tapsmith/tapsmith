@@ -641,10 +641,11 @@ export function executeInitPlan(
     `Verify the setup end-to-end: npx tapsmith verify${args.json ? ' --json' : ''}`,
     'Run tests: npx tapsmith test',
     // The plugin registers the MCP server and adds a test-writing skill; with no
-    // agent found, the manual MCP registration (docs/mcp-server.md).
+    // agent found, the manual registration of the server the plugin uses
+    // (docs/mcp-server.md).
     ...(codingAgents.length > 0
       ? pluginInstallSteps(codingAgents).map(([label, how]) => `Install the ${label} (the Tapsmith MCP server and a test-writing skill): ${how}`)
-      : ['Register the MCP server for richer agent tooling: claude mcp add tapsmith-headless -- npx tapsmith mcp-server']),
+      : ['Register the MCP server for richer agent tooling (it follows UI mode when that runs): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui']),
     ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];
 

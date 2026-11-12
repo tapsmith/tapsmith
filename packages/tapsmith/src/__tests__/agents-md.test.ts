@@ -10,6 +10,11 @@ describe('renderAgentsSection()', () => {
     expect(section).toContain('npx tapsmith test --ui');
     expect(section).toContain('tapsmith-ui');
     expect(section).toContain('tapsmith-headless');
+    // The by-hand path leads with the server that follows UI mode.
+    const byHand = section.slice(section.indexOf('Without the plugin'));
+    expect(byHand.indexOf('claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui')).toBeGreaterThan(-1);
+    expect(byHand.indexOf('--prefer-ui')).toBeLessThan(byHand.indexOf('tapsmith-ui'));
+    expect(byHand.indexOf('--prefer-ui')).toBeLessThan(byHand.indexOf('tapsmith-headless'));
     expect(section).toContain('Do not start a long-lived UI session yourself unless the user asks you to');
     expect(section).toContain('getByRole');
     expect(section).toContain('getByDescription');

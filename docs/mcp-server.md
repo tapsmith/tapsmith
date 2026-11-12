@@ -4,11 +4,11 @@ Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that
 
 ## Quick start: UI mode and the plugin
 
-1. Start UI mode in your project: `npx tapsmith test --ui`.
-2. Install the Tapsmith plugin in your coding agent ([below](#install-the-plugin)).
-3. Ask the agent to write or fix a test. It works in the UI session you have open: its test runs and device actions show in the UI as they happen, on the device the session is mirroring.
+1. Once: install the Tapsmith plugin in your coding agent ([below](#install-the-plugin)).
+2. Whenever you want to watch the agent work: start UI mode in your project, `npx tapsmith test --ui`. Before or after the agent starts, either way works.
+3. Ask the agent to write or fix a test. While UI mode is running it works in the UI session you have open: its test runs and device actions show in the UI as they happen, on the device the session is mirroring.
 
-There is no URL to copy and nothing to register. Without a UI session the plugin's server runs [headless](#stdio-mode) on a device of its own, and it moves to a UI session you start later without restarting the agent ([how it follows UI mode](#one-server-that-follows-ui-mode)).
+There is no URL to copy and nothing to register. Without a UI session the plugin's server runs [headless](#stdio-mode) on a device of its own, and it moves to a UI session you start later from the next tool call, without restarting the agent ([how it follows UI mode](#one-server-that-follows-ui-mode)).
 
 ## Install the plugin
 
@@ -72,9 +72,9 @@ codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
 
 ## Modes
 
-The server above chooses between two modes, and each can also be registered by hand, as this section shows: for an MCP client the plugin does not cover, to connect to a UI session of another project or machine, or to keep an agent headless whatever UI sessions are running. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
+The server above chooses between two modes, and each can also be registered by hand, as this section shows: for an MCP client the plugin does not cover, to connect to a UI session of another project or machine, or to keep an agent headless whatever UI sessions are running. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. Registering a single mode by hand, prefer `tapsmith-ui` while a UI session is running: the agent then works in the session you can see.
 
-### HTTP mode (recommended)
+### HTTP mode
 
 When running `tapsmith test --ui`, a Streamable HTTP MCP endpoint is hosted alongside the UI. The agent shares the same daemon, device, and test session as the UI — test runs appear in the UI with full progress tracking, and both the agent and user share mutual exclusion (only one run at a time).
 
@@ -151,7 +151,7 @@ codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith
 claude mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
 ```
 
-If a UI server is already running, stdio mode will detect it and suggest connecting via HTTP instead. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session. With `--prefer-ui` the server makes that choice itself, call by call: see [One server that follows UI mode](#one-server-that-follows-ui-mode).
+If a UI server is already running when it starts, the plain stdio server stays headless and says so on stderr, pointing at the plugin or `--prefer-ui` to follow the UI session, and at the session's HTTP endpoint. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session. With `--prefer-ui` the server makes that choice itself, call by call: see [One server that follows UI mode](#one-server-that-follows-ui-mode).
 
 The session ends when the client closes the server's stdin or sends it SIGINT, SIGTERM or SIGHUP. Either way the server stops any run in progress, stops the daemon it started (and so that daemon's device agent) unless another MCP session in the project is still using it, and exits 0.
 
@@ -489,8 +489,8 @@ Returns a message indicating whether watch mode was enabled or disabled.
 
 ### UI-shared workflow
 
-1. **Start the UI:** `tapsmith test --ui`
-2. **Connect your agent** to the MCP endpoint shown in the MCP panel
+1. **Connect your agent** (once): [install the plugin](#install-the-plugin) or [register `--prefer-ui`](#one-server-that-follows-ui-mode), which follow the UI session from the next call. For a UI session of another project or machine, register the MCP URL shown in the MCP panel ([HTTP mode](#http-mode))
+2. **Start the UI:** `tapsmith test --ui`
 3. **Understand the environment:** call `tapsmith_session_info` to see platform, device, package, and project configuration
 4. **Discover tests:** call `tapsmith_list_tests` to see the full test tree with file paths and test names
 5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested locators, then `tapsmith_test_locator` on each locator you will use, until it counts exactly 1. Only then put it in test code
@@ -501,7 +501,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 
 ### Headless stdio workflow
 
-1. **Add the MCP server:** [install the plugin](#install-the-plugin), or register it by hand: `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
+1. **Add the MCP server:** [install the plugin](#install-the-plugin) or [register `--prefer-ui`](#one-server-that-follows-ui-mode), which run headless while no UI session is running. To stay headless even when one is, register the plain server: `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device, and put a locator in test code only once `tapsmith_test_locator` counts exactly 1

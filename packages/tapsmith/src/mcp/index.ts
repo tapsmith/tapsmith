@@ -268,13 +268,14 @@ export async function runMcpServer(
   const stopActivityMonitor = startActivityMonitor(activityPath);
 
   if (uiPort) {
-    const sseUrl = `http://localhost:${uiPort}/mcp`;
+    const mcpUrl = `http://localhost:${uiPort}/mcp`;
     // Not for the headless half of `mcp-server --prefer-ui`, which is running
     // because the server chose headless for now (a run in flight).
     if (!process.env[BRIDGED_ENV]) {
       process.stderr.write(
-        `[tapsmith-mcp] UI mode detected. For shared-session mode (recommended), connect via SSE instead:\n` +
-        `[tapsmith-mcp]   ${sseUrl}\n`,
+        `[tapsmith-mcp] UI mode detected. This server stays headless. To have the agent work in the UI session,\n` +
+        `[tapsmith-mcp] install the Tapsmith plugin or register \`tapsmith mcp-server --prefer-ui\` instead,\n` +
+        `[tapsmith-mcp] or register the UI session's Streamable HTTP endpoint by hand: ${mcpUrl}\n`,
       );
     }
     events.onToolCall((event) => {
@@ -381,14 +382,16 @@ export async function runMcpServer(
   process.stderr.write(`  ${DIM}Stdio clients start this command as a subprocess; another terminal cannot attach to this process.${RESET}\n`);
   process.stderr.write(`  ${DIM}This terminal is also watching MCP activity from client-owned Tapsmith subprocesses.${RESET}\n`);
   process.stderr.write(`\n  ${BOLD}Connect your AI agent${RESET}\n`);
-  process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Codex CLI:${RESET}\n`);
-  process.stderr.write(`    codex mcp add tapsmith-headless -- npx tapsmith mcp-server\n`);
-  process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Claude Code:${RESET}\n`);
+  process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} The Tapsmith plugin, or by hand the server it uses (follows UI mode when one is running):${RESET}\n`);
+  process.stderr.write(`    claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\n`);
+  process.stderr.write(`    codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\n`);
+  process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Headless only:${RESET}\n`);
   process.stderr.write(`    claude mcp add tapsmith-headless -- npx tapsmith mcp-server\n`);
+  process.stderr.write(`    codex mcp add tapsmith-headless -- npx tapsmith mcp-server\n`);
   process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Custom config:${RESET}\n`);
   process.stderr.write(`    npx tapsmith mcp-server --config tapsmith.config.ios.mjs\n`);
   process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Generic MCP stdio config:${RESET}\n`);
-  process.stderr.write(`    { "mcpServers": { "tapsmith-headless": { "command": "npx", "args": ["tapsmith", "mcp-server"] } } }\n\n`);
+  process.stderr.write(`    { "mcpServers": { "tapsmith": { "command": "npx", "args": ["tapsmith", "mcp-server", "--prefer-ui"] } } }\n\n`);
 
 }
 

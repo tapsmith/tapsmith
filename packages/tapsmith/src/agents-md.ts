@@ -35,12 +35,17 @@ The docs for the installed Tapsmith version ship in the package: read \`node_mod
 
 The Tapsmith plugin for Claude Code, Codex and Cursor registers one MCP server, \`tapsmith\` (run from this project's Tapsmith install), and adds a skill for writing and debugging tests; \`node_modules/tapsmith/docs/mcp-server.md\` says how to install it. That server works in the user's running \`npx tapsmith test --ui\` session when there is one, so they can watch, and headless otherwise; \`tapsmith_session_info\` says which. With the plugin installed, nothing below needs registering.
 
-Without the plugin, register the servers by hand. Prefer the UI-backed MCP server over the standalone headless server. If the user already has \`npx tapsmith test --ui\` running, ask them for the MCP URL shown in the UI and register it as \`tapsmith-ui\`:
+Without the plugin, register by hand the server the plugin uses, under the name \`tapsmith\`. It works in the user's UI session whenever one is running and headless otherwise, so no URL is needed:
+
+- Claude Code: \`claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\`
+- Codex: \`codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\`
+
+Two single-mode registrations cover the cases it does not. To work in a UI session of another project or machine, ask the user for the MCP URL that UI shows and register it as \`tapsmith-ui\`:
 
 - Claude Code: \`claude mcp add tapsmith-ui --transport http http://localhost:<port>/mcp\`
 - Codex: \`codex mcp add tapsmith-ui --url http://localhost:<port>/mcp\`
 
-The UI MCP session shares the browser test runner, device, test tree, results, traces, and mutual exclusion. Use the headless stdio server only when no UI session is available or you specifically need an isolated agent-owned session:
+To keep an agent headless, on an isolated agent-owned session whatever UI sessions are running, register the plain stdio server as \`tapsmith-headless\`:
 
 - Claude Code: \`claude mcp add tapsmith-headless -- npx tapsmith mcp-server\`
 - Codex: \`codex mcp add tapsmith-headless -- npx tapsmith mcp-server\`
