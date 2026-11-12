@@ -1907,7 +1907,7 @@ describe("custom config", () => {
 | `retries`    | `number`                                    | Retry count for failed tests. A retry starts from a reset app ([details](writing-tests.md#retries-start-from-a-fresh-app)) |
 | `trace`      | `TraceMode \| Partial<TraceConfig>`         | Trace recording configuration. See [configuration.md](./configuration.md#traceconfig) for the full `TraceConfig` shape (includes `network`, `networkHttpPorts`, `networkHosts`, `networkIgnoreHosts`, `networkPassthroughHosts`, `screenshots`, etc.). |
 | `video`      | `VideoMode \| Partial<VideoConfig>`         | Video recording configuration. See the [Video recording](#video-recording) section below. |
-| `appState`   | `string`                                    | Path to saved app state archive to restore; `""` means clear |
+| `appState`   | `string`                                    | Path to saved app state archive to restore at each reset of the scope (cold, or warm while the app's hooks report no writes since the restore: see [Keeping restored app state between tests](warm-reset.md#keeping-restored-app-state-between-tests)); `""` means clear |
 | `appReset`   | `'auto' \| 'clear' \| 'restart' \| 'warm' \| 'none'` | How the app is reset before tests in this scope. See [Test isolation](./writing-tests.md#test-isolation). |
 | `appResetScope` | `'auto' \| 'file' \| 'test'`            | Reset once per file or before every test (`auto` resolves to per file; opt into per-test with `'test'`) |
 | `appResetRoute` | `string`                                   | Screen the declared reset leaves the app on: a path (`'/settings'`) resolved against the hooks' URL prefix, or a full deep link. See [Starting on a screen](writing-tests.md#starting-on-a-screen). |

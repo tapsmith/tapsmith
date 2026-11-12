@@ -57,6 +57,27 @@ export interface ResetCapabilities {
    * itself could not land on it.
    */
   hooksUrlPrefix?: string;
+  /**
+   * The saved app state the last cold restore put on the device, with the
+   * hooks marker's `boot` token and `writes` count read right after it. While
+   * the app is still that process and its write count has not moved, the data
+   * on the device still matches the archive, and the next restore of the same
+   * archive can be a warm reset that keeps it. Self-validating — any other
+   * relaunch changes `boot` — so a copy carried into a watch-mode or MCP
+   * child never vouches for a different process.
+   */
+  appStateBaseline?: AppStateBaseline;
+}
+
+export interface AppStateBaseline {
+  /** Absolute path of the restored archive. */
+  archive: string;
+  boot: string;
+  /**
+   * Undefined when the app does not report writes (no `onReload`/`track`):
+   * remembered so later restores skip the marker reads that cannot help.
+   */
+  writes?: number;
 }
 
 /**
@@ -234,6 +255,13 @@ export interface HooksMarker {
   nav?: number;
   /** URL prefix the module builds reset links from; empty when it could not determine one. */
   urlPrefix: string;
+  /** Per-process token: changes whenever the app process is recreated. */
+  boot?: string;
+  /**
+   * Persisted writes the hooks counted in this process. Present only when
+   * the app can reset while keeping its data (`onReload` + `track`).
+   */
+  writes?: number;
   error?: string;
 }
 
@@ -257,6 +285,8 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
   let epoch: number | undefined;
   let nav: number | undefined;
   let urlPrefix = '';
+  let boot: string | undefined;
+  let writes: number | undefined;
   let error: string | undefined;
   for (const field of fields) {
     const eq = field.indexOf('=');
@@ -266,6 +296,8 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
     if (key === 'epoch') epoch = Number.parseInt(value, 10);
     else if (key === 'nav') nav = Number.parseInt(value, 10);
     else if (key === 'url') urlPrefix = value;
+    else if (key === 'boot' && value) boot = value;
+    else if (key === 'writes' && /^\d+$/.test(value)) writes = Number.parseInt(value, 10);
     else if (key === 'err' && value) {
       try { error = decodeURIComponent(value); } catch { error = value; }
     }
@@ -274,6 +306,8 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
   return {
     version, epoch, urlPrefix,
     ...(nav !== undefined && Number.isFinite(nav) ? { nav } : {}),
+    ...(boot ? { boot } : {}),
+    ...(writes !== undefined ? { writes } : {}),
     ...(error ? { error } : {}),
   };
 }

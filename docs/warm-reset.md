@@ -52,6 +52,9 @@ That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
 | `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders nothing and registers nothing. |
 
+| `onReload` | Resets the app while *keeping* its stored data: drop in-memory state (signed-in user, caches, navigation) and read it back from storage, as a fresh launch would. Tapsmith runs it, instead of `clear` and `onReset`, between tests that restore the same saved app state; see [Keeping restored app state between tests](#keeping-restored-app-state-between-tests). Needs `track`. |
+| `track` | The stores your app keeps data in, e.g. `[AsyncStorage]` or an MMKV instance. The hooks count every write to them, so Tapsmith can tell whether a test changed restored data. |
+
 `registerTapsmithReset(fn)` registers a handler from non-React code.
 
 ### Release builds for e2e
@@ -84,9 +87,54 @@ export default function HomeScreen() {
 
 `useTapsmithResetEpoch()` returns the number of resets acknowledged in this process — it changes after every reset and is `0` at launch, so it costs nothing in production builds where the hooks are disabled. Prefer an imperative reset like this over remounting with `key={resetEpoch}`: on Android a remounted `ScrollView` exposes accessibility nodes with empty bounds until the next input event, which hides its items from UIAutomator.
 
+## Keeping restored app state between tests
+
+A scope that restores saved app state (`test.use({ appState })`, typically a project that reuses a logged-in session) needs the archive's data on the device before every reset, not empty stores. A plain warm reset cannot give it that: it clears the stores and runs `onReset`, which signs the user out. So by default every reset in such a scope restores the archive and relaunches the app, cold, even with the hooks mounted. The trace's **APP RESET** section says so: `warm skipped: the app does not report persisted writes (pass onReload and track to <TapsmithTestHooks>)`.
+
+Most tests only read that data, though. If nothing was written since the restore, the data on the device still matches the archive, and only the app's in-memory state needs resetting. Pass `track` and `onReload` and Tapsmith does exactly that:
+
+```tsx
+import AsyncStorage from "@react-native-async-storage/async-storage"
+
+function Hooks() {
+  const { reloadFromStorage, resetAppState } = useAuth()
+  return (
+    <TapsmithTestHooks
+      urlPrefix={Linking.createURL("/")}
+      enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+      clear={[AsyncStorage]}
+      onReset={resetAppState}
+      track={[AsyncStorage]}
+      onReload={reloadFromStorage}
+    />
+  )
+}
+```
+
+`onReload` should leave the app as a fresh launch with the same stored data would: for a signed-in session, re-read the session from storage rather than clear it.
+
+What happens, per device:
+
+1. The first reset that restores an archive restores it cold, then reads the hooks' write count.
+2. Each later reset that restores the **same** archive reads the count again. If the app is still the process that restore launched and its count has not moved, the reset is warm: Tapsmith opens a reset link that asks the hooks to keep the data (`__tapsmith_keep=1`), and the hooks run `onReload` instead of `clear` and `onReset`. The trace row reads *"kept auth.tar.gz: no persisted writes since the restore"*.
+3. Otherwise it restores the archive cold again, and the row says why: *"warm skipped: the app wrote persisted data since the restore (2 writes)"*, *"… the app relaunched since the restore"*, *"… a retry restores the archive cold"*, or *"… first restore of auth.tar.gz on this device"*. If the warm reset itself fails, Tapsmith restores the archive and reports the fallback.
+
+Retries and the fresh start after a failure always restore cold. So does a policy that is not warm: an explicit `appReset: 'clear'` or `'restart'` keeps restoring cold. `appState: ''` always clears the app's data.
+
+**Report every write.** Keeping the data is only as honest as the count. The hooks count calls to the write methods of the stores in `track` (`setItem`, `removeItem`, `mergeItem`, `clear`, `multiSet`, …; MMKV's `set`, `delete`, `clearAll`; expo-secure-store's `setItemAsync`, `deleteItemAsync`), whether the call came from your code, a library or the reset itself. Writes they cannot see — a native module, SQLite, files, the iOS keychain — must be reported with `markTapsmithWrite()`:
+
+```tsx
+import { markTapsmithWrite } from "@tapsmith/react-native"
+
+await db.runAsync("INSERT INTO drafts …")
+markTapsmithWrite()
+```
+
+A missed write means the next test sees data an earlier test left behind. If you cannot account for every write, leave `onReload` out: the scope then restores cold every time, as before. If a store's methods cannot be wrapped (a frozen object), the hooks publish no count at all, with the same result. Pass `track={[]}` only when `markTapsmithWrite()` reports every write the app makes.
+
 ## How a warm reset works
 
-1. The component renders an invisible marker in the accessibility tree — `tapsmith-hooks:1;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>` — that Tapsmith reads once after launch (that is the detection) and again after every reset. `nav` counts every URL the process receives, which lets Tapsmith positively acknowledge plain navigation deep links too — including a link to the screen already showing, which no UI heuristic can verify (on iOS that used to cost the full warm-delivery window plus a cold relaunch, ~11 s per navigation). `boot` is a random token generated once per app process: when Tapsmith delivers a reset cold (its periodic cold-launch valve, or a retry), the epoch counter restarts with the process, and a changed `boot` is how the fresh process's acknowledgement is recognised. The marker draws nothing on screen, and no locator matches it: `getByText("nav")` or `getByTestId("tapsmith-hooks")` find nothing ([what locators never match](locators.md#what-locators-never-match)). Earlier versions of `@tapsmith/react-native` also drew a small grey copy of the marker in the bottom-right corner; upgrading the package removes it.
+1. The component renders an invisible marker in the accessibility tree — `tapsmith-hooks:1;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>`, plus `;writes=<n>` with `onReload` and `track` ([above](#keeping-restored-app-state-between-tests)) — that Tapsmith reads once after launch (that is the detection) and again after every reset. `nav` counts every URL the process receives, which lets Tapsmith positively acknowledge plain navigation deep links too — including a link to the screen already showing, which no UI heuristic can verify (on iOS that used to cost the full warm-delivery window plus a cold relaunch, ~11 s per navigation). `boot` is a random token generated once per app process: when Tapsmith delivers a reset cold (its periodic cold-launch valve, or a retry), the epoch counter restarts with the process, and a changed `boot` is how the fresh process's acknowledgement is recognised. The marker draws nothing on screen, and no locator matches it: `getByText("nav")` or `getByTestId("tapsmith-hooks")` find nothing ([what locators never match](locators.md#what-locators-never-match)). Earlier versions of `@tapsmith/react-native` also drew a small grey copy of the marker in the bottom-right corner; upgrading the package removes it.
 2. To reset, Tapsmith opens `<prefix><route>?__tapsmith_reset=1&nonce=…` — a normal deep link, so your router lands on `route` while the hooks dismiss the keyboard, clear the stores and run `onReset`.
 3. The hooks bump `epoch`. Tapsmith waits for the epoch to advance — that is the **acknowledgement**; no fixed sleeps. If your handler throws, the epoch still advances and the marker carries `err=…`, so Tapsmith reports the failure and falls back instead of hanging.
 

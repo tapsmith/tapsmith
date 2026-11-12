@@ -2084,9 +2084,12 @@ async function runTracedAppReset(
       );
       reports.set(rd.name, report);
       // `appReset: 'none'` does nothing worth a row (the policy is in the trace
-      // metadata); prepared / fallback outcomes get a summary row per device.
+      // metadata); prepared / fallback outcomes get a summary row per device,
+      // and so does an `appState` reset that explains itself (a restore kept
+      // warm, or why a warm reset was skipped).
       const isNone = appResetAction(policy).kind === 'none';
-      if (collector && !isNone && (report.origin !== 'inline' || report.fellBack)) {
+      const explainsAppState = policy.appState !== undefined && report.reason !== undefined;
+      if (collector && !isNone && (report.origin !== 'inline' || report.fellBack || explainsAppState)) {
         collector.addActionEvent({
           category: 'device',
           action: 'appReset',

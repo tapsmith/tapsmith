@@ -725,6 +725,191 @@ describe('session-preflight', () => {
     });
   });
 
+  describe('keeping a restored appState between tests', () => {
+    const ARCHIVE = '/abs/auth.tar.gz';
+    const RESTORE_WARM: AppResetPolicy = { mode: 'warm', scope: 'test', appState: ARCHIVE };
+
+    /** A hooked app whose marker reports `boot` and `writes` (undefined = no write support). */
+    function hookedApp(initial: { boot: string; writes?: number }) {
+      const app = { ...initial };
+      const ctx = makeContext({ capabilities: { hooksDetected: true, hooksUrlPrefix: 'app:///' } });
+      vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => ({
+        requestId: '1',
+        hierarchyXml: `<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;nav=0;boot=${app.boot};url=app:///${app.writes === undefined ? '' : `;writes=${app.writes}`}" /></hierarchy>`,
+        errorMessage: '',
+      }));
+      // A restore relaunches the app: a new process with its own boot token,
+      // and a write count that starts again from zero.
+      let launches = 0;
+      vi.mocked(ctx.device.restartApp).mockImplementation(async () => {
+        launches += 1;
+        app.boot = `relaunch${launches}`;
+        if (app.writes !== undefined) app.writes = 0;
+      });
+      vi.mocked(ctx.device._resetApp).mockImplementation(async () => resetResult('warm', { hooksDetected: true }));
+      return { ctx, app };
+    }
+
+    it('restores cold the first time, says why, and records the write count it left', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 4 });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledWith('com.example.app', ARCHIVE);
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: false });
+      expect(report.reason).toMatch(/^warm skipped: first restore of auth\.tar\.gz/);
+      expect(ctx.capabilities?.appStateBaseline).toEqual({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+    });
+
+    it('resets warm, keeping the data, while the app has written nothing since the restore', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device.restoreAppState).mockClear();
+      vi.mocked(ctx.device.restartApp).mockClear();
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, route: '/profile' }, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).not.toHaveBeenCalled();
+      expect(ctx.device.restartApp).not.toHaveBeenCalled();
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({
+        mode: 'warm', keepAppData: true, fallback: false, target: '/profile',
+      }));
+      // The legacy link cannot keep data.
+      expect(vi.mocked(ctx.device._resetApp).mock.calls[0][1]).not.toHaveProperty('resetDeepLink');
+      expect(report).toMatchObject({ origin: 'inline', modeUsed: 'warm', fellBack: false });
+      expect(report.reason).toBe('kept auth.tar.gz: no persisted writes since the restore');
+      expect(ctx.capabilities?.appStateBaseline).toEqual({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+    });
+
+    it('restores cold again after a test wrote persisted data, and names the drift', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      app.writes = 2;
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report.modeUsed).toBe('restore');
+      expect(report.reason).toBe('warm skipped: the app wrote persisted data since the restore (2 writes)');
+      expect(ctx.capabilities?.appStateBaseline).toEqual({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('restores cold when the app relaunched since the restore', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      app.boot = 'crashed-and-relaunched';
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toMatch(/^warm skipped: the app relaunched since the restore/);
+    });
+
+    it('restores cold every time for an app that does not report writes, and says how to fix it', async () => {
+      const { ctx } = hookedApp({ boot: 'b0' });
+      const first = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const second = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      const third = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.capabilities?.appStateBaseline).not.toHaveProperty('writes');
+      // Known by now: later restores read no marker for it.
+      expect(third.steps.map((s) => s.name)).not.toContain('readWriteCount');
+      expect(first.reason).toMatch(/^warm skipped: first restore/);
+      expect(second.reason).toMatch(/^warm skipped: the app does not report persisted writes \(pass onReload and track to <TapsmithTestHooks>\)/);
+    });
+
+    it('restores cold on a forced-cold reset (retry, fresh start after a failure)', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test', forceCold: true });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toBe('warm skipped: a retry restores the archive cold');
+    });
+
+    it('restores a different archive cold', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, appState: '/abs/admin.tar.gz' }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.restoreAppState).toHaveBeenLastCalledWith('com.example.app', '/abs/admin.tar.gz');
+      expect(report.reason).toMatch(/^warm skipped: first restore of admin\.tar\.gz/);
+    });
+
+    it('never tries warm under a cold policy, and reads no write count for it', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.capabilities = { hooksDetected: true, hooksUrlPrefix: 'app:///', appStateBaseline: { archive: ARCHIVE, boot: 'b0', writes: 0 } };
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'restart' }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.modeUsed).toBe('restore');
+      expect(report.reason).toBe("warm skipped: appReset is 'restart'");
+    });
+
+    it('says nothing extra for an app without hooks (nothing was skipped)', async () => {
+      const ctx = makeContext({ capabilities: { hooksDetected: false } });
+
+      const report = await executeAppReset(ctx, { mode: 'clear', scope: 'test', appState: ARCHIVE }, { phase: 'before test' });
+
+      expect(report.reason).toBeUndefined();
+    });
+
+    it('restores the archive when the warm reset fails, and reports the fallback', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockRejectedValueOnce(new Error('in-app reset reported an error: no onReload'));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toMatch(/^warm reset keeping auth\.tar\.gz failed \(.*no onReload\); restored it cold/);
+      expect(report.steps.find((s) => s.name === 'resetApp')?.ok).toBe(false);
+    });
+
+    it('restores the archive when the daemon cleared the app after all', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('clear', { modeRequested: 'warm', fellBack: true, reason: 'boom' }));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+    });
+
+    it('keeps the data through a cold-delivered warm reset, then restores cold next time', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, coldLaunch: true }));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(report.modeUsed).toBe('warm');
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(1);
+      // A new process may have written at launch: its writes are unknown.
+      expect(ctx.capabilities?.appStateBaseline).toBeUndefined();
+    });
+
+    it("explains that appState '' clears even with hooks", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('clear'));
+
+      const report = await executeAppReset(ctx, { mode: 'warm', scope: 'test', appState: '' }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ mode: 'clear' }));
+      expect(report.reason).toBe("warm skipped: appState '' clears the app's data");
+    });
+  });
+
   describe('Android app readiness after a cold launch', () => {
     const splash = { requestId: '1', hierarchyXml: '<hierarchy><node package="com.example.app" class="android.widget.FrameLayout" text="" content-desc="" /></hierarchy>', errorMessage: '' };
     const rendered = { requestId: '2', hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>', errorMessage: '' };

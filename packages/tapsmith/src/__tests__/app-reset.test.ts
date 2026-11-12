@@ -162,9 +162,17 @@ describe('start route (appResetRoute, PILOT-1064)', () => {
 });
 
 describe('parseHooksMarker', () => {
-  it('ignores fields it does not use (boot token from newer modules)', () => {
-    const m = parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;boot=c0ffee42;url=app:///" />');
-    expect(m).toMatchObject({ epoch: 3, urlPrefix: 'app:///' });
+  it('ignores fields it does not know', () => {
+    const m = parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;future=x;url=app:///" />');
+    expect(m).toEqual({ version: 1, epoch: 3, urlPrefix: 'app:///' });
+  });
+
+  it('reads the boot token and the persisted write count', () => {
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;boot=c0ffee42;url=app:///;writes=5" />'))
+      .toEqual({ version: 1, epoch: 3, boot: 'c0ffee42', urlPrefix: 'app:///', writes: 5 });
+    // A malformed count is no count: the app then reports no writes.
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;url=app:///;writes=-1" />')).not.toHaveProperty('writes');
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;url=app:///;writes=" />')).not.toHaveProperty('writes');
   });
 
   it('parses the Android text attribute and the iOS label attribute', () => {

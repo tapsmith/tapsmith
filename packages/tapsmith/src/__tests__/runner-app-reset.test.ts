@@ -223,6 +223,53 @@ describe('runner app reset (declared isolation)', () => {
     expect(d.device._resetApp.mock.calls.map((c) => c[1].forceCold)).toEqual([false, true, false]);
   });
 
+  it('appState with hooks: restores once, then keeps the archive warm while no test writes, and the trace says which ran', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-kept-restore-'));
+    const d = makeDevice();
+    const app = { boot: 'b0', writes: 0 };
+    d.client.getUiHierarchy.mockImplementation(async () => ({
+      requestId: '1',
+      hierarchyXml: `<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;boot=${app.boot};url=app:///;writes=${app.writes}" /></hierarchy>`,
+      errorMessage: '',
+    }));
+    d.device.restartApp.mockImplementation(async () => { d.calls.push('restartApp'); app.boot = `p${d.calls.length}`; app.writes = 0; });
+    d.device._resetApp.mockImplementation(async (_pkg: string, opts: { mode?: 'warm' | 'restart' | 'clear'; keepAppData?: boolean }) => {
+      d.calls.push(`resetApp:${opts.mode ?? 'warm'}${opts.keepAppData ? ':keep' : ''}`);
+      return { modeRequested: 'warm', modeUsed: 'warm', fellBack: false, coldLaunch: false, durationMs: 5, hooksDetected: true, steps: [{ name: 'warm' as const, durationMs: 5, ok: true }] };
+    });
+    try {
+      pushContext();
+      tapsmithTest.use({ appState: './auth.tar.gz', appResetScope: 'test' });
+      tapsmithTest('reads', async () => {});
+      tapsmithTest('writes', async () => { app.writes += 1; });
+      tapsmithTest('after a write', async () => {});
+      const ctx = popContext();
+      const caps = { hooksDetected: true, hooksUrlPrefix: 'app:///' };
+      const opts = makeOpts(d, makeConfig({
+        rootDir: tempRoot,
+        trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+      }), { resetCapabilities: caps });
+      opts.devices[0].sessionContext!.capabilities = caps;
+
+      const result = await runSuiteContext(ctx, '', [], [], opts);
+
+      const tests = collectResults(result);
+      expect(tests.map((t) => t.status)).toEqual(['passed', 'passed', 'passed']);
+      expect(resetCalls(d)).toEqual([
+        'restoreAppState', 'restartApp', // first restore: cold
+        'resetApp:warm:keep', // nothing written: kept warm
+        'restoreAppState', 'restartApp', // the previous test wrote: cold again
+      ]);
+      const detail = (t: (typeof tests)[number]) => traceEvents(t.tracePath!)
+        .find((e) => e.type === 'action' && e.action === 'appReset')?.detail;
+      expect(detail(tests[0])).toMatch(/^warm skipped: first restore of auth\.tar\.gz/);
+      expect(detail(tests[1])).toBe('kept auth.tar.gz: no persisted writes since the restore');
+      expect(detail(tests[2])).toBe('warm skipped: the app wrote persisted data since the restore (1 write)');
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   describe('a readiness check that relaunches the app after a routed reset (appResetRoute)', () => {
     // The embedder's beforeEachTest readiness check runs after the reset and
     // can relaunch the app (an iOS app launched out of process by simctl
