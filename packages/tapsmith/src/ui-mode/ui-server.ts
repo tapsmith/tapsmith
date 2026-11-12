@@ -81,7 +81,7 @@ import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, 
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
 import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
-import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
+import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, PickGenerations, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
 import { nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import {
   forkStdioForLaunchProgress,
@@ -4023,8 +4023,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   const liveHierarchies = new LiveHierarchyCache();
   /** One live locator evaluation per device at a time; superseded ones never run. */
   const liveEvaluations = new LatestOnlyRunner<LiveLocatorEvaluation>();
-  /** The latest pick per device and tab, by a generation count. */
-  const latestPicks = new Map<string, number>();
+  /** The latest pick per device and tab. */
+  const latestPicks = new PickGenerations();
   /**
    * When a live WebView connect last failed per device (`worker:device`),
    * off the adopted primary: re-asking every capture would otherwise spend
@@ -4938,10 +4938,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         }
         // A tab's newer pick on this device replaces this one: its check
         // stops between candidates and its answer is never sent.
-        const pickKey = `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`;
-        const generation = (latestPicks.get(pickKey) ?? 0) + 1;
-        latestPicks.set(pickKey, generation);
-        const superseded = () => latestPicks.get(pickKey) !== generation;
+        const superseded = latestPicks.start(`${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`);
         void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview, beforeConnect: target.beforeConnect, superseded })
           .then((result) => {
             noteLiveConnect(target.workerId, target.deviceIndex, result.note);
@@ -4951,6 +4948,17 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             type: 'locator-suggestions', requestId, suggestions: [],
             note: err instanceof Error ? err.message : String(err),
           }));
+        break;
+      }
+      case 'cancel-live-locators': {
+        // A test started on the device (PILOT-1179): stop this tab's pick
+        // check between candidates and forget its waiting evaluation. Work
+        // already on the device finishes; the tab has stopped listening.
+        const id = msg.workerId ?? selectedWorkerId;
+        const index = msg.deviceIndex ?? (id === selectedWorkerId ? selectedDeviceIndex : 0);
+        const key = `${id}:${index}:${msg.clientId ?? ''}`;
+        latestPicks.cancel(key);
+        liveEvaluations.dropWaiting(key);
         break;
       }
       case 'request-source':

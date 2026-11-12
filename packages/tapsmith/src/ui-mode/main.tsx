@@ -37,6 +37,7 @@ import { Layout } from './components/Layout.js';
 import { TestExplorer } from './components/TestExplorer.js';
 import { RunControls, type Theme } from './components/RunControls.js';
 import { DevicePane, deviceViewsOf } from './components/DevicePane.js';
+import { mirrorLockState, mirrorRunning, workerRunning, type MirrorLockPref } from './mirror-lock.js';
 import { DeviceActivityPanel } from './components/DeviceActivityPanel.js';
 // Trace viewer components — reused for live trace display
 import { ActionsPanel } from '../trace-viewer/components/ActionsPanel.js';
@@ -231,7 +232,9 @@ function App() {
   // snapshot with the overlay lands, or by the timer at the deadline — the
   // timer matters because identical snapshots don't re-trigger the effect.
   // Anything that ends a live pick drops a held one too.
-  const pendingMirrorPickRef = useRef<{ x: number; y: number; deadline: number } | null>(null);
+  // `mirror` is the device the click was on (`worker:device`): a point on one
+  // device's screen never resolves against another's capture.
+  const pendingMirrorPickRef = useRef<{ x: number; y: number; deadline: number; mirror: string } | null>(null);
   // Whether the mirrored device's captures carry the WebView DOM overlay.
   const liveOverlayRef = useRef(true);
   const pendingPickTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -1373,25 +1376,23 @@ function App() {
     onConnectionChange: handleConnectionChange,
   });
 
-  // Interactive mirror lock preference:
-  //   'auto' — locked only while the active worker is running (default)
-  //   'on'   — user explicitly locked; stays locked even after the run ends
-  //   'off'  — user unlocked during a run; resets to 'auto' when the run ends
-  //            (so the next run auto-locks again)
-  const [mirrorLockPref, setMirrorLockPref] = useState<'auto' | 'on' | 'off'>('auto');
-  const activeWorker = workers.find((w) => w.workerId === selectedWorkerId);
-  const runningOnActive = activeWorker ? activeWorker.status === 'running' : isRunning;
+  // Interactive mirror lock (mirror-lock.ts). It follows the device the
+  // mirror shows — the mirrored worker's, or in the "All" grid each tile's
+  // own — never the worker selected elsewhere (PILOT-1179).
+  const [mirrorLockPref, setMirrorLockPref] = useState<MirrorLockPref>('auto');
+  const mirrorGrid = deviceViewMode === 'all' && deviceViewCount > 1;
+  const runningOnMirror = mirrorRunning(workers, { grid: mirrorGrid, workerId: mirrorWorkerId }, isRunning);
   // An unlock-override is per-run: once the run ends, fall back to 'auto'.
   // An explicit lock ('on') is sticky and survives the run ending.
   useEffect(() => {
-    if (!runningOnActive && mirrorLockPref === 'off') setMirrorLockPref('auto');
-  }, [runningOnActive, mirrorLockPref]);
-  const mirrorLocked = mirrorLockPref === 'on'
-    ? true
-    : mirrorLockPref === 'off'
-      ? false
-      : runningOnActive;
+    if (!runningOnMirror && mirrorLockPref === 'off') setMirrorLockPref('auto');
+  }, [runningOnMirror, mirrorLockPref]);
+  const { locked: mirrorLocked, overridden: mirrorOverridden, livePaused } = mirrorLockState(mirrorLockPref, runningOnMirror);
   const mirrorInteractive = !mirrorLocked;
+  const tileLock = useCallback((workerId: number) => {
+    const state = mirrorLockState(mirrorLockPref, workerRunning(workers, workerId, isRunning));
+    return { interactive: !state.locked, force: state.overridden };
+  }, [mirrorLockPref, workers, isRunning]);
 
   // ─── Live mirror element pick ───
 
@@ -1471,19 +1472,20 @@ function App() {
       // Pick mode stays armed; hierarchy polling continues. The deadline
       // timer guarantees the click resolves even if every subsequent
       // snapshot is identical (e.g. the WebView connect keeps failing).
-      pendingMirrorPickRef.current = { x: point.x, y: point.y, deadline: Date.now() + WEBVIEW_PICK_WAIT_MS };
+      pendingMirrorPickRef.current = { x: point.x, y: point.y, deadline: Date.now() + WEBVIEW_PICK_WAIT_MS, mirror: `${mirrorWorkerId}:${mirrorDeviceIndex}` };
       clearTimeout(pendingPickTimerRef.current);
       pendingPickTimerRef.current = setTimeout(() => {
         const pending = pendingMirrorPickRef.current;
         if (!pending) return;
         pendingMirrorPickRef.current = null;
+        if (pending.mirror !== `${mirrorWorkerIdRef.current}:${mirrorDeviceIndexRef.current}`) return;
         finalizeMirrorPickRef.current(pending);
       }, WEBVIEW_PICK_WAIT_MS);
       return;
     }
     clearPendingMirrorPick();
     finalizeMirrorPick(point);
-  }, [liveRoots, finalizeMirrorPick, clearPendingMirrorPick]);
+  }, [liveRoots, finalizeMirrorPick, clearPendingMirrorPick, mirrorWorkerId, mirrorDeviceIndex]);
 
   // Resolve a deferred WebView pick when a fresh snapshot arrives: finalize
   // once the overlay is present, or fall back to the native projection at the
@@ -1491,12 +1493,18 @@ function App() {
   useEffect(() => {
     const pending = pendingMirrorPickRef.current;
     if (!pending || liveRoots.length === 0) return;
+    // The mirror moved to another device before this effect's cleanup ran
+    // (effects run after paint; a capture of the new device can land first).
+    if (pending.mirror !== `${mirrorWorkerId}:${mirrorDeviceIndex}`) {
+      clearPendingMirrorPick();
+      return;
+    }
     // Resolve once the overlay is in, or once the device says none can come.
     if (!liveOverlayRef.current || !isWebViewOverlayPending(liveRoots, pending.x, pending.y) || Date.now() > pending.deadline) {
       clearPendingMirrorPick();
       finalizeMirrorPick(pending);
     }
-  }, [liveRoots, finalizeMirrorPick, clearPendingMirrorPick]);
+  }, [liveRoots, finalizeMirrorPick, clearPendingMirrorPick, mirrorWorkerId, mirrorDeviceIndex]);
 
   // Explicit source toggle in the Locator tab. Picking still sets the source
   // implicitly (and clicking a trace action resets to 'trace'); this is the
@@ -1509,11 +1517,36 @@ function App() {
       clearPendingMirrorPick();
     }
     setSelectorSource(source);
-    if (source === 'live' && !liveHierarchyXml) {
+    if (source === 'live' && !liveHierarchyXml && !livePaused) {
       send({ type: 'request-hierarchy', workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
     }
-  }, [liveHierarchyXml, mirrorWorkerId, mirrorDeviceIndex, send, clearPendingMirrorPick]);
+  }, [liveHierarchyXml, livePaused, mirrorWorkerId, mirrorDeviceIndex, send, clearPendingMirrorPick]);
 
+  // A test started on the mirrored device with the mirror locked: the picker
+  // and the Locator tab leave the device alone until it ends (PILOT-1179).
+  // An armed pick ends as on a disconnect, a pick still being checked is
+  // dropped, and the server stops this tab's work on the device.
+  const liveAnswersRef = useRef(liveAnswers);
+  liveAnswersRef.current = liveAnswers;
+  useEffect(() => {
+    if (!livePaused) return;
+    // Only a tab with work out on the device has anything to cancel.
+    const workOut = Boolean(liveAnswersRef.current.suggestions?.pending) || evaluationPendingRef.current;
+    clearPendingMirrorPick();
+    setPickTarget((t) => t === 'mirror' ? null : t);
+    setMirrorHoverBounds(null);
+    fillFromSuggestionsRef.current = false;
+    suggestRequestRef.current++;
+    evaluateRequestRef.current++;
+    evaluationPendingRef.current = false;
+    setLiveAnswers((prev) => ({
+      evaluation: null,
+      suggestions: prev.suggestions?.pending
+        ? { suggestions: [], pending: false, note: 'A test started on this device before it answered; pick the element again once the run ends.' }
+        : prev.suggestions,
+    }));
+    if (workOut) send({ type: 'cancel-live-locators', clientId: clientIdRef.current, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
+  }, [livePaused, mirrorWorkerId, mirrorDeviceIndex, send, clearPendingMirrorPick]);
   // Ask the device what the locator matches (PILOT-848), shortly after typing
   // stops. Any change of locator, source or device retires the request in
   // flight at once, so its late reply can never stand for the new one.
@@ -1535,18 +1568,20 @@ function App() {
       setLiveAnswers((prev) => ({ ...prev, evaluation: { error: 'No live device connected.' } }));
       return;
     }
+    // Paused while a test runs on the device: asked again when it ends.
+    if (livePaused) return;
     const timer = setTimeout(() => sendEvaluation(locator), 250);
     return () => clearTimeout(timer);
-  }, [selectorSource, selectorText, connected, sendEvaluation]);
+  }, [selectorSource, selectorText, connected, livePaused, sendEvaluation]);
 
   // Follow the screen: re-ask with each live refresh once the last answer is
   // in (a slow device is never re-asked faster than it answers).
-  const liveRefreshRef = useRef({ selectorSource, selectorText, connected, evaluation: liveAnswers.evaluation });
-  liveRefreshRef.current = { selectorSource, selectorText, connected, evaluation: liveAnswers.evaluation };
+  const liveRefreshRef = useRef({ selectorSource, selectorText, connected, livePaused, evaluation: liveAnswers.evaluation });
+  liveRefreshRef.current = { selectorSource, selectorText, connected, livePaused, evaluation: liveAnswers.evaluation };
   useEffect(() => {
     const now = liveRefreshRef.current;
     const locator = now.selectorText.trim();
-    if (now.selectorSource !== 'live' || !now.connected || !locator) return;
+    if (now.selectorSource !== 'live' || !now.connected || now.livePaused || !locator) return;
     if (evaluationPendingRef.current || !now.evaluation) return;
     sendEvaluationRef.current(locator);
   }, [liveRevision]);
@@ -1561,13 +1596,13 @@ function App() {
   const liveHierarchyInUse = pickTarget === 'mirror'
     || (selectorSource === 'live' && selectorText.trim() !== '');
   useEffect(() => {
-    if (!liveHierarchyInUse || !connected) return;
+    if (!liveHierarchyInUse || !connected || livePaused) return;
     send({ type: 'request-hierarchy', workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
     const id = setInterval(() => {
       send({ type: 'request-hierarchy', workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
     }, 1000);
     return () => clearInterval(id);
-  }, [liveHierarchyInUse, connected, mirrorWorkerId, mirrorDeviceIndex, send]);
+  }, [liveHierarchyInUse, connected, livePaused, mirrorWorkerId, mirrorDeviceIndex, send]);
 
   // Switching the mirrored device invalidates the previous device's hierarchy
   // (bounds from one device must never highlight on another's mirror).
@@ -2083,12 +2118,14 @@ function App() {
           platform={devicePlatform}
           interactive={mirrorInteractive}
           locked={mirrorLocked}
-          force={runningOnActive && mirrorInteractive}
+          force={mirrorOverridden}
+          tileLock={tileLock}
           onToggleLock={() => setMirrorLockPref(mirrorLocked ? 'off' : 'on')}
           send={send}
           pickMode={pickTarget === 'mirror'}
           onTogglePick={handleMirrorPickToggle}
-          pickAvailable={connected && !mirrorLoading && !(deviceViewMode === 'all' && deviceViewCount > 1)}
+          pickAvailable={connected && !mirrorLoading && !mirrorGrid && !livePaused}
+          pickPaused={livePaused}
           pickDpr={mirrorDpr}
           pickHoverBounds={mirrorHoverBounds}
           pickMatchBounds={selectorSource === 'live' ? selectorHighlights : EMPTY_BOUNDS}
@@ -2131,6 +2168,7 @@ function App() {
               source={selectorSource}
               onSourceChange={handleSelectorSourceChange}
               liveSourceAvailable={connected}
+              livePaused={livePaused}
               live={pickedNode && pickedNode === livePickedNode ? liveAnswers : { ...liveAnswers, suggestions: null }}
             />
           }

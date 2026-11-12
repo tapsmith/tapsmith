@@ -88,6 +88,11 @@ interface LocatorTabProps {
   /** False when there is no live device to bind to (server disconnected). */
   liveSourceAvailable?: boolean
   /**
+   * The live device is running a test with the mirror locked (UI mode,
+   * PILOT-1179): nothing is asked of it until the run ends.
+   */
+  livePaused?: boolean
+  /**
    * The device's answers while `source` is 'live' (PILOT-848): the locator's
    * match count and the picked element's suggestions come from the agent,
    * not this module's matcher, which only answers for recorded hierarchies.
@@ -103,7 +108,7 @@ export interface LiveLocatorAnswers {
   suggestions: { suggestions: Array<{ code: string; label: string }>; note?: string; pending: boolean } | null
 }
 
-export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChange, source, onSourceChange, liveSourceAvailable, live }: LocatorTabProps) {
+export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChange, source, onSourceChange, liveSourceAvailable, livePaused, live }: LocatorTabProps) {
   injectStStyles();
 
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
@@ -199,7 +204,8 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
   const hasPositionalChain = liveAnswers?.evaluation
     ? Boolean(liveAnswers.evaluation.positional)
     : /\.(first|last)\(\)|\.nth\(\s*-?\d+\s*\)/.test(selector);
-  const checking = Boolean(liveAnswers && selector.trim() && !liveAnswers.evaluation);
+  const paused = Boolean(liveAnswers && livePaused);
+  const checking = Boolean(liveAnswers && !paused && selector.trim() && !liveAnswers.evaluation);
   const strictWarning = matchCount !== null && matchCount > 1 && !hasPositionalChain;
 
   return (
@@ -253,9 +259,11 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
         <span class={countClass} data-testid="locator-match-count">{checking ? 'Checking…' : countLabel}</span>
       </div>
       <div class="st-source-note" data-testid="locator-source-note">
-        {liveAnswers
-          ? 'Matched by the device, as a test resolves it.'
-          : 'Matched against the recorded hierarchy: approximate. The device decides at run time.'}
+        {paused
+          ? 'Paused while a test runs on this device. Unlock the mirror to check live anyway, or switch to Trace.'
+          : liveAnswers
+            ? 'Matched by the device, as a test resolves it.'
+            : 'Matched against the recorded hierarchy: approximate. The device decides at run time.'}
       </div>
       {selectorError && (
         <div class="st-selector-error" role="alert" data-testid="locator-error">
