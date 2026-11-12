@@ -645,7 +645,7 @@ export function executeInitPlan(
     // (docs/mcp-server.md).
     ...(codingAgents.length > 0
       ? pluginInstallSteps(codingAgents).map(([label, how]) => `Install the ${label} (the Tapsmith MCP server and a test-writing skill): ${how}`)
-      : ['Register the MCP server for richer agent tooling (it follows UI mode when that runs): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui']),
+      : ['Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui']),
     ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];
 

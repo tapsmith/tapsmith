@@ -6,15 +6,15 @@ Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that
 
 1. Once: install the Tapsmith plugin in your coding agent ([below](#install-the-plugin)).
 2. Whenever you want to watch the agent work: start UI mode in your project, `npx tapsmith test --ui`. Before or after the agent starts, either way works.
-3. Ask the agent to write or fix a test. While UI mode is running it works in the UI session you have open: its test runs and device actions show in the UI as they happen, on the device the session is mirroring.
+3. Ask the agent to write or fix a test. While UI mode is running it works in the UI session you have open: its test runs and device actions show in the UI as they happen, on the device the session is mirroring. With no UI session running, it works [headless](#stdio-mode) on a device of its own.
 
-There is no URL to copy and nothing to register. Without a UI session the plugin's server runs [headless](#stdio-mode) on a device of its own, and it moves to a UI session you start later from the next tool call, without restarting the agent ([how it follows UI mode](#one-server-that-follows-ui-mode)).
+There is no URL to copy and nothing to register. The agent moves to a UI session you start later from its next tool call, with no restart ([how it follows UI mode](#one-server-that-follows-ui-mode)).
 
 ## Install the plugin
 
 The Tapsmith plugin for Claude Code, Codex and Cursor does two things:
 
-- registers one MCP server, `tapsmith`, started from the Tapsmith installed in your project, never a global or `npx`-cached copy. It works in the project's running UI-mode session when there is one, and headless when there is not;
+- registers one MCP server, `tapsmith`, started from the Tapsmith installed in your project, never a global or `npx`-cached copy. It works in the project's running UI-mode session when there is one, and headless on a device of its own when there is not;
 - adds a `tapsmith` skill that walks the agent through finding locators, screen objects, running one test and reading a failed test's trace, and points it at the docs that ship with the installed version, in `node_modules/tapsmith/docs/`.
 
 Install Tapsmith in the project first (`npm install -D tapsmith`), since the plugin's server runs that copy. `tapsmith init` lists the plugin install for each coding agent it finds in the project.

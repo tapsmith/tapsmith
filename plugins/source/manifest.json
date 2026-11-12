@@ -1,6 +1,6 @@
 {
   "name": "tapsmith",
-  "description": "Write, run and debug Tapsmith mobile tests: the Tapsmith MCP server, run from the project's own install and working in its UI-mode session when one is running, and a skill for finding locators, structuring tests and reading failed traces.",
+  "description": "Write, run and debug Tapsmith mobile tests: the Tapsmith MCP server, run from the project's own install, working in its UI-mode session when one is running and headless otherwise, and a skill for finding locators, structuring tests and reading failed traces.",
   "author": { "name": "Tapsmith", "url": "https://tapsmith.dev" },
   "homepage": "https://tapsmith.dev/guides/mcp-server/",
   "repository": "https://github.com/tapsmith/tapsmith",

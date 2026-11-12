@@ -866,7 +866,7 @@ describe('executeInitPlan()', () => {
       expect(result.nextSteps.join('\n')).not.toContain('claude mcp add');
       // With none found, the manual registration of the server the plugin uses.
       const none = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), { ...args, force: true }, tmp);
-      expect(none.nextSteps).toContain('Register the MCP server for richer agent tooling (it follows UI mode when that runs): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui');
+      expect(none.nextSteps).toContain('Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui');
       expect(none.nextSteps.join('\n')).not.toContain('tapsmith-headless');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

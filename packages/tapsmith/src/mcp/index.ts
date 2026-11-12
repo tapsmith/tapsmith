@@ -382,7 +382,7 @@ export async function runMcpServer(
   process.stderr.write(`  ${DIM}Stdio clients start this command as a subprocess; another terminal cannot attach to this process.${RESET}\n`);
   process.stderr.write(`  ${DIM}This terminal is also watching MCP activity from client-owned Tapsmith subprocesses.${RESET}\n`);
   process.stderr.write(`\n  ${BOLD}Connect your AI agent${RESET}\n`);
-  process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} The Tapsmith plugin, or by hand the server it uses (follows UI mode when one is running):${RESET}\n`);
+  process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} The Tapsmith plugin, or by hand the server it uses (works in UI mode when one is running, headless otherwise):${RESET}\n`);
   process.stderr.write(`    claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\n`);
   process.stderr.write(`    codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\n`);
   process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Headless only:${RESET}\n`);

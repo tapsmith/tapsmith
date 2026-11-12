@@ -5,7 +5,8 @@ Write, run and debug [Tapsmith](https://tapsmith.dev) mobile tests with a coding
 - registers one MCP server, `tapsmith`, run from the project's own install, so the agent can read the live
   accessibility tree, prove each locator before using it, run one test and read a failed test's trace. With
   `npx tapsmith test --ui` running in the project the agent works in that UI session, where you can watch it;
-  with none it runs headless. It follows a UI session you start or close later;
+  with none it runs headless on a device of its own. It follows a UI session you start or close later from its
+  next tool call, with no restart;
 - ships the `tapsmith` skill, which points the agent at the docs bundled with the installed Tapsmith version
   (`node_modules/tapsmith/docs/`) and walks it through the locator loop, screen objects, running one test and
   reading traces.
