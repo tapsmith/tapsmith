@@ -82,9 +82,10 @@ struct ParkedKeyboardWatch {
 ///    has one; the iPhone keyboard does not.
 /// 3. **Tap a blank spot** (`blankPoint`): apps often dismiss on a tap
 ///    outside the field. Only where every element under the point is a plain
-///    unlabeled container — no control, text, image, bar, or input — and in
-///    the nearest container of the focused field that has room, so the tap
-///    stays beside the field (inside a sheet, not on its backdrop).
+///    unlabeled container or a background image — no control, text, smaller
+///    image, bar, or input — and in the nearest container of the focused
+///    field that has room, so the tap stays beside the field (inside a
+///    sheet, not on its backdrop).
 /// 4. **The return key** (`returnKey`), last because it also submits the
 ///    field. Only for a single-line field (in a text view it types a new line)
 ///    and only when the key reads "return" or "done": "go", "send", "search",
@@ -141,8 +142,9 @@ struct KeyboardDismissPlanner {
     static let swipeFraction: CGFloat = 0.03
     /// Smallest visible scroll view worth dragging.
     static let minScrollExtent: CGFloat = 44
-    /// A labeled `.other` this large (a fraction of the screen) is a screen
-    /// container with a testID, not a control.
+    /// A testID'd `.other` this large (a fraction of the screen) is a screen
+    /// container, not a control; an image this large is a background
+    /// (PILOT-1177), not an icon.
     static let containerAreaFraction: CGFloat = 0.5
     /// A container covering this much of the screen is a window or modal
     /// root, where a sheet's backdrop lives: never part of a field's scope.
@@ -340,9 +342,9 @@ struct KeyboardDismissPlanner {
         guard starts.width > 0, starts.height > 0 else { return nil }
 
         // Under the point: the scroll view, its ancestors, and plain
-        // containers — no control, text, image or web view of its content, and
-        // nothing drawn over it from elsewhere (a screen whose own content
-        // covers a scroll view left in the tree). A drag that does not start a
+        // containers — no control, text, image (but a background) or web view
+        // of its content, and nothing drawn over it from elsewhere (a screen
+        // whose own content covers a scroll view left in the tree). A drag that does not start a
         // scroll (sideways in a vertical list, any drag in a carousel) presses
         // what it starts on, and a role-less Pressable is a labeled `.other`.
         // Its plain ancestors and enclosing scroll views are transparent; a
@@ -421,7 +423,7 @@ struct KeyboardDismissPlanner {
         // The keys inside the keyboard element only: an accessory bar's "Done"
         // button would not be the key that "\n" presses.
         let keys = keyIndices().filter { isKeyLike(nodes[$0]) }
-        guard let key = keys.first(where: { Self.returnKeyIdentifiers.contains(nodes[$0].identifier) })
+        guard let key = keys.first(where: { Self.returnKeyIdentifiers.contains(Self.keyIdentifier(nodes[$0])) })
             ?? keys.first(where: {
                 nodes[$0].identifier.isEmpty && Self.returnKeyLabels.contains(nodes[$0].label.lowercased())
             })
@@ -429,17 +431,24 @@ struct KeyboardDismissPlanner {
             return .notPossible("the keyboard has no return key")
         }
         let node = nodes[key]
+        let identifier = Self.keyIdentifier(node)
         let label = node.label.lowercased()
         // An English action label vetoes the key whatever its identifier; a
         // label outside the English set (localized) leaves it to the identifier.
         let actionLabel = Self.returnKeyLabels.contains(label) && !Self.dismissingReturnLabels.contains(label)
-        let dismisses = node.identifier.isEmpty
+        let dismisses = identifier.isEmpty
             ? Self.dismissingReturnLabels.contains(label)
-            : Self.dismissingReturnIdentifiers.contains(node.identifier) && !actionLabel
+            : Self.dismissingReturnIdentifiers.contains(identifier) && !actionLabel
         guard dismisses else {
             return .notPossible("the return key is \"\(node.label)\", an app action")
         }
         return .press(CGPoint(x: nodes[key].frame.midX, y: nodes[key].frame.midY))
+    }
+
+    /// A key's identifier without the trailing colon iOS 26.4 gives some
+    /// return keys ("Next:"), which does not change the key.
+    private static func keyIdentifier(_ node: Node) -> String {
+        node.identifier.hasSuffix(":") ? String(node.identifier.dropLast()) : node.identifier
     }
 
     // MARK: - Failure
@@ -460,9 +469,14 @@ struct KeyboardDismissPlanner {
     // MARK: - Helpers
 
     /// A node a touch may land on without doing anything: the application,
-    /// a window, or an unlabeled container. A testID alone makes a container
-    /// suspect (an icon-only Pressable looks like that) unless it is
-    /// screen-sized. The test-hooks marker takes no touches.
+    /// a window, an unlabeled container, or a background image. A testID
+    /// alone makes a container suspect (an icon-only Pressable looks like
+    /// that) unless it is screen-sized. An image is an icon or picture that
+    /// may take a tap unless it covers at least half the screen: then it is
+    /// the screen's background (React Native's ImageBackground, PILOT-1177),
+    /// labeled or not (SwiftUI labels an asset image with its name). A
+    /// tappable image is wrapped in a button or labeled view, which still
+    /// blocks. The test-hooks marker takes no touches.
     private func isPlain(_ i: Int) -> Bool {
         let node = nodes[i]
         if analyzer.isTapsmithHooksMarker(node) { return true }
@@ -472,12 +486,20 @@ struct KeyboardDismissPlanner {
         case .other:
             guard node.label.isEmpty else { return false }
             if node.identifier.isEmpty { return true }
-            let area = node.frame.intersection(screen)
-            guard !area.isNull else { return true }
-            return area.width * area.height >= screen.width * screen.height * Self.containerAreaFraction
+            return coversContainerArea(node)
+        case .image:
+            return coversContainerArea(node)
         default:
             return false
         }
+    }
+
+    /// Whether `node` covers at least `containerAreaFraction` of the screen
+    /// (or none of it).
+    private func coversContainerArea(_ node: Node) -> Bool {
+        let area = node.frame.intersection(screen)
+        guard !area.isNull else { return true }
+        return area.width * area.height >= screen.width * screen.height * Self.containerAreaFraction
     }
 
     /// The grid point in `rect` furthest from every blocking node's frame and

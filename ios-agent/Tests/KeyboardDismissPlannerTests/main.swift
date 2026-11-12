@@ -678,6 +678,145 @@ do {
     check("sheet with no room: no blank tap on the backdrop", planner(rows).blankPoint(focusedFrame: field), nil)
 }
 
+// MARK: - Background images (PILOT-1177)
+
+/// DreamSpinner's email sign-in screen with the password field focused, as
+/// recorded on an iPhone 17 / iOS 26.4 simulator (trace hierarchy, runs of
+/// identical screen-sized wrappers collapsed): a React Native ImageBackground
+/// draws a screen-sized image behind a ScrollView form. The keyboard's return
+/// key is "next", identifier "Next:".
+let signInPassword = R(98, 430, 198, 45)
+let signInBlockers: [CGRect] = [
+    R(42, 94, 317, 64), R(96, 170, 210, 21), R(49, 264, 304, 20), R(49, 308, 48, 17),
+    R(98, 337, 238, 45), R(66, 349, 20, 20), R(49, 401, 88, 17), signInPassword, R(66, 442, 20, 20),
+    R(308, 438, 28, 28), R(49, 506, 304, 44), R(0, 533, 402, 30),
+]
+func signInScreen(background: Row? = (5, .image, "", "assets/assets/images/background-portrait.png", screen)) -> [Row] {
+    var rows: [Row] = [
+        (0, .application, "DreamSpinner", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (4, .other, "", "", screen),
+    ]
+    if let background { rows.append(background) }
+    rows += [
+        (4, .other, "", "", screen),
+        (4, .other, "", "", screen),
+        (5, .other, "", "", screen),
+        (6, .other, "", "", R(0, 62, 402, 504)),
+        (7, .scrollView, "", "", R(0, 62, 402, 504)),
+        (8, .other, "", "", R(0, 62, 402, 738)),
+        (9, .other, "", "", R(0, 62, 402, 738)),
+        (10, .staticText, "DreamSpinner", "", R(42, 94, 317, 64)),
+        (10, .staticText, "Unleash endless creativity", "", R(96, 170, 210, 21)),
+        (10, .other, "", "", R(24, 239, 354, 449)),
+        (10, .staticText, "Sign in to continue to DreamSpinner", "", R(49, 264, 304, 20)),
+        (10, .staticText, "EMAIL", "", R(49, 308, 48, 17)),
+        (10, .other, "", "", R(49, 333, 304, 52)),
+        (10, .other, "", "", R(98, 337, 238, 45)),
+        (11, .textField, "", "", R(98, 337, 238, 45)),
+        (10, .other, "", "", R(66, 349, 20, 20)),
+        (11, .image, "get mail", "envelope.fill", R(66, 349, 20, 20)),
+        (10, .staticText, "PASSWORD", "", R(49, 401, 88, 17)),
+        (10, .other, "", "", R(49, 426, 304, 52)),
+        (10, .other, "", "", R(98, 430, 198, 45)),
+        (11, .secureTextField, "", "", signInPassword),
+        (10, .other, "", "", R(66, 442, 20, 20)),
+        (11, .image, "lock", "lock.fill", R(66, 442, 20, 20)),
+        (10, .button, "Show password", "", R(308, 438, 28, 28)),
+        (10, .button, "Sign in", "", R(49, 506, 304, 44)),
+        (10, .button, "Forgot password?", "", R(237, 557, 116, 17)),
+        (10, .button, "Sign up", "", R(243, 588, 79, 32)),
+        (8, .other, "Horizontal scroll bar, 1 page", "", R(0, 533, 402, 30)),
+        // The keyboard: region from 566, return key "next" / "Next:".
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", R(0, 566, 402, 308)),
+        (4, .other, "", "inputView", R(0, 566, 402, 308)),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", R(0, 566, 402, 308)),
+        (4, .other, "", "", R(0, 583, 402, 233)),
+        (5, .keyboard, "", "", R(0, 583, 402, 233)),
+        (6, .key, "q", "", R(4, 590, 39, 54)),
+        (6, .button, "shift", "shift", R(4, 698, 51, 54)),
+        (6, .key, "delete", "delete", R(348, 698, 51, 54)),
+        (6, .key, "numbers", "more", R(4, 752, 99, 54)),
+        (6, .key, " ", "space", R(103, 752, 197, 54)),
+        (6, .button, "next", "Next:", R(300, 752, 99, 54)),
+        (4, .other, "", "", R(0, 583, 402, 291)),
+        (5, .button, "Dictate", "dictation", R(325, 805, 68, 69)),
+    ]
+    return rows
+}
+
+do {
+    // PILOT-1177: the screen-sized background image blocked every point, so
+    // hideKeyboard found neither a drag start nor a blank spot and failed.
+    let signIn = planner(signInScreen())
+    check("sign-in screen: keyboard region from the trace", signIn.keyboardRegion, R(0, 566, 402, 308))
+    let drag = signIn.scrollSwipeStart(focusedFrame: signInPassword)
+    checkTrue("background image: scroll view drag offered", drag != nil)
+    if let p = drag {
+        checkTrue("background image: drag starts in the scroll view above the keyboard",
+                  R(0, 62, 402, 504).contains(p) && p.y < 566, "\(p)")
+        checkTrue("background image: drag starts clear of the form's controls and text",
+                  notInside(p, signInBlockers), "\(p)")
+    }
+    let blank = signIn.blankPoint(focusedFrame: signInPassword)
+    checkTrue("background image: blank spot found", blank != nil)
+    if let p = blank {
+        checkTrue("background image: blank spot in the scroll view above the keyboard",
+                  R(0, 62, 402, 504).contains(p) && p.y < 566, "\(p)")
+        checkTrue("background image: blank spot clear of the form's controls and text",
+                  notInside(p, signInBlockers), "\(p)")
+    }
+    // Without the image the same screen plans the same way.
+    checkTrue("no background image: blank spot found",
+              planner(signInScreen(background: nil)).blankPoint(focusedFrame: signInPassword) != nil)
+    // A labeled background (SwiftUI labels an asset image with its name) is
+    // a background too; one cropped by the screen counts its visible part.
+    checkTrue("labeled background image: blank spot found",
+              planner(signInScreen(background: (5, .image, "background", "background", screen)))
+                  .blankPoint(focusedFrame: signInPassword) != nil)
+    checkTrue("background image taller than the screen: blank spot found",
+              planner(signInScreen(background: (5, .image, "", "", R(0, -200, 402, 1400))))
+                  .blankPoint(focusedFrame: signInPassword) != nil)
+    // The keyboard's "next" key is an app action — refused for that reason,
+    // not as a missing key ("Next:" carries a colon on iOS 26.4).
+    check("sign-in screen: \"Next:\" is the return key, an app action",
+          signIn.returnKey(focusedInput: .secureTextField),
+          .notPossible("the return key is \"next\", an app action"))
+}
+
+do {
+    let field = R(16, 132, 370, 44)
+    // An image smaller than half the screen may be a tappable picture or
+    // icon: it still blocks, labeled or not.
+    for (label, name) in [("", "unlabeled"), ("Photo", "labeled")] {
+        let picture = fieldScreen([
+            (4, .button, "Wall", "", R(0, 0, 402, 400)),
+            (4, .image, label, "", R(0, 400, 402, 129)),
+        ])
+        check("small \(name) image is not blank", planner(picture).blankPoint(focusedFrame: field), nil)
+    }
+    // Just under half the screen still blocks; half the screen does not.
+    let half = screen.width * screen.height * Planner.containerAreaFraction / screen.width
+    // The rest of the room is a wall of controls.
+    let underHalf = fieldScreen([
+        (4, .image, "", "", R(0, 116, 402, half - 1)),
+        (4, .button, "Wall", "", R(0, 116 + half - 1, 402, 874)),
+    ])
+    check("image just under half the screen covering the room: not blank",
+          planner(underHalf).blankPoint(focusedFrame: field), nil)
+    let atHalf = fieldScreen([
+        (4, .image, "", "", R(0, 116, 402, half)),
+        (4, .button, "Wall", "", R(0, 116 + half, 402, 874)),
+    ])
+    checkTrue("image of half the screen is a background", planner(atHalf).blankPoint(focusedFrame: field) != nil)
+}
+
 // MARK: - 4. Return key
 
 check("single-line field, return key: press it",
@@ -725,6 +864,20 @@ check("localized action key: do not press",
 check("key without an identifier: judged by its label",
       planner(appHead + keyboardWindows(returnLabel: "done", returnId: "")).returnKey(focusedInput: .textField),
       .press(CGPoint(x: 348, y: 776)))
+// iOS 26.4 gives some return keys a trailing colon ("Next:"); it does not
+// change which key it is.
+check("identifier with a colon, action key: do not press",
+      planner(appHead + keyboardWindows(returnLabel: "go", returnId: "Go:")).returnKey(focusedInput: .textField),
+      .notPossible("the return key is \"go\", an app action"))
+check("identifier with a colon, done key: press it",
+      planner(appHead + keyboardWindows(returnLabel: "done", returnId: "Done:")).returnKey(focusedInput: .textField),
+      .press(CGPoint(x: 348, y: 776)))
+check("identifier with a colon, localized default key: press it",
+      planner(appHead + keyboardWindows(returnLabel: "retour", returnId: "Return:")).returnKey(focusedInput: .textField),
+      .press(CGPoint(x: 348, y: 776)))
+check("identifier with a colon, localized action key: do not press",
+      planner(appHead + keyboardWindows(returnLabel: "suivant", returnId: "Next:")).returnKey(focusedInput: .textField),
+      .notPossible("the return key is \"suivant\", an app action"))
 
 // MARK: - Failure message
 
