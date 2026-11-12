@@ -5,7 +5,7 @@
  * per-node play buttons, watch toggles, and filtering.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback } from 'preact/hooks';
 import { ArrowLeft, Check, ChevronsDownUp, ChevronsUpDown, Circle, CircleSlash, Eye, Link, LoaderCircle, Play, Search, Smartphone, Square, X } from 'lucide-preact';
 import type { TestTreeNode, ClientMessage } from '../ui-protocol.js';
 
@@ -217,21 +217,6 @@ function TreeNode({ node, depth, parentProjectName, expandedNodes, selectedTestI
   const isSelected = selectedTestId === node.id;
   const hasChildren = node.children && node.children.length > 0;
 
-  // Status flash animation (failures only — green flashes are distracting)
-  const prevStatusRef = useRef(node.status);
-  const [flashClass, setFlashClass] = useState('');
-
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = node.status;
-    if (prev === 'running' && node.status === 'failed') {
-      setFlashClass('te-status-flash-failed');
-      const timer = setTimeout(() => setFlashClass(''), 600);
-      return () => clearTimeout(timer);
-    }
-    setFlashClass('');
-  }, [node.status]);
-
   const pending = pendingIds.has(node.id);
 
   const handleRun = useCallback((e: Event) => {
@@ -279,7 +264,7 @@ function TreeNode({ node, depth, parentProjectName, expandedNodes, selectedTestI
   return (
     <div class="te-node-group" role="presentation">
       <div
-        class={`te-node node ${isSelected ? 'selected' : ''} te-node-${node.type} ${runningClass} ${flashClass}`}
+        class={`te-node node ${isSelected ? 'selected' : ''} te-node-${node.type} ${runningClass}`}
         role="treeitem"
         aria-label={label}
         aria-level={depth + 1}

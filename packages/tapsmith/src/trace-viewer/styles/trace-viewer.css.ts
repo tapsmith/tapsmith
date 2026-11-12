@@ -151,10 +151,6 @@ html, body, #app {
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-@keyframes flash-fail {
-  0% { background: oklch(0.68 0.2 25 / 0.3); }
-  100% { background: transparent; }
-}
 
 /* ─── Trace Viewer Layout ─── */
 
