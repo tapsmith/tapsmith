@@ -31,7 +31,7 @@ The UI provides:
 
 ### Each test runs once
 
-UI mode never retries a failed test, as in Playwright's UI mode: whatever `retries` is set to — at the root of the config, on a project, with `test.use({ retries })` or with `test.describe.configure({ retries })` — every run, whether started from the tree, by a watched file or by an MCP agent, runs each test once. A failed test stays failed, with its actions, screenshots, hierarchies and error in place, until you run it again; that run replaces them. `tapsmith test`, `--workers`, `--watch` and `tapsmith mcp-server` keep the configured retries.
+UI mode never retries a failed test, as in Playwright's UI mode: whatever `retries` is set to — at the root of the config, on a project, with `test.use({ retries })` or with `test.describe.configure({ retries })` — every run, whether started from the tree, by a watched file or by an MCP agent, runs each test once. A failed test's actions, screenshots, hierarchies and error stay in place for you to inspect until you run it again, and that run replaces them. `tapsmith test`, `--workers`, `--watch` and `tapsmith mcp-server` keep the configured retries.
 
 This only concerns retrying a test that failed. Waiting for a locator or assertion, and the recovery UI mode does when the device session fails under a file (it starts the session again and reruns the file), work as before. A trace mode that records only retries (`on-first-retry`, `on-all-retries`) records every test in UI mode, which needs the trace for its live view. A video mode that records only retries (`on-first-retry`, `on-all-retries`) records nothing in UI mode, and UI mode says so when it starts.
 
