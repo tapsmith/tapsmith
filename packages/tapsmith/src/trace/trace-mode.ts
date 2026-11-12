@@ -76,9 +76,9 @@ export function shouldRetain(
 }
 
 /**
- * The trace mode UI mode records under: UI mode never retries a failed test
- * (PILOT-1175), so a retry-only mode would record nothing, and the live view
- * is built from the trace; it records every test as `on` instead.
+ * The trace mode UI mode records under: UI mode never retries a failed test,
+ * so a retry-only mode would record nothing, and the live view is built from
+ * the trace; it records every test as `on` instead.
  */
 export function uiModeTraceMode(mode: TraceMode): TraceMode {
   return recordsOnlyOnRetry(mode) ? 'on' : mode;
@@ -86,9 +86,9 @@ export function uiModeTraceMode(mode: TraceMode): TraceMode {
 
 /**
  * The startup warning for a retry-only trace or video mode that will record
- * nothing in this run, or `undefined` (PILOT-240). UI mode never retries a
- * failed test and records a retry-only trace mode as `on` (PILOT-1175), so
- * there a trace mode never warns and a retry-only video mode always does.
+ * nothing in this run, or `undefined`. UI mode never retries a failed test
+ * and records a retry-only trace mode as `on`, so there a trace mode never
+ * warns and a retry-only video mode always does.
  *
  * @param scope - Appended after the retry count, e.g. ` in project "android"`.
  */
