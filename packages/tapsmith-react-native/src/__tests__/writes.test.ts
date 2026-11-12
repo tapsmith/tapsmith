@@ -99,6 +99,14 @@ describe('persisted write tracking', () => {
     expect(trackStoreWrites([{ getItem: () => undefined }]).trackable).toBe(false);
   });
 
+  it('reports a store that writes through statements or file operations as untrackable, whatever else it has', () => {
+    // op-sqlite: `updateHook` matches a write name, but writes go through `execute`.
+    const sqlite = { execute: () => undefined, updateHook: () => undefined, close: () => undefined };
+    expect(trackStoreWrites([sqlite]).trackable).toBe(false);
+    const files = { deleteAsync: () => undefined, downloadAsync: () => undefined };
+    expect(trackStoreWrites([files]).trackable).toBe(false);
+  });
+
   it('counts manual marks and tells subscribers', () => {
     const seen: number[] = [];
     const off = subscribePersistedWrites((n) => seen.push(n));

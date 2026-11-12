@@ -52,7 +52,7 @@ That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
 | `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders nothing and registers nothing. |
 | `onReload` | Resets the app while *keeping* its stored data: drop in-memory state (signed-in user, caches, navigation) and read it back from storage, as a fresh launch would. Tapsmith runs it, instead of `clear`, `onReset` and `registerTapsmithReset` handlers, between tests that restore the same saved app state; see [Keeping restored app state between tests](#keeping-restored-app-state-between-tests). Needs `track`. |
-| `track` | The stores your app keeps data in, e.g. `[AsyncStorage]` or an MMKV instance. The hooks count every write to them, so Tapsmith can tell whether a test changed restored data. |
+| `track` | The key-value stores your app keeps data in, e.g. `[AsyncStorage]` or an MMKV instance. The hooks count every write to them, so Tapsmith can tell whether a test changed restored data. A SQLite database or a file system cannot be tracked this way (a call to `execute` may or may not write): passing one turns the count off. Report those writes with `markTapsmithWrite()` instead. |
 
 `registerTapsmithReset(fn)` registers a handler from non-React code.
 

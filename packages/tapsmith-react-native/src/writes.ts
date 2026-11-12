@@ -54,6 +54,15 @@ export function subscribePersistedWrites(listener: (count: number) => void): () 
  */
 const WRITE_METHOD = /^(set|remove|delete|clear|merge|multiSet|multiRemove|multiMerge|recrypt|trim|import|reset|write|create|put|save|insert|update|add|append|move|copy|rename|unlink)/;
 const NOT_A_WRITE = /Listener$/;
+/**
+ * Entry points of stores whose writes go through statements or file
+ * operations (SQLite's `execute`/`runAsync`/`transaction`, a file system's
+ * `downloadAsync`/`makeDirectoryAsync`): a call there may or may not write,
+ * so counting calls cannot tell. A store with any of them is not trackable,
+ * even if some of its other methods match the write names above (op-sqlite's
+ * `updateHook`, expo-sqlite's `createSessionAsync`).
+ */
+const OPAQUE_WRITE = /^(exec|execute|run|transaction|sql|batch|download|makeDirectory|writeTransaction|readTransaction)/;
 
 export interface StoreTracking {
   /**
@@ -72,7 +81,7 @@ export function trackStoreWrites(stores: readonly object[]): StoreTracking {
   let trackable = true;
   for (const store of stores) {
     const names = writeMethodNames(store);
-    if (names.length === 0) trackable = false;
+    if (names.length === 0 || hasOpaqueWrites(store)) trackable = false;
     for (const name of names) {
       const target = store as Record<string, unknown>;
       const hadOwn = Object.prototype.hasOwnProperty.call(store, name);
@@ -109,15 +118,23 @@ export function trackStoreWrites(stores: readonly object[]): StoreTracking {
   };
 }
 
-function writeMethodNames(store: object): string[] {
+function hasOpaqueWrites(store: object): boolean {
+  return methodNames(store).some((name) => OPAQUE_WRITE.test(name));
+}
+
+function methodNames(store: object): string[] {
   const names = new Set<string>();
   for (let o: object | null = store; o && o !== Object.prototype && o !== Function.prototype; o = Object.getPrototypeOf(o) as object | null) {
     for (const name of Object.getOwnPropertyNames(o)) {
-      if (name === 'constructor' || !WRITE_METHOD.test(name) || NOT_A_WRITE.test(name)) continue;
+      if (name === 'constructor') continue;
       let value: unknown;
       try { value = (store as Record<string, unknown>)[name]; } catch { continue; }
       if (typeof value === 'function') names.add(name);
     }
   }
   return [...names];
+}
+
+function writeMethodNames(store: object): string[] {
+  return methodNames(store).filter((name) => WRITE_METHOD.test(name) && !NOT_A_WRITE.test(name));
 }

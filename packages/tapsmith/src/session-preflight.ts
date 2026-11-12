@@ -1091,7 +1091,10 @@ async function planKeptRestore(
   if (!hooks) return { keep: false, recordBaseline: false };
   if (options.forceCold) return { keep: false, recordBaseline: true, reason: 'warm skipped: a retry restores the archive cold' };
   const baseline = ctx.capabilities?.appStateBaseline;
-  if (!baseline || baseline.archive !== archive) return { keep: false, recordBaseline: true };
+  if (!baseline) return { keep: false, recordBaseline: true };
+  if (baseline.archive !== archive) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: the last restore on this device was of ${path.basename(baseline.archive)}` };
+  }
   // The same path saved again (a setup project re-run, possibly on another
   // device) holds other data than this device restored.
   if (archiveStamp(archive) !== baseline.archiveStamp) {

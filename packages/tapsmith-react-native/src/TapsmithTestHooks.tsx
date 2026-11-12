@@ -43,7 +43,9 @@ export interface TapsmithTestHooksProps {
    * lets Tapsmith tell whether a test changed the restored data. Report
    * writes these stores cannot show (native modules, SQLite, files, the
    * keychain) with `markTapsmithWrite()`; pass `[]` if that covers all of
-   * them.
+   * them. A store that writes through statements or file operations (a
+   * SQLite database, a file system) cannot be counted, and passing one turns
+   * the count off.
    */
   track?: readonly object[];
   /** Bare React Native shorthand for `urlPrefix={`${scheme}://`}`. */

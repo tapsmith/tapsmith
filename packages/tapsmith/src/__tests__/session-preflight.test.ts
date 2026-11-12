@@ -859,7 +859,7 @@ describe('session-preflight', () => {
 
       expect(ctx.device._resetApp).not.toHaveBeenCalled();
       expect(ctx.device.restoreAppState).toHaveBeenLastCalledWith('com.example.app', OTHER_ARCHIVE);
-      expect(report.reason).toMatch(/^warm skipped: first restore of admin\.tar\.gz/);
+      expect(report.reason).toBe('warm skipped: the last restore on this device was of auth.tar.gz');
     });
 
     it('never tries warm under a cold policy, and reads no write count for it', async () => {
