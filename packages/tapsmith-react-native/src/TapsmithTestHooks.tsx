@@ -6,6 +6,7 @@ import { CARRIER_TEXT_COLOR } from './carrier-color.js';
 import { hooksEnabledByDefault } from './enabled.js';
 import { blurFocusedInput, type KeyboardDeps } from './keyboard.js';
 import { registeredHandlers, runResetPipeline, type Clearable, type ResetHandler } from './reset.js';
+import { persistedWriteCount, subscribePersistedWrites, trackStoreWrites } from './writes.js';
 
 export interface TapsmithTestHooksProps {
   /**
@@ -25,6 +26,25 @@ export interface TapsmithTestHooksProps {
    * and standalone builds). Bare React Native: `'myapp://'`.
    */
   urlPrefix?: string;
+  /**
+   * Resets the app while keeping its persisted data: drop in-memory state
+   * (signed-in user, caches, navigation) and read it back from storage, as a
+   * fresh launch would. Tapsmith calls it instead of `clear` + `onReset`
+   * between tests that restore the same saved app state (`appState`), when
+   * the app has written nothing to its stores since the restore — so the
+   * data still matches the archive and no restore + relaunch is needed.
+   * Requires `track`.
+   */
+  onReload?: ResetHandler;
+  /**
+   * Stores whose writes Tapsmith counts, e.g. `[AsyncStorage]` or `[storage]`
+   * (MMKV): every store the app persists data in. With `onReload`, the count
+   * lets Tapsmith tell whether a test changed the restored data. Report
+   * writes these stores cannot show (native modules, SQLite, files, the
+   * keychain) with `markTapsmithWrite()`; pass `[]` if that covers all of
+   * them.
+   */
+  track?: readonly object[];
   /** Bare React Native shorthand for `urlPrefix={`${scheme}://`}`. */
   scheme?: string;
   /**
@@ -57,15 +77,37 @@ const keyboardDeps: KeyboardDeps = {
  *
  * Renders nothing and registers nothing when disabled (production).
  */
-export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enabled }: TapsmithTestHooksProps) {
+export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPrefix, scheme, enabled }: TapsmithTestHooksProps) {
   const active = enabled ?? hooksEnabledByDefault();
   const [epoch, setEpoch] = useState(0);
   const [nav, setNav] = useState(0);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [writes, setWrites] = useState(persistedWriteCount);
+  const [trackable, setTrackable] = useState(false);
   const seenNonces = useRef(new Set<string>());
   const initialUrlHandled = useRef(false);
-  const latest = useRef({ onReset, clear });
-  latest.current = { onReset, clear };
+  const latest = useRef({ onReset, onReload, clear });
+  latest.current = { onReset, onReload, clear };
+  // `track={[AsyncStorage]}` is a new array on every render: re-wrap only
+  // when the stores themselves change.
+  const trackedStores = useRef<readonly object[] | undefined>(undefined);
+  if (!sameStores(trackedStores.current, track)) trackedStores.current = track;
+  const stores = trackedStores.current;
+
+  useEffect(() => {
+    if (!active || !stores) {
+      setTrackable(false);
+      return undefined;
+    }
+    const tracking = trackStoreWrites(stores);
+    setTrackable(tracking.trackable);
+    const unsubscribe = subscribePersistedWrites(setWrites);
+    setWrites(persistedWriteCount());
+    return () => {
+      unsubscribe();
+      tracking.untrack();
+    };
+  }, [active, stores]);
 
   const prefix = normalisePrefix(urlPrefix ?? (scheme ? `${scheme}://` : ''));
 
@@ -99,7 +141,7 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
       // Blur it alongside the clear (see runResetPipeline for the order).
       try {
         const handlers: ResetHandler[] = [...(latest.current.onReset ? [latest.current.onReset] : []), ...registeredHandlers()];
-        await runResetPipeline(request, latest.current.clear, handlers, () => blurFocusedInput(keyboardDeps));
+        await runResetPipeline(request, latest.current.clear, handlers, () => blurFocusedInput(keyboardDeps), latest.current.onReload);
         if (disposed && !initial) return;
         setError(undefined);
       } catch (err) {
@@ -132,7 +174,10 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
 
   if (!active) return null;
 
-  const marker = formatMarker({ epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error });
+  // The write count is published only when Tapsmith can act on it: the app
+  // can reset while keeping its data, and every tracked store is counted.
+  const reportsWrites = !!onReload && trackable;
+  const marker = formatMarker({ epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error, ...(reportsWrites ? { writes } : {}) });
 
   // The marker. Deliberately screen-sized rather than tucked into a corner: a
   // platform's own UI can sit on top of a corner — Android's three-button
@@ -160,6 +205,12 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
       </Text>
     </View>
   );
+}
+
+function sameStores(a: readonly object[] | undefined, b: readonly object[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((store, i) => store === b[i]);
 }
 
 function normalisePrefix(prefix: string): string {
