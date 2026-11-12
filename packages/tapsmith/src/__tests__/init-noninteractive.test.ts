@@ -845,8 +845,29 @@ describe('executeInitPlan()', () => {
       const text = [...result.nextSteps, ...result.warnings].join('\n');
       expect(text).toContain('pnpm exec tapsmith verify');
       expect(text).toContain('pnpm exec tapsmith create-avd');
-      expect(text).toContain('claude mcp add tapsmith-headless -- pnpm exec tapsmith mcp-server');
+      expect(text).toContain('claude mcp add tapsmith -- pnpm exec tapsmith mcp-server --prefer-ui');
       expect(text).not.toContain('npx tapsmith');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('lists the plugin install for the coding agents the project uses instead of the manual MCP registration', () => {
+    const tmp = makeTmp();
+    try {
+      const args = initArgs({ yes: true, platform: 'android', exampleTest: false, agentsMd: false });
+      const plan = resolveInitPlan(args, baseEnv, detectStubs, tmp);
+      const result = executeInitPlan(plan, args, tmp, undefined, 'npx tapsmith', ['claude', 'cursor']);
+      expect(result.nextSteps).toContain(
+        'Install the Claude Code plugin (the Tapsmith MCP server and a test-writing skill): ' +
+          'claude plugin marketplace add tapsmith/tapsmith && claude plugin install tapsmith@tapsmith',
+      );
+      expect(result.nextSteps.some((step) => step.startsWith('Install the Cursor plugin') && step.includes('docs/mcp-server.md'))).toBe(true);
+      expect(result.nextSteps.join('\n')).not.toContain('claude mcp add');
+      // With none found, the manual registration of the server the plugin uses.
+      const none = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), { ...args, force: true }, tmp);
+      expect(none.nextSteps).toContain('Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui');
+      expect(none.nextSteps.join('\n')).not.toContain('tapsmith-headless');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

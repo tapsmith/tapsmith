@@ -3043,13 +3043,16 @@ npx tapsmith telemetry enable
 npx tapsmith telemetry status --json
 ```
 
-### `tapsmith mcp-server [-c <path>]`
+### `tapsmith mcp-server [-c <path>] [--prefer-ui]`
 
 Run the MCP server on stdio, for an AI coding agent to launch as a subprocess. It runs its own headless test session, with its own daemon and device. `-c` / `--config` uses a specific config file. Stdout carries the MCP protocol, so messages and usage errors go to stderr. See the [MCP Server Guide](mcp-server.md) for setup.
+
+`--prefer-ui` (or `TAPSMITH_MCP_PREFER_UI=1`) makes it work in the project's running `tapsmith test --ui` session when there is one, and headless when there is not, checking before every tool call. The Tapsmith plugin for coding agents starts the server this way. [One server that follows UI mode](mcp-server.md#one-server-that-follows-ui-mode) has the rules for moving between the two.
 
 ```bash
 claude mcp add tapsmith-headless -- npx tapsmith mcp-server
 codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
 ```
 
 ### `tapsmith create-avd [--api <level>] [--name <name>] [--device <profile>] [--abi <abi>] [--force] [--install-tools]`
@@ -3568,6 +3571,8 @@ Tapsmith includes a built-in MCP server that lets AI coding agents interact with
 
 - **SSE mode** (via `tapsmith test --ui`) -- agent shares the UI session with full test tree, results, watch mode, and mutual exclusion. 16 tools available.
 - **Stdio mode** (client-launched `tapsmith mcp-server`) -- standalone agent with its own headless test session, daemon, and device. Includes test discovery, results, watch mode, stop, and session info. 16 tools available.
+
+`tapsmith mcp-server --prefer-ui`, which the Tapsmith plugin for coding agents registers, chooses between the two for each tool call: the project's running UI session when there is one, a headless session otherwise.
 
 See the [MCP Server Guide](mcp-server.md) for setup instructions, the full tool reference, and the recommended workflow.
 

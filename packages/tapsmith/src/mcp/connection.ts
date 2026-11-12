@@ -11,6 +11,7 @@ import { loadMcpConfig } from './config-loader.js';
 import { configDeviceTarget, configTargetMissMessage, type ConfigDeviceTarget } from './config-device-target.js';
 import { describeUnusableAndroidDevices, pinnedDeviceUnusableMessage, type AdbStateEntry } from '../device-advice.js';
 import { uiPortFilePath, allUiPortFiles, mcpDaemonRegistryPath } from './port-file.js';
+import type { UiSessionProject } from './ui-session.js';
 import { openDaemonLog, readDaemonLogSince } from './daemon-log.js';
 import { awaitDaemonStart, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed } from '../daemon-start.js';
 import { withDetail } from '../error-detail.js';
@@ -1997,6 +1998,14 @@ export interface UiDaemonPorts {
   daemons?: UiDaemonRecord[]
   owned?: string[]
   devices?: string[]
+  /** The session's MCP endpoint. */
+  mcpUrl?: string
+  /** The project the session was started for: see `uiSessionMatchesProject`. */
+  project?: UiSessionProject
+  /** The UI server's process. */
+  pid?: number
+  /** ISO time the session started. */
+  startedAt?: string
 }
 
 function parseUiDaemonPorts(data: UiDaemonPorts): UiDiscoveryResult {

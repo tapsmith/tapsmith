@@ -10,6 +10,7 @@ import { simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
+import { pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
@@ -584,6 +585,8 @@ export function executeInitPlan(
   cwd: string = process.cwd(),
   missingTapsmith?: InstallCommand,
   cli = 'npx tapsmith',
+  /** The coding agents the project uses (`detectCodingAgents`), whose plugin install Next steps lists. */
+  codingAgents: readonly CodingAgent[] = [],
 ): InitResult {
   const filesCreated: string[] = [];
   // Plug'n'Play first: `verify`, the next step, would refuse there (PILOT-778).
@@ -637,7 +640,12 @@ export function executeInitPlan(
     // --json is for agents: a person reading the plain output gets the plain command (PILOT-562).
     `Verify the setup end-to-end: npx tapsmith verify${args.json ? ' --json' : ''}`,
     'Run tests: npx tapsmith test',
-    'Register the MCP server for richer agent tooling: claude mcp add tapsmith-headless -- npx tapsmith mcp-server',
+    // The plugin registers the MCP server and adds a test-writing skill; with no
+    // agent found, the manual registration of the server the plugin uses
+    // (docs/mcp-server.md).
+    ...(codingAgents.length > 0
+      ? pluginInstallSteps(codingAgents).map(([label, how]) => `Install the ${label} (the Tapsmith MCP server and a test-writing skill): ${how}`)
+      : ['Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui']),
     ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];
 

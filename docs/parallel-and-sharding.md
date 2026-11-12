@@ -524,6 +524,10 @@ devices.
   Device emulator-5554 is in use by another Tapsmith session: `tapsmith test --ui` (pid 4242) in /work/app, since 10:41:03.
   ```
 
+- **A coding agent's server that follows UI mode** (`tapsmith mcp-server --prefer-ui`, which the Tapsmith
+  plugin starts) gives its headless device up when asked. `tapsmith test --ui` asks as it starts in the same
+  project, since the agent will work in the new UI session, and waits up to 10 seconds; a test run in progress
+  there keeps its device. See [One server that follows UI mode](mcp-server.md#one-server-that-follows-ui-mode).
 - **Daemons** another session is driving a device through are never adopted or repointed, including the one on
   the default `localhost:50051` that a headless MCP server or a `tapsmith test` would otherwise connect to. A
   session uses only the daemon it started. If another session's daemon takes the port first, `tapsmith test`

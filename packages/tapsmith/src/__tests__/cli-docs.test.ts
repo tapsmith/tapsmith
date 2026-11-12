@@ -621,7 +621,7 @@ const REPO = path.resolve(import.meta.dirname, '../../../..');
 const SOURCE_SETS = {
   markdown: [
     'docs/**/*.md', '*.md', 'packages/*/README.md', 'tools/**/*.md', 'web-tests/**/*.md', 'website/*.md',
-    '.github/**/*.md', '.claude/skills/**/*.md',
+    '.github/**/*.md', '.claude/skills/**/*.md', 'plugins/**/*.md',
   ],
   astro: ['website/src/pages/**/*.astro'],
   source: ['packages/tapsmith/src/**/*.{ts,tsx}'],

@@ -10,6 +10,11 @@ describe('renderAgentsSection()', () => {
     expect(section).toContain('npx tapsmith test --ui');
     expect(section).toContain('tapsmith-ui');
     expect(section).toContain('tapsmith-headless');
+    // The by-hand path leads with the server that follows UI mode.
+    const byHand = section.slice(section.indexOf('Without the plugin'));
+    expect(byHand.indexOf('claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui')).toBeGreaterThan(-1);
+    expect(byHand.indexOf('--prefer-ui')).toBeLessThan(byHand.indexOf('tapsmith-ui'));
+    expect(byHand.indexOf('--prefer-ui')).toBeLessThan(byHand.indexOf('tapsmith-headless'));
     expect(section).toContain('Do not start a long-lived UI session yourself unless the user asks you to');
     expect(section).toContain('getByRole');
     expect(section).toContain('getByDescription');
@@ -41,9 +46,12 @@ describe('renderAgentsSection()', () => {
 });
 
 describe('the locator loop and Playwright habits (PILOT-849)', () => {
-  it('points the agent at the docs of the installed version', () => {
+  it('points the agent at the docs of the installed version, and at the plugin', () => {
     const section = renderAgentsSection();
     expect(section).toContain('`node_modules/tapsmith/docs/<page>.md`');
+    expect(section).toContain('The Tapsmith plugin for Claude Code, Codex and Cursor registers one MCP server, `tapsmith`');
+    expect(section).toContain('works in the user\'s running `npx tapsmith test --ui` session when there is one');
+    expect(section).toContain('`node_modules/tapsmith/docs/mcp-server.md`');
   });
 
   it('states the loop as a rule', () => {

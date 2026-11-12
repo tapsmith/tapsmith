@@ -56,32 +56,60 @@ installed version without web access: `node_modules/tapsmith/docs/<page>.md`.
 Start with `api-reference.md`, `writing-tests.md` and `locators.md`. Links
 between pages are relative file links.
 
-## MCP server (recommended)
+## The plugin (recommended)
+
+Install the Tapsmith plugin for Claude Code, Codex or Cursor. Whenever UI mode
+is running (`npx tapsmith test --ui`), the agent works in the UI session you have
+open: you watch its test runs and device actions as they happen. With no UI
+session running, it works headless on a device of its own, and moves to a UI
+session you start later from its next tool call, with no restart.
+
+```bash
+claude plugin marketplace add tapsmith/tapsmith && claude plugin install tapsmith@tapsmith   # Claude Code
+codex plugin marketplace add tapsmith/tapsmith && codex plugin add tapsmith@tapsmith         # Codex
+```
+
+The plugin registers one MCP server, run from the project's own Tapsmith
+install, and adds a skill for writing and debugging tests that points the agent
+at the bundled docs. [Install the plugin](mcp-server.md#install-the-plugin) covers
+Cursor, which project folder the server runs in, and
+[how the server follows UI mode](mcp-server.md#one-server-that-follows-ui-mode).
+
+## MCP server
 
 For richer agent workflows — inspecting the live accessibility tree, validating
-locators before committing them, running tests, reading traces — register the
-MCP server. It comes in two forms, registered under two names so an agent can
-have both:
+locators before committing them, running tests, reading traces — the agent
+needs the MCP server. The plugin registers it; without the plugin, register
+`npx tapsmith mcp-server --prefer-ui`, the server the plugin uses. It works in
+the project's UI session whenever one is running and headless otherwise, so
+there is no URL to copy:
 
-- **`tapsmith-ui`**, preferred whenever `npx tapsmith test --ui` is running: the
-  agent works in the UI session you can see, sharing its device, test tree,
-  results and traces. Register the MCP URL the UI shows (`http://localhost:9274/mcp`
-  by default):
+```bash
+claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui   # Claude Code
+codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui    # Codex
+```
+
+The two modes it chooses between can also be registered on their own, each
+under a name of its own, for the cases it does not cover:
+
+- **`tapsmith-ui`**, to connect to a UI session of another project or machine.
+  Register the MCP URL that UI shows (`http://localhost:9274/mcp` by default):
 
   ```bash
   claude mcp add tapsmith-ui --transport http http://localhost:9274/mcp   # Claude Code
   codex mcp add tapsmith-ui --url http://localhost:9274/mcp               # Codex
   ```
 
-- **`tapsmith-headless`**, for when no UI session is running or the agent needs a
-  session of its own. The agent's MCP client starts it as a subprocess:
+- **`tapsmith-headless`**, to keep an agent on a session of its own whatever UI
+  sessions are running. The agent's MCP client starts it as a subprocess:
 
   ```bash
   claude mcp add tapsmith-headless -- npx tapsmith mcp-server   # Claude Code
   codex mcp add tapsmith-headless -- npx tapsmith mcp-server    # Codex
   ```
 
-The `AGENTS.md` section `tapsmith init` writes tells your agent the same.
+The `AGENTS.md` section `tapsmith init` writes tells your agent the same, and
+`init` lists the plugin install for each coding agent it finds in the project.
 
 Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
 `tapsmith_test_locator`, `tapsmith_run_tests`, `tapsmith_read_trace`,
