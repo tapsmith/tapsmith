@@ -889,14 +889,18 @@ export async function executeAppReset(
         } else if (baseline) {
           let after: ReturnType<typeof parseHooksMarker>;
           await step('readWriteCount', async () => { after = await readMarker(ctx); });
-          // An unreadable marker right after a reset is a transition, not
-          // evidence of a write: the count was checked before the reset.
-          if (after?.boot !== undefined && after.boot !== baseline.boot) {
+          // Unverified is not kept: a write the app made during the reset is
+          // exactly what this read is for, and the next restore would only
+          // catch it after a test had already run on it.
+          if (after?.writes === undefined) {
+            kept = false;
+            reason = `could not read the app's write count after the warm reset; restored ${archiveName} cold`;
+          } else if (after.boot !== baseline.boot) {
             // Relaunched after all (a delivery that went cold without the
             // daemon seeing it): as above, the count went with the process.
             kept = false;
             reason = `the warm reset relaunched the app, so writes made just before it cannot be ruled out; restored ${archiveName} cold`;
-          } else if (after?.writes !== undefined && after.writes !== baseline.writes) {
+          } else if (after.writes !== baseline.writes) {
             kept = false;
             const n = after.writes - baseline.writes;
             reason = `the app wrote persisted data during the warm reset (${n} write${n === 1 ? '' : 's'}); restored ${archiveName} cold`;

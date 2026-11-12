@@ -965,7 +965,7 @@ describe('session-preflight', () => {
       expect(report.reason).toBe('the warm reset relaunched the app, so writes made just before it cannot be ruled out; restored auth.tar.gz cold');
     });
 
-    it('stays kept when the re-read after the reset finds no marker (a transition, not a write)', async () => {
+    it('restores cold when the re-read after the reset finds no count: a write during the reset cannot be ruled out', async () => {
       const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
       await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
       const empty = { requestId: '1', hierarchyXml: '<hierarchy/>', errorMessage: '' };
@@ -976,8 +976,9 @@ describe('session-preflight', () => {
 
       const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
 
-      expect(report.modeUsed).toBe('warm');
-      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(1);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe("could not read the app's write count after the warm reset; restored auth.tar.gz cold");
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
     });
 
     it('restores cold when the archive was saved again since it was restored', async () => {
