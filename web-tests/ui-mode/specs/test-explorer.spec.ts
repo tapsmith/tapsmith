@@ -186,6 +186,72 @@ test.describe("Test explorer", () => {
       await expect(explorer.statusFilterCount("Fail")).toHaveText("1")
       await expect(explorer.statusFilterCount("Skip")).toHaveText("1")
     })
+
+    // PILOT-1178. Rows used to flash red on any running → failed change, and a
+    // parent row is recomputed from all its children: running a passing test
+    // beside an earlier failure took the file and describe rows from running to
+    // failed, so they flashed as if the test just run had failed. The flash is
+    // gone; the status icon carries the result.
+    test("no row flashes when a passing test runs beside an earlier failure", async ({ app, explorer, page }) => {
+      const ui = app
+      await explorer.expandAll()
+
+      ui.send({
+        type: "test-status",
+        fullName: "Gestures screen > double tap registers double tap gesture",
+        filePath: GESTURES_FILE,
+        status: "failed",
+        error: "expected true to be false",
+      })
+      await expect(explorer.node("gestures.test.ts")).toHaveAttribute("data-status", "failed")
+
+      const recorded = () =>
+        page.evaluate(() => (window as unknown as { __animations: { name: string; onRow: boolean }[] }).__animations)
+
+      // Record every CSS animation that starts from here on. `animationstart`
+      // bubbles, so one capture listener sees rows and their descendants alike.
+      await page.evaluate(() => {
+        const w = window as unknown as { __animations: { name: string; onRow: boolean }[] }
+        w.__animations = []
+        document.addEventListener(
+          "animationstart",
+          (e) => {
+            const target = e.target as Element
+            w.__animations.push({ name: e.animationName, onRow: target.getAttribute("role") === "treeitem" })
+          },
+          true,
+        )
+      })
+
+      const fullName = "Gestures screen > long press registers long press"
+      // The message sequence the UI server sends for a single-test run.
+      ui.send({ type: "run-start", fileCount: 1, filePath: GESTURES_FILE, testFilter: fullName })
+      ui.send({ type: "file-status", filePath: GESTURES_FILE, status: "running" })
+      ui.send({ type: "test-start", fullName, filePath: GESTURES_FILE })
+      await expect(explorer.node("long press registers long press")).toHaveAttribute("data-status", "running")
+      await expect(explorer.node("gestures.test.ts")).toHaveAttribute("data-status", "running")
+      // Control: the running spinner's `spin` reaches the recorder, so an empty
+      // list below means no row animated, not that nothing was recorded.
+      await expect.poll(async () => (await recorded()).map((a) => a.name)).toContain("spin")
+
+      ui.send({ type: "test-status", fullName, filePath: GESTURES_FILE, status: "passed", duration: 10 })
+      ui.send({ type: "file-status", filePath: GESTURES_FILE, status: "done" })
+      ui.send({ type: "run-end", status: "passed", duration: 10, passed: 1, failed: 0, skipped: 0 })
+
+      await expect(explorer.node("long press registers long press")).toHaveAttribute("data-status", "passed")
+      // The earlier failure still decides the parents' status...
+      await expect(explorer.node("gestures.test.ts")).toHaveAttribute("data-status", "failed")
+      await expect(explorer.node("Gestures screen")).toHaveAttribute("data-status", "failed")
+
+      // ...but no row animated on the way there.
+      // `animationstart` is dispatched on the frame after the class change, so
+      // let two frames pass before reading what the recorder saw.
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      )
+      const rowAnimations = (await recorded()).filter((a) => a.onRow)
+      expect(rowAnimations).toEqual([])
+    })
   })
 
   test.describe("projects", () => {
