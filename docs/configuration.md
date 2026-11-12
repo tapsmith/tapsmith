@@ -259,7 +259,7 @@ type VideoMode = "off" | "on" | "on-first-retry" | "on-all-retries" | "retain-on
 
 The mode set is identical to `TraceMode` and the semantics match exactly — `"on"` records every test, `"retain-on-failure"` records but discards passing-test videos, etc.
 
-Note that `"retain-on-failure"` still pays the recording/encoding cost for every test and only discards the file afterwards. The retry-only modes (`"on-first-retry"`, `"on-all-retries"`) start no recorder at all on the first attempt, which avoids that cost entirely on healthy runs — but they require `retries >= 1` to ever produce a video (the runner warns at startup if `retries` is 0). This mirrors Playwright's `on-first-retry` caveat.
+Note that `"retain-on-failure"` still pays the recording/encoding cost for every test and only discards the file afterwards. The retry-only modes (`"on-first-retry"`, `"on-all-retries"`) start no recorder at all on the first attempt, which avoids that cost entirely on healthy runs — but they require `retries >= 1` to ever produce a video (the runner warns at startup if `retries` is 0, and in [UI mode](ui-mode.md#each-test-runs-once), which never retries, whatever `retries` is). This mirrors Playwright's `on-first-retry` caveat.
 
 ### `VideoConfig`
 
