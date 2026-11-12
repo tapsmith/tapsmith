@@ -2125,7 +2125,7 @@ function App() {
           pickMode={pickTarget === 'mirror'}
           onTogglePick={handleMirrorPickToggle}
           pickAvailable={connected && !mirrorLoading && !mirrorGrid && !livePaused}
-          pickPaused={livePaused}
+          pickPaused={livePaused && connected}
           pickDpr={mirrorDpr}
           pickHoverBounds={mirrorHoverBounds}
           pickMatchBounds={selectorSource === 'live' ? selectorHighlights : EMPTY_BOUNDS}
@@ -2168,7 +2168,7 @@ function App() {
               source={selectorSource}
               onSourceChange={handleSelectorSourceChange}
               liveSourceAvailable={connected}
-              livePaused={livePaused}
+              livePaused={livePaused && connected}
               live={pickedNode && pickedNode === livePickedNode ? liveAnswers : { ...liveAnswers, suggestions: null }}
             />
           }

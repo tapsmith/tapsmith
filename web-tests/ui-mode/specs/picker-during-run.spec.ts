@@ -299,6 +299,28 @@ test.describe("The lock and picker with several workers", () => {
     await expect(device.pickToggle).toBeDisabled()
   })
 
+  test("while disconnected, neither the pick button nor the Locator tab claims a test is running", async ({ ui, device, page, detailTabs, runControls }) => {
+    // The last worker status a dropped connection left behind is not news about the device.
+    const locator = new LocatorPane(page)
+    ui.seed([...idleSeed(singleFileTree()), WORKERS])
+    await ui.open()
+    await device.selectWorkerView("emulator-5554")
+    await expect(device.mirrorStatus).toHaveText("Starting mirror…")
+    ui.sendFrame({ ...screenFrame(120, 260), workerId: 0 })
+    ui.send(RUN_STARTED, workerStatus(0, "running"))
+    await expect(device.pickToggle).toHaveAccessibleDescription(/Locked while a test runs/)
+    await detailTabs.select("Locator")
+    await locator.type('device.getByText("Save")')
+    await locator.sourceToggle.getByRole("button", { name: "Live" }).click()
+    await expect(locator.sourceNote).toContainText("Paused while a test runs on this device")
+
+    ui.drop()
+    await expect(runControls.connection).toHaveText("Disconnected")
+    await expect(device.pickToggle).toBeDisabled()
+    await expect(device.pickToggle).not.toHaveAccessibleDescription(/Locked while a test runs/)
+    await expect(locator.sourceNote).not.toContainText("Paused while a test runs")
+  })
+
   test("in the All view, only the device running a test is locked", async ({ ui, device, page }) => {
     ui.seed([...idleSeed(singleFileTree()), WORKERS])
     await ui.open()
