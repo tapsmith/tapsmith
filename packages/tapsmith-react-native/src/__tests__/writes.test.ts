@@ -92,6 +92,20 @@ describe('persisted write tracking', () => {
     tracking.untrack();
   });
 
+  it('keeps counting through a later tracker when an earlier one untracks first (two mounts unmounting out of order)', () => {
+    const store = { setItem: vi.fn(() => undefined) };
+    const first = trackStoreWrites([store]);
+    const second = trackStoreWrites([store]);
+    first.untrack();
+    const start = persistedWriteCount();
+    store.setItem();
+    expect(persistedWriteCount()).toBe(start + 1);
+    second.untrack();
+    // Both gone: a write counts nothing, and still reaches the store.
+    store.setItem();
+    expect(persistedWriteCount()).toBe(start + 1);
+  });
+
   it('reports a store it cannot wrap as untrackable', () => {
     const frozen = Object.freeze({ setItem: () => undefined });
     expect(trackStoreWrites([frozen]).trackable).toBe(false);

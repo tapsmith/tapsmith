@@ -86,10 +86,11 @@ export function trackStoreWrites(stores: readonly object[]): StoreTracking {
       const target = store as Record<string, unknown>;
       const hadOwn = Object.prototype.hasOwnProperty.call(store, name);
       const original = target[name] as (...args: unknown[]) => unknown;
+      let counting = true;
       const wrapped = function (this: unknown, ...args: unknown[]): unknown {
         // Before the call: a write that fails half-way may still have changed
         // something, and a rejected promise is the caller's to handle.
-        markTapsmithWrite();
+        if (counting) markTapsmithWrite();
         return original.apply(this, args);
       };
       try {
@@ -105,6 +106,11 @@ export function trackStoreWrites(stores: readonly object[]): StoreTracking {
         continue;
       }
       undo.push(() => {
+        counting = false;
+        // Something wrapped the method after us (another mount of the hooks,
+        // a devtool): putting `original` back would remove its wrapper too.
+        // Stay in the chain as a pass-through instead.
+        if (target[name] !== wrapped) return;
         try {
           if (hadOwn) target[name] = original;
           else delete target[name];
