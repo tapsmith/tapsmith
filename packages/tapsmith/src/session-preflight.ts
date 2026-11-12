@@ -854,6 +854,7 @@ export async function executeAppReset(
             mode: 'warm',
             fallback: false,
             keepAppData: true,
+            recoverable: true,
             forceCold: false,
             coldEveryNResets: ctx.config.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY,
             skipTraceCapture: true,
@@ -874,9 +875,24 @@ export async function executeAppReset(
         processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
         routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
         reason = `kept ${archiveName}: no persisted writes since the restore`;
-        // A new process may write at launch, and those writes happened after
-        // the count this baseline holds: the next restore goes cold.
-        if (processRecreated) delete ctx.capabilities?.appStateBaseline;
+        // A process recreated by the reset (a cold delivery) may write at
+        // launch, after the count the baseline holds; the baseline keeps the
+        // old boot token, so the next restore sees the relaunch and goes cold.
+        // One that survived dropped no pending timers: a write it had
+        // scheduled before the reset (a debounced save) may have landed
+        // since the count was read. Check again.
+        const baseline = ctx.capabilities?.appStateBaseline;
+        if (!processRecreated && baseline) {
+          let after: ReturnType<typeof parseHooksMarker>;
+          await step('readWriteCount', async () => { after = await readMarker(ctx); });
+          // An unreadable marker right after a reset is a transition, not
+          // evidence of a write: the count was checked before the reset.
+          if (after?.writes !== undefined && after.boot === baseline.boot && after.writes !== baseline.writes) {
+            kept = false;
+            const n = after.writes - baseline.writes;
+            reason = `the app wrote persisted data during the warm reset (${n} write${n === 1 ? '' : 's'}); restored ${archiveName} cold`;
+          }
+        }
       } else if (result) {
         reason = `warm reset keeping ${archiveName} cleared the app (${result.reason ?? 'no reason given'}); restored it cold`;
       }
@@ -888,7 +904,10 @@ export async function executeAppReset(
       reason = plan.reason;
     }
     if (!kept) {
-      if (ctx.capabilities && !plan.keepBaseline) delete ctx.capabilities.appStateBaseline;
+      modeUsed = 'restore';
+      processRecreated = true;
+      routeReached = false;
+      if (ctx.capabilities) delete ctx.capabilities.appStateBaseline;
       await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
       await step('restartApp', () => ctx.device.restartApp(pkg));
       if (plan.recordBaseline) recordBaselineFor = action.archive;
@@ -1019,10 +1038,11 @@ interface KeptRestorePlan {
   keep: boolean;
   /** Why the restore runs cold (trace detail), when warm was possible in principle. */
   reason?: string;
-  /** After a cold restore, read the write count the next restore compares against. */
+  /**
+   * After a cold restore (including the fallback of a failed keep), read the
+   * write count the next restore compares against.
+   */
   recordBaseline: boolean;
-  /** Leave the recorded baseline alone (it already says the app reports no writes). */
-  keepBaseline?: boolean;
 }
 
 /**
@@ -1030,7 +1050,9 @@ interface KeptRestorePlan {
  * device. It can when the last cold restore was of the same archive, the app
  * is still the process that restore launched (`boot`), and the hooks have
  * counted no persisted write since (`writes`). Anything else — and every
- * forced-cold reset — restores the archive again.
+ * forced-cold reset — restores the archive again. The marker is read every
+ * time (one hierarchy dump against a restore and relaunch), so nothing about
+ * the app is assumed from an earlier read.
  */
 async function planKeptRestore(
   ctx: SessionPreflightContext,
@@ -1045,58 +1067,44 @@ async function planKeptRestore(
   }
   if (!hooks) return { keep: false, recordBaseline: false };
   if (options.forceCold) return { keep: false, recordBaseline: true, reason: 'warm skipped: a retry restores the archive cold' };
+  let marker: ReturnType<typeof parseHooksMarker>;
+  await step('readWriteCount', async () => { marker = await readMarker(ctx); });
+  if (!marker) return { keep: false, recordBaseline: true, reason: 'warm skipped: could not read the hooks marker' };
+  // This build of the app reports no writes; the relaunch a restore does
+  // will not change that, so reading again after it would find nothing.
+  if (marker.writes === undefined) return { keep: false, recordBaseline: false, reason: NO_WRITES_REASON };
   const baseline = ctx.capabilities?.appStateBaseline;
-  if (baseline && baseline.writes === undefined) {
-    return { keep: false, recordBaseline: false, keepBaseline: true, reason: NO_WRITES_REASON };
-  }
   if (!baseline || baseline.archive !== archive) {
     return { keep: false, recordBaseline: true, reason: `warm skipped: first restore of ${path.basename(archive)} on this device` };
   }
-  let marker: ReturnType<typeof parseHooksMarker>;
-  await step('readWriteCount', async () => {
-    try {
-      marker = parseHooksMarker((await ctx.client.getUiHierarchy()).hierarchyXml ?? '');
-    } catch {
-      marker = undefined;
-    }
-  });
-  if (!marker) return { keep: false, recordBaseline: true, reason: 'warm skipped: could not read the hooks marker' };
-  if (marker.writes === undefined) return { keep: false, recordBaseline: true, reason: NO_WRITES_REASON };
   if (marker.boot !== baseline.boot) {
     return { keep: false, recordBaseline: true, reason: 'warm skipped: the app relaunched since the restore' };
   }
   if (marker.writes !== baseline.writes) {
-    const n = marker.writes - (baseline.writes ?? 0);
-    return {
-      keep: false,
-      recordBaseline: true,
-      reason: n > 0
-        ? `warm skipped: the app wrote persisted data since the restore (${n} write${n === 1 ? '' : 's'})`
-        : 'warm skipped: the app relaunched since the restore',
-    };
+    // Same process, so the count only grew.
+    const n = marker.writes - baseline.writes;
+    return { keep: false, recordBaseline: true, reason: `warm skipped: the app wrote persisted data since the restore (${n} write${n === 1 ? '' : 's'})` };
   }
-  return { keep: true, recordBaseline: false };
+  return { keep: true, recordBaseline: true };
+}
+
+async function readMarker(ctx: SessionPreflightContext): Promise<ReturnType<typeof parseHooksMarker>> {
+  try {
+    return parseHooksMarker((await ctx.client.getUiHierarchy()).hierarchyXml ?? '');
+  } catch {
+    return undefined;
+  }
 }
 
 /**
  * After a cold restore of `archive`, remember the process it launched and
  * its write count, so the next restore of the same archive can tell whether
- * the data changed. For an app that does not report writes, the baseline
- * records just that, and later restores read nothing.
+ * the data changed. A marker without a count records nothing.
  */
 async function recordAppStateBaseline(ctx: SessionPreflightContext, archive: string): Promise<void> {
-  let marker: ReturnType<typeof parseHooksMarker>;
-  try {
-    marker = parseHooksMarker((await ctx.client.getUiHierarchy()).hierarchyXml ?? '');
-  } catch {
-    return;
-  }
-  if (marker?.boot) {
-    (ctx.capabilities ??= {}).appStateBaseline = {
-      archive,
-      boot: marker.boot,
-      ...(marker.writes !== undefined ? { writes: marker.writes } : {}),
-    };
+  const marker = await readMarker(ctx);
+  if (marker?.boot && marker.writes !== undefined) {
+    (ctx.capabilities ??= {}).appStateBaseline = { archive, boot: marker.boot, writes: marker.writes };
   }
 }
 

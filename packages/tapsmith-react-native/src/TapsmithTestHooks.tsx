@@ -29,8 +29,9 @@ export interface TapsmithTestHooksProps {
   /**
    * Resets the app while keeping its persisted data: drop in-memory state
    * (signed-in user, caches, navigation) and read it back from storage, as a
-   * fresh launch would. Tapsmith calls it instead of `clear` + `onReset`
-   * between tests that restore the same saved app state (`appState`), when
+   * fresh launch would. Tapsmith calls it instead of `clear`, `onReset` and
+   * `registerTapsmithReset` handlers (none of them run, so reset what they
+   * would, and cancel writes the app has scheduled but not made) between tests that restore the same saved app state (`appState`), when
    * the app has written nothing to its stores since the restore — so the
    * data still matches the archive and no restore + relaunch is needed.
    * Requires `track`.
@@ -83,7 +84,11 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
   const [nav, setNav] = useState(0);
   const [error, setError] = useState<string | undefined>(undefined);
   const [writes, setWrites] = useState(persistedWriteCount);
-  const [trackable, setTrackable] = useState(false);
+  // Undefined until the stores are wrapped (an effect, after the first
+  // commit). The count is published from the first render on: Tapsmith may
+  // read the marker before the effect runs, and a marker without a count
+  // there would read as "this app reports no writes".
+  const [trackable, setTrackable] = useState<boolean | undefined>(undefined);
   const seenNonces = useRef(new Set<string>());
   const initialUrlHandled = useRef(false);
   const latest = useRef({ onReset, onReload, clear });
@@ -176,7 +181,7 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
 
   // The write count is published only when Tapsmith can act on it: the app
   // can reset while keeping its data, and every tracked store is counted.
-  const reportsWrites = !!onReload && trackable;
+  const reportsWrites = !!onReload && !!stores && trackable !== false;
   const marker = formatMarker({ epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error, ...(reportsWrites ? { writes } : {}) });
 
   // The marker. Deliberately screen-sized rather than tucked into a corner: a

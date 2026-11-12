@@ -51,8 +51,7 @@ That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'
 | `onReset` | Your own reset: sign out, drop in-memory caches, reset navigation. Receives `{ target, nonce }`; if it navigates, navigate to `target` — that is the route the reset (and an `appResetRoute`) asked for, and Tapsmith cannot see where the app ends up. `target` is the route's path without its query: a query in `appResetRoute` (`'/settings?tab=2'`) reaches your app only with the reset link itself, so a handler that navigates again drops it. |
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
 | `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders nothing and registers nothing. |
-
-| `onReload` | Resets the app while *keeping* its stored data: drop in-memory state (signed-in user, caches, navigation) and read it back from storage, as a fresh launch would. Tapsmith runs it, instead of `clear` and `onReset`, between tests that restore the same saved app state; see [Keeping restored app state between tests](#keeping-restored-app-state-between-tests). Needs `track`. |
+| `onReload` | Resets the app while *keeping* its stored data: drop in-memory state (signed-in user, caches, navigation) and read it back from storage, as a fresh launch would. Tapsmith runs it, instead of `clear`, `onReset` and `registerTapsmithReset` handlers, between tests that restore the same saved app state; see [Keeping restored app state between tests](#keeping-restored-app-state-between-tests). Needs `track`. |
 | `track` | The stores your app keeps data in, e.g. `[AsyncStorage]` or an MMKV instance. The hooks count every write to them, so Tapsmith can tell whether a test changed restored data. |
 
 `registerTapsmithReset(fn)` registers a handler from non-React code.
@@ -111,7 +110,7 @@ function Hooks() {
 }
 ```
 
-`onReload` should leave the app as a fresh launch with the same stored data would: for a signed-in session, re-read the session from storage rather than clear it.
+`onReload` should leave the app as a fresh launch with the same stored data would: for a signed-in session, re-read the session from storage rather than clear it. It is the only handler a keep reset runs — `clear`, `onReset` and handlers added with `registerTapsmithReset` do not run — so it must also drop whatever in-memory state those reset (a Redux store, a query cache), and cancel writes the app has scheduled but not made yet (a debounced save): a fresh launch would never make them.
 
 What happens, per device:
 
@@ -130,7 +129,7 @@ await db.runAsync("INSERT INTO drafts …")
 markTapsmithWrite()
 ```
 
-A missed write means the next test sees data an earlier test left behind. If you cannot account for every write, leave `onReload` out: the scope then restores cold every time, as before. If a store's methods cannot be wrapped (a frozen object), the hooks publish no count at all, with the same result. Pass `track={[]}` only when `markTapsmithWrite()` reports every write the app makes.
+Tapsmith reads the count before the reset and again right after it, so a deferred save that lands during the reset is caught; one that lands later is not. An app that defers writes (a throttled persister, a debounced autosave) should call `markTapsmithWrite()` when it schedules the write, or have `onReload` cancel it. A missed write means the next test sees data an earlier test left behind. If you cannot account for every write, leave `onReload` out: the scope then restores cold every time, as before. If a store's methods cannot be wrapped (a frozen object), the hooks publish no count at all, with the same result. Pass `track={[]}` only when `markTapsmithWrite()` reports every write the app makes.
 
 ## How a warm reset works
 

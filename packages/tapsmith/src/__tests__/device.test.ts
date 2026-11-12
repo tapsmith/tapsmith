@@ -1589,6 +1589,32 @@ describe('Device.resetApp()', () => {
     await expect(device.resetApp({ mode: 'clear', fallback: false })).rejects.toThrow('clear failed');
   });
 
+  it('records a failed reset its caller recovers from as a handled step, and still throws', async () => {
+    const resetApp = vi.fn(async () => ({
+      requestId: '1', success: false, errorType: 'RESET_FAILED', errorMessage: 'in-app reset reported an error: no onReload',
+      screenshot: Buffer.alloc(0), modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM',
+      fellBack: false, coldLaunch: false, reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: false,
+    }));
+    const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
+    const device = new Device(client, { package: 'com.example.app' });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-reset-recoverable-'));
+    const collector = makeTraceCollector(tempDir);
+    setActiveTraceCollector(collector);
+    try {
+      await expect(device._resetApp('com.example.app', { mode: 'warm', fallback: false, keepAppData: true, recoverable: true }))
+        .rejects.toThrow('no onReload');
+      expect(resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ keepAppData: true, allowFallback: false }));
+      expect(collector.events).toContainEqual(expect.objectContaining({
+        action: 'resetApp',
+        success: true,
+        detail: expect.stringContaining('failed: in-app reset reported an error: no onReload'),
+      }));
+    } finally {
+      setActiveTraceCollector(null);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('retry attempts force a cold delivery', async () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),

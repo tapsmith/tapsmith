@@ -843,13 +843,18 @@ export class Device {
             // The process was recreated after all — drop cached WebView state.
             await this._disposeWebViewManager();
           }
-          return response;
+          // A caller that recovers from a failure itself records the attempt
+          // as handled (its detail still says it failed), not as an error.
+          return options.recoverable && !response.success ? { ...response, success: true } : response;
         },
         'App reset failed',
         {
           detail: () => (response ? describeAppResetResponse(mode, response, options.target) : undefined),
           skipBeforeCapture: options.skipTraceCapture,
         }));
+    if (options.recoverable && !response!.success) {
+      throw new Error(response!.errorMessage || 'App reset failed');
+    }
     const result = toAppResetResult(mode, response!);
     if (result.coldLaunch) this._appProcessRecreated();
     return result;
@@ -2381,6 +2386,13 @@ export interface InternalAppResetOptions extends AppResetOptions {
    * same `appState`, once the hook reports no writes since the restore.
    */
   keepAppData?: boolean;
+  /**
+   * The caller falls back on its own when the reset fails (the runner
+   * restores the archive after a failed keep-data reset): the trace records
+   * the failed attempt as a handled step rather than an error, and the call
+   * still throws.
+   */
+  recoverable?: boolean;
 }
 
 /** What `device.resetApp()` did: the rung that ran, why, and how long it took. */

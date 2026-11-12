@@ -73,11 +73,7 @@ export interface AppStateBaseline {
   /** Absolute path of the restored archive. */
   archive: string;
   boot: string;
-  /**
-   * Undefined when the app does not report writes (no `onReload`/`track`):
-   * remembered so later restores skip the marker reads that cannot help.
-   */
-  writes?: number;
+  writes: number;
 }
 
 /**
