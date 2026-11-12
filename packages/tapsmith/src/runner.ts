@@ -24,7 +24,7 @@ import { APIRequestContext } from './api-request.js';
 import { flushSoftErrors } from './expect.js';
 import { FixtureRegistry, resolveFixtures, fixtureParameterNames, functionHasParameters, type FixtureDefinitions, type BuiltinFixtures } from './fixtures.js';
 import { resolveTraceConfig, type TraceConfig } from './trace/types.js';
-import { recordsOnlyOnRetry, shouldRecord, shouldRetain } from './trace/trace-mode.js';
+import { shouldRecord, shouldRetain, uiModeTraceMode } from './trace/trace-mode.js';
 import { resolveVideoConfig } from './video/types.js';
 import { appendEventsToTrace, packageTrace, readTraceActionCount } from './trace/trace-packager.js';
 import { TraceCollector, extractSourceLocation, screenshotFileName, setActiveTraceCollector, withActiveTraceCollector } from './trace/trace-collector.js';
@@ -1625,14 +1625,13 @@ function testRetries(opts: RunOptions): number {
 }
 
 /**
- * The trace config a scope records with. In UI mode a retry-only mode
- * (`on-first-retry`, `on-all-retries`) records as `on`: with no retry it
- * would record nothing, and the live view is built from the trace (the UI
- * worker already turns `off` into `on` for the same reason).
+ * The trace config a scope records with: in UI mode a retry-only mode
+ * records as `on` (`uiModeTraceMode`), as the UI worker already turns `off`
+ * into `on`, since the live view is built from the trace.
  */
 function runTraceConfig(opts: RunOptions): TraceConfig {
   const config = resolveTraceConfig(opts.config.trace);
-  return opts.runMode === 'ui' && recordsOnlyOnRetry(config.mode) ? { ...config, mode: 'on' } : config;
+  return opts.runMode === 'ui' ? { ...config, mode: uiModeTraceMode(config.mode) } : config;
 }
 
 /**
