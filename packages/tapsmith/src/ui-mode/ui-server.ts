@@ -698,10 +698,20 @@ export async function startUIServer(
     }
   }
 
+  /**
+   * Something outside the workers touched these devices (a mirror gesture, an
+   * MCP tool). The server's readiness claim goes stale, and so must each
+   * worker's own prepared records — the run consumes those, and a preparation
+   * skips any device still holding one (PILOT-1195). Sent in every readiness
+   * state: a touch during a run or startup outdates the records just the same.
+   */
   function invalidateWorkers(reason: StaleReason, workerIds?: number[]): void {
     for (const w of uiWorkers) {
       if (w.retired) continue;
       if (workerIds && !workerIds.includes(w.id)) continue;
+      try {
+        w.process.send({ type: 'invalidate-prepared' } satisfies UIWorkerMessage);
+      } catch { /* IPC closed */ }
       readinessEvent(w, { type: 'invalidate', reason });
     }
   }
