@@ -3824,6 +3824,7 @@ pub(crate) async fn handle_transparent_tcp<S>(
 }
 
 /// [`handle_transparent_tcp`] inside its connection's origin scope.
+#[cfg(any(target_os = "macos", test))]
 async fn serve_transparent_tcp<S>(
     mut client: S,
     dst_host: String,
