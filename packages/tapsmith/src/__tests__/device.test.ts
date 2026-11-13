@@ -830,6 +830,7 @@ describe('Device.route()', () => {
       expect(isTestEndedError(err)).toBe(true);
       expect(stream.writes.filter((m) => typeof m === 'object' && m !== null && 'registerRoute' in m)).toEqual([]);
       expect(device._takeRouteRegistrations()).toBe(0);
+      expect(device._takeRouteRegistrationLog()).toEqual([]);
     });
 
     it('starts capture on demand for device.on() too', async () => {
@@ -879,6 +880,37 @@ describe('Device.route()', () => {
     expect(device._takeRouteRegistrations()).toBe(0);
   });
 
+  // PILOT-1196: the runner compares each route's registration time with the
+  // captured requests' start times.
+  it('logs each successful registration with its pattern, time and matcher, and resets when taken', async () => {
+    const stream = new FakeRouteStream();
+    const client = makeMockClient({
+      networkRouteStream: vi.fn(
+        () => stream as unknown as ReturnType<TapsmithGrpcClient['networkRouteStream']>,
+      ),
+    });
+    const device = new Device(client);
+    const before = Date.now();
+
+    await device.route('**/todos*', async () => undefined);
+    await device.route(/\/users\/\d+$/, async () => undefined);
+    await device.route((url) => url.hostname === 'api.example.com', async () => undefined);
+    const after = Date.now();
+
+    const log = device._takeRouteRegistrationLog();
+    expect(log.map((r) => r.pattern)).toEqual(['**/todos*', '/\\/users\\/\\d+$/', '<predicate>']);
+    for (const r of log) {
+      expect(r.registeredAtMs).toBeGreaterThanOrEqual(before);
+      expect(r.registeredAtMs).toBeLessThanOrEqual(after);
+    }
+    expect(log[0]!.matches('https://api.example.com/todos?_limit=10')).toBe(true);
+    expect(log[0]!.matches('https://api.example.com/posts')).toBe(false);
+    expect(log[1]!.matches('https://api.example.com/users/7')).toBe(true);
+    expect(log[2]!.matches('https://api.example.com/x')).toBe(true);
+    expect(log[2]!.matches('https://other.example.com/x')).toBe(false);
+    expect(device._takeRouteRegistrationLog()).toEqual([]);
+  });
+
   it('does not count a registration that failed', async () => {
     const client = makeMockClient({
       startNetworkCapture: vi.fn(async () => ({
@@ -893,6 +925,7 @@ describe('Device.route()', () => {
 
     await expect(device.route('**/posts*', async () => undefined)).rejects.toThrow();
     expect(device._takeRouteRegistrations()).toBe(0);
+    expect(device._takeRouteRegistrationLog()).toEqual([]);
   });
 
   it('passes keepRunning through when stopping network capture', async () => {

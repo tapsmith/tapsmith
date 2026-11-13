@@ -1122,8 +1122,8 @@ message CapturedNetworkEntry {
   bool request_body_omitted = 17;
   bool response_body_omitted = 18;
   // The connection came from an OS service (a system daemon or system app),
-  // not an app. Set on route_action "passthrough" markers only, on routes
-  // that can tell (Android transparent capture, iOS simulator redirector).
+  // not an app. Set on every entry such a connection records, on routes that
+  // can tell (Android transparent capture, iOS simulator redirector).
   bool os_service = 19;
 }
 

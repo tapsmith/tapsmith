@@ -1285,7 +1285,7 @@ export class TapsmithGrpcClient {
       captureId?: string;
       requestBodyOmitted?: boolean;
       responseBodyOmitted?: boolean;
-      /** A passthrough marker for a connection an OS service opened, not an app. */
+      /** The entry belongs to a connection an OS service opened, not an app. */
       osService?: boolean;
     }>;
     errorMessage: string;

@@ -75,6 +75,20 @@ pub enum TrafficOrigin {
     OsService,
 }
 
+tokio::task_local! {
+    /// The [`TrafficOrigin`] of the connection the current task serves, so
+    /// every entry it records is tagged without threading the origin through
+    /// each handler (PILOT-1196). Scoped where a connection enters the proxy
+    /// ([`spawn_accept_loop`], [`handle_transparent_tcp`]) and again on each
+    /// spawned h2 stream task, which does not inherit it.
+    static CONNECTION_ORIGIN: TrafficOrigin;
+}
+
+/// The current connection's origin; unattributed outside a connection task.
+fn connection_origin() -> TrafficOrigin {
+    CONNECTION_ORIGIN.try_with(|o| *o).unwrap_or_default()
+}
+
 /// A captured network request/response pair.
 #[derive(Debug, Clone)]
 pub struct CapturedEntry {
@@ -102,8 +116,9 @@ pub struct CapturedEntry {
     pub in_flight: bool,
     pub capture_id: u64,
     /// The connection came from an OS service rather than an app (see
-    /// [`TrafficOrigin::OsService`]). Only set on `passthrough` markers, the
-    /// one entry kind the SDK reads it for.
+    /// [`TrafficOrigin::OsService`]). Set on every entry the connection
+    /// records, from [`CONNECTION_ORIGIN`]: the SDK leaves these out of the
+    /// app's traffic.
     pub os_service: bool,
 }
 
@@ -470,6 +485,7 @@ impl ProxyState {
     }
 
     fn push_entry(&mut self, mut entry: CapturedEntry) {
+        entry.os_service |= connection_origin() == TrafficOrigin::OsService;
         entry.capture_id = self.next_stream_key;
         self.next_stream_key += 1;
         self.entries.push(entry);
@@ -846,7 +862,10 @@ fn spawn_accept_loop(
                         Ok((stream, addr)) => {
                             let st = state.clone();
                             let ca = mitm_ca.clone();
-                            tokio::spawn(handle_connection(stream, addr, st, ca, origin));
+                            tokio::spawn(CONNECTION_ORIGIN.scope(
+                                origin,
+                                handle_connection(stream, addr, st, ca, origin),
+                            ));
                         }
                         Err(e) => {
                             warn!("Proxy accept error: {e}");
@@ -1530,12 +1549,9 @@ async fn handle_cleartext_h2<C>(
             .entry(authority.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(None)))
             .clone();
-        tokio::spawn(serve_h2_stream(
-            request,
-            respond,
-            target,
-            state.clone(),
-            upstream,
+        tokio::spawn(CONNECTION_ORIGIN.scope(
+            connection_origin(),
+            serve_h2_stream(request, respond, target, state.clone(), upstream),
         ));
     }
 }
@@ -1575,12 +1591,15 @@ async fn handle_mitm_h2<C>(
     loop {
         match conn.accept().await {
             Some(Ok((request, respond))) => {
-                tokio::spawn(serve_h2_stream(
-                    request,
-                    respond,
-                    target.clone(),
-                    state.clone(),
-                    upstream.clone(),
+                tokio::spawn(CONNECTION_ORIGIN.scope(
+                    connection_origin(),
+                    serve_h2_stream(
+                        request,
+                        respond,
+                        target.clone(),
+                        state.clone(),
+                        upstream.clone(),
+                    ),
                 ));
             }
             Some(Err(e)) => {
@@ -1810,7 +1829,7 @@ async fn serve_h2_stream(
         route_action: route_action.to_string(),
         in_flight: true,
         capture_id: 0,
-        os_service: false,
+        os_service: connection_origin() == TrafficOrigin::OsService,
     }));
     let stream_key = {
         let mut state = state.lock().await;
@@ -3787,6 +3806,25 @@ async fn dial_upstream(dst_host: &str, dst_port: u16) -> Option<TcpStream> {
 /// HTTP flows pass through to [`handle_mitm_http`] directly (no SNI needed).
 #[cfg(any(target_os = "macos", test))]
 pub(crate) async fn handle_transparent_tcp<S>(
+    client: S,
+    dst_host: String,
+    dst_port: u16,
+    state: Arc<Mutex<ProxyState>>,
+    mitm_ca: Arc<MitmAuthority>,
+    origin: TrafficOrigin,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    CONNECTION_ORIGIN
+        .scope(
+            origin,
+            serve_transparent_tcp(client, dst_host, dst_port, state, mitm_ca, origin),
+        )
+        .await
+}
+
+/// [`handle_transparent_tcp`] inside its connection's origin scope.
+async fn serve_transparent_tcp<S>(
     mut client: S,
     dst_host: String,
     dst_port: u16,
@@ -7302,6 +7340,146 @@ mod tests {
             assert_eq!(final_entries[0].capture_id, first[0].capture_id);
             assert_eq!(final_entries[0].response_body, b"firstsecond");
             assert!(!final_entries[0].in_flight);
+        })
+        .await
+        .unwrap();
+    }
+
+    /// A plain upstream that answers each connection's first request with
+    /// `ok`, then closes.
+    async fn spawn_ok_upstream() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        )
+                        .await;
+                });
+            }
+        });
+        port
+    }
+
+    // PILOT-1196: every entry an OS service's connection produces is tagged,
+    // not only its passthrough marker — the SDK reads untagged entries as the
+    // app's traffic ("the proxy saw no request from the app").
+    #[tokio::test]
+    async fn every_entry_of_an_os_service_connection_is_tagged() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let port = spawn_ok_upstream().await;
+            let dir = tempfile::tempdir().unwrap();
+            let ca = Arc::new(
+                MitmAuthority::generate_new(
+                    &dir.path().join("ca.pem"),
+                    &dir.path().join("key.pem"),
+                )
+                .unwrap(),
+            );
+            let proxy = NetworkProxy::start(ca.clone()).await.unwrap();
+
+            // HTTP/1.1 through the iOS redirector's entry point, per origin.
+            for (origin, path) in [
+                (TrafficOrigin::OsService, "/os"),
+                (TrafficOrigin::Unattributed, "/app"),
+            ] {
+                let (mut client, redirected) = tokio::io::duplex(65536);
+                tokio::spawn(handle_transparent_tcp(
+                    redirected,
+                    "127.0.0.1".to_string(),
+                    port,
+                    proxy.state.clone(),
+                    ca.clone(),
+                    origin,
+                ));
+                client
+                    .write_all(
+                        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                let mut response = Vec::new();
+                client.read_to_end(&mut response).await.unwrap();
+                assert!(response.ends_with(b"ok"), "{path}");
+            }
+
+            // And on the Android OS-service listener (handle_connection).
+            let os_port = proxy.start_os_service_listener().await.unwrap();
+            let mut client = TcpStream::connect(("127.0.0.1", os_port)).await.unwrap();
+            client
+                .write_all(
+                    format!("GET /os-listener HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            client.read_to_end(&mut response).await.unwrap();
+            assert!(response.ends_with(b"ok"));
+
+            // h2c: each stream is served on its own spawned task.
+            let h2_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let h2_port = h2_listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                let (socket, _) = h2_listener.accept().await.unwrap();
+                let mut conn = h2::server::handshake(socket).await.unwrap();
+                while let Some(Ok((_req, mut respond))) = conn.accept().await {
+                    let response = http::Response::builder().status(200).body(()).unwrap();
+                    let mut send = respond.send_response(response, false).unwrap();
+                    send.send_data(bytes::Bytes::from_static(b"ok"), true)
+                        .unwrap();
+                }
+            });
+            let (tcp, redirected) = tokio::io::duplex(65536);
+            tokio::spawn(handle_transparent_tcp(
+                redirected,
+                "127.0.0.1".to_string(),
+                h2_port,
+                proxy.state.clone(),
+                ca.clone(),
+                TrafficOrigin::OsService,
+            ));
+            let (h2_client, conn) = h2::client::handshake(tcp).await.unwrap();
+            tokio::spawn(async move {
+                let _ = conn.await;
+            });
+            let mut h2_client = h2_client.ready().await.unwrap();
+            let request = http::Request::builder()
+                .uri(format!("http://127.0.0.1:{h2_port}/h2"))
+                .body(())
+                .unwrap();
+            let (response, _) = h2_client.send_request(request, true).unwrap();
+            let mut body = response.await.unwrap().into_body();
+            while let Some(chunk) = body.data().await {
+                chunk.unwrap();
+            }
+
+            let entries = wait_for_entries(&proxy.state, 4).await;
+            let mut tagged: Vec<(String, bool)> = entries
+                .iter()
+                .map(|e| {
+                    (
+                        e.url.rsplit('/').next().unwrap_or_default().to_string(),
+                        e.os_service,
+                    )
+                })
+                .collect();
+            tagged.sort();
+            assert_eq!(
+                tagged,
+                vec![
+                    ("app".to_string(), false),
+                    ("h2".to_string(), true),
+                    ("os".to_string(), true),
+                    ("os-listener".to_string(), true),
+                ]
+            );
+            proxy.stop().await;
         })
         .await
         .unwrap();

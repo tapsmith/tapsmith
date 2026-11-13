@@ -69,10 +69,9 @@ const WEBVIEW_CONNECT_LOG_LIMIT = 80;
 
 // ─── Pending network waiters (PILOT-543) ───
 
-/** A waitForRequest/waitForResponse still waiting, and how to end it early. */
 /**
  * @internal — One successful `route()` call, as the runner's unfired-route
- * warning reads it (PILOT-1196).
+ * warning reads it.
  */
 export interface RouteRegistrationRecord {
   /** The pattern as the trace shows it. */
@@ -82,6 +81,7 @@ export interface RouteRegistrationRecord {
   matches: (url: string) => boolean;
 }
 
+/** A waitForRequest/waitForResponse still waiting, and how to end it early. */
 interface PendingWaiter {
   readonly seq: number;
   cancel(): void;
@@ -230,7 +230,7 @@ export class Device {
   private _routeRegistrations = 0;
   /**
    * The same calls' patterns and when each took effect, for the runner's
-   * unfired-route warning (PILOT-1196).
+   * unfired-route warning.
    */
   private _routeRegistrationLog: RouteRegistrationRecord[] = [];
   /**
@@ -1504,7 +1504,7 @@ export class Device {
    * @internal — The routes registered since the last call (pattern, when it
    * took effect, and its URL matcher), then reset. The runner reads it after
    * a test whose routes never fired, to name a matching request the app sent
-   * before its route existed (PILOT-1196).
+   * before its route existed.
    */
   _takeRouteRegistrationLog(): RouteRegistrationRecord[] {
     const log = this._routeRegistrationLog;
