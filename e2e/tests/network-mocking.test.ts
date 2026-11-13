@@ -103,6 +103,28 @@ describe("Network mocking", () => {
     await device.unrouteAll()
   })
 
+  // PILOT-1196: on an iOS simulator the Network Extension only learned a
+  // just-launched app's PID from a 2 s poll, so a request the app sent as it
+  // launched went around the proxy (and kept-alive, so did the later ones).
+  test("route() sees a request the app sends as it launches", async ({ device, apiCallsScreen }) => {
+    await device.route("**/posts*", async (route) => {
+      await route.fulfill({
+        json: [
+          { id: 98, title: "Mocked Launch Post", body: "Fulfilled at launch" },
+        ],
+      })
+    })
+
+    // A cold launch straight onto a screen that fetches as it mounts.
+    await device.terminateApp()
+    await openScreen(device, "/api-calls?autoload=posts")
+
+    await expect(apiCallsScreen.postsHeading).toBeVisible({ timeout: 10_000 })
+    await expect(device.getByText("Mocked Launch Post")).toBeVisible()
+
+    await device.unrouteAll()
+  })
+
   test("route.fulfill() — mock error status", async ({ device, apiCallsScreen }) => {
     await device.route("**/users/1", async (route) => {
       await route.fulfill({
