@@ -14,8 +14,8 @@ export interface McpToolCallEvent {
   /**
    * Serial of the device the call acted on, as the connection resolved it —
    * set on `completed`/`error` once a device tool picked its target. UI mode
-   * invalidates that device's worker (PILOT-1195); `args` alone cannot say
-   * which device a call with no `device` landed on.
+   * invalidates that device's worker's prepared state; `args` alone cannot
+   * say which device a call with no `device` landed on.
    */
   device?: string
 }

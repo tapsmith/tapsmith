@@ -80,6 +80,15 @@ export interface ReadinessEnv {
   recentlyInteracted(): boolean;
 }
 
+/**
+ * Stale reasons that hold the device as-is instead of re-preparing after the
+ * grace period: someone drove the app there on purpose (a mirror gesture or
+ * an MCP agent's action), or a stopped/failed run left it for inspection.
+ * Re-preparing would reset it out from under them. The next run resets
+ * inline; Prepare now, a new target or a preference change re-arms.
+ */
+const HOLDING_REASONS: ReadonlySet<StaleReason> = new Set(['mirror-gesture', 'mcp-tool', 'run-stopped', 'run-failed']);
+
 export const DEFAULT_GRACE_MS = 5_000;
 export const INTERACTION_HOLD_MS = 2_000;
 export const TARGET_CHANGED_GRACE_MS = 1_000;
@@ -161,6 +170,8 @@ export class DeviceReadiness {
       case 'grace-elapsed': {
         if (event.timerId !== this._timerId) return [];
         if (s.kind === 'running' || s.kind === 'preparing' || s.kind === 'ready' || s.kind === 'retired' || s.kind === 'initializing') return [];
+        // A timer that fired just before a hold cleared it must not arm.
+        if (s.kind === 'stale' && HOLDING_REASONS.has(s.reason)) return [];
         return this.arm();
       }
 
@@ -209,16 +220,20 @@ export class DeviceReadiness {
         if (s.kind === 'preparing') cmds.push({ type: 'send-cancel-prepare', prepareId: s.prepareId });
         const previous = s.kind === 'ready' ? s.policy : undefined;
         this._state = { kind: 'stale', reason: event.reason, since: this.env.now(), previous };
-        cmds.push({ type: 'broadcast' }, { type: 'start-timer', timerId: this._timerId, ms: this.env.graceMs() });
+        if (HOLDING_REASONS.has(event.reason)) {
+          cmds.push({ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' });
+        } else {
+          cmds.push({ type: 'broadcast' }, { type: 'start-timer', timerId: this._timerId, ms: this.env.graceMs() });
+        }
         return cmds;
       }
 
       case 'candidate-changed': {
         if (s.kind === 'ready') return this.reconcileCandidate();
         if (s.kind === 'unprepared' && s.reason !== 'grace') return this.arm();
-        // A stop- or failure-induced hold has no pending timer (unlike other
-        // stale states); picking a new target is the user moving on — re-arm.
-        if (s.kind === 'stale' && (s.reason === 'run-stopped' || s.reason === 'run-failed')) return this.arm();
+        // A hold (stop, failure, touch) has no pending timer, unlike other
+        // stale states; picking a new target is the user moving on — re-arm.
+        if (s.kind === 'stale' && HOLDING_REASONS.has(s.reason)) return this.arm();
         return [];
       }
 
@@ -317,13 +332,17 @@ export interface McpTargetWorker {
  * a call the session cannot place is not narrowed, since missing the touched
  * device would let a stale prepared state through. Re-deriving the MCP's
  * own default or project choice here is not attempted — it drifts from the
- * connection pool's order.
+ * connection pool's order. A call that failed without resolving a device was
+ * refused before it reached one (every mutating tool resolves first), so it
+ * touched nothing.
  */
 export function mcpToolWorkers(
   resolved: string | undefined,
   args: Record<string, unknown> | undefined,
   workers: McpTargetWorker[],
+  status: 'completed' | 'error' = 'completed',
 ): number[] | undefined {
+  if (status === 'error' && !resolved) return [];
   const device = resolved || (typeof args?.device === 'string' && args.device ? args.device : undefined);
   if (!device) return undefined;
   const hit = workers.filter((w) => w.devices.some((d) => d.serial === device || d.name === device));
