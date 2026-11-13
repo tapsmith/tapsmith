@@ -1347,6 +1347,9 @@ describe('runner execution', () => {
           const warnings = routeWarnings(warn);
           expect(warnings).toHaveLength(1);
           expect(warnings[0]).toContain('the network proxy saw no request from the app during this test');
+          // Not a bypass diagnosis by itself: a test that failed before its
+          // fetch sees the same empty capture.
+          expect(warnings[0]).toContain('(if the test reached the step that sends the request, the app may have sent it');
         } finally {
           warn.mockRestore();
         }

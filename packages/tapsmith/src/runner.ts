@@ -434,8 +434,9 @@ function _warnUnfiredRoutes(
   }
   if (reasons.appTrafficSeen === false) {
     possible.push(
-      'the network proxy saw no request from the app during this test: its requests may have gone over a ' +
-        'connection it opened before the proxy started, or been answered from its HTTP cache',
+      'the network proxy saw no request from the app during this test (if the test reached the step that sends ' +
+        'the request, the app may have sent it over a connection it opened before the proxy started, or answered ' +
+        'it from its HTTP cache)',
     );
   }
   if (reasons.passthroughHosts.length > 0) {
