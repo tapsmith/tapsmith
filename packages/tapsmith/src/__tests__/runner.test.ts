@@ -1148,6 +1148,9 @@ describe('runner execution', () => {
     // PILOT-775: without a trace recording network, a test's first route()
     // starts the proxy on demand; routes that then never fire say why.
     describe('on-demand capture (PILOT-775)', () => {
+      // Capture times after the file's run starts (requests from before it
+      // are not named), on the host clock like the daemon's.
+      const T = Date.now() + 60_000;
       const makeOnDemandDevice = (opts: {
         handled: number
         drained?: Array<{ url: string; routeAction: string; isHttps: boolean; osService?: boolean; method?: string; startTimeMs?: number }>
@@ -1269,12 +1272,12 @@ describe('runner execution', () => {
         const device = makeOnDemandDevice({
           handled: 0,
           drained: [
-            { url: 'https://api.example.com/config', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 1_000 },
-            { url: 'https://api.example.com/todos?_limit=10', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 2_500 },
+            { url: 'https://api.example.com/config', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 1_000 },
+            { url: 'https://api.example.com/todos?_limit=10', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 2_500 },
             // After the route: not "before it was registered".
-            { url: 'https://api.example.com/todos?_limit=20', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 9_000 },
+            { url: 'https://api.example.com/todos?_limit=20', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 9_000 },
           ],
-          registrations: [{ pattern: '**/todos*', registeredAtMs: 6_000, matches: (u) => u.includes('/todos') }],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: T + 6_000, matches: (u) => u.includes('/todos') }],
         });
         try {
           await runBody('fetches at launch', failAfter(() => device.route()), [{ name: 'device-1', device }]);
@@ -1394,6 +1397,47 @@ describe('runner execution', () => {
         }
       });
 
+      // A drain repeats every still-open h2 stream with its original start
+      // time: one the app opened in an earlier test (a Firestore Listen, an
+      // SSE feed) is not this test's traffic.
+      it('does not count a stream opened before the test as its traffic', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        let streamStartedAt = 0;
+        const device = makeOnDemandDevice({
+          handled: 0,
+          registrations: [{
+            pattern: '**/posts*',
+            get registeredAtMs() { return Date.now(); },
+            matches: (u) => u.includes('/posts'),
+          }],
+        });
+        device._networkProxyRunning = true;
+        device._stopNetworkCapture = vi.fn(async () => {
+          if (!streamStartedAt) streamStartedAt = Date.now() - 1;
+          return {
+            success: true, errorMessage: '', entriesBeforeStart: [],
+            entries: [{
+              url: 'https://api.example.com/events', routeAction: '', isHttps: true, method: 'GET',
+              startTimeMs: streamStartedAt, inFlight: true,
+            }],
+          };
+        }) as unknown as typeof device._stopNetworkCapture;
+        try {
+          pushContext();
+          tapsmithTest('opens the stream', async () => {});
+          tapsmithTest('waits for a request', failAfter(() => device.route()));
+          const ctx = popContext();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+          await runSuiteContext(ctx, '', [], [], makeOpts({ config: makeConfig(), devices: [{ name: 'device-1', device }] as any }));
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('the network proxy saw no request from the app during this test');
+          expect(warnings[0]).not.toContain('/events');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
       it('says the proxy saw no request from the app when nothing but OS services was captured', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const device = makeOnDemandDevice({
@@ -1401,7 +1445,7 @@ describe('runner execution', () => {
           drained: [
             { url: 'https://gsp64-ssl.ls.apple.com/', routeAction: 'passthrough', isHttps: true, osService: true },
           ],
-          registrations: [{ pattern: '**/todos*', registeredAtMs: 6_000, matches: (u) => u.includes('/todos') }],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: T + 6_000, matches: (u) => u.includes('/todos') }],
         });
         try {
           await runBody('bypassed', failAfter(() => device.route()), [{ name: 'device-1', device }]);
@@ -1420,8 +1464,8 @@ describe('runner execution', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const device = makeOnDemandDevice({
           handled: 0,
-          drained: [{ url: 'https://api.example.com/other', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 9_000 }],
-          registrations: [{ pattern: '**/todos*', registeredAtMs: 6_000, matches: (u) => u.includes('/todos') }],
+          drained: [{ url: 'https://api.example.com/other', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 9_000 }],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: T + 6_000, matches: (u) => u.includes('/todos') }],
         });
         try {
           await runBody('mocks another url', failAfter(() => device.route()), [{ name: 'device-1', device }]);

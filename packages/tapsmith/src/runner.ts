@@ -2814,25 +2814,26 @@ async function runSuiteContext(
       // A device with no entry here drained no capture, so nothing is known.
       // Summaries from before this file's run began (an idle UI-mode or
       // watch session between runs) say nothing about this test's routes.
-      // Whether the app sent anything is judged on the test's own capture.
+      // Whether the app sent anything is judged on the requests that started
+      // during this attempt: a drain repeats every still-open stream (an SSE
+      // or gRPC stream opened at launch) with its original start time.
       const capturedAppRequests = new Map<Device, CapturedAppRequest[]>();
       const appTrafficInTest = new Map<Device, boolean>();
+      const attemptStartedAtMs = Date.now();
       const noteCapture = (
         d: Device,
         res: { entries: RawNetworkEntries; entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }> },
       ): void => {
         const seen = capturedAppRequests.get(d) ?? [];
         const since = _fileRunStartedAtMs ?? 0;
-        for (const e of res.entriesBeforeStart ?? []) {
-          if (!e.osService && e.startTimeMs >= since) {
-            seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
-          }
-        }
         let inTest = appTrafficInTest.get(d) ?? false;
-        for (const e of res.entries) {
-          if (e.osService) continue;
+        const before = res.entriesBeforeStart ?? [];
+        for (const e of [...before, ...res.entries]) {
+          if (e.osService || e.startTimeMs < since) continue;
+          if (!before.includes(e) && e.startTimeMs >= attemptStartedAtMs) inTest = true;
+          // A stream open across drains is named once.
+          else if (seen.some((s) => s.startTimeMs === e.startTimeMs && s.url === e.url)) continue;
           seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
-          inTest = true;
         }
         capturedAppRequests.set(d, seen);
         appTrafficInTest.set(d, inTest);
