@@ -427,8 +427,8 @@ function _warnUnfiredRoutes(
     const more = reasons.earlyRequests.length > 3 ? `, and ${reasons.earlyRequests.length - 3} more` : '';
     possible.push(
       `the app sent ${shown.join(', and ')}${more} — a route only sees requests sent after it is registered ` +
-        '(register it before the step that sends the request: a route from beforeAll stays in place across each ' +
-        "test's app reset, or relaunch the app after registering it), and the app may answer a repeat of that " +
+        '(register it before the step that sends the request: in beforeAll with appResetScope: \'test\', so each ' +
+        "test's app reset comes after it, or relaunch the app after registering it), and the app may answer a repeat of that " +
         'request from its HTTP cache, which no route sees',
     );
   }
@@ -2846,6 +2846,22 @@ async function runSuiteContext(
           }
         }
       };
+
+      // What a running proxy captured since the last test drained it — the
+      // app reset a file-scoped `appReset` runs before its first test, or a
+      // beforeAll — would be cleared unread by the capture start below. Keep
+      // the app's requests for the unfired-route reasons: a launch request
+      // sent before the test registered its route is the likeliest one
+      // (PILOT-1196). Its certificate rejects are cleared as before.
+      for (const d of devices) {
+        if (!d._networkProxyRunning) continue;
+        try {
+          const res = await d._stopNetworkCapture({ keepRunning: true });
+          if (res.success) noteCapture(d, res.entries);
+        } catch {
+          // Best-effort: the reasons are hints, and the start below goes on.
+        }
+      }
 
       // Re-arm on-demand capture: a start that failed in an earlier test is
       // tried once more in this one — or not at all when the trace's own

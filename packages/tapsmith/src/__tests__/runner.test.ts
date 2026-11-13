@@ -1292,6 +1292,40 @@ describe('runner execution', () => {
         }
       });
 
+      // A file-scoped reset (and beforeAll) runs before the first test starts
+      // capture, and that start clears what the proxy captured meanwhile.
+      it('names a request the app sent before the test started capturing', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'https://api.example.com/posts?_limit=3', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 1_000 },
+          ],
+          registrations: [{ pattern: '**/posts*', registeredAtMs: 1_264, matches: (u) => u.includes('/posts') }],
+        });
+        // The proxy is already up (started with the session), and each test's
+        // start resets what it has captured, as the daemon does.
+        device._networkProxyRunning = true;
+        const startCapture = device._startNetworkCapture;
+        const drain = device._stopNetworkCapture;
+        device._startNetworkCapture = vi.fn(async (...args: Parameters<typeof startCapture>) => {
+          // Whatever was not drained before the start is gone.
+          await (drain as unknown as () => Promise<unknown>)();
+          return startCapture(...args);
+        }) as unknown as typeof device._startNetworkCapture;
+        try {
+          await runBody('fetches during the file reset', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain(
+            'the app sent GET https://api.example.com/posts?_limit=3 264 ms before the route for **/posts* was registered',
+          );
+          expect(warnings[0]).not.toContain('saw no request from the app');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
       it('says the proxy saw no request from the app when nothing but OS services was captured', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const device = makeOnDemandDevice({
