@@ -224,6 +224,8 @@ function serveUntilInstalled(start, extraArgs, firstError) {
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     child.stdin.on('error', () => {});
+    // Decoded as a stream, so a character split across two reads stays whole.
+    child.stdout.setEncoding('utf8');
     let buffer = '';
     child.stdout.on('data', (data) => {
       buffer += data;
@@ -316,7 +318,10 @@ function serveUntilInstalled(start, extraArgs, firstError) {
           protocolVersion,
           capabilities: { tools: { listChanged: true }, resources: { listChanged: true } },
           serverInfo: { name: 'tapsmith', version: '0.0.0-setup' },
-          instructions: reason() + ' Until then the only tool is ' + SETUP_TOOL + '; the tapsmith_* tools appear once Tapsmith is installed.',
+          // Kept by the client for the whole session, so true after a switch too.
+          instructions: 'When this session started, Tapsmith was not loaded: ' + error + ' Until it is, the only tool is ' +
+            SETUP_TOOL + '. Once it is installed the tapsmith_* tools load without a restart: if they are in your tool list, ' +
+            'this no longer applies.',
         });
         return;
       }

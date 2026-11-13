@@ -84,6 +84,7 @@ function installFakeMcpTapsmith(dir: string): string {
     "  if (m.method === 'notifications/initialized') { initialized = true; return; }",
     "  if (m.method === 'tools/list') return send({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'tapsmith_snapshot', inputSchema: { type: 'object' } }, { name: 'probe', inputSchema: { type: 'object' } }] } });",
     "  if (m.method === 'tools/call' && m.params.name === 'crash') process.exit(3);",
+    "  if (m.method === 'tools/call' && m.params.name === 'big') return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'é😀日'.repeat(100000) }] } });",
     "  if (m.method === 'tools/call') return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: JSON.stringify({",
     '    args: process.argv.slice(2), cwd: process.cwd(), bin: process.argv[1], preferUi: process.env.TAPSMITH_MCP_PREFER_UI,',
     '    execArgv: process.execArgv, init, initialized,',
@@ -118,8 +119,9 @@ function startPluginServer(configFile: (typeof CONFIGS)[number], cwd: string, en
   let buffer = '';
   let nextId = 1;
   child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-  child.stdout.on('data', (d: Buffer) => {
-    buffer += d.toString();
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (d: string) => {
+    buffer += d;
     let nl;
     while ((nl = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, nl);
@@ -401,7 +403,8 @@ describe.each(CONFIGS)('the plugin MCP server in %s, before Tapsmith is installe
       expect(init.result.serverInfo.name).toBe('tapsmith');
       expect(init.result.protocolVersion).toBe('2025-06-18');
       expect(init.result.capabilities.tools).toEqual({ listChanged: true });
-      expect(init.result.instructions).toContain(`Tapsmith is not installed in ${tmp}`);
+      expect(init.result.instructions).toContain(`When this session started, Tapsmith was not loaded: Tapsmith is not installed in ${tmp}`);
+      expect(init.result.instructions).toContain('if they are in your tool list, this no longer applies');
       expect(init.result.instructions).toContain('npm install -D tapsmith');
 
       const list = await client.request('tools/list');
@@ -459,6 +462,9 @@ describe.each(CONFIGS)('the plugin MCP server in %s, before Tapsmith is installe
         init: { protocolVersion: '2025-06-18', clientInfo: { name: 'plugin-test' } },
         initialized: true,
       });
+      // A reply far bigger than one pipe read, its characters split across reads.
+      const big = await client.request('tools/call', { name: 'big', arguments: {} });
+      expect(big.result.content[0].text).toBe('é😀日'.repeat(100000));
       // Its own tool still answers, for clients that never re-list tools.
       const status = await client.request('tools/call', { name: 'tapsmith_setup_status', arguments: {} });
       expect(status.result.isError).toBeFalsy();
