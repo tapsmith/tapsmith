@@ -1148,9 +1148,14 @@ describe('runner execution', () => {
     // PILOT-775: without a trace recording network, a test's first route()
     // starts the proxy on demand; routes that then never fire say why.
     describe('on-demand capture (PILOT-775)', () => {
+      // Capture times after the file's run starts (requests from before it
+      // are not named), on the host clock like the daemon's.
+      const T = Date.now() + 60_000;
       const makeOnDemandDevice = (opts: {
         handled: number
-        drained?: Array<{ url: string; routeAction: string; isHttps: boolean; osService?: boolean }>
+        drained?: Array<{ url: string; routeAction: string; isHttps: boolean; osService?: boolean; method?: string; startTimeMs?: number }>
+        /** What Device records for each route() call (PILOT-1196). */
+        registrations?: Array<{ pattern: string; registeredAtMs: number; matches: (url: string) => boolean }>
         tlsRejectedHosts?: string[]
         osServiceTlsRejectedHosts?: string[]
         name?: string
@@ -1163,6 +1168,7 @@ describe('runner execution', () => {
           _setOnDemandNetworkCapture: vi.fn((start: (() => Promise<void>) | null) => { starter = start; }),
           _takeProxyStartedOnDemand: () => { const v = startedOnDemand; startedOnDemand = false; return v; },
           _takeRouteHandlerCalls: () => opts.handled,
+          _takeRouteRegistrationLog: () => opts.registrations ?? [],
           /** What Device.route() does: start capture on demand, then register. */
           route: async () => {
             if (starter && !base._networkProxyRunning) {
@@ -1254,6 +1260,216 @@ describe('runner execution', () => {
           expect(warnings[0]).toContain('HTTPS to api.example.com passed through the network proxy uncaptured');
           expect(warnings[0]).not.toContain('plain.example.com');
           expect(warnings[0]).toContain('Google Play emulator image');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      // PILOT-1196: an app that fetches as it launches sent the request
+      // before the test registered its route.
+      it('names a request the app sent before the route matching it was registered', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'https://api.example.com/config', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 1_000 },
+            { url: 'https://api.example.com/todos?_limit=10', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 2_500 },
+            // After the route: not "before it was registered".
+            { url: 'https://api.example.com/todos?_limit=20', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 9_000 },
+          ],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: T + 6_000, matches: (u) => u.includes('/todos') }],
+        });
+        try {
+          await runBody('fetches at launch', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain(
+            'the app sent GET https://api.example.com/todos?_limit=10 3.5 s before the route for **/todos* was registered',
+          );
+          expect(warnings[0]).not.toContain('_limit=20');
+          expect(warnings[0]).not.toContain('/config');
+          expect(warnings[0]).toContain('HTTP cache');
+          expect(warnings[0]).not.toContain('saw no request from the app');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      // A file-scoped reset (and beforeAll) runs before the first test starts
+      // capture, and that start clears what the proxy captured meanwhile.
+      /**
+       * A device whose proxy is already up (started with the session): each
+       * test's start clears what it captured, as the daemon does, and the
+       * next stop returns a summary of it in entriesBeforeStart. `before`
+       * holds what the app sent before that start, timed at the start.
+       */
+      const makeRunningProxyDevice = (opts: {
+        before: Array<{ url: string; startTimeMs?: number }>
+        routeLeadMs: number
+        routeMatches: (u: string) => boolean
+      }) => {
+        let startedAt = 0;
+        const device = makeOnDemandDevice({
+          handled: 0,
+          registrations: [{
+            pattern: '**/posts*',
+            get registeredAtMs() { return startedAt + opts.routeLeadMs; },
+            matches: opts.routeMatches,
+          }],
+        });
+        device._networkProxyRunning = true;
+        let before: unknown[] = [];
+        const startCapture = device._startNetworkCapture;
+        device._startNetworkCapture = vi.fn(async (...args: Parameters<typeof startCapture>) => {
+          startedAt = Date.now();
+          before = opts.before.map((e) => ({
+            routeAction: '', isHttps: true, method: 'GET', ...e, startTimeMs: e.startTimeMs ?? startedAt,
+          }));
+          return startCapture(...args);
+        }) as unknown as typeof device._startNetworkCapture;
+        device._stopNetworkCapture = vi.fn(async () => {
+          const res = { success: true, entries: [], entriesBeforeStart: before, errorMessage: '' };
+          before = [];
+          return res;
+        }) as unknown as typeof device._stopNetworkCapture;
+        return device;
+      };
+
+      // A file-scoped reset (and beforeAll) runs before the first test starts
+      // capture, and that start clears what the proxy captured meanwhile.
+      it('names a request the app sent before the test started capturing', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeRunningProxyDevice({
+          before: [{ url: 'https://api.example.com/posts?_limit=3' }],
+          routeLeadMs: 264,
+          routeMatches: (u) => u.includes('/posts'),
+        });
+        try {
+          await runBody('fetches during the file reset', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain(
+            'the app sent GET https://api.example.com/posts?_limit=3 264 ms before the route for **/posts* was registered',
+          );
+          // The advice names a relaunch: a warm reset does not resend a launch request.
+          expect(warnings[0]).toContain("appReset 'restart' or 'clear' with appResetScope 'test'");
+          expect(warnings[0]).not.toContain('saw no request from the app');
+          // One drain per test: the summary rides on the test's own stop.
+          expect(device._stopNetworkCapture).toHaveBeenCalledTimes(1);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('judges "saw no request" on the test\'s own capture, not on unrelated requests sent before it', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeRunningProxyDevice({
+          before: [{ url: 'https://api.example.com/config' }],
+          routeLeadMs: 264,
+          routeMatches: (u) => u.includes('/posts'),
+        });
+        try {
+          await runBody('quiet during the test', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('the network proxy saw no request from the app during this test');
+          expect(warnings[0]).not.toContain('/config');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('does not name requests captured before the file\'s run began (an idle session between runs)', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeRunningProxyDevice({
+          before: [{ url: 'https://api.example.com/posts?idle=1', startTimeMs: Date.now() - 300_000 }],
+          routeLeadMs: 264,
+          routeMatches: (u) => u.includes('/posts'),
+        });
+        try {
+          await runBody('after an idle gap', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).not.toContain('idle=1');
+          expect(warnings[0]).toContain('the network proxy saw no request from the app during this test');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      // A drain repeats every still-open h2 stream with its original start
+      // time: one the app opened in an earlier test (a Firestore Listen, an
+      // SSE feed) is not this test's traffic.
+      it('does not count a stream opened before the test as its traffic', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        let streamStartedAt = 0;
+        const device = makeOnDemandDevice({
+          handled: 0,
+          registrations: [{
+            pattern: '**/posts*',
+            get registeredAtMs() { return Date.now(); },
+            matches: (u) => u.includes('/posts'),
+          }],
+        });
+        device._networkProxyRunning = true;
+        device._stopNetworkCapture = vi.fn(async () => {
+          if (!streamStartedAt) streamStartedAt = Date.now() - 1;
+          return {
+            success: true, errorMessage: '', entriesBeforeStart: [],
+            entries: [{
+              url: 'https://api.example.com/events', routeAction: '', isHttps: true, method: 'GET',
+              startTimeMs: streamStartedAt, inFlight: true,
+            }],
+          };
+        }) as unknown as typeof device._stopNetworkCapture;
+        try {
+          pushContext();
+          tapsmithTest('opens the stream', async () => {});
+          tapsmithTest('waits for a request', failAfter(() => device.route()));
+          const ctx = popContext();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+          await runSuiteContext(ctx, '', [], [], makeOpts({ config: makeConfig(), devices: [{ name: 'device-1', device }] as any }));
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('the network proxy saw no request from the app during this test');
+          expect(warnings[0]).not.toContain('/events');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('says the proxy saw no request from the app when nothing but OS services was captured', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'https://gsp64-ssl.ls.apple.com/', routeAction: 'passthrough', isHttps: true, osService: true },
+          ],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: T + 6_000, matches: (u) => u.includes('/todos') }],
+        });
+        try {
+          await runBody('bypassed', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('the network proxy saw no request from the app during this test');
+          // Not a bypass diagnosis by itself: a test that failed before its
+          // fetch sees the same empty capture.
+          expect(warnings[0]).toContain('(if the test reached the step that sends the request, the app may have sent it');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('does not say the proxy saw nothing when it captured the app\'s requests', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [{ url: 'https://api.example.com/other', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 9_000 }],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: T + 6_000, matches: (u) => u.includes('/todos') }],
+        });
+        try {
+          await runBody('mocks another url', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          for (const w of routeWarnings(warn)) expect(w).not.toContain('saw no request from the app');
         } finally {
           warn.mockRestore();
         }

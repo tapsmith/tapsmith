@@ -69,6 +69,18 @@ const WEBVIEW_CONNECT_LOG_LIMIT = 80;
 
 // ─── Pending network waiters (PILOT-543) ───
 
+/**
+ * @internal — One successful `route()` call, as the runner's unfired-route
+ * warning reads it.
+ */
+export interface RouteRegistrationRecord {
+  /** The pattern as the trace shows it. */
+  pattern: string;
+  /** When the route took effect (host clock, like captured entries' start times). */
+  registeredAtMs: number;
+  matches: (url: string) => boolean;
+}
+
 /** A waitForRequest/waitForResponse still waiting, and how to end it early. */
 interface PendingWaiter {
   readonly seq: number;
@@ -216,6 +228,11 @@ export class Device {
   private _networkCaptureError: string | undefined;
   /** Successful `route()` calls since the runner last took the count. */
   private _routeRegistrations = 0;
+  /**
+   * The same calls' patterns and when each took effect, for the runner's
+   * unfired-route warning.
+   */
+  private _routeRegistrationLog: RouteRegistrationRecord[] = [];
   /**
    * The runner's starter for network capture on demand: a
    * route(), waitForRequest() or waitForResponse() made while capture is not
@@ -1464,6 +1481,11 @@ export class Device {
     }
     await this._ensureRouteManager().addRoute(url, handler, options);
     this._routeRegistrations++;
+    this._routeRegistrationLog.push({
+      pattern: formatPattern(url),
+      registeredAtMs: Date.now(),
+      matches: (requestUrl) => matchUrlPattern(requestUrl, url),
+    });
     this._emitNetworkAction('route', formatPattern(url), start, true, undefined, source, stack);
   }
 
@@ -1476,6 +1498,18 @@ export class Device {
     const n = this._routeRegistrations;
     this._routeRegistrations = 0;
     return n;
+  }
+
+  /**
+   * @internal — The routes registered since the last call (pattern, when it
+   * took effect, and its URL matcher), then reset. The runner reads it after
+   * a test whose routes never fired, to name a matching request the app sent
+   * before its route existed.
+   */
+  _takeRouteRegistrationLog(): RouteRegistrationRecord[] {
+    const log = this._routeRegistrationLog;
+    this._routeRegistrationLog = [];
+    return log;
   }
 
   /**

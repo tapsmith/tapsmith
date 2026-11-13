@@ -17,7 +17,7 @@ import * as os from 'node:os';
 import { NetworkSnapshots } from './trace/network-snapshots.js';
 import { decodeHttpBody, headerValue } from './http-body.js';
 import type { TapsmithConfig, Platform, UseOptions } from './config.js';
-import { pendingWaiterMark, type Device } from './device.js';
+import { pendingWaiterMark, type Device, type RouteRegistrationRecord } from './device.js';
 import type { TapsmithReporter } from './reporter.js';
 import { fileLoadFailureTitle, loadErrorForReport } from './load-failure.js';
 import { APIRequestContext } from './api-request.js';
@@ -402,15 +402,44 @@ async function startSessionNetworkCapture(opts: RunOptions): Promise<void> {
  * configured or certificate-rejecting host is tunneled), or the proxy only
  * came up with the test's first route, or with its file in a session whose
  * app was already running, after the app may have opened the
- * connections it went on using. Neither shows: nothing to say — the app may
- * simply not have made the request.
+ * connections it went on using. Also (PILOT-1196): the proxy captured a
+ * request matching a route before that route was registered (an app that
+ * fetches as it launches), or captured nothing from the app at all. None
+ * shows: nothing to say — the app may simply not have made the request.
  */
 function _warnUnfiredRoutes(
   fullName: string,
   deviceName: string | undefined,
-  reasons: { passthroughHosts: string[]; proxyStartedLate: 'mid-test' | 'after-launch' | undefined },
+  reasons: {
+    passthroughHosts: string[];
+    proxyStartedLate: 'mid-test' | 'after-launch' | undefined;
+    /** Requests matching a route that the proxy captured before that route was registered. */
+    earlyRequests: EarlyRouteRequest[];
+    /** Whether the proxy saw any request from the app; undefined when this test drained no capture. */
+    appTrafficSeen: boolean | undefined;
+  },
 ): void {
   const possible: string[] = [];
+  if (reasons.earlyRequests.length > 0) {
+    const shown = reasons.earlyRequests.slice(0, 3).map((r) =>
+      `${r.method ? `${r.method} ` : ''}${r.url} ${formatLeadTime(r.msBefore)} before the route for ${r.pattern} was registered`,
+    );
+    const more = reasons.earlyRequests.length > 3 ? `, and ${reasons.earlyRequests.length - 3} more` : '';
+    possible.push(
+      `the app sent ${shown.join(', and ')}${more} — a route only sees requests sent after it is registered ` +
+        '(register it before the step that sends the request: relaunch the app after registering it, with ' +
+        'device.restartApp(), or register it in beforeAll and reset with a relaunch before every test — appReset ' +
+        "'restart' or 'clear' with appResetScope 'test'; a warm reset does not relaunch the app), and the app may answer a repeat of that " +
+        'request from its HTTP cache, which no route sees',
+    );
+  }
+  if (reasons.appTrafficSeen === false) {
+    possible.push(
+      'the network proxy saw no request from the app during this test (if the test reached the step that sends ' +
+        'the request, the app may have sent it over a connection it opened before the proxy started, or answered ' +
+        'it from its HTTP cache)',
+    );
+  }
   if (reasons.passthroughHosts.length > 0) {
     const hosts = reasons.passthroughHosts.slice(0, 5).join(', ') +
       (reasons.passthroughHosts.length > 5 ? `, and ${reasons.passthroughHosts.length - 5} more` : '');
@@ -447,6 +476,54 @@ function _warnUnfiredRoutes(
       possible.map((p, i) => `(${i + 1}) ${p}`).join('; ') +
       '. See https://tapsmith.dev/guides/network/#prerequisites',
   );
+}
+
+/**
+ * When the current test file's run began (its root scope), so the
+ * unfired-route reasons ignore what the proxy captured before it — between
+ * runs of a UI-mode, watch or MCP session, say (PILOT-1196). A worker runs
+ * one file at a time.
+ */
+let _fileRunStartedAtMs: number | undefined;
+
+/** A captured request that matched a route registered after it was sent (PILOT-1196). */
+interface EarlyRouteRequest {
+  method: string;
+  url: string;
+  pattern: string;
+  msBefore: number;
+}
+
+/** A captured request, as the unfired-route reasons read it. */
+interface CapturedAppRequest {
+  method: string;
+  url: string;
+  startTimeMs: number;
+  routeAction: string;
+}
+
+/**
+ * The captured requests (not passed through: those carry only a host) that
+ * matched one of the test's routes before it was registered, oldest first,
+ * each named once against the first route it matches.
+ */
+function earlyRouteRequests(
+  requests: CapturedAppRequest[],
+  registrations: RouteRegistrationRecord[],
+): EarlyRouteRequest[] {
+  const early: EarlyRouteRequest[] = [];
+  for (const req of [...requests].sort((a, b) => a.startTimeMs - b.startTimeMs)) {
+    if (req.routeAction === 'passthrough') continue;
+    const route = registrations.find((r) => req.startTimeMs < r.registeredAtMs && r.matches(req.url));
+    if (route) {
+      early.push({ method: req.method, url: req.url, pattern: route.pattern, msBefore: route.registeredAtMs - req.startTimeMs });
+    }
+  }
+  return early;
+}
+
+function formatLeadTime(ms: number): string {
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
 /** How a test ended. */
@@ -2238,6 +2315,7 @@ async function runSuiteContext(
   const defaultTestTimeoutMs = opts.config.timeout * 3;
   const testTimeoutMs = scopeTimeout ? Math.max(defaultTestTimeoutMs, scopeTimeout) : defaultTestTimeoutMs;
   const isRoot = parentPrefix === '';
+  if (isRoot) _fileRunStartedAtMs = Date.now();
   // A serial scope inside another serial group stays part of that group.
   const serialGroup = inherited.serialGroup ?? (ctx.mode === 'serial' ? { failed: false } : undefined);
   const canReset = !!opts.config.package && resettableDevices(opts).length > 0;
@@ -2724,8 +2802,43 @@ async function runSuiteContext(
       // (true when the proxy came up on demand during the test), and the
       // HTTPS hosts their proxy passed through uncaptured — the likely
       // reasons (PILOT-775).
-      const unfiredRouteDevices = new Map<Device, 'mid-test' | 'after-launch' | undefined>();
+      const unfiredRouteDevices = new Map<Device, {
+        proxyStartedLate: 'mid-test' | 'after-launch' | undefined;
+        registrations: RouteRegistrationRecord[];
+      }>();
       const passthroughHosts = new Map<Device, Set<string>>();
+      // What each drained device's proxy captured from the app (not OS
+      // services) this test, for the same reasons (PILOT-1196) — with what
+      // it captured before the test's capture start cleared it (the
+      // daemon's summaries of an app reset's launch requests, a beforeAll).
+      // A device with no entry here drained no capture, so nothing is known.
+      // Summaries from before this file's run began (an idle UI-mode or
+      // watch session between runs) say nothing about this test's routes.
+      // Whether the app sent anything is judged on the requests that started
+      // during this attempt: a drain repeats every still-open stream (an SSE
+      // or gRPC stream opened at launch) with its original start time.
+      const capturedAppRequests = new Map<Device, CapturedAppRequest[]>();
+      const appTrafficInTest = new Map<Device, boolean>();
+      const attemptStartedAtMs = Date.now();
+      const noteCapture = (
+        d: Device,
+        res: { entries: RawNetworkEntries; entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }> },
+      ): void => {
+        const seen = capturedAppRequests.get(d) ?? [];
+        const since = _fileRunStartedAtMs ?? 0;
+        let inTest = appTrafficInTest.get(d) ?? false;
+        const before = res.entriesBeforeStart ?? [];
+        for (const e of [...before, ...res.entries]) {
+          if (e.osService || e.startTimeMs < since) continue;
+          if (!before.includes(e) && e.startTimeMs >= attemptStartedAtMs) inTest = true;
+          // A stream open across drains is named once.
+          else if (seen.some((s) => s.startTimeMs === e.startTimeMs && s.url === e.url)) continue;
+          seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
+        }
+        capturedAppRequests.set(d, seen);
+        appTrafficInTest.set(d, inTest);
+        notePassthrough(d, res.entries);
+      };
       const notePassthrough = (d: Device, entries: RawNetworkEntries): void => {
         // Not an OS service's tunnel (PILOT-782): Google Play services passing
         // its pinned hosts through is no reason for the app's routes not firing.
@@ -2747,7 +2860,7 @@ async function runSuiteContext(
           try {
             const res = await d._stopNetworkCapture({ keepRunning: true });
             if (!res.success) continue;
-            notePassthrough(d, res.entries);
+            noteCapture(d, res);
             // Clients that rejected the MITM certificate (PILOT-712), once
             // per run per host as on the traced path.
             if (d._networkCaptureRoute === 'ios-system-proxy') continue;
@@ -3213,13 +3326,17 @@ async function runSuiteContext(
         // (PILOT-517). Optional call: lifecycle mocks stand in for Device.
         const startedOnDemand = d._takeProxyStartedOnDemand?.() ?? false;
         const registered = d._takeRouteRegistrations?.() ?? 0;
+        const registrations = d._takeRouteRegistrationLog?.() ?? [];
         const handled = d._takeRouteHandlerCalls?.() ?? 0;
         if (registered > 0 && !d._networkProxyRunning) {
           _warnRoutesWithoutProxy(fullName, d._traceDeviceId, recording && traceConfig.network);
         } else if ((registered > 0 || d._routeManager?.hasRoutes) && handled === 0) {
           // The test's own routes, or ones a beforeAll or worker fixture keeps
           // live for it.
-          unfiredRouteDevices.set(d, startedOnDemand ? 'mid-test' : d._proxyStartedAfterLaunch ? 'after-launch' : undefined);
+          unfiredRouteDevices.set(d, {
+            proxyStartedLate: startedOnDemand ? 'mid-test' : d._proxyStartedAfterLaunch ? 'after-launch' : undefined,
+            registrations,
+          });
         }
         if (d._routeManager?.hasTestRoutes) await d._routeManager.removeTestRoutes();
         // device.on() listeners the test added end with it too (PILOT-775).
@@ -3354,7 +3471,7 @@ async function runSuiteContext(
                   );
                 }
                 snapshotsFor(d).update(res.entries);
-                notePassthrough(d, res.entries);
+                noteCapture(d, res);
               } else {
                 console.warn(`[tapsmith] Network capture stopped with error: ${res.errorMessage}`);
               }
@@ -3489,10 +3606,15 @@ async function runSuiteContext(
       // never fired: say why when the capture shows a likely reason
       // (PILOT-775). A passing test's unfired route is just a mock the app
       // did not need.
-      for (const [d, proxyStartedLate] of status === 'failed' ? unfiredRouteDevices : []) {
+      for (const [d, { proxyStartedLate, registrations }] of status === 'failed' ? unfiredRouteDevices : []) {
+        const captured = capturedAppRequests.get(d);
+        const earlyRequests = captured ? earlyRouteRequests(captured, registrations) : [];
         _warnUnfiredRoutes(fullName, d._traceDeviceId, {
           passthroughHosts: [...(passthroughHosts.get(d) ?? [])],
           proxyStartedLate,
+          earlyRequests,
+          // An early request already explains an empty test capture.
+          appTrafficSeen: captured ? earlyRequests.length > 0 || appTrafficInTest.get(d) === true : undefined,
         });
       }
 

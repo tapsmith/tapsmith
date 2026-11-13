@@ -5,9 +5,12 @@
 //! `InterceptConf`, and bridges every intercepted TCP flow into
 //! [`crate::network_proxy::handle_transparent_tcp`]. Intercepted UDP flows are
 //! relayed only when they are DNS (so in-process gRPC/c-ares resolvers keep
-//! working under capture); all other UDP is dropped. A background refresh
-//! task polls `ps` every [`PID_REFRESH_INTERVAL`] and pushes an updated
-//! `InterceptConf` if the simulator's process tree has changed.
+//! working under capture); all other UDP is dropped. The conf also carries a
+//! path pattern for the apps installed in the simulator, so an app is
+//! intercepted from its first connection ([`intercept_actions`]). A
+//! background refresh task polls `ps` every [`PID_REFRESH_INTERVAL`] and
+//! pushes an updated `InterceptConf` if the simulator's process tree has
+//! changed.
 //!
 //! The lifecycle is anchored by the [`IosRedirect`] handle; dropping it
 //! aborts the refresh, accept, and launcher-drain tasks and unlinks the
@@ -48,9 +51,11 @@ use crate::mitm_ca::MitmAuthority;
 use crate::network_proxy::{handle_transparent_tcp, join_host_port, ProxyState, TrafficOrigin};
 
 /// How often the PID refresh task re-queries `ps` and pushes a new
-/// `InterceptConf` if the simulator's process tree has changed. Short enough
-/// to catch newly-spawned test-app child processes before they race through
-/// a quick HTTP call; long enough to keep the `ps` cost negligible.
+/// `InterceptConf` if the simulator's process tree has changed. Apps
+/// installed in the simulator do not wait for it (their path pattern matches
+/// from the first connection — [`intercept_actions`]); it picks up the
+/// runtime's own processes, such as a WebView's networking process, which
+/// start with the app. Long enough to keep the `ps` cost negligible.
 const PID_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Max size of a `NewFlow` proto handshake. The real protocol messages are
@@ -440,7 +445,7 @@ impl IosRedirect {
             .await
             .context("resolving initial simulator PID set")?;
         if initial_pids.is_empty() {
-            warn!(%udid, "no simulator processes found — InterceptConf will be empty");
+            warn!(%udid, "no simulator processes found — only apps installed in the simulator are intercepted until the next PID refresh");
         } else {
             debug!(%udid, pids = initial_pids.len(), "resolved initial simulator PID set");
         }
@@ -627,7 +632,7 @@ impl IosRedirect {
             debug!("System Extension control channel connected");
 
             let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
-            send_intercept_conf(&mut control, &initial_pids)
+            send_intercept_conf(&mut control, &udid, &initial_pids)
                 .await
                 .context("sending initial InterceptConf")?;
             debug!(pids = initial_pids.len(), "initial InterceptConf accepted");
@@ -711,9 +716,34 @@ impl Drop for IosRedirect {
     }
 }
 
-/// Encode and write an `InterceptConf` with the given PIDs to the SE's
-/// control channel. The PIDs are sent as decimal-string actions, which the
-/// SE matches exactly against each flow's originating PID.
+/// The `InterceptConf` actions for one simulator: its known PIDs, plus a
+/// process pattern for everything installed in it (PILOT-1196).
+///
+/// The extension decides each new flow in `handleNewFlow`, against whatever
+/// conf it holds at that moment: a decimal action matches the flow's PID
+/// exactly; any other action matches when it is a (case-sensitive) substring
+/// of the flow's executable path (mitmproxy_rs `InterceptConf.swift`). PIDs
+/// alone left a gap: the refresh loop only learns a just-launched app's PID
+/// on its next `ps` poll, and a connection the app opened before then went
+/// around the proxy — and, kept alive, carried the app's later requests
+/// around it too. Every app installed in the simulator, and the XCTest
+/// runner, runs from `…/<UDID>/data/Containers/Bundle/…`, so the pattern
+/// catches its first connection with no PID needed. The simulator runtime's
+/// own processes run from the runtime's `RuntimeRoot`, which every simulator
+/// of that runtime shares, so they stay PID-scoped.
+///
+/// Every action is an include, so the extension's default stays "leave the
+/// flow alone" (it flips only when the first action is a `!` exclude), and
+/// the list is never empty (the extension reads `actions[0]` for that
+/// default).
+fn intercept_actions(udid: &str, pids: &[u32]) -> Vec<String> {
+    let mut actions: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
+    actions.push(format!("/{udid}/data/"));
+    actions
+}
+
+/// Encode and write this simulator's `InterceptConf` ([`intercept_actions`])
+/// to the SE's control channel.
 ///
 /// Wrapped in [`CONTROL_CHANNEL_WRITE_TIMEOUT`] — a stuck SE (crash,
 /// suspension, kernel quirk) must never block the caller indefinitely. The
@@ -722,10 +752,11 @@ impl Drop for IosRedirect {
 /// directly into the test runner.
 async fn send_intercept_conf(
     control: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    udid: &str,
     pids: &[u32],
 ) -> Result<()> {
     let conf = ipc::InterceptConf {
-        actions: pids.iter().map(|p| p.to_string()).collect(),
+        actions: intercept_actions(udid, pids),
     };
     let bytes = Bytes::from(conf.encode_to_vec());
     match timeout(CONTROL_CHANNEL_WRITE_TIMEOUT, control.send(bytes)).await {
@@ -785,10 +816,10 @@ async fn pid_refresh_loop(
         // their traffic would be invisible. Now we retry, and if both
         // attempts fail we log loud at error! so the user grepping for
         // capture issues finds a clear signal. PILOT-182 review #4 finding S4.
-        if let Err(e) = send_intercept_conf(&mut control, &pids).await {
+        if let Err(e) = send_intercept_conf(&mut control, &udid, &pids).await {
             let first_err = format!("{e:#}");
             warn!(%udid, "InterceptConf update failed (will retry once): {first_err}");
-            if let Err(e2) = send_intercept_conf(&mut control, &pids).await {
+            if let Err(e2) = send_intercept_conf(&mut control, &udid, &pids).await {
                 error!(
                     %udid,
                     "InterceptConf update failed twice — refresh loop giving up. \
@@ -1376,6 +1407,58 @@ mod launch_lock_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const UDID: &str = "972FB67E-B94F-40EC-9388-7F3EFB761246";
+
+    /// The include pattern is matched by the extension as a substring of the
+    /// flow's executable path (mitmproxy_rs InterceptConf.swift).
+    fn pattern_matches(actions: &[String], path: &str) -> bool {
+        actions
+            .iter()
+            .filter(|a| a.parse::<u32>().is_err())
+            .any(|a| path.contains(a.as_str()))
+    }
+
+    #[test]
+    fn intercept_actions_cover_apps_installed_in_the_simulator_without_a_pid() {
+        // PILOT-1196: an app launched after the last PID refresh must still
+        // be intercepted from its first connection.
+        let actions = intercept_actions(UDID, &[11320, 14646]);
+        assert!(actions.contains(&"11320".to_string()));
+        assert!(actions.contains(&"14646".to_string()));
+        for path in [
+            format!("/Users/me/Library/Developer/CoreSimulator/Devices/{UDID}/data/Containers/Bundle/Application/F9BAB21E/MyApp.app/MyApp"),
+            // A custom device set (`simctl --set`) keeps the same layout.
+            format!("/Users/me/Library/Developer/XCTestDevices/{UDID}/data/Containers/Bundle/Application/0CD2/Runner.app/Runner"),
+        ] {
+            assert!(pattern_matches(&actions, &path), "{path}");
+        }
+    }
+
+    #[test]
+    fn intercept_actions_leave_other_simulators_and_the_host_alone() {
+        let actions = intercept_actions(UDID, &[]);
+        for path in [
+            "/Users/me/Library/Developer/CoreSimulator/Devices/6C21330D-1440-40AC-8E5E-F23F9164C6B6/data/Containers/Bundle/Application/F9BA/MyApp.app/MyApp",
+            // Runtime system processes are shared by every simulator of the
+            // runtime, so they stay PID-scoped.
+            "/Library/Developer/CoreSimulator/Volumes/iOS_23A343/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.0.simruntime/Contents/Resources/RuntimeRoot/usr/libexec/nsurlsessiond",
+            "/Applications/Safari.app/Contents/MacOS/Safari",
+        ] {
+            assert!(!pattern_matches(&actions, path), "{path}");
+        }
+        // Every action is an include, so the extension's default stays
+        // "do not intercept" (its default flips when the first action is a
+        // `!` exclude).
+        assert!(actions.iter().all(|a| !a.starts_with('!')));
+    }
+
+    #[test]
+    fn intercept_actions_are_never_empty() {
+        // The extension indexes `actions[0]` to pick its default, so an empty
+        // list (no simulator process found yet) must not be sent.
+        assert!(!intercept_actions(UDID, &[]).is_empty());
+    }
 
     #[test]
     fn simulator_flow_origin_tags_only_runtime_system_processes() {
