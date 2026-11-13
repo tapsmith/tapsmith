@@ -320,7 +320,7 @@ function serveUntilInstalled(start, extraArgs, firstError) {
           serverInfo: { name: 'tapsmith', version: '0.0.0-setup' },
           // Kept by the client for the whole session, so true after a switch too.
           instructions: 'When this session started, Tapsmith was not loaded: ' + error + ' Until it is, the only tool is ' +
-            SETUP_TOOL + '. Once it is installed the tapsmith_* tools load without a restart: if they are in your tool list, ' +
+            SETUP_TOOL + '. Once that is fixed the tapsmith_* tools load without a restart: if they are in your tool list, ' +
             'this no longer applies.',
         });
         return;
@@ -332,7 +332,7 @@ function serveUntilInstalled(start, extraArgs, firstError) {
           tools: [{
             name: SETUP_TOOL,
             description: 'Why the Tapsmith tools are not available yet. ' + reason() +
-              ' Call this after installing it: the tapsmith_* tools then load without a restart.',
+              ' Call this again once that is fixed: the tapsmith_* tools then load without a restart.',
             inputSchema: { type: 'object', properties: {} },
           }],
         });

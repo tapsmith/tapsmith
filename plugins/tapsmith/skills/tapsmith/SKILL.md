@@ -39,7 +39,7 @@ Until it is installed, the `tapsmith` server's only tool is `tapsmith_setup_stat
 why. Once it is installed, the server loads it from the next call, with no restart. If the
 `tapsmith_*` tools still do not appear after that, call `tapsmith_setup_status`: when it says
 Tapsmith is loaded, ask the user to reconnect the server (`/mcp` in Claude Code) or start a new
-session. Do not write your own MCP client or fall back to guessing locators.
+session (in Codex, a new session is the only way). Do not write your own MCP client or fall back to guessing locators.
 
 ## Tools
 

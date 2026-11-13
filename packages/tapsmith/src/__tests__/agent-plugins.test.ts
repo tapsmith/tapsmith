@@ -434,6 +434,8 @@ describe.each(CONFIGS)('the plugin MCP server in %s, before Tapsmith is installe
     try {
       const init = await client.initialize();
       expect(init.result.instructions).toMatch(/several projects/);
+      // Nothing to install here: the instructions promise a reload once it is fixed, not once installed.
+      expect(init.result.instructions).toContain('Once that is fixed the tapsmith_* tools load without a restart');
       const call = await client.request('tools/call', { name: 'tapsmith_snapshot', arguments: {} });
       expect(call.result.content[0].text).toContain('e2e-android, e2e-ios');
     } finally {
