@@ -5,6 +5,7 @@ import {
   INTERACTION_HOLD_MS,
   TARGET_CHANGED_GRACE_MS,
   MAX_PREPARE_ATTEMPTS,
+  mcpToolWorkers,
   toWireReadiness,
   type Candidate,
   type ReadinessCommand,
@@ -340,5 +341,42 @@ describe('DeviceReadiness', () => {
     r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
     expect(r.handle({ type: 'worker-recycled' })).toEqual([]);
     expect(r.state.kind).toBe('ready');
+  });
+});
+
+describe('mcpToolWorkers', () => {
+  // Each invalidation drops the workers' prepared records (PILOT-1195), so an
+  // MCP tool must invalidate the worker it touched, not every worker.
+  const workers = [
+    { id: 0, bucket: 'android', devices: [{ serial: 'emulator-5554', name: 'alice' }, { serial: 'emulator-5556', name: 'bob' }] },
+    { id: 1, bucket: 'android', devices: [{ serial: 'emulator-5558', name: 'alice' }, { serial: 'emulator-5560', name: 'bob' }] },
+    { id: 2, bucket: 'ios', devices: [{ serial: 'SIM-1' }] },
+  ];
+  const buckets = new Map([['android', 'android'], ['ios', 'ios']]);
+
+  it('no device and no project: the session primary, the first live worker', () => {
+    expect(mcpToolWorkers({ x: 1 }, workers, buckets)).toEqual([0]);
+    expect(mcpToolWorkers(undefined, workers.slice(1), buckets)).toEqual([1]);
+  });
+
+  it('a serial picks the worker that holds it, primary or group member', () => {
+    expect(mcpToolWorkers({ device: 'emulator-5558' }, workers, buckets)).toEqual([1]);
+    expect(mcpToolWorkers({ device: 'emulator-5556' }, workers, buckets)).toEqual([0]);
+    expect(mcpToolWorkers({ device: 'SIM-1', project: 'android' }, workers, buckets)).toEqual([2]);
+  });
+
+  it('a group name picks every worker with that member', () => {
+    expect(mcpToolWorkers({ device: 'bob' }, workers, buckets)).toEqual([0, 1]);
+  });
+
+  it('a project picks its bucket\'s workers', () => {
+    expect(mcpToolWorkers({ project: 'ios' }, workers, buckets)).toEqual([2]);
+    expect(mcpToolWorkers({ project: 'android' }, workers, buckets)).toEqual([0, 1]);
+  });
+
+  it('a device or project it cannot place invalidates every worker', () => {
+    expect(mcpToolWorkers({ device: 'gone' }, workers, buckets)).toBeUndefined();
+    expect(mcpToolWorkers({ project: 'web' }, workers, buckets)).toBeUndefined();
+    expect(mcpToolWorkers({}, [], buckets)).toBeUndefined();
   });
 });

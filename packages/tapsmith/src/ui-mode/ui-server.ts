@@ -76,7 +76,7 @@ import { deviceGroupSize, deviceGroupNames } from '../config.js';
 import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js';
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
-import { DeviceReadiness, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
+import { DeviceReadiness, mcpToolWorkers, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
@@ -703,7 +703,9 @@ export async function startUIServer(
    * MCP tool). The server's readiness claim goes stale, and so must each
    * worker's own prepared records — the run consumes those, and a preparation
    * skips any device still holding one (PILOT-1195). Sent in every readiness
-   * state: a touch during a run or startup outdates the records just the same.
+   * state: a touch during a run outdates the records just the same. A worker
+   * still starting is not in `uiWorkers` yet, so only an MCP tool (the mirror
+   * has no client for it) can touch its devices unseen.
    */
   function invalidateWorkers(reason: StaleReason, workerIds?: number[]): void {
     for (const w of uiWorkers) {
@@ -736,10 +738,12 @@ export async function startUIServer(
   /** Route an MCP device interaction to the worker(s) it touched. */
   function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined): void {
     if (!MUTATING_MCP_TOOLS.has(tool)) return;
-    const projectName = typeof args?.project === 'string' ? args.project : undefined;
-    const bucket = projectName ? ctx.bucketByProject?.get(projectName) : undefined;
-    const targets = bucket ? uiWorkers.filter((w) => w.bucketSignature === bucket).map((w) => w.id) : undefined;
-    invalidateWorkers('mcp-tool', targets);
+    const live = uiWorkers.filter((w) => !w.retired).map((w) => ({
+      id: w.id,
+      bucket: w.bucketSignature,
+      devices: workerDevicesInfo(w).map((d) => ({ serial: d.deviceSerial, name: d.name })),
+    }));
+    invalidateWorkers('mcp-tool', mcpToolWorkers(args, live, ctx.bucketByProject));
   }
 
   let screenPollTimer: ReturnType<typeof setTimeout> | null = null;

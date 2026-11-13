@@ -299,6 +299,45 @@ export class DeviceReadiness {
   }
 }
 
+// ─── MCP tool targeting ───
+
+/** What `mcpToolWorkers` needs to know about one live worker. */
+export interface McpTargetWorker {
+  id: number
+  bucket?: string
+  /** The worker's devices, primary first: serial and group name (`alice`). */
+  devices: Array<{ serial: string; name?: string }>
+}
+
+/**
+ * The workers a mutating MCP device tool touched, so only their devices are
+ * invalidated — each invalidation now costs a real reset on the next
+ * preparation. Mirrors how the MCP connection resolves the call: an explicit
+ * `device` (serial or group name) wins; else `project` names its bucket's
+ * workers; else the session's primary, the first live worker (the order the
+ * UI server publishes its daemons in). Undefined means "every worker": a
+ * device or project the session cannot place is not narrowed, since missing
+ * the touched device would let a stale prepared state through.
+ */
+export function mcpToolWorkers(
+  args: Record<string, unknown> | undefined,
+  workers: McpTargetWorker[],
+  bucketByProject: ReadonlyMap<string, string> | undefined,
+): number[] | undefined {
+  const device = typeof args?.device === 'string' && args.device ? args.device : undefined;
+  if (device) {
+    const hit = workers.filter((w) => w.devices.some((d) => d.serial === device || d.name === device));
+    return hit.length > 0 ? hit.map((w) => w.id) : undefined;
+  }
+  const project = typeof args?.project === 'string' && args.project ? args.project : undefined;
+  if (project) {
+    const bucket = bucketByProject?.get(project);
+    const hit = bucket === undefined ? [] : workers.filter((w) => w.bucket === bucket);
+    return hit.length > 0 ? hit.map((w) => w.id) : undefined;
+  }
+  return workers.length > 0 ? [workers[0].id] : undefined;
+}
+
 // ─── Wire representation ───
 
 /** What the client sees; a flattened, JSON-friendly view of the state. */
