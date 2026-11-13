@@ -35,6 +35,12 @@ between pages are relative, so follow them as file paths. Which page for what:
 If `node_modules/tapsmith` is missing, Tapsmith is not installed in this project: say so and
 suggest `npm install -D tapsmith`, then `npx tapsmith init`. Do not install a global copy.
 
+Until it is installed, the `tapsmith` server's only tool is `tapsmith_setup_status`, which says
+why. Once it is installed, the server loads it from the next call, with no restart. If the
+`tapsmith_*` tools still do not appear after that, call `tapsmith_setup_status`: when it says
+Tapsmith is loaded, ask the user to reconnect the server (`/mcp` in Claude Code) or start a new
+session. Do not write your own MCP client or fall back to guessing locators.
+
 ## Tools
 
 The plugin registers one MCP server, **`tapsmith`**, run from the project's own Tapsmith
