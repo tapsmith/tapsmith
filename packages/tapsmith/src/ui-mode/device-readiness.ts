@@ -34,7 +34,7 @@ export type ReadinessState =
   | { kind: 'unprepared'; reason: UnpreparedReason }
   | { kind: 'preparing'; prepareId: string; target: AppResetPolicy; forFile?: string; startedAt: number; detail?: string }
   | { kind: 'ready'; policy: AppResetPolicy; forFile?: string; preparedAt: number; durationMs: number; prepareId: string; /** Who did the work (default: background preparation). */ source?: string }
-  | { kind: 'stale'; reason: StaleReason; since: number; previous?: AppResetPolicy }
+  | { kind: 'stale'; reason: StaleReason; since: number; previous?: AppResetPolicy; /** A hold's target when it began (`candidateKey`); a different one releases it. */ heldFor?: string }
   | { kind: 'error'; message: string; since: number; attempts: number }
   | { kind: 'retired' };
 
@@ -84,10 +84,21 @@ export interface ReadinessEnv {
  * Stale reasons that hold the device as-is instead of re-preparing after the
  * grace period: someone drove the app there on purpose (a mirror gesture or
  * an MCP agent's action), or a stopped/failed run left it for inspection.
- * Re-preparing would reset it out from under them. The next run resets
- * inline; Prepare now, a new target or a preference change re-arms.
+ * Re-preparing would reset it out from under them. The next run on that
+ * worker resets inline; Prepare now or a different target re-arms. A run on
+ * another worker, a click within the same file and a preferences re-send do
+ * not.
  */
 const HOLDING_REASONS: ReadonlySet<StaleReason> = new Set(['mirror-gesture', 'mcp-tool', 'run-stopped', 'run-failed']);
+
+function isHold(s: ReadinessState): s is Extract<ReadinessState, { kind: 'stale' }> {
+  return s.kind === 'stale' && HOLDING_REASONS.has(s.reason);
+}
+
+/** Identity of a candidate target, for telling a new target from a re-selection. */
+function candidateKey(c: Candidate | undefined): string | undefined {
+  return c ? JSON.stringify([c.projectName ?? null, c.file]) : undefined;
+}
 
 export const DEFAULT_GRACE_MS = 5_000;
 export const INTERACTION_HOLD_MS = 2_000;
@@ -153,14 +164,18 @@ export class DeviceReadiness {
         // file touched its device (dispatch moved it to `running`). A worker
         // still `ready` or mid-`preparing` sat the run out — its preparation
         // is as valid as it was, so keep it rather than discard it and redo
-        // the same reset after the grace period.
-        if (s.kind === 'ready' || s.kind === 'preparing') return [];
+        // the same reset after the grace period. A held worker that sat it out
+        // stays held: nothing touched its device.
+        if (s.kind === 'ready' || s.kind === 'preparing' || isHold(s)) return [];
         if (event.stopped || event.failed) {
           // The user stopped the run, or a test on this device failed — either
           // way the state on the device is worth inspecting. Don't yank it
           // into a background reset; preparation re-arms on the next normal
-          // trigger (selection change, prepare-now, a later run).
-          this._state = { kind: 'stale', reason: event.stopped ? 'run-stopped' : 'run-failed', since: this.env.now() };
+          // trigger (a different target, prepare-now, this worker's next run).
+          this._state = {
+            kind: 'stale', reason: event.stopped ? 'run-stopped' : 'run-failed', since: this.env.now(),
+            heldFor: candidateKey(this.env.nextCandidate()),
+          };
           return [{ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' }];
         }
         this._state = { kind: 'unprepared', reason: 'grace' };
@@ -171,7 +186,7 @@ export class DeviceReadiness {
         if (event.timerId !== this._timerId) return [];
         if (s.kind === 'running' || s.kind === 'preparing' || s.kind === 'ready' || s.kind === 'retired' || s.kind === 'initializing') return [];
         // A timer that fired just before a hold cleared it must not arm.
-        if (s.kind === 'stale' && HOLDING_REASONS.has(s.reason)) return [];
+        if (isHold(s)) return [];
         return this.arm();
       }
 
@@ -219,8 +234,12 @@ export class DeviceReadiness {
         const cmds: ReadinessCommand[] = [];
         if (s.kind === 'preparing') cmds.push({ type: 'send-cancel-prepare', prepareId: s.prepareId });
         const previous = s.kind === 'ready' ? s.policy : undefined;
-        this._state = { kind: 'stale', reason: event.reason, since: this.env.now(), previous };
-        if (HOLDING_REASONS.has(event.reason)) {
+        const hold = HOLDING_REASONS.has(event.reason);
+        this._state = {
+          kind: 'stale', reason: event.reason, since: this.env.now(), previous,
+          ...(hold ? { heldFor: candidateKey(this.env.nextCandidate()) } : {}),
+        };
+        if (hold) {
           cmds.push({ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' });
         } else {
           cmds.push({ type: 'broadcast' }, { type: 'start-timer', timerId: this._timerId, ms: this.env.graceMs() });
@@ -232,8 +251,9 @@ export class DeviceReadiness {
         if (s.kind === 'ready') return this.reconcileCandidate();
         if (s.kind === 'unprepared' && s.reason !== 'grace') return this.arm();
         // A hold (stop, failure, touch) has no pending timer, unlike other
-        // stale states; picking a new target is the user moving on — re-arm.
-        if (s.kind === 'stale' && HOLDING_REASONS.has(s.reason)) return this.arm();
+        // stale states; picking a different target is the user moving on —
+        // re-arm. Another test in the same file is not.
+        if (isHold(s)) return candidateKey(this.env.nextCandidate()) === s.heldFor ? [] : this.arm();
         return [];
       }
 
@@ -249,7 +269,10 @@ export class DeviceReadiness {
           }
           return []; // a valid `ready` is kept; it just won't be re-armed later
         }
-        if (s.kind === 'unprepared' || s.kind === 'stale' || s.kind === 'error') return this.arm();
+        // A hold stays held: the browser re-sends unchanged preferences on
+        // every reconnect, and turning preparation on is no reason to reset a
+        // device someone is using.
+        if (s.kind === 'unprepared' || (s.kind === 'stale' && !isHold(s)) || s.kind === 'error') return this.arm();
         return [];
       }
 

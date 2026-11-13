@@ -172,6 +172,7 @@ describe('DeviceReadiness', () => {
     expect(timer(ended)).toBeUndefined();
 
     // Picking a new target is the user moving on — preparation re-arms.
+    env.candidate = { file: '/t/b.test.ts', policy: CLEAR };
     const rearmed = r.handle({ type: 'candidate-changed' });
     expect(sendPrepare(rearmed)).toBeDefined();
     expect(r.state).toMatchObject({ kind: 'preparing' });
@@ -190,6 +191,7 @@ describe('DeviceReadiness', () => {
     expect(timer(ended)).toBeUndefined();
 
     // Picking a new target is the user moving on — preparation re-arms.
+    env.candidate = { file: '/t/b.test.ts', policy: CLEAR };
     const rearmed = r.handle({ type: 'candidate-changed' });
     expect(sendPrepare(rearmed)).toBeDefined();
     expect(r.state).toMatchObject({ kind: 'preparing' });
@@ -260,9 +262,11 @@ describe('DeviceReadiness', () => {
     r.handle({ type: 'invalidate', reason: 'mcp-tool' });
     expect(sendPrepare(r.handle({ type: 'prepare-now' }))).toBeDefined();
 
-    const r2 = new DeviceReadiness(1, makeEnv());
+    const env2 = makeEnv();
+    const r2 = new DeviceReadiness(1, env2);
     r2.handle({ type: 'worker-ready', initialPolicy: CLEAR });
     r2.handle({ type: 'invalidate', reason: 'mirror-gesture' });
+    env2.candidate = { file: '/t/b.test.ts', policy: CLEAR };
     expect(sendPrepare(r2.handle({ type: 'candidate-changed' }))).toBeDefined();
 
     const r3 = new DeviceReadiness(2, makeEnv());
@@ -272,6 +276,39 @@ describe('DeviceReadiness', () => {
     expect(r3.state.kind).toBe('running');
     const ended = r3.handle({ type: 'run-ended', stopped: false });
     expect(timer(ended)).toBeDefined();
+  });
+
+  it('a hold survives a selection that keeps the same file, and a preferences re-send', () => {
+    for (const reason of ['mirror-gesture', 'mcp-tool'] as const) {
+      const env = makeEnv();
+      const r = new DeviceReadiness(0, env);
+      r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
+      r.handle({ type: 'invalidate', reason });
+      // Clicking another test in the same file, or the browser reconnecting
+      // and re-sending unchanged preferences, is not the user moving on.
+      expect(r.handle({ type: 'candidate-changed' })).toEqual([]);
+      expect(r.handle({ type: 'preferences-changed' })).toEqual([]);
+      expect(r.state).toMatchObject({ kind: 'stale', reason });
+    }
+  });
+
+  it('a stopped-run hold also survives a same-file selection', () => {
+    const r = new DeviceReadiness(0, makeEnv());
+    r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
+    r.handle({ type: 'dispatch', file: '/t/a.test.ts', want: CLEAR });
+    r.handle({ type: 'run-ended', stopped: true });
+    expect(r.handle({ type: 'candidate-changed' })).toEqual([]);
+    expect(r.state).toMatchObject({ kind: 'stale', reason: 'run-stopped' });
+  });
+
+  it('a held worker that sat a run out stays held when the run ends', () => {
+    for (const ended of [{ stopped: false }, { stopped: false, failed: true }, { stopped: true }]) {
+      const r = new DeviceReadiness(1, makeEnv());
+      r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
+      r.handle({ type: 'invalidate', reason: 'mcp-tool' });
+      expect(r.handle({ type: 'run-ended', ...ended })).toEqual([]);
+      expect(r.state).toMatchObject({ kind: 'stale', reason: 'mcp-tool' });
+    }
   });
 
   it('other invalidations still re-arm after the grace period', () => {
