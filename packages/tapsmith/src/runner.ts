@@ -427,8 +427,9 @@ function _warnUnfiredRoutes(
     const more = reasons.earlyRequests.length > 3 ? `, and ${reasons.earlyRequests.length - 3} more` : '';
     possible.push(
       `the app sent ${shown.join(', and ')}${more} — a route only sees requests sent after it is registered ` +
-        '(register it before the step that sends the request: in beforeAll with appResetScope: \'test\', so each ' +
-        "test's app reset comes after it, or relaunch the app after registering it), and the app may answer a repeat of that " +
+        '(register it before the step that sends the request: relaunch the app after registering it, with ' +
+        'device.restartApp(), or register it in beforeAll and reset with a relaunch before every test — appReset ' +
+        "'restart' or 'clear' with appResetScope 'test'; a warm reset does not relaunch the app), and the app may answer a repeat of that " +
         'request from its HTTP cache, which no route sees',
     );
   }
@@ -476,6 +477,14 @@ function _warnUnfiredRoutes(
       '. See https://tapsmith.dev/guides/network/#prerequisites',
   );
 }
+
+/**
+ * When the current test file's run began (its root scope), so the
+ * unfired-route reasons ignore what the proxy captured before it — between
+ * runs of a UI-mode, watch or MCP session, say (PILOT-1196). A worker runs
+ * one file at a time.
+ */
+let _fileRunStartedAtMs: number | undefined;
 
 /** A captured request that matched a route registered after it was sent (PILOT-1196). */
 interface EarlyRouteRequest {
@@ -2306,6 +2315,7 @@ async function runSuiteContext(
   const defaultTestTimeoutMs = opts.config.timeout * 3;
   const testTimeoutMs = scopeTimeout ? Math.max(defaultTestTimeoutMs, scopeTimeout) : defaultTestTimeoutMs;
   const isRoot = parentPrefix === '';
+  if (isRoot) _fileRunStartedAtMs = Date.now();
   // A serial scope inside another serial group stays part of that group.
   const serialGroup = inherited.serialGroup ?? (ctx.mode === 'serial' ? { failed: false } : undefined);
   const canReset = !!opts.config.package && resettableDevices(opts).length > 0;
@@ -2802,16 +2812,30 @@ async function runSuiteContext(
       // it captured before the test's capture start cleared it (the
       // daemon's summaries of an app reset's launch requests, a beforeAll).
       // A device with no entry here drained no capture, so nothing is known.
+      // Summaries from before this file's run began (an idle UI-mode or
+      // watch session between runs) say nothing about this test's routes.
+      // Whether the app sent anything is judged on the test's own capture.
       const capturedAppRequests = new Map<Device, CapturedAppRequest[]>();
+      const appTrafficInTest = new Map<Device, boolean>();
       const noteCapture = (
         d: Device,
         res: { entries: RawNetworkEntries; entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }> },
       ): void => {
         const seen = capturedAppRequests.get(d) ?? [];
-        for (const e of [...(res.entriesBeforeStart ?? []), ...res.entries]) {
-          if (!e.osService) seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
+        const since = _fileRunStartedAtMs ?? 0;
+        for (const e of res.entriesBeforeStart ?? []) {
+          if (!e.osService && e.startTimeMs >= since) {
+            seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
+          }
+        }
+        let inTest = appTrafficInTest.get(d) ?? false;
+        for (const e of res.entries) {
+          if (e.osService) continue;
+          seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
+          inTest = true;
         }
         capturedAppRequests.set(d, seen);
+        appTrafficInTest.set(d, inTest);
         notePassthrough(d, res.entries);
       };
       const notePassthrough = (d: Device, entries: RawNetworkEntries): void => {
@@ -3583,11 +3607,13 @@ async function runSuiteContext(
       // did not need.
       for (const [d, { proxyStartedLate, registrations }] of status === 'failed' ? unfiredRouteDevices : []) {
         const captured = capturedAppRequests.get(d);
+        const earlyRequests = captured ? earlyRouteRequests(captured, registrations) : [];
         _warnUnfiredRoutes(fullName, d._traceDeviceId, {
           passthroughHosts: [...(passthroughHosts.get(d) ?? [])],
           proxyStartedLate,
-          earlyRequests: captured ? earlyRouteRequests(captured, registrations) : [],
-          appTrafficSeen: captured ? captured.length > 0 : undefined,
+          earlyRequests,
+          // An early request already explains an empty test capture.
+          appTrafficSeen: captured ? earlyRequests.length > 0 || appTrafficInTest.get(d) === true : undefined,
         });
       }
 
