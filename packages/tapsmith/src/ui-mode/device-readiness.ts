@@ -34,7 +34,7 @@ export type ReadinessState =
   | { kind: 'unprepared'; reason: UnpreparedReason }
   | { kind: 'preparing'; prepareId: string; target: AppResetPolicy; forFile?: string; startedAt: number; detail?: string }
   | { kind: 'ready'; policy: AppResetPolicy; forFile?: string; preparedAt: number; durationMs: number; prepareId: string; /** Who did the work (default: background preparation). */ source?: string }
-  | { kind: 'stale'; reason: StaleReason; since: number; previous?: AppResetPolicy; /** The selection when a hold began (`ReadinessEnv.selection`); a different one releases it. */ heldFor?: string }
+  | { kind: 'stale'; reason: StaleReason; since: number; previous?: AppResetPolicy }
   | { kind: 'error'; message: string; since: number; attempts: number }
   | { kind: 'retired' };
 
@@ -45,7 +45,7 @@ export interface Candidate {
 }
 
 export type ReadinessEvent =
-  | { type: 'worker-ready'; initialPolicy?: AppResetPolicy }
+  | { type: 'worker-ready'; initialPolicy?: AppResetPolicy; /** A hold the worker's previous process was in (a respawn that kept the device as it was). */ hold?: StaleReason }
   | { type: 'dispatch'; file: string; want: AppResetPolicy }
   | { type: 'file-done' }
   | { type: 'run-ended'; stopped: boolean; failed?: boolean }
@@ -74,12 +74,6 @@ export interface ReadinessEnv {
   speculationEnabled(): boolean;
   /** The file most likely to run next on this worker, with its resolved policy. */
   nextCandidate(): Candidate | undefined;
-  /**
-   * What the user has selected (a file and its project), as a stable key, or
-   * undefined. A hold is released when this changes — unlike the candidate,
-   * it does not shift when sibling workers claim files.
-   */
-  selection(): string | undefined;
   /** Quiet time after a run before the device is yanked into a reset. */
   graceMs(): number;
   /** Someone is poking the mirror right now — hold off. */
@@ -90,15 +84,20 @@ export interface ReadinessEnv {
  * Stale reasons that hold the device as-is instead of re-preparing after the
  * grace period: someone drove the app there on purpose (a mirror gesture or
  * an MCP agent's action), or a stopped/failed run left it for inspection.
- * Re-preparing would reset it out from under them. The next run on that
- * worker resets inline; Prepare now or a different target re-arms. A run on
- * another worker, a click within the same file and a preferences re-send do
- * not.
+ * Re-preparing would reset it out from under them. A hold ends only by an
+ * explicit act on that device: Prepare now, or a run on that worker (which
+ * resets inline). Selection changes, runs on other workers and preference
+ * re-sends leave it alone.
  */
 const HOLDING_REASONS: ReadonlySet<StaleReason> = new Set(['mirror-gesture', 'mcp-tool', 'run-stopped', 'run-failed']);
 
 function isHold(s: ReadinessState): s is Extract<ReadinessState, { kind: 'stale' }> {
   return s.kind === 'stale' && HOLDING_REASONS.has(s.reason);
+}
+
+/** The reason a worker's device is held as-is, or undefined when it is not held. */
+export function holdReason(s: ReadinessState | undefined): StaleReason | undefined {
+  return s && isHold(s) ? s.reason : undefined;
 }
 
 
@@ -137,6 +136,11 @@ export class DeviceReadiness {
     switch (event.type) {
       case 'worker-ready': {
         this._errorAttempts = 0;
+        if (event.hold && HOLDING_REASONS.has(event.hold)) {
+          // A respawn (fresh code) that kept the device as it was keeps it held.
+          this._state = { kind: 'stale', reason: event.hold, since: this.env.now() };
+          return [{ type: 'broadcast' }];
+        }
         if (event.initialPolicy) {
           this._state = {
             kind: 'ready', policy: event.initialPolicy, preparedAt: this.env.now(), durationMs: 0, prepareId: this.nextId(), source: 'startup launch',
@@ -172,12 +176,9 @@ export class DeviceReadiness {
         if (event.stopped || event.failed) {
           // The user stopped the run, or a test on this device failed — either
           // way the state on the device is worth inspecting. Don't yank it
-          // into a background reset; preparation re-arms on the next normal
-          // trigger (a different target, prepare-now, this worker's next run).
-          this._state = {
-            kind: 'stale', reason: event.stopped ? 'run-stopped' : 'run-failed', since: this.env.now(),
-            heldFor: this.env.selection(),
-          };
+          // into a background reset; it stays held until Prepare now or this
+          // worker's next run.
+          this._state = { kind: 'stale', reason: event.stopped ? 'run-stopped' : 'run-failed', since: this.env.now() };
           return [{ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' }];
         }
         this._state = { kind: 'unprepared', reason: 'grace' };
@@ -236,12 +237,8 @@ export class DeviceReadiness {
         const cmds: ReadinessCommand[] = [];
         if (s.kind === 'preparing') cmds.push({ type: 'send-cancel-prepare', prepareId: s.prepareId });
         const previous = s.kind === 'ready' ? s.policy : undefined;
-        const hold = HOLDING_REASONS.has(event.reason);
-        this._state = {
-          kind: 'stale', reason: event.reason, since: this.env.now(), previous,
-          ...(hold ? { heldFor: this.env.selection() } : {}),
-        };
-        if (hold) {
+        this._state = { kind: 'stale', reason: event.reason, since: this.env.now(), previous };
+        if (HOLDING_REASONS.has(event.reason)) {
           cmds.push({ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' });
         } else {
           cmds.push({ type: 'broadcast' }, { type: 'start-timer', timerId: this._timerId, ms: this.env.graceMs() });
@@ -252,11 +249,8 @@ export class DeviceReadiness {
       case 'candidate-changed': {
         if (s.kind === 'ready') return this.reconcileCandidate();
         if (s.kind === 'unprepared' && s.reason !== 'grace') return this.arm();
-        // A hold (stop, failure, touch) has no pending timer, unlike other
-        // stale states; picking a different target is the user moving on —
-        // re-arm. Another test in the same file is not, nor a sibling worker
-        // claiming files (which shifts this worker's candidate).
-        if (isHold(s)) return this.env.selection() === s.heldFor ? [] : this.arm();
+        // A hold (stop, failure, touch) stays until Prepare now or the
+        // worker's own run: a selection says nothing about this device.
         return [];
       }
 

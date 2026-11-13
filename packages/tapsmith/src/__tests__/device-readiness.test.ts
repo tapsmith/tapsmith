@@ -5,6 +5,7 @@ import {
   INTERACTION_HOLD_MS,
   TARGET_CHANGED_GRACE_MS,
   MAX_PREPARE_ATTEMPTS,
+  holdReason,
   mcpToolWorkers,
   toWireReadiness,
   type Candidate,
@@ -19,10 +20,8 @@ const AUTH: AppResetPolicy = { mode: 'clear', scope: 'file', appState: '/abs/aut
 
 function makeEnv(overrides: Partial<ReadinessEnv> & { candidate?: Candidate | null } = {}) {
   let now = 1_000_000;
-  const env: ReadinessEnv & { tick(ms: number): void; candidate: Candidate | null; selected: string | undefined; speculation: boolean; interacted: boolean } = {
+  const env: ReadinessEnv & { tick(ms: number): void; candidate: Candidate | null; speculation: boolean; interacted: boolean } = {
     candidate: overrides.candidate === undefined ? { file: '/t/a.test.ts', policy: CLEAR } : overrides.candidate,
-    selected: '/t/a.test.ts',
-    selection() { return this.selected; },
     speculation: true,
     interacted: false,
     now: () => now,
@@ -161,7 +160,7 @@ describe('DeviceReadiness', () => {
     expect(r.state).toMatchObject({ kind: 'ready', policy: RESTART, prepareId: prep.prepareId });
   });
 
-  it('a stopped run goes stale (run-stopped) with no timer, and re-arms on selection change', () => {
+  it('a stopped run goes stale (run-stopped) with no timer, and stays held through a selection change', () => {
     const env = makeEnv();
     const r = new DeviceReadiness(0, env);
     r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
@@ -173,15 +172,15 @@ describe('DeviceReadiness', () => {
     expect(r.state).toMatchObject({ kind: 'stale', reason: 'run-stopped' });
     expect(timer(ended)).toBeUndefined();
 
-    // Picking a new target is the user moving on — preparation re-arms.
+    // Selecting other tests leaves it held; Prepare now re-arms.
     env.candidate = { file: '/t/b.test.ts', policy: CLEAR };
-    env.selected = '/t/b.test.ts';
-    const rearmed = r.handle({ type: 'candidate-changed' });
+    expect(r.handle({ type: 'candidate-changed' })).toEqual([]);
+    const rearmed = r.handle({ type: 'prepare-now' });
     expect(sendPrepare(rearmed)).toBeDefined();
     expect(r.state).toMatchObject({ kind: 'preparing' });
   });
 
-  it('a failed run goes stale (run-failed) with no timer, and re-arms on selection change', () => {
+  it('a failed run goes stale (run-failed) with no timer, and stays held through a selection change', () => {
     const env = makeEnv();
     const r = new DeviceReadiness(0, env);
     r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
@@ -193,10 +192,10 @@ describe('DeviceReadiness', () => {
     expect(r.state).toMatchObject({ kind: 'stale', reason: 'run-failed' });
     expect(timer(ended)).toBeUndefined();
 
-    // Picking a new target is the user moving on — preparation re-arms.
+    // Selecting other tests leaves it held; Prepare now re-arms.
     env.candidate = { file: '/t/b.test.ts', policy: CLEAR };
-    env.selected = '/t/b.test.ts';
-    const rearmed = r.handle({ type: 'candidate-changed' });
+    expect(r.handle({ type: 'candidate-changed' })).toEqual([]);
+    const rearmed = r.handle({ type: 'prepare-now' });
     expect(sendPrepare(rearmed)).toBeDefined();
     expect(r.state).toMatchObject({ kind: 'preparing' });
   });
@@ -260,7 +259,7 @@ describe('DeviceReadiness', () => {
     expect(r.state).toMatchObject({ kind: 'stale', reason: 'mirror-gesture' });
   });
 
-  it('a touch hold is released by Prepare now, a new target, or the next run', () => {
+  it('a touch hold is released by Prepare now or the worker\'s own run, not by a new target', () => {
     const r = new DeviceReadiness(0, makeEnv());
     r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
     r.handle({ type: 'invalidate', reason: 'mcp-tool' });
@@ -271,8 +270,8 @@ describe('DeviceReadiness', () => {
     r2.handle({ type: 'worker-ready', initialPolicy: CLEAR });
     r2.handle({ type: 'invalidate', reason: 'mirror-gesture' });
     env2.candidate = { file: '/t/b.test.ts', policy: CLEAR };
-    env2.selected = '/t/b.test.ts';
-    expect(sendPrepare(r2.handle({ type: 'candidate-changed' }))).toBeDefined();
+    expect(r2.handle({ type: 'candidate-changed' })).toEqual([]);
+    expect(r2.state).toMatchObject({ kind: 'stale', reason: 'mirror-gesture' });
 
     const r3 = new DeviceReadiness(2, makeEnv());
     r3.handle({ type: 'worker-ready', initialPolicy: CLEAR });
@@ -297,27 +296,6 @@ describe('DeviceReadiness', () => {
     }
   });
 
-  it('a hold follows the selection, not the candidate a sibling worker\'s claims shift', () => {
-    const env = makeEnv();
-    const r = new DeviceReadiness(0, env);
-    r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
-    r.handle({ type: 'invalidate', reason: 'mirror-gesture' });
-    // A sibling worker now claims the selected file, so this worker's
-    // candidate falls through to another one — the user selected nothing new.
-    env.candidate = { file: '/t/other.test.ts', policy: CLEAR };
-    expect(r.handle({ type: 'candidate-changed' })).toEqual([]);
-    expect(r.state).toMatchObject({ kind: 'stale', reason: 'mirror-gesture' });
-  });
-
-  it('a stopped-run hold also survives a same-file selection', () => {
-    const r = new DeviceReadiness(0, makeEnv());
-    r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
-    r.handle({ type: 'dispatch', file: '/t/a.test.ts', want: CLEAR });
-    r.handle({ type: 'run-ended', stopped: true });
-    expect(r.handle({ type: 'candidate-changed' })).toEqual([]);
-    expect(r.state).toMatchObject({ kind: 'stale', reason: 'run-stopped' });
-  });
-
   it('a held worker that sat a run out stays held when the run ends', () => {
     for (const ended of [{ stopped: false }, { stopped: false, failed: true }, { stopped: true }]) {
       const r = new DeviceReadiness(1, makeEnv());
@@ -326,6 +304,16 @@ describe('DeviceReadiness', () => {
       expect(r.handle({ type: 'run-ended', ...ended })).toEqual([]);
       expect(r.state).toMatchObject({ kind: 'stale', reason: 'mcp-tool' });
     }
+  });
+
+  it('a respawned worker can resume a hold instead of preparing', () => {
+    const r = new DeviceReadiness(0, makeEnv());
+    const cmds = r.handle({ type: 'worker-ready', hold: 'mcp-tool' });
+    expect(sendPrepare(cmds)).toBeUndefined();
+    expect(r.state).toMatchObject({ kind: 'stale', reason: 'mcp-tool' });
+    expect(holdReason(r.state)).toBe('mcp-tool');
+    expect(holdReason({ kind: 'stale', reason: 'manual', since: 0 })).toBeUndefined();
+    expect(holdReason({ kind: 'ready', policy: CLEAR, preparedAt: 0, durationMs: 0, prepareId: 'x' })).toBeUndefined();
   });
 
   it('other invalidations still re-arm after the grace period', () => {

@@ -76,7 +76,7 @@ import { deviceGroupSize, deviceGroupNames } from '../config.js';
 import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js';
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
-import { DeviceReadiness, mcpToolWorkers, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
+import { DeviceReadiness, holdReason, mcpToolWorkers, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
@@ -548,7 +548,6 @@ export async function startUIServer(
       now: () => Date.now(),
       speculationEnabled: speculationAllowed,
       nextCandidate: () => candidateFor(worker),
-      selection: () => (selectedNode?.file ? JSON.stringify([selectedNode.projectName ?? null, selectedNode.file]) : undefined),
       graceMs: () => preferences.prepareDelayMs,
       recentlyInteracted: () => Date.now() - lastMirrorInteraction < READINESS_INTERACTION_HOLD_WINDOW_MS,
     });
@@ -2196,6 +2195,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
      * passes it; a respawn passes false (it must not wipe the app mid-session).
      */
     forceInstall: boolean,
+    /**
+     * The hold the replaced worker was in (a respawn that reused the device
+     * as it was): resumed instead of preparing, so a code reload does not
+     * reset a device someone drove to a screen.
+     */
+    hold?: StaleReason,
   ): Promise<UIWorkerHandle> {
     // The rest of this worker's device group (`use.devices`), each on a
     // daemon of its own — adopted from the CLI when it opened them beside
@@ -2487,7 +2492,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     });
     attachReadiness(worker);
     broadcastWorkerStatus(worker, 'idle');
-    readinessEvent(worker, { type: 'worker-ready', initialPolicy: worker.initialPolicy });
+    readinessEvent(worker, { type: 'worker-ready', initialPolicy: worker.initialPolicy, hold });
     return worker;
   }
 
@@ -3575,6 +3580,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // without this flag).
     worker.respawning = true;
     worker.retired = true;
+    const hold = holdReason(worker.readiness?.state);
     readinessEvent(worker, { type: 'worker-retired' });
     try {
       await terminateWorkerProcess(worker);
@@ -3600,6 +3606,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       const newWorker = await initializeOneWorker(
         worker.id, worker.deviceSerial, daemonPort, agentPort, daemonBin, undefined, undefined, undefined, adopt,
         false, false,
+        // Only an adopting respawn leaves the device as it was; a worker that
+        // starts its own daemon relaunches the app, which ends any hold.
+        adopt ? hold : undefined,
       );
       // Preserve the friendly display name from before respawn.
       newWorker.displayName = worker.displayName;
@@ -3664,9 +3673,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   async function recycleStaleWorkers(reason: string): Promise<void> {
     // A worker mid-background-prepare is deliberately skipped: killing it now
     // wastes the preparation for nothing — it stays codeStale and
-    // ensureWorkersReady recycles it before the next run anyway.
+    // ensureWorkersReady recycles it before the next run anyway. So is a held
+    // one: a respawn that cannot adopt relaunches the app, and the device is
+    // held for someone driving it (an agent writing the screen object it just
+    // explored, say).
     const stale = uiWorkers.filter(
-      (w) => w.codeStale && !w.retired && !w.busy && w.readiness?.state.kind !== 'preparing',
+      (w) => w.codeStale && !w.retired && !w.busy && w.readiness?.state.kind !== 'preparing'
+        && !holdReason(w.readiness?.state),
     );
     await Promise.allSettled(stale.map((w) => recycleWorker(w, reason)));
   }
