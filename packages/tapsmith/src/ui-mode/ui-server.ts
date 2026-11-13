@@ -736,14 +736,13 @@ export async function startUIServer(
   }
 
   /** Route an MCP device interaction to the worker(s) it touched. */
-  function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined): void {
+  function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined, device: string | undefined): void {
     if (!MUTATING_MCP_TOOLS.has(tool)) return;
     const live = uiWorkers.filter((w) => !w.retired).map((w) => ({
       id: w.id,
-      bucket: w.bucketSignature,
       devices: workerDevicesInfo(w).map((d) => ({ serial: d.deviceSerial, name: d.name })),
     }));
-    invalidateWorkers('mcp-tool', mcpToolWorkers(args, live, ctx.bucketByProject));
+    invalidateWorkers('mcp-tool', mcpToolWorkers(device, args, live));
   }
 
   let screenPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1484,7 +1483,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
     if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
     broadcast(mcpMsg);
-    if (event.status !== 'started') invalidateForMcpTool(event.tool, event.args);
+    if (event.status !== 'started') invalidateForMcpTool(event.tool, event.args, event.device);
   });
 
   // ─── Test Discovery ───
@@ -5380,7 +5379,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
           if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
           broadcast(mcpMsg);
-          if (mcpMsg.status !== 'started') invalidateForMcpTool(mcpMsg.tool, mcpMsg.args);
+          if (mcpMsg.status !== 'started') invalidateForMcpTool(mcpMsg.tool, mcpMsg.args, typeof mcpMsg.device === 'string' ? mcpMsg.device : undefined);
         } catch { /* ignore malformed */ }
         res.writeHead(200);
         res.end('OK');

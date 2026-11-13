@@ -490,6 +490,8 @@ export interface McpToolCallMessage {
   error?: string
   durationMs?: number
   timestamp: number
+  /** Serial of the device the call acted on, when it resolved one. */
+  device?: string
 }
 
 export interface RunStateMessage {

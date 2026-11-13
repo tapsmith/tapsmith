@@ -346,37 +346,30 @@ describe('DeviceReadiness', () => {
 
 describe('mcpToolWorkers', () => {
   // Each invalidation drops the workers' prepared records (PILOT-1195), so an
-  // MCP tool must invalidate the worker it touched, not every worker.
+  // MCP tool must invalidate the worker whose device it touched — and never
+  // miss it, or a stale prepared state is credited on the next run.
   const workers = [
-    { id: 0, bucket: 'android', devices: [{ serial: 'emulator-5554', name: 'alice' }, { serial: 'emulator-5556', name: 'bob' }] },
-    { id: 1, bucket: 'android', devices: [{ serial: 'emulator-5558', name: 'alice' }, { serial: 'emulator-5560', name: 'bob' }] },
-    { id: 2, bucket: 'ios', devices: [{ serial: 'SIM-1' }] },
+    { id: 0, devices: [{ serial: 'emulator-5554', name: 'alice' }, { serial: 'emulator-5556', name: 'bob' }] },
+    { id: 1, devices: [{ serial: 'emulator-5558', name: 'alice' }, { serial: 'emulator-5560', name: 'bob' }] },
+    { id: 2, devices: [{ serial: 'SIM-1' }] },
   ];
-  const buckets = new Map([['android', 'android'], ['ios', 'ios']]);
 
-  it('no device and no project: the session primary, the first live worker', () => {
-    expect(mcpToolWorkers({ x: 1 }, workers, buckets)).toEqual([0]);
-    expect(mcpToolWorkers(undefined, workers.slice(1), buckets)).toEqual([1]);
+  it('the serial the call resolved picks the worker that holds it, whatever the args say', () => {
+    expect(mcpToolWorkers('emulator-5558', {}, workers)).toEqual([1]);
+    expect(mcpToolWorkers('emulator-5556', { project: 'ios' }, workers)).toEqual([0]);
+    expect(mcpToolWorkers('SIM-1', { device: 'alice' }, workers)).toEqual([2]);
   });
 
-  it('a serial picks the worker that holds it, primary or group member', () => {
-    expect(mcpToolWorkers({ device: 'emulator-5558' }, workers, buckets)).toEqual([1]);
-    expect(mcpToolWorkers({ device: 'emulator-5556' }, workers, buckets)).toEqual([0]);
-    expect(mcpToolWorkers({ device: 'SIM-1', project: 'android' }, workers, buckets)).toEqual([2]);
+  it('without a resolved serial, an explicit device argument (serial or group name) is used', () => {
+    expect(mcpToolWorkers(undefined, { device: 'emulator-5560' }, workers)).toEqual([1]);
+    expect(mcpToolWorkers(undefined, { device: 'bob' }, workers)).toEqual([0, 1]);
   });
 
-  it('a group name picks every worker with that member', () => {
-    expect(mcpToolWorkers({ device: 'bob' }, workers, buckets)).toEqual([0, 1]);
-  });
-
-  it('a project picks its bucket\'s workers', () => {
-    expect(mcpToolWorkers({ project: 'ios' }, workers, buckets)).toEqual([2]);
-    expect(mcpToolWorkers({ project: 'android' }, workers, buckets)).toEqual([0, 1]);
-  });
-
-  it('a device or project it cannot place invalidates every worker', () => {
-    expect(mcpToolWorkers({ device: 'gone' }, workers, buckets)).toBeUndefined();
-    expect(mcpToolWorkers({ project: 'web' }, workers, buckets)).toBeUndefined();
-    expect(mcpToolWorkers({}, [], buckets)).toBeUndefined();
+  it('a call it cannot place invalidates every worker', () => {
+    expect(mcpToolWorkers(undefined, {}, workers)).toBeUndefined();
+    expect(mcpToolWorkers(undefined, { project: 'android' }, workers)).toBeUndefined();
+    expect(mcpToolWorkers('emulator-9999', {}, workers)).toBeUndefined();
+    expect(mcpToolWorkers(undefined, { device: 'gone' }, workers)).toBeUndefined();
+    expect(mcpToolWorkers(undefined, undefined, [])).toBeUndefined();
   });
 });
