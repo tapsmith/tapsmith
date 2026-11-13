@@ -4,7 +4,7 @@
  * the project's own installed Tapsmith rather than a global or npx copy.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import path from 'node:path';
@@ -64,6 +64,111 @@ function installFakeTapsmith(dir: string, version = '9.9.9'): string {
     ].join('\n'),
   );
 }
+
+/**
+ * A fake installed tapsmith whose `mcp-server` speaks MCP over stdio, as the
+ * real one does: it lists two tools; `probe` returns what it was started
+ * with, and `crash` exits 3.
+ */
+function installFakeMcpTapsmith(dir: string): string {
+  // Built aside and moved in whole, so the server's poll never sees half of it.
+  const stage = fs.mkdtempSync(path.join(path.dirname(tmp), 'tapsmith-stage-'));
+  const bin = installFakeTapsmith(stage);
+  fs.writeFileSync(bin, [
+    "import * as readline from 'node:readline';",
+    'let init; let initialized = false;',
+    'const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");',
+    "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
+    '  const m = JSON.parse(line);',
+    "  if (m.method === 'initialize') { init = m.params; return send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'tapsmith', version: '9.9.9' } } }); }",
+    "  if (m.method === 'notifications/initialized') { initialized = true; return; }",
+    "  if (m.method === 'tools/list') return send({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'tapsmith_snapshot', inputSchema: { type: 'object' } }, { name: 'probe', inputSchema: { type: 'object' } }] } });",
+    "  if (m.method === 'tools/call' && m.params.name === 'crash') process.exit(3);",
+    "  if (m.method === 'tools/call' && m.params.name === 'big') return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'é😀日'.repeat(100000) }] } });",
+    "  if (m.method === 'tools/call') return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: JSON.stringify({",
+    '    args: process.argv.slice(2), cwd: process.cwd(), bin: process.argv[1], preferUi: process.env.TAPSMITH_MCP_PREFER_UI,',
+    '    execArgv: process.execArgv, init, initialized,',
+    '  }) }] } });',
+    "  if (m.id !== undefined) send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no' } });",
+    '});',
+    '',
+  ].join('\n'));
+  fs.renameSync(path.join(stage, 'node_modules'), path.join(dir, 'node_modules'));
+  fs.rmSync(stage, { recursive: true });
+  return path.join(dir, path.relative(stage, bin));
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any -- JSON-RPC messages in tests */
+type RpcMessage = { id?: number | string; method?: string; params?: any; result?: any; error?: any };
+
+/**
+ * The plugin's MCP server started as an MCP client starts it, with a small
+ * newline-delimited JSON-RPC client on its stdio.
+ */
+function startPluginServer(configFile: (typeof CONFIGS)[number], cwd: string, env: Record<string, string> = {}, extraArgs: string[] = []) {
+  const config = JSON.parse(generatedFiles(REPO)[`plugins/tapsmith/${configFile}`]!) as McpConfig;
+  const args = config.mcpServers['tapsmith']!.args.map((a) => a.replace('${CLAUDE_PLUGIN_ROOT}', path.join(REPO, 'plugins/tapsmith')));
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+  for (const name of ['CLAUDE_PROJECT_DIR', 'TAPSMITH_PROJECT_DIR', 'WORKSPACE_FOLDER_PATHS', 'TAPSMITH_MCP_PREFER_UI']) {
+    if (!(name in env)) delete childEnv[name];
+  }
+  const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [...args, ...extraArgs], { cwd, env: childEnv });
+  const messages: RpcMessage[] = [];
+  const waiters: Array<{ match: (m: RpcMessage) => boolean; resolve: (m: RpcMessage) => void }> = [];
+  let stderr = '';
+  let buffer = '';
+  let nextId = 1;
+  child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (d: string) => {
+    buffer += d;
+    let nl;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      if (!line.trim()) continue;
+      const message = JSON.parse(line) as RpcMessage;
+      messages.push(message);
+      for (const w of waiters.filter((w) => w.match(message))) {
+        waiters.splice(waiters.indexOf(w), 1);
+        w.resolve(message);
+      }
+    }
+  });
+  const handle = {
+    exited: undefined as number | null | undefined,
+    closed: new Promise<void>((resolve) => child.on('exit', (code) => { handle.exited = code; resolve(); })),
+    stderr: () => stderr,
+    waitFor(match: (m: RpcMessage) => boolean, timeoutMs = 10_000): Promise<RpcMessage> {
+      const seen = messages.find(match);
+      if (seen) return Promise.resolve(seen);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no matching message; stderr:\n${stderr}`)), timeoutMs);
+        waiters.push({ match, resolve: (m) => { clearTimeout(timer); resolve(m); } });
+      });
+    },
+    request(method: string, params?: unknown): Promise<any> {
+      const id = nextId++;
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) })}\n`);
+      return handle.waitFor((m) => m.id === id && m.method === undefined);
+    },
+    async initialize(): Promise<any> {
+      const init = await handle.request('initialize', {
+        protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'plugin-test', version: '1' },
+      });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+      return init;
+    },
+    async close(): Promise<void> {
+      child.stdin.end();
+      const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+      await handle.closed;
+      clearTimeout(timer);
+    },
+  };
+  return handle;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 type McpConfig = { mcpServers: Record<string, { command: string; args: string[] }> };
 
@@ -202,6 +307,16 @@ describe('locateTapsmith', () => {
     expect(found.error).toContain('npm install -D tapsmith');
   });
 
+  it('sees an install made after it last looked, and not one still being written', () => {
+    // Node's resolver would cache the missing package.json from the first look.
+    fs.mkdirSync(path.join(tmp, 'node_modules/tapsmith'), { recursive: true });
+    expect(locateTapsmith(tmp).error).toBeDefined();
+    write('node_modules/tapsmith/package.json', JSON.stringify({ name: 'tapsmith', version: '9.9.9', bin: { tapsmith: 'dist/bin.js' } }));
+    expect(locateTapsmith(tmp).error).toBeDefined();
+    const bin = write('node_modules/tapsmith/dist/bin.js', '');
+    expect(locateTapsmith(tmp)).toEqual({ dir: tmp, bin, version: '9.9.9' });
+  });
+
   it('ignores a package called something else that a tapsmith import would not reach', () => {
     write('node_modules/other/package.json', JSON.stringify({ name: 'other', bin: { tapsmith: 'x.js' } }));
     expect(locateTapsmith(tmp).error).toBeDefined();
@@ -268,11 +383,154 @@ describe.each(CONFIGS)('the plugin MCP server command in %s', (configFile) => {
     expect(JSON.parse(run.stdout).cwd).toBe(path.join(tmp, 'project'));
   });
 
-  it('exits 1 with the reason on stderr and nothing on stdout when Tapsmith is not installed', () => {
-    const run = runPluginServer(configFile, tmp);
-    expect(run.status).toBe(1);
-    expect(run.stdout).toBe('');
-    expect(run.stderr).toContain('tapsmith plugin: Tapsmith is not installed');
+  it('stays up when Tapsmith is not installed, logging the reason on stderr too', async () => {
+    const client = startPluginServer(configFile, tmp);
+    try {
+      await client.initialize();
+      expect(client.stderr()).toContain('tapsmith plugin: Tapsmith is not installed');
+      expect(client.exited).toBeUndefined();
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+describe.each(CONFIGS)('the plugin MCP server in %s, before Tapsmith is installed', { timeout: 20_000 }, (configFile) => {
+  it('tells the agent why there are no Tapsmith tools: in its instructions and in every tool call', async () => {
+    const client = startPluginServer(configFile, tmp);
+    try {
+      const init = await client.initialize();
+      expect(init.result.serverInfo.name).toBe('tapsmith');
+      expect(init.result.protocolVersion).toBe('2025-06-18');
+      expect(init.result.capabilities.tools).toEqual({ listChanged: true });
+      expect(init.result.instructions).toContain(`When this session started, Tapsmith was not loaded: Tapsmith is not installed in ${tmp}`);
+      expect(init.result.instructions).toContain('if they are in your tool list, this no longer applies');
+      expect(init.result.instructions).toContain('npm install -D tapsmith');
+
+      const list = await client.request('tools/list');
+      expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['tapsmith_setup_status']);
+      expect(list.result.tools[0].description).toContain('npm install -D tapsmith');
+      expect((await client.request('resources/list')).result).toEqual({ resources: [] });
+      expect(await client.request('ping')).toMatchObject({ result: {} });
+
+      for (const name of ['tapsmith_setup_status', 'tapsmith_snapshot']) {
+        const call = await client.request('tools/call', { name, arguments: {} });
+        expect(call.result.isError).toBe(true);
+        expect(call.result.content[0].text).toContain(`Tapsmith is not installed in ${tmp}`);
+      }
+      expect((await client.request('no/such/method')).error.code).toBe(-32601);
+    } finally {
+      await client.close();
+    }
+    expect(client.exited).toBe(0);
+  });
+
+  it('explains the other reasons it cannot start Tapsmith the same way', async () => {
+    for (const name of ['e2e-android', 'e2e-ios']) {
+      write(`${name}/tapsmith.config.ts`, 'export default {};\n');
+      installFakeTapsmith(path.join(tmp, name));
+    }
+    const client = startPluginServer(configFile, tmp);
+    try {
+      const init = await client.initialize();
+      expect(init.result.instructions).toMatch(/several projects/);
+      // Nothing to install here: the instructions promise a reload once it is fixed, not once installed.
+      expect(init.result.instructions).toContain('Once that is fixed the tapsmith_* tools load without a restart');
+      const call = await client.request('tools/call', { name: 'tapsmith_snapshot', arguments: {} });
+      expect(call.result.content[0].text).toContain('e2e-android, e2e-ios');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("switches to the project's Tapsmith once it is installed, telling the client its tools changed", async () => {
+    const client = startPluginServer(configFile, tmp, {}, ['--config', 'tapsmith.config.ios.mjs']);
+    try {
+      await client.initialize();
+      const bin = installFakeMcpTapsmith(tmp);
+      await client.waitFor((m) => m.method === 'notifications/tools/list_changed');
+      expect(client.stderr()).toContain(`starting tapsmith 9.9.9 mcp-server in ${tmp}`);
+
+      const list = await client.request('tools/list');
+      expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['tapsmith_snapshot', 'probe']);
+      const probe = JSON.parse((await client.request('tools/call', { name: 'probe', arguments: {} })).result.content[0].text);
+      expect(probe).toMatchObject({
+        args: ['mcp-server', '--config', 'tapsmith.config.ios.mjs'],
+        cwd: tmp,
+        bin,
+        preferUi: '1',
+        execArgv: [],
+        // The client's own initialize, replayed with the version the launcher agreed.
+        init: { protocolVersion: '2025-06-18', clientInfo: { name: 'plugin-test' } },
+        initialized: true,
+      });
+      // A reply far bigger than one pipe read, its characters split across reads.
+      const big = await client.request('tools/call', { name: 'big', arguments: {} });
+      expect(big.result.content[0].text).toBe('é😀日'.repeat(100000));
+      // Its own tool still answers, for clients that never re-list tools.
+      const status = await client.request('tools/call', { name: 'tapsmith_setup_status', arguments: {} });
+      expect(status.result.isError).toBeFalsy();
+      expect(status.result.content[0].text).toContain('Tapsmith 9.9.9 is loaded');
+    } finally {
+      await client.close();
+    }
+    // stdin closed: the server exits, and the launcher with its code.
+    expect(client.exited).toBe(0);
+  });
+
+  it('checks again on the next call, without waiting for its poll', async () => {
+    const client = startPluginServer(configFile, tmp);
+    try {
+      await client.initialize();
+      installFakeMcpTapsmith(tmp);
+      const call = await client.request('tools/call', { name: 'probe', arguments: {} });
+      expect(JSON.parse(call.result.content[0].text)).toMatchObject({ cwd: tmp });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("leaves a TAPSMITH_MCP_PREFER_UI the user set alone", async () => {
+    const client = startPluginServer(configFile, tmp, { TAPSMITH_MCP_PREFER_UI: '0' });
+    try {
+      await client.initialize();
+      installFakeMcpTapsmith(tmp);
+      const call = await client.request('tools/call', { name: 'probe', arguments: {} });
+      expect(JSON.parse(call.result.content[0].text)).toMatchObject({ preferUi: '0' });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('serves on when the installed server exits as it starts, and starts it again on the next call', async () => {
+    const client = startPluginServer(configFile, tmp);
+    try {
+      await client.initialize();
+      const bin = installFakeTapsmith(tmp);
+      fs.writeFileSync(bin, 'process.exit(2);\n');
+      const call = await client.request('tools/call', { name: 'tapsmith_snapshot', arguments: {} });
+      expect(call.result.isError).toBe(true);
+      expect(call.result.content[0].text).toContain(`Tapsmith 9.9.9 is installed in ${tmp}, but its MCP server exited with code 2 as it started`);
+      expect(client.exited).toBeUndefined();
+
+      fs.rmSync(path.join(tmp, 'node_modules'), { recursive: true });
+      installFakeMcpTapsmith(tmp);
+      const retry = await client.request('tools/call', { name: 'probe', arguments: {} });
+      expect(JSON.parse(retry.result.content[0].text)).toMatchObject({ cwd: tmp });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("answers a call the server never did when the server dies, and exits with the server's code", async () => {
+    const client = startPluginServer(configFile, tmp);
+    await client.initialize();
+    installFakeMcpTapsmith(tmp);
+    await client.waitFor((m) => m.method === 'notifications/tools/list_changed');
+    const call = await client.request('tools/call', { name: 'crash', arguments: {} });
+    expect(call.error.message).toMatch(/exited with code 3/);
+    await client.closed;
+    expect(client.exited).toBe(3);
   });
 });
 
