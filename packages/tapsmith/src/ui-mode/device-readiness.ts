@@ -299,6 +299,37 @@ export class DeviceReadiness {
   }
 }
 
+// ─── MCP tool targeting ───
+
+/** What `mcpToolWorkers` needs to know about one live worker. */
+export interface McpTargetWorker {
+  id: number
+  /** The worker's devices, primary first: serial and group name (`alice`). */
+  devices: Array<{ serial: string; name?: string }>
+}
+
+/**
+ * The workers a mutating MCP device tool touched, so only their devices are
+ * invalidated — each invalidation costs a real reset on the next
+ * preparation. `resolved` is the serial the MCP connection actually acted on
+ * (the tool-call event's `device`); without it, an explicit `device`
+ * argument (serial or group name) is used. Undefined means "every worker":
+ * a call the session cannot place is not narrowed, since missing the touched
+ * device would let a stale prepared state through. Re-deriving the MCP's
+ * own default or project choice here is not attempted — it drifts from the
+ * connection pool's order.
+ */
+export function mcpToolWorkers(
+  resolved: string | undefined,
+  args: Record<string, unknown> | undefined,
+  workers: McpTargetWorker[],
+): number[] | undefined {
+  const device = resolved || (typeof args?.device === 'string' && args.device ? args.device : undefined);
+  if (!device) return undefined;
+  const hit = workers.filter((w) => w.devices.some((d) => d.serial === device || d.name === device));
+  return hit.length > 0 ? hit.map((w) => w.id) : undefined;
+}
+
 // ─── Wire representation ───
 
 /** What the client sees; a flattened, JSON-friendly view of the state. */

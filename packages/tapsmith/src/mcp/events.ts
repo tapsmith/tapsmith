@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export interface McpToolCallEvent {
   id: string
   tool: string
@@ -9,6 +11,13 @@ export interface McpToolCallEvent {
   error?: string
   durationMs?: number
   timestamp: number
+  /**
+   * Serial of the device the call acted on, as the connection resolved it —
+   * set on `completed`/`error` once a device tool picked its target. UI mode
+   * invalidates that device's worker (PILOT-1195); `args` alone cannot say
+   * which device a call with no `device` landed on.
+   */
+  device?: string
 }
 
 export interface McpClientInfo {
@@ -142,4 +151,17 @@ export function summarizeResult(tool: string, result: string): string {
     default:
       return result.slice(0, 60);
   }
+}
+
+const toolCallDevice = new AsyncLocalStorage<{ device?: string }>();
+
+/** Run a tool callback with a slot for the device it resolves (see {@link noteToolDevice}). */
+export function runWithToolDevice<T>(slot: { device?: string }, fn: () => T): T {
+  return toolCallDevice.run(slot, fn);
+}
+
+/** Record the device the current tool call acts on, for its tool-call event. */
+export function noteToolDevice(serial: string | undefined): void {
+  const slot = toolCallDevice.getStore();
+  if (slot && serial) slot.device = serial;
 }

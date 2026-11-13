@@ -5,6 +5,7 @@ import {
   INTERACTION_HOLD_MS,
   TARGET_CHANGED_GRACE_MS,
   MAX_PREPARE_ATTEMPTS,
+  mcpToolWorkers,
   toWireReadiness,
   type Candidate,
   type ReadinessCommand,
@@ -340,5 +341,35 @@ describe('DeviceReadiness', () => {
     r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
     expect(r.handle({ type: 'worker-recycled' })).toEqual([]);
     expect(r.state.kind).toBe('ready');
+  });
+});
+
+describe('mcpToolWorkers', () => {
+  // Each invalidation drops the workers' prepared records (PILOT-1195), so an
+  // MCP tool must invalidate the worker whose device it touched — and never
+  // miss it, or a stale prepared state is credited on the next run.
+  const workers = [
+    { id: 0, devices: [{ serial: 'emulator-5554', name: 'alice' }, { serial: 'emulator-5556', name: 'bob' }] },
+    { id: 1, devices: [{ serial: 'emulator-5558', name: 'alice' }, { serial: 'emulator-5560', name: 'bob' }] },
+    { id: 2, devices: [{ serial: 'SIM-1' }] },
+  ];
+
+  it('the serial the call resolved picks the worker that holds it, whatever the args say', () => {
+    expect(mcpToolWorkers('emulator-5558', {}, workers)).toEqual([1]);
+    expect(mcpToolWorkers('emulator-5556', { project: 'ios' }, workers)).toEqual([0]);
+    expect(mcpToolWorkers('SIM-1', { device: 'alice' }, workers)).toEqual([2]);
+  });
+
+  it('without a resolved serial, an explicit device argument (serial or group name) is used', () => {
+    expect(mcpToolWorkers(undefined, { device: 'emulator-5560' }, workers)).toEqual([1]);
+    expect(mcpToolWorkers(undefined, { device: 'bob' }, workers)).toEqual([0, 1]);
+  });
+
+  it('a call it cannot place invalidates every worker', () => {
+    expect(mcpToolWorkers(undefined, {}, workers)).toBeUndefined();
+    expect(mcpToolWorkers(undefined, { project: 'android' }, workers)).toBeUndefined();
+    expect(mcpToolWorkers('emulator-9999', {}, workers)).toBeUndefined();
+    expect(mcpToolWorkers(undefined, { device: 'gone' }, workers)).toBeUndefined();
+    expect(mcpToolWorkers(undefined, undefined, [])).toBeUndefined();
   });
 });

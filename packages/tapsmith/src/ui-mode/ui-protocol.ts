@@ -490,6 +490,8 @@ export interface McpToolCallMessage {
   error?: string
   durationMs?: number
   timestamp: number
+  /** Serial of the device the call acted on, when it resolved one. */
+  device?: string
 }
 
 export interface RunStateMessage {
@@ -1045,6 +1047,16 @@ export interface UIWorkerCancelPrepareMessage {
   prepareId: string
 }
 
+/**
+ * Server → UI worker: something outside the worker touched its devices (a
+ * mirror gesture, a UI-mode MCP tool), so whatever a launch or preparation
+ * left on them is gone. The worker drops its prepared records; the next
+ * preparation or run resets for real instead of crediting a stale one.
+ */
+export interface UIWorkerInvalidatePreparedMessage {
+  type: 'invalidate-prepared'
+}
+
 /** Server → UI worker: shut down gracefully. */
 export interface UIWorkerShutdownMessage {
   type: 'shutdown'
@@ -1062,6 +1074,7 @@ export type UIWorkerMessage =
   | UIWorkerAbortMessage
   | UIWorkerPrepareMessage
   | UIWorkerCancelPrepareMessage
+  | UIWorkerInvalidatePreparedMessage
 
 /** UI worker → server: worker is ready. */
 export interface UIWorkerReadyMessage {
