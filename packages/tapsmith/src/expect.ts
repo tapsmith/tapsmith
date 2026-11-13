@@ -644,9 +644,12 @@ function createAssertions(
 
   /** Fail a single-element matcher whose last tick matched nothing. */
   const failMissing = async (expectation: string, timeout: number): Promise<never> => {
-    const hint = await handle._locatorMissHelp({ waitedMs: timeout });
+    // An nth(i) past the end is a positional miss: name the index and the
+    // count, as an action does, rather than let it read as a selector miss.
+    const detail = await handle._positionalMissDetailNow();
+    const hint = await handle._locatorMissHelp({ waitedMs: timeout, positionalDetail: detail });
     return fail(
-      `Expected element ${selectorDescription(handle)} ${negated ? "NOT " : ""}${expectation}, but no element matched${hint}`,
+      `Expected element ${selectorDescription(handle)} ${negated ? "NOT " : ""}${expectation}, but no element matched${detail}${hint}`,
     );
   };
 

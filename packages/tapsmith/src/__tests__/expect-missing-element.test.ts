@@ -135,12 +135,17 @@ describe("negated single-element assertions on a missing element (PILOT-1198)", 
     ).rejects.toThrow(/NOT to be checked, but it was$/);
   });
 
-  it("not.toBeChecked() on an out-of-range nth() fails as no element matched", async () => {
+  it("not.toBeChecked() on an out-of-range nth() names the index and the count", async () => {
     const { client } = clientOf(() => [makeElementInfo({ checked: false })]);
     const handle = new ElementHandle(client, _text("Compact list"), TIMEOUT).nth(3);
     await vitestExpect(
       tapsmithExpect(handle).not.toBeChecked({ timeout: TIMEOUT }),
-    ).rejects.toThrow("NOT to be checked, but no element matched");
+    ).rejects.toThrow(
+      "NOT to be checked, but no element matched (nth(3): expected at least 4 element(s), but found 1)",
+    );
+    await vitestExpect(
+      tapsmithExpect(handle).toHaveText("x", { timeout: TIMEOUT }),
+    ).rejects.toThrow('to have text "x", but no element matched (nth(3): expected at least 4 element(s), but found 1)');
   });
 
   describe("absence-style assertions still pass on a missing element (Playwright)", () => {
