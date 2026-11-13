@@ -34,7 +34,7 @@ export type ReadinessState =
   | { kind: 'unprepared'; reason: UnpreparedReason }
   | { kind: 'preparing'; prepareId: string; target: AppResetPolicy; forFile?: string; startedAt: number; detail?: string }
   | { kind: 'ready'; policy: AppResetPolicy; forFile?: string; preparedAt: number; durationMs: number; prepareId: string; /** Who did the work (default: background preparation). */ source?: string }
-  | { kind: 'stale'; reason: StaleReason; since: number; previous?: AppResetPolicy; /** A hold's target when it began (`candidateKey`); a different one releases it. */ heldFor?: string }
+  | { kind: 'stale'; reason: StaleReason; since: number; previous?: AppResetPolicy; /** The selection when a hold began (`ReadinessEnv.selection`); a different one releases it. */ heldFor?: string }
   | { kind: 'error'; message: string; since: number; attempts: number }
   | { kind: 'retired' };
 
@@ -74,6 +74,12 @@ export interface ReadinessEnv {
   speculationEnabled(): boolean;
   /** The file most likely to run next on this worker, with its resolved policy. */
   nextCandidate(): Candidate | undefined;
+  /**
+   * What the user has selected (a file and its project), as a stable key, or
+   * undefined. A hold is released when this changes — unlike the candidate,
+   * it does not shift when sibling workers claim files.
+   */
+  selection(): string | undefined;
   /** Quiet time after a run before the device is yanked into a reset. */
   graceMs(): number;
   /** Someone is poking the mirror right now — hold off. */
@@ -95,10 +101,6 @@ function isHold(s: ReadinessState): s is Extract<ReadinessState, { kind: 'stale'
   return s.kind === 'stale' && HOLDING_REASONS.has(s.reason);
 }
 
-/** Identity of a candidate target, for telling a new target from a re-selection. */
-function candidateKey(c: Candidate | undefined): string | undefined {
-  return c ? JSON.stringify([c.projectName ?? null, c.file]) : undefined;
-}
 
 export const DEFAULT_GRACE_MS = 5_000;
 export const INTERACTION_HOLD_MS = 2_000;
@@ -174,7 +176,7 @@ export class DeviceReadiness {
           // trigger (a different target, prepare-now, this worker's next run).
           this._state = {
             kind: 'stale', reason: event.stopped ? 'run-stopped' : 'run-failed', since: this.env.now(),
-            heldFor: candidateKey(this.env.nextCandidate()),
+            heldFor: this.env.selection(),
           };
           return [{ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' }];
         }
@@ -237,7 +239,7 @@ export class DeviceReadiness {
         const hold = HOLDING_REASONS.has(event.reason);
         this._state = {
           kind: 'stale', reason: event.reason, since: this.env.now(), previous,
-          ...(hold ? { heldFor: candidateKey(this.env.nextCandidate()) } : {}),
+          ...(hold ? { heldFor: this.env.selection() } : {}),
         };
         if (hold) {
           cmds.push({ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' });
@@ -252,8 +254,9 @@ export class DeviceReadiness {
         if (s.kind === 'unprepared' && s.reason !== 'grace') return this.arm();
         // A hold (stop, failure, touch) has no pending timer, unlike other
         // stale states; picking a different target is the user moving on —
-        // re-arm. Another test in the same file is not.
-        if (isHold(s)) return candidateKey(this.env.nextCandidate()) === s.heldFor ? [] : this.arm();
+        // re-arm. Another test in the same file is not, nor a sibling worker
+        // claiming files (which shifts this worker's candidate).
+        if (isHold(s)) return this.env.selection() === s.heldFor ? [] : this.arm();
         return [];
       }
 

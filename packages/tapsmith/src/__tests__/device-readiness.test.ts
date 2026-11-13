@@ -19,8 +19,10 @@ const AUTH: AppResetPolicy = { mode: 'clear', scope: 'file', appState: '/abs/aut
 
 function makeEnv(overrides: Partial<ReadinessEnv> & { candidate?: Candidate | null } = {}) {
   let now = 1_000_000;
-  const env: ReadinessEnv & { tick(ms: number): void; candidate: Candidate | null; speculation: boolean; interacted: boolean } = {
+  const env: ReadinessEnv & { tick(ms: number): void; candidate: Candidate | null; selected: string | undefined; speculation: boolean; interacted: boolean } = {
     candidate: overrides.candidate === undefined ? { file: '/t/a.test.ts', policy: CLEAR } : overrides.candidate,
+    selected: '/t/a.test.ts',
+    selection() { return this.selected; },
     speculation: true,
     interacted: false,
     now: () => now,
@@ -173,6 +175,7 @@ describe('DeviceReadiness', () => {
 
     // Picking a new target is the user moving on — preparation re-arms.
     env.candidate = { file: '/t/b.test.ts', policy: CLEAR };
+    env.selected = '/t/b.test.ts';
     const rearmed = r.handle({ type: 'candidate-changed' });
     expect(sendPrepare(rearmed)).toBeDefined();
     expect(r.state).toMatchObject({ kind: 'preparing' });
@@ -192,6 +195,7 @@ describe('DeviceReadiness', () => {
 
     // Picking a new target is the user moving on — preparation re-arms.
     env.candidate = { file: '/t/b.test.ts', policy: CLEAR };
+    env.selected = '/t/b.test.ts';
     const rearmed = r.handle({ type: 'candidate-changed' });
     expect(sendPrepare(rearmed)).toBeDefined();
     expect(r.state).toMatchObject({ kind: 'preparing' });
@@ -267,6 +271,7 @@ describe('DeviceReadiness', () => {
     r2.handle({ type: 'worker-ready', initialPolicy: CLEAR });
     r2.handle({ type: 'invalidate', reason: 'mirror-gesture' });
     env2.candidate = { file: '/t/b.test.ts', policy: CLEAR };
+    env2.selected = '/t/b.test.ts';
     expect(sendPrepare(r2.handle({ type: 'candidate-changed' }))).toBeDefined();
 
     const r3 = new DeviceReadiness(2, makeEnv());
@@ -290,6 +295,18 @@ describe('DeviceReadiness', () => {
       expect(r.handle({ type: 'preferences-changed' })).toEqual([]);
       expect(r.state).toMatchObject({ kind: 'stale', reason });
     }
+  });
+
+  it('a hold follows the selection, not the candidate a sibling worker\'s claims shift', () => {
+    const env = makeEnv();
+    const r = new DeviceReadiness(0, env);
+    r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
+    r.handle({ type: 'invalidate', reason: 'mirror-gesture' });
+    // A sibling worker now claims the selected file, so this worker's
+    // candidate falls through to another one — the user selected nothing new.
+    env.candidate = { file: '/t/other.test.ts', policy: CLEAR };
+    expect(r.handle({ type: 'candidate-changed' })).toEqual([]);
+    expect(r.state).toMatchObject({ kind: 'stale', reason: 'mirror-gesture' });
   });
 
   it('a stopped-run hold also survives a same-file selection', () => {

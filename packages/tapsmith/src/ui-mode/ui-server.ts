@@ -548,6 +548,7 @@ export async function startUIServer(
       now: () => Date.now(),
       speculationEnabled: speculationAllowed,
       nextCandidate: () => candidateFor(worker),
+      selection: () => (selectedNode?.file ? JSON.stringify([selectedNode.projectName ?? null, selectedNode.file]) : undefined),
       graceMs: () => preferences.prepareDelayMs,
       recentlyInteracted: () => Date.now() - lastMirrorInteraction < READINESS_INTERACTION_HOLD_WINDOW_MS,
     });
