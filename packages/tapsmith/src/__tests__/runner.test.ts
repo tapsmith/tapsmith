@@ -1150,7 +1150,9 @@ describe('runner execution', () => {
     describe('on-demand capture (PILOT-775)', () => {
       const makeOnDemandDevice = (opts: {
         handled: number
-        drained?: Array<{ url: string; routeAction: string; isHttps: boolean; osService?: boolean }>
+        drained?: Array<{ url: string; routeAction: string; isHttps: boolean; osService?: boolean; method?: string; startTimeMs?: number }>
+        /** What Device records for each route() call (PILOT-1196). */
+        registrations?: Array<{ pattern: string; registeredAtMs: number; matches: (url: string) => boolean }>
         tlsRejectedHosts?: string[]
         osServiceTlsRejectedHosts?: string[]
         name?: string
@@ -1163,6 +1165,7 @@ describe('runner execution', () => {
           _setOnDemandNetworkCapture: vi.fn((start: (() => Promise<void>) | null) => { starter = start; }),
           _takeProxyStartedOnDemand: () => { const v = startedOnDemand; startedOnDemand = false; return v; },
           _takeRouteHandlerCalls: () => opts.handled,
+          _takeRouteRegistrationLog: () => opts.registrations ?? [],
           /** What Device.route() does: start capture on demand, then register. */
           route: async () => {
             if (starter && !base._networkProxyRunning) {
@@ -1254,6 +1257,70 @@ describe('runner execution', () => {
           expect(warnings[0]).toContain('HTTPS to api.example.com passed through the network proxy uncaptured');
           expect(warnings[0]).not.toContain('plain.example.com');
           expect(warnings[0]).toContain('Google Play emulator image');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      // PILOT-1196: an app that fetches as it launches sent the request
+      // before the test registered its route.
+      it('names a request the app sent before the route matching it was registered', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'https://api.example.com/config', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 1_000 },
+            { url: 'https://api.example.com/todos?_limit=10', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 2_500 },
+            // After the route: not "before it was registered".
+            { url: 'https://api.example.com/todos?_limit=20', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 9_000 },
+          ],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: 6_000, matches: (u) => u.includes('/todos') }],
+        });
+        try {
+          await runBody('fetches at launch', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain(
+            'the app sent GET https://api.example.com/todos?_limit=10 3.5 s before the route for **/todos* was registered',
+          );
+          expect(warnings[0]).not.toContain('_limit=20');
+          expect(warnings[0]).not.toContain('/config');
+          expect(warnings[0]).toContain('HTTP cache');
+          expect(warnings[0]).not.toContain('saw no request from the app');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('says the proxy saw no request from the app when nothing but OS services was captured', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'https://gsp64-ssl.ls.apple.com/', routeAction: 'passthrough', isHttps: true, osService: true },
+          ],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: 6_000, matches: (u) => u.includes('/todos') }],
+        });
+        try {
+          await runBody('bypassed', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('the network proxy saw no request from the app during this test');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('does not say the proxy saw nothing when it captured the app\'s requests', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [{ url: 'https://api.example.com/other', routeAction: '', isHttps: true, method: 'GET', startTimeMs: 9_000 }],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: 6_000, matches: (u) => u.includes('/todos') }],
+        });
+        try {
+          await runBody('mocks another url', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          for (const w of routeWarnings(warn)) expect(w).not.toContain('saw no request from the app');
         } finally {
           warn.mockRestore();
         }
