@@ -1598,8 +1598,8 @@ export class ElementHandle {
   }
 
   /**
-   * @internal — For an assertion that saw no element on a positional handle
-   * (PILOT-1198): ` (nth(i): expected at least N element(s), but found M)`,
+   * @internal — For an assertion that saw no element on a positional handle:
+   * ` (nth(i): expected at least N element(s), but found M)`,
    * from one more read, so its message names the short index as an action's
    * does instead of implying the locator matches nothing. '' when the handle
    * has no index, the read now finds the target, or the read fails (the
