@@ -1144,6 +1144,11 @@ message StopNetworkCaptureResponse {
   // nothing about the app under test. Only routes that can attribute a
   // connection fill it: Android transparent capture, iOS simulator redirector.
   repeated string os_service_tls_rejected_hosts = 6;
+  // Entries a capture start cleared since the previous stop: what the app sent
+  // between tests (an app reset's launch requests, a beforeAll). Headers and
+  // bodies are empty. Only for naming a request sent before a test's route was
+  // registered; never part of the test's capture.
+  repeated CapturedNetworkEntry entries_before_start = 7;
 }
 
 // ─── Physical iOS device network capture (PILOT-185) ───

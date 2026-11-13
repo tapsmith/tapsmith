@@ -1296,6 +1296,18 @@ export class TapsmithGrpcClient {
     tlsRejectedHosts?: string[];
     /** Hosts whose MITM certificate an OS service rejected; absent from older daemons. */
     osServiceTlsRejectedHosts?: string[];
+    /**
+     * Header- and body-less copies of the entries a capture start cleared
+     * since the previous stop (what the app sent between tests); absent from
+     * older daemons. Never part of the test's capture.
+     */
+    entriesBeforeStart?: Array<{
+      method: string;
+      url: string;
+      startTimeMs: number;
+      routeAction: string;
+      osService?: boolean;
+    }>;
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon
     // even when the run was stopped, or the proxy keeps capturing into a

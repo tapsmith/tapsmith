@@ -5374,6 +5374,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
             let captured = proxy.drain_entries().await;
             let entries = captured_entries_to_proto(captured, proxy.capture_session());
+            let entries_before_start = captured_entries_to_proto(
+                proxy.take_entries_before_start().await,
+                proxy.capture_session(),
+            );
             let tls_rejects = proxy.take_tls_rejects().await;
             return Ok(Response::new(proto::StopNetworkCaptureResponse {
                 request_id,
@@ -5382,6 +5386,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_message: String::new(),
                 tls_rejected_hosts: tls_rejects.hosts,
                 os_service_tls_rejected_hosts: tls_rejects.os_service_hosts,
+                entries_before_start,
             }));
         }
 
@@ -5437,6 +5442,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         let capture_session = proxy.capture_session().to_string();
         let tls_rejects = proxy.take_tls_rejects().await;
+        let entries_before_start =
+            captured_entries_to_proto(proxy.take_entries_before_start().await, &capture_session);
         let captured = proxy.stop().await;
         let entries = captured_entries_to_proto(captured, &capture_session);
 
@@ -5447,6 +5454,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             error_message: String::new(),
             tls_rejected_hosts: tls_rejects.hosts,
             os_service_tls_rejected_hosts: tls_rejects.os_service_hosts,
+            entries_before_start,
         }))
     }
 

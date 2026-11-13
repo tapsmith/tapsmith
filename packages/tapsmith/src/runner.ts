@@ -2797,16 +2797,21 @@ async function runSuiteContext(
       }>();
       const passthroughHosts = new Map<Device, Set<string>>();
       // What each drained device's proxy captured from the app (not OS
-      // services) this test, for the same reasons (PILOT-1196). A device
-      // with no entry here drained no capture, so nothing is known.
+      // services) this test, for the same reasons (PILOT-1196) — with what
+      // it captured before the test's capture start cleared it (the
+      // daemon's summaries of an app reset's launch requests, a beforeAll).
+      // A device with no entry here drained no capture, so nothing is known.
       const capturedAppRequests = new Map<Device, CapturedAppRequest[]>();
-      const noteCapture = (d: Device, entries: RawNetworkEntries): void => {
+      const noteCapture = (
+        d: Device,
+        res: { entries: RawNetworkEntries; entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }> },
+      ): void => {
         const seen = capturedAppRequests.get(d) ?? [];
-        for (const e of entries) {
+        for (const e of [...(res.entriesBeforeStart ?? []), ...res.entries]) {
           if (!e.osService) seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
         }
         capturedAppRequests.set(d, seen);
-        notePassthrough(d, entries);
+        notePassthrough(d, res.entries);
       };
       const notePassthrough = (d: Device, entries: RawNetworkEntries): void => {
         // Not an OS service's tunnel (PILOT-782): Google Play services passing
@@ -2829,7 +2834,7 @@ async function runSuiteContext(
           try {
             const res = await d._stopNetworkCapture({ keepRunning: true });
             if (!res.success) continue;
-            noteCapture(d, res.entries);
+            noteCapture(d, res);
             // Clients that rejected the MITM certificate (PILOT-712), once
             // per run per host as on the traced path.
             if (d._networkCaptureRoute === 'ios-system-proxy') continue;
@@ -2846,22 +2851,6 @@ async function runSuiteContext(
           }
         }
       };
-
-      // What a running proxy captured since the last test drained it — the
-      // app reset a file-scoped `appReset` runs before its first test, or a
-      // beforeAll — would be cleared unread by the capture start below. Keep
-      // the app's requests for the unfired-route reasons: a launch request
-      // sent before the test registered its route is the likeliest one
-      // (PILOT-1196). Its certificate rejects are cleared as before.
-      for (const d of devices) {
-        if (!d._networkProxyRunning) continue;
-        try {
-          const res = await d._stopNetworkCapture({ keepRunning: true });
-          if (res.success) noteCapture(d, res.entries);
-        } catch {
-          // Best-effort: the reasons are hints, and the start below goes on.
-        }
-      }
 
       // Re-arm on-demand capture: a start that failed in an earlier test is
       // tried once more in this one — or not at all when the trace's own
@@ -3456,7 +3445,7 @@ async function runSuiteContext(
                   );
                 }
                 snapshotsFor(d).update(res.entries);
-                noteCapture(d, res.entries);
+                noteCapture(d, res);
               } else {
                 console.warn(`[tapsmith] Network capture stopped with error: ${res.errorMessage}`);
               }

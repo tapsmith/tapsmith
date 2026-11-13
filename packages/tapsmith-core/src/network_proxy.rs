@@ -465,7 +465,17 @@ pub(crate) struct ProxyState {
     /// can repeat it. A fact about the device, so
     /// [`NetworkProxy::reset_capture_state`] leaves it alone.
     tunnel_all_tls: Option<String>,
+    /// Body- and header-less copies of the entries a capture start cleared
+    /// ([`NetworkProxy::reset_capture_state`]) since the last
+    /// [`NetworkProxy::take_entries_before_start`]: what the app sent between
+    /// tests (an app reset's launch requests, a `beforeAll`). The SDK reads
+    /// them only to name a request sent before a test's route was registered
+    /// (PILOT-1196). Bounded by [`MAX_ENTRIES_BEFORE_START`], newest kept.
+    entries_before_start: Vec<CapturedEntry>,
 }
+
+/// Cap on [`ProxyState::entries_before_start`].
+const MAX_ENTRIES_BEFORE_START: usize = 200;
 
 /// Cap on each of [`ProxyState::tls_rejected_hosts`] and
 /// [`ProxyState::os_service_tls_rejected_hosts`] between drains: enough to name
@@ -607,6 +617,7 @@ impl NetworkProxy {
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
             os_service_tls_rejected_hosts: BTreeSet::new(),
+            entries_before_start: Vec::new(),
             tunnel_all_tls: None,
         }));
 
@@ -746,11 +757,31 @@ impl NetworkProxy {
     /// up front are tunneled by the host rule before ever reaching this path.
     pub async fn reset_capture_state(&self) {
         let mut state = self.state.lock().await;
-        state.entries.clear();
+        let cleared = std::mem::take(&mut state.entries);
+        state
+            .entries_before_start
+            .extend(cleared.into_iter().map(|e| CapturedEntry {
+                request_headers: Vec::new(),
+                response_headers: Vec::new(),
+                request_body: Vec::new(),
+                response_body: Vec::new(),
+                ..e
+            }));
+        let excess = state
+            .entries_before_start
+            .len()
+            .saturating_sub(MAX_ENTRIES_BEFORE_START);
+        state.entries_before_start.drain(..excess);
         state.mitm_rejected_hosts.clear();
         state.mitm_handshake_aborts.clear();
         state.tls_rejected_hosts.clear();
         state.os_service_tls_rejected_hosts.clear();
+    }
+
+    /// Return and clear the summaries of entries capture starts cleared since
+    /// the last call (see `ProxyState::entries_before_start`).
+    pub async fn take_entries_before_start(&self) -> Vec<CapturedEntry> {
+        std::mem::take(&mut self.state.lock().await.entries_before_start)
     }
 
     /// Return (sorted) and clear the hosts whose client rejected our MITM
@@ -5430,6 +5461,7 @@ mod tests {
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
             os_service_tls_rejected_hosts: BTreeSet::new(),
+            entries_before_start: Vec::new(),
             tunnel_all_tls: None,
         }));
 
@@ -5787,6 +5819,82 @@ mod tests {
         );
     }
 
+    fn summary_entry(url: &str) -> CapturedEntry {
+        CapturedEntry {
+            method: "GET".to_string(),
+            url: url.to_string(),
+            status_code: 200,
+            content_type: "application/json".to_string(),
+            request_size: 2,
+            response_size: 2,
+            start_time_ms: 1_000,
+            duration_ms: 5,
+            request_headers: vec![("accept".to_string(), "*/*".to_string())],
+            response_headers: vec![("etag".to_string(), "x".to_string())],
+            request_body: b"rq".to_vec(),
+            response_body: b"rs".to_vec(),
+            is_https: true,
+            in_flight: false,
+            capture_id: 0,
+            os_service: false,
+            route_action: String::new(),
+        }
+    }
+
+    // PILOT-1196: a capture start clears what the proxy captured since the
+    // last drain (a launch request sent during an app reset, say); the next
+    // drain still returns a body-less summary of it, so the SDK can name a
+    // request the app sent before a test's route existed without draining
+    // before every start.
+    #[tokio::test]
+    async fn reset_capture_state_keeps_a_summary_of_what_it_clears_for_the_next_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let proxy = NetworkProxy::start(ca).await.unwrap();
+        proxy
+            .state
+            .lock()
+            .await
+            .push_entry(summary_entry("https://api.example.com/posts?_limit=3"));
+
+        proxy.reset_capture_state().await;
+        assert!(
+            proxy.drain_entries().await.is_empty(),
+            "the start clears the entries"
+        );
+
+        let before = proxy.take_entries_before_start().await;
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].url, "https://api.example.com/posts?_limit=3");
+        assert_eq!(before[0].start_time_ms, 1_000);
+        assert!(before[0].request_body.is_empty() && before[0].response_body.is_empty());
+        assert!(before[0].request_headers.is_empty() && before[0].response_headers.is_empty());
+        assert!(
+            proxy.take_entries_before_start().await.is_empty(),
+            "taken once"
+        );
+
+        // Bounded: only the most recent are kept.
+        for i in 0..(MAX_ENTRIES_BEFORE_START + 5) {
+            proxy
+                .state
+                .lock()
+                .await
+                .push_entry(summary_entry(&format!("https://api.example.com/{i}")));
+        }
+        proxy.reset_capture_state().await;
+        let before = proxy.take_entries_before_start().await;
+        assert_eq!(before.len(), MAX_ENTRIES_BEFORE_START);
+        assert_eq!(
+            before.last().unwrap().url,
+            format!("https://api.example.com/{}", MAX_ENTRIES_BEFORE_START + 4)
+        );
+        proxy.stop().await;
+    }
+
     #[test]
     fn parse_host_header_with_port() {
         let (host, port) = super::parse_host_header("192.168.4.38:9037").unwrap();
@@ -6109,6 +6217,7 @@ mod tests {
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
             os_service_tls_rejected_hosts: BTreeSet::new(),
+            entries_before_start: Vec::new(),
             tunnel_all_tls: None,
         }))
     }
@@ -6663,6 +6772,7 @@ mod tests {
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
             os_service_tls_rejected_hosts: BTreeSet::new(),
+            entries_before_start: Vec::new(),
             tunnel_all_tls: None,
         }));
 
@@ -6907,6 +7017,7 @@ mod tests {
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
             os_service_tls_rejected_hosts: BTreeSet::new(),
+            entries_before_start: Vec::new(),
             tunnel_all_tls: None,
         }))
     }
@@ -7892,6 +8003,7 @@ mod tests {
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
             os_service_tls_rejected_hosts: BTreeSet::new(),
+            entries_before_start: Vec::new(),
             tunnel_all_tls: None,
         }))
     }
