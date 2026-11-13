@@ -27,7 +27,7 @@ When a test fails and its routes were live but none of them fired, Tapsmith name
 - *the network proxy started on demand during this test or its hooks* — the on-demand case above;
 - *the network proxy started at the beginning of this file, after the app was already running* — the mid-session cases above (watch, UI mode, the MCP server); relaunching the app, or restarting watch or UI mode, lets its connections go through the proxy;
 - *the app sent `<method> <url>` … before the route for `<pattern>` was registered* — the app fetched before the test's route existed (at launch, say); see the paragraph above;
-- *the network proxy saw no request from the app during this test* — the app's requests went over a connection it opened before the proxy started, or its HTTP cache answered them;
+- *the network proxy saw no request from the app during this test* — the app may have sent its requests over a connection it opened before the proxy started, or its HTTP cache may have answered them (or it sent none, the last reason);
 - *the app never sent a request matching the route patterns* — check the pattern.
 
 A `waitForRequest()`/`waitForResponse()` that times out says when no capture was running on the device, or when the proxy only started with that wait. If the proxy cannot start (on iOS, for example, the Network Extension is not approved yet — see [iOS Network Capture](ios-network-capture.md)), `device.route()` throws `Network capture disabled: …` with the reason, and a waiter rejects at once with it. A failed start is tried again once per test, not on every call.
