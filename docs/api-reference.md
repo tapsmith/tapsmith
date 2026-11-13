@@ -1594,6 +1594,8 @@ All locator assertions accept an optional `options` object:
 
 An option the assertion does not support (a misspelling, or a Playwright option Tapsmith does not have yet, such as `toBeEnabled({ enabled: false })` or `toHaveText(text, { ignoreCase: true })`) throws a `TypeError` at once, naming the supported options, rather than being ignored — so the assertion never silently checks something other than what you wrote. So does an options argument that is not an object (`toBeVisible(5000)`).
 
+**A locator that matches nothing.** As in Playwright, an assertion about the element's state or value needs the element to exist, with or without `.not`. `expect(locator).not.toBeChecked()` on a locator that matches nothing (say, a control that was renamed) waits out its timeout and fails with `Expected element … NOT to be checked, but no element matched`, rather than passing because a missing element is not checked. The same goes for `toBeEnabled`, `toBeDisabled`, `toBeEditable`, `toBeEmpty`, `toBeFocused`, `toBeInViewport`, `toHaveValue`, `toHaveAttribute`, `toHaveRole`, `toHaveAccessibleName`, `toHaveAccessibleDescription`, and the single-text forms of `toHaveText` and `toContainText`. The assertions about absence accept an empty match set as their answer: `toBeHidden()`, `.not.toBeVisible()`, `.not.toExist()`, `.not.toBeInViewport()`, `toHaveCount(0)`, and the array forms of `toHaveText` and `toContainText`.
+
 #### `.toBeVisible(options?): Promise<void>`
 
 Assert that the element is visible on screen. With `.not`, waits for the element to disappear.
@@ -3560,6 +3562,8 @@ await expect(webview.locator("a")).toHaveAttribute("href", "/about")
 `toHaveText` and `toContainText` take a string or a RegExp here; an array of texts throws a `TypeError` (not supported for WebView locators yet).
 
 All assertions support `.not` and a `{ timeout }` option; `toBeVisible` also takes `{ visible: false }`, which asserts the element is hidden, like `toBeHidden()`. Any other option throws a `TypeError`, as for native locator assertions.
+
+As for native locators, `toHaveText`, `toContainText`, `toHaveValue` and `toHaveAttribute` need the element to exist, with or without `.not`: on a locator that matches nothing they wait out the timeout and fail with `… but no element matched`.
 
 ```typescript
 await expect(webview.locator(".spinner")).not.toBeVisible()
