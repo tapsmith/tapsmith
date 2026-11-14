@@ -947,10 +947,12 @@ class SnapshotElementFinder {
         let element = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasKeyboardFocus == true"))
             .firstMatch
-        guard element.exists else { return nil }
-        let type = element.elementType
-        guard textInputTypes.contains(type) else { return nil }
-        return (type, element.frame)
+        // One snapshot reads the type and the frame together (reading them
+        // off the element is a query each); `exists` first, because a
+        // snapshot of no match fails only after XCUITest's wait for one.
+        guard element.exists, let snap = try? element.snapshot() else { return nil }
+        guard textInputTypes.contains(snap.elementType) else { return nil }
+        return (snap.elementType, snap.frame)
     }
 
     /// The text input that has keyboard focus right now, as the typing

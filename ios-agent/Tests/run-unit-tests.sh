@@ -215,6 +215,34 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/hid-touch-tests"
 "$OUT/hid-touch-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/HostTouchTests/main.swift \
+  TapsmithAgent/HostTouch.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
+  -o "$OUT/host-touch-tests"
+"$OUT/host-touch-tests"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/CommandMetaTests/main.swift \
+  TapsmithAgent/CommandMeta.swift \
+  TapsmithAgent/HostTouch.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
+  -o "$OUT/command-meta-tests"
+"$OUT/command-meta-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/KeyboardSettleTests/main.swift \
+  TapsmithAgent/KeyboardSettle.swift \
+  TapsmithAgent/IdleSettle.swift \
+  TapsmithAgent/TouchSettle.swift \
+  TapsmithAgent/TouchPlanClock.swift \
+  -o "$OUT/keyboard-settle-tests"
+"$OUT/keyboard-settle-tests"
+
 # Pins XCTest's private region screenshot (the touch settle's sampler).
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
