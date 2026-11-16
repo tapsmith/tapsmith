@@ -25,9 +25,9 @@ import XCTest
 ///   content passes under a nav bar even though the bar comes first in the
 ///   tree) or painted after it — not over a sheet presented on top of their
 ///   screen. They clip the visible area like the keyboard does.
-///   A bar node that fills its container over the content before it is not
-///   a bar but the host of one (iOS 27, PILOT-1207): only the controls in it
-///   cover anything.
+///   A bar node that fills its container, laid over content that fills it
+///   too, is not a bar but the host of one (iOS 27, PILOT-1207): only the
+///   controls in it cover anything.
 /// - **An interactive control painted after the target** (later in a
 ///   pre-order walk, which is the drawing order) that is not the target's own
 ///   descendant and contains the touch point: a button, link, input, cell,
@@ -306,25 +306,29 @@ struct OcclusionAnalyzer {
     }
 
     /// Whether bar `i` is the host of a bar rather than a bar: it fills its
-    /// whole container and is laid over the content before it there. iOS 27
-    /// adds one as the last child of every app window and of every sheet
-    /// (PILOT-1207), empty when the screen has no toolbar and otherwise
-    /// holding the toolbar's items, laid out in it as floating capsules.
-    /// Clipping by its frame would call everything in the container covered.
-    /// A real bar never covers all of its container's content: one in a
-    /// wrapper of its own size (a `UIViewRepresentable`, a React Native view
-    /// around a custom tab bar) fills a container no bigger than a bar, so a
-    /// host's container must be more than a third of its window's height —
-    /// a screen, or a sheet down to a medium detent. What a host holds still
-    /// covers what it is drawn over, as an interactive control painted after
-    /// the target.
+    /// whole container and is laid over the content before it there — an
+    /// earlier sibling that fills the container too. iOS 27 adds one as the
+    /// last child of every navigation container, a window's or a sheet's of
+    /// any height (PILOT-1207), empty when the screen has no toolbar and
+    /// otherwise holding the toolbar's items, laid out in it as floating
+    /// capsules. Clipping by its frame would call everything in the
+    /// container covered. A real bar is never laid over all of its
+    /// container's content: one in a wrapper of its own size (a
+    /// `UIViewRepresentable`, a React Native view around a custom tab bar)
+    /// shares it with nothing, or with something smaller (a badge). What a
+    /// host holds still covers what it is drawn over, as an interactive
+    /// control painted after the target.
     private func isBarHost(_ i: Int) -> Bool {
-        guard let p = nodes[i].parent, i > p + 1 else { return false }
+        guard let p = nodes[i].parent else { return false }
         let container = nodes[p].frame
-        var window = nodes[i].window.map { nodes[$0].frame } ?? screen
-        if window.height <= 0 { window = screen }
-        guard container.width > 0, container.height > window.height / 3 else { return false }
-        return nodes[i].frame.insetBy(dx: -1, dy: -1).contains(container)
+        guard container.width > 0, container.height > 0,
+              nodes[i].frame.insetBy(dx: -1, dy: -1).contains(container) else { return false }
+        var sibling = p + 1
+        while sibling < i {
+            if Self.framesMatch(nodes[sibling].frame, container) { return true }
+            sibling = nodes[sibling].subtreeEnd
+        }
+        return false
     }
 
     // MARK: - Keyboard

@@ -332,7 +332,8 @@ check("a toolbar spanning its window narrower than the screen is a host too",
       analyzer([
           (0, .application, "App", "", screen),
           (1, .window, "", "", halfWindow),
-          (2, .textField, "", "", R(20, 183, 160, 22)),
+          (2, .other, "", "", halfWindow),
+          (3, .textField, "", "", R(20, 183, 160, 22)),
           (2, .toolbar, "Toolbar", "Toolbar", halfWindow),
       ]).analyze(.init(frame: R(20, 183, 160, 22), elementType: .textField, label: "", identifier: ""), isHittable: true),
       .clear(point: CGPoint(x: 100, y: 194), visible: R(20, 183, 160, 22)))
@@ -368,9 +369,9 @@ check("a bar alone in a wrapper of its own size still covers what is under it",
       ]).analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
       .covered(by: "toolbar"))
 
-// ... and so does one in a bar-sized wrapper with something laid out before
-// it (a badge before a custom React Native tab bar): its container is no
-// bigger than a bar, so it is not a host.
+// ... and so does one in a bar-sized wrapper with something smaller laid out
+// before it (a badge before a custom React Native tab bar): it is not laid
+// over content that fills the wrapper, so it is not a host.
 checkPoint("a bar in a bar-sized wrapper after a sibling still clips a row half under it",
            analyzer(ios27Form + [
                (5, .cell, "", "", R(16, 770, 370, 60)),
@@ -380,6 +381,33 @@ checkPoint("a bar in a bar-sized wrapper after a sibling still clips a row half 
                (5, .button, "Home", "", R(20, 795, 80, 50)),
            ]).analyze(.init(frame: R(16, 770, 370, 60), elementType: .cell, label: "", identifier: ""), isHittable: true),
            CGPoint(x: 201, y: 780))
+
+// A sheet at a small detent (or an iPad popover) gets the same host, however
+// short: a host is told by what it is laid over, not by its size.
+let shortSheet: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .other, "", "", R(0, 624, 402, 250)),
+    (4, .navigationBar, "", "Sheet", R(0, 640, 402, 54)),
+    (4, .other, "", "", R(0, 624, 402, 250)),
+    (5, .button, "Save", "", R(150, 760, 102, 44)),
+    (4, .toolbar, "Toolbar", "Toolbar", R(0, 624, 402, 250)),
+    (5, .other, "", "", R(0, 624, 402, 250)),
+]
+checkPoint("iOS 27: a short sheet's toolbar host does not cover its button",
+           analyzer(shortSheet).analyze(button("Save", R(150, 760, 102, 44)), isHittable: true),
+           CGPoint(x: 201, y: 782))
+// A full-height bar whose earlier sibling is smaller than the container
+// (a side rail after a badge) is still a bar.
+check("a bar filling a tall wrapper after a smaller sibling still covers what is under it",
+      analyzer(ios27Form + [
+          (5, .cell, "", "", R(16, 300, 40, 40)),
+          (3, .other, "", "", R(0, 0, 80, 874)),
+          (4, .staticText, "3", "", R(60, 300, 16, 16)),
+          (4, .toolbar, "", "", R(0, 0, 80, 874)),
+      ]).analyze(.init(frame: R(16, 300, 40, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      .covered(by: "toolbar"))
 
 // ─── Scroll viewports ───
 
