@@ -162,9 +162,7 @@ Other caveats:
 
 Run `tapsmith ios setup-device` first — it surfaces most setup issues with actionable fix instructions. Common failure modes:
 
-**"No Accounts"** — no Apple ID is signed in to Xcode. Open Xcode → Settings → Accounts, click + and sign in, then re-run `tapsmith ios build-agent`.
-
-**"No Account for Team 'XXXXXXXXXX'"** — Xcode doesn't have the Apple ID that owns that team signed in. If you are signed in to a different team, `tapsmith ios build-agent` names it: re-run with `--team-id` and that team. Otherwise open Xcode → Settings → Accounts and sign in.
+**"No Accounts" or "No Account for Team 'XXXXXXXXXX'"** — none of the Apple IDs signed in to Xcode owns the team the build asked for. Xcode 27 can report this as "No Accounts" even when you are signed in. If Xcode is signed in to a different team, `tapsmith ios build-agent` names it: re-run with `--team-id` and that team. If no Apple ID is signed in, open Xcode → Settings → Accounts, click + and sign in.
 
 **"No profiles for 'dev.tapsmith.agent.xctrunner' were found"** — when it appears alongside one of the account errors above, fix that first; this one follows from it. On its own, it means your device isn't registered under the selected team. Open Xcode → Window → Devices and Simulators and wait for auto-registration.
 

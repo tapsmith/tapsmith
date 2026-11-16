@@ -399,9 +399,37 @@ interface ErrorHint {
 }
 
 /** What a hint needs to know beyond the matched line. */
-interface HintContext {
+export interface HintContext {
   /** The teams Xcode is signed in to (`readXcodeRegisteredTeams`). */
   xcodeTeams: SigningIdentity[]
+  /** The team the build asked for (`DEVELOPMENT_TEAM`). */
+  requestedTeam: string
+}
+
+/**
+ * The advice for an xcodebuild account error about `team`. Xcode reports a
+ * team that no signed-in account owns either as "No Account for Team" or,
+ * on Xcode 27.2, as plain "No Accounts", so both come here. "Sign in" is only
+ * right when Xcode has no team at all; a user already signed in to another
+ * team just asked for the wrong one.
+ */
+function accountHint(team: string, xcodeTeams: SigningIdentity[]): ErrorHint {
+  if (xcodeTeams.length === 0) {
+    return {
+      label: `Xcode has no Apple ID signed in. Open Xcode → Settings → Accounts, click + and sign in with the Apple ID that owns team ${team} (free accounts work too), then re-run \`tapsmith ios build-agent\`.`,
+    };
+  }
+  if (xcodeTeams.some((t) => t.teamId === team)) {
+    return {
+      label: `Xcode lists team ${team}, but xcodebuild found no usable account for it. Open Xcode → Settings → Accounts, select that Apple ID and sign in again if it shows an error, then re-run.`,
+    };
+  }
+  const list = xcodeTeams.map((t) => `${t.teamId} (${t.name})`).join(', ');
+  return {
+    label: xcodeTeams.length === 1
+      ? `Xcode is signed in to team ${list}, not ${team}. Re-run with \`--team-id ${xcodeTeams[0]!.teamId}\`.`
+      : `Xcode is signed in to teams ${list}, not ${team}. Re-run with \`--team-id <one of them>\`.`,
+  };
 }
 
 /**
@@ -421,31 +449,14 @@ type HintKind = 'account' | 'profile' | 'other';
  */
 const KNOWN_ERROR_PATTERNS: Array<{ re: RegExp, kind: HintKind, hint: (match: RegExpMatchArray, ctx: HintContext) => ErrorHint }> = [
   {
-    re: /No Account for Team ['"]([A-Z0-9]+)['"]/,
+    re: /No Account for Team ['"]([A-Za-z0-9]+)['"]/,
     kind: 'account',
-    hint: (m, { xcodeTeams }) => {
-      const team = m[1]!;
-      const others = xcodeTeams.filter((t) => t.teamId !== team);
-      if (others.length === 0) {
-        return {
-          label: `Xcode has no account for team ${team}. Open Xcode → Settings → Accounts and sign in with the Apple ID that owns team ${team}.`,
-        };
-      }
-      // Signed in already, but to another team: "sign in" would send the user in a circle.
-      const list = others.map((t) => `${t.teamId} (${t.name})`).join(', ');
-      return {
-        label: others.length === 1
-          ? `Xcode is signed in to team ${list}, not ${team}. Re-run with \`--team-id ${others[0]!.teamId}\`.`
-          : `Xcode is signed in to teams ${list}, not ${team}. Re-run with \`--team-id <one of them>\`.`,
-      };
-    },
+    hint: (m, { xcodeTeams }) => accountHint(m[1]!, xcodeTeams),
   },
   {
     re: /\bNo Accounts:/,
     kind: 'account',
-    hint: () => ({
-      label: 'Xcode has no Apple ID signed in. Open Xcode → Settings → Accounts, click + and sign in (free accounts work too), then re-run `tapsmith ios build-agent`.',
-    }),
+    hint: (_m, { xcodeTeams, requestedTeam }) => accountHint(requestedTeam, xcodeTeams),
   },
   {
     re: /No profiles for ['"]([^'"]+)['"] were found/,
@@ -505,7 +516,7 @@ function matchKnownError(line: string, ctx: HintContext): { kind: HintKind, hint
 }
 
 /** Scan an xcodebuild output line and return any matching hint. */
-export function matchKnownErrorHint(line: string, ctx: HintContext = { xcodeTeams: [] }): ErrorHint | undefined {
+export function matchKnownErrorHint(line: string, ctx: HintContext = { xcodeTeams: [], requestedTeam: '' }): ErrorHint | undefined {
   return matchKnownError(line, ctx)?.hint;
 }
 
@@ -513,8 +524,7 @@ export function matchKnownErrorHint(line: string, ctx: HintContext = { xcodeTeam
  * The hints for a failed build's output: each once, in order, and without the
  * provisioning-profile hint when an account error caused it.
  */
-export function selectErrorHints(lines: string[], xcodeTeams: SigningIdentity[]): ErrorHint[] {
-  const ctx: HintContext = { xcodeTeams };
+export function selectErrorHints(lines: string[], ctx: HintContext): ErrorHint[] {
   const matched = lines.flatMap((l) => {
     const hit = matchKnownError(l, ctx);
     return hit ? [hit] : [];
@@ -593,7 +603,7 @@ export async function buildIosAgent(options: BuildIosAgentOptions): Promise<stri
   const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
 
   if (!ok) {
-    const hints = selectErrorHints(tailLines, readXcodeRegisteredTeams());
+    const hints = selectErrorHints(tailLines, { xcodeTeams: readXcodeRegisteredTeams(), requestedTeam: teamId });
     console.log();
     console.log(red(`✗ xcodebuild failed after ${elapsedSec}s.`));
     if (hints.length > 0) {

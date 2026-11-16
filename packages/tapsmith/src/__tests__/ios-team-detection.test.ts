@@ -241,8 +241,10 @@ describe('selectErrorHints', () => {
   const NO_ACCOUNT_FOR_TEAM = `error: No Account for Team "CERTID9876". Add a new account in Accounts settings or verify that your accounts have valid credentials. (in target 'TapsmithAgentUITests' from project 'TapsmithAgent')`;
   const NO_PROFILES = `error: No profiles for 'dev.tapsmith.agent.xctrunner' were found: Xcode couldn't find any iOS App Development provisioning profiles matching 'dev.tapsmith.agent.xctrunner'. (in target 'TapsmithAgentUITests' from project 'TapsmithAgent')`;
   const NO_ACCOUNTS = 'error: No Accounts: Add a new account in Accounts settings. (in target \'TapsmithAgentUITests\' from project \'TapsmithAgent\')';
-  const labels = (lines: string[], teams: { teamId: string, name: string }[] = []) =>
-    selectErrorHints(lines, teams).map((h) => h.label);
+  const JANE = { teamId: 'TEAMID1234', name: 'Jane Developer' };
+  const ACME = { teamId: 'ACMETEAM42', name: 'Acme Corp' };
+  const labels = (lines: string[], teams: { teamId: string, name: string }[] = [], requestedTeam = 'CERTID9876') =>
+    selectErrorHints(lines, { xcodeTeams: teams, requestedTeam }).map((h) => h.label);
 
   it('drops the provisioning-profile hint when an account error caused it', () => {
     const out = labels([NO_ACCOUNT_FOR_TEAM, NO_PROFILES]);
@@ -264,16 +266,13 @@ describe('selectErrorHints', () => {
   });
 
   it('when Xcode is signed in to another team, says to pass that team instead of "sign in"', () => {
-    const out = labels([NO_ACCOUNT_FOR_TEAM], [{ teamId: 'TEAMID1234', name: 'Jane Developer' }]);
+    const out = labels([NO_ACCOUNT_FOR_TEAM], [JANE]);
     expect(out[0]).toContain('--team-id TEAMID1234');
     expect(out[0]).not.toMatch(/sign in with the Apple ID/);
   });
 
   it('lists every signed-in team when there are several', () => {
-    const out = labels([NO_ACCOUNT_FOR_TEAM], [
-      { teamId: 'TEAMID1234', name: 'Jane Developer' },
-      { teamId: 'ACMETEAM42', name: 'Acme Corp' },
-    ]);
+    const out = labels([NO_ACCOUNT_FOR_TEAM], [JANE, ACME]);
     expect(out[0]).toContain('TEAMID1234 (Jane Developer)');
     expect(out[0]).toContain('ACMETEAM42 (Acme Corp)');
   });
@@ -281,6 +280,35 @@ describe('selectErrorHints', () => {
   it('keeps the sign-in advice when Xcode has no account at all', () => {
     const out = labels([NO_ACCOUNT_FOR_TEAM]);
     expect(out[0]).toMatch(/sign in with the Apple ID that owns team CERTID9876/);
+  });
+
+  // Xcode 27.2 reports a team no signed-in account owns as "No Accounts",
+  // not "No Account for Team" (seen on a real Mac signed in to another team).
+  it('"No Accounts" for a team Xcode is not signed in to names the signed-in team', () => {
+    const out = labels([NO_ACCOUNTS, NO_PROFILES], [JANE]);
+    expect(out).toEqual([
+      'Xcode is signed in to team TEAMID1234 (Jane Developer), not CERTID9876. Re-run with `--team-id TEAMID1234`.',
+    ]);
+  });
+
+  it('"No Accounts" and "No Account for Team" for the same wrong team give one hint', () => {
+    expect(labels([NO_ACCOUNT_FOR_TEAM, NO_ACCOUNTS, NO_PROFILES], [JANE])).toHaveLength(1);
+  });
+
+  it('an account error for a team Xcode lists says to re-enter that account, not to switch teams', () => {
+    for (const line of [NO_ACCOUNTS, NO_ACCOUNT_FOR_TEAM]) {
+      const out = labels([line], [{ teamId: 'CERTID9876', name: 'Jane Developer' }, ACME]);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatch(/lists team CERTID9876[\s\S]*Settings → Accounts/);
+      expect(out[0]).not.toContain('--team-id ACMETEAM42');
+    }
+  });
+
+  it('recognises a lowercase team ID in "No Account for Team" and drops the profile hint', () => {
+    const out = labels([`error: No Account for Team "abc". Add a new account in Accounts settings.`, NO_PROFILES], [JANE], 'abc');
+    expect(out).toEqual([
+      'Xcode is signed in to team TEAMID1234 (Jane Developer), not abc. Re-run with `--team-id TEAMID1234`.',
+    ]);
   });
 
   it('prints a repeated hint once', () => {
