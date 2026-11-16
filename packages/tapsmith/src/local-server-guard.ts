@@ -15,10 +15,13 @@
  * CORS "simple" request with no preflight, and none of these servers has a
  * cross-origin browser client.
  *
- * A request with no Origin header is not from a web page (browsers always
- * send Origin on WebSocket handshakes and on cross-origin requests), so it is
- * a local process such as `tapsmith mcp-server` or an MCP client, and is
- * allowed.
+ * A request with no Origin header is allowed: it is a local process such as
+ * `tapsmith mcp-server` or an MCP client — or a browser's no-cors GET/HEAD
+ * (an `<img>`, `<script>` or navigation), which is the one kind of browser
+ * request that carries no Origin. Browsers always send Origin on WebSocket
+ * handshakes and on every other cross-origin request. So a page can still
+ * trigger a guarded GET, though it cannot read the response: GET routes on
+ * these servers must not change anything.
  */
 
 import * as http from 'node:http';
