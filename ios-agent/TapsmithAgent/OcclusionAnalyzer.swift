@@ -317,8 +317,9 @@ struct OcclusionAnalyzer {
     /// `UIViewRepresentable`, a React Native view around a custom tab bar)
     /// shares it with nothing, or with something smaller (a badge). What a
     /// host holds still covers what it is drawn over, as an interactive
-    /// control painted after the target.
-    private func isBarHost(_ i: Int) -> Bool {
+    /// control painted after the target. (`KeyboardDismissPlanner` treats a
+    /// host as plain for the same reason.)
+    func isBarHost(_ i: Int) -> Bool {
         guard let p = nodes[i].parent else { return false }
         let container = nodes[p].frame
         guard container.width > 0, container.height > 0,

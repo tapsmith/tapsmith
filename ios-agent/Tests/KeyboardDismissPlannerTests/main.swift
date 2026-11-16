@@ -595,6 +595,35 @@ do {
     check("an app button named like the key is not the key", planner(appButton).dismissKey(), nil)
 }
 
+// MARK: - iOS 27 toolbar host (PILOT-1207)
+
+// iOS 27 lays a `Toolbar` host the size of its container over the screen's
+// content (a full-size content layer before it), empty or holding a bottom
+// toolbar's items as floating capsules. The host is not a blocker; its items
+// are.
+func withIOS27Host(_ rows: [Row], items: [Row] = []) -> [Row] {
+    // Last in the app's window: before the keyboard's windows.
+    let split = rows.indices.dropFirst(2).first { rows[$0].type == .window } ?? rows.count
+    return Array(rows[..<split]) + [
+        (3, .other, "", "", screen),
+        (3, .toolbar, "Toolbar", "Toolbar", screen),
+        (4, .other, "", "", screen),
+    ] + items + Array(rows[split...])
+}
+do {
+    let host27 = withIOS27Host(scrollScreen)
+    checkTrue("iOS 27 host: scroll drag still offered",
+              planner(host27).scrollSwipeStart(focusedFrame: R(16, 180, 370, 44)) != nil)
+    checkTrue("iOS 27 host: blank spot still found",
+              planner(withIOS27Host(occlusion)).blankPoint(focusedFrame: occlusionInput) != nil)
+    // A capsule in the host still blocks: a full-width one over the drag area
+    // leaves no start there.
+    let capsule = R(0, 116, 402, 413)
+    let p = planner(withIOS27Host(scrollScreen, items: [(4, .button, "Archive", "", capsule)]))
+        .scrollSwipeStart(focusedFrame: R(16, 180, 370, 44))
+    checkTrue("iOS 27 host: its item still blocks a drag start", p.map { notInside($0, [capsule]) } ?? true, "\(String(describing: p))")
+}
+
 // MARK: - 3. Blank spot
 
 do {
