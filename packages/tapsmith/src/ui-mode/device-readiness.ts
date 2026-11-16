@@ -84,10 +84,12 @@ export interface ReadinessEnv {
  * Stale reasons that hold the device as-is instead of re-preparing after the
  * grace period: someone drove the app there on purpose (a mirror gesture or
  * an MCP agent's action), or a stopped/failed run left it for inspection.
- * Re-preparing would reset it out from under them. A hold ends only by an
+ * Re-preparing would reset it out from under them. A hold ends by an
  * explicit act on that device: Prepare now, or a run on that worker (which
  * resets inline). Selection changes, runs on other workers and preference
- * re-sends leave it alone.
+ * re-sends leave it alone. (A run that must first reload changed source
+ * restarts every worker; one that cannot adopt the CLI's device relaunches
+ * the app, which ends its hold — fresh code wins. See `ensureWorkersReady`.)
  */
 const HOLDING_REASONS: ReadonlySet<StaleReason> = new Set(['mirror-gesture', 'mcp-tool', 'run-stopped', 'run-failed']);
 
@@ -260,7 +262,9 @@ export class DeviceReadiness {
             this._state = { kind: 'unprepared', reason: 'speculation-off' };
             return [{ type: 'send-cancel-prepare', prepareId: s.prepareId }, { type: 'broadcast' }];
           }
-          if (s.kind === 'unprepared' || s.kind === 'stale' || s.kind === 'error') {
+          // A hold stays a hold: it is about the device, not the preference
+          // (and the browser re-sends a stored "off" on every reconnect).
+          if (s.kind === 'unprepared' || (s.kind === 'stale' && !isHold(s)) || s.kind === 'error') {
             this._state = { kind: 'unprepared', reason: 'speculation-off' };
             return [{ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' }];
           }

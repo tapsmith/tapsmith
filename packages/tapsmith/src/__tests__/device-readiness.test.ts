@@ -296,6 +296,19 @@ describe('DeviceReadiness', () => {
     }
   });
 
+  it('a hold survives preferences sent while preparation is off', () => {
+    const env = makeEnv();
+    env.speculation = false;
+    const r = new DeviceReadiness(0, env);
+    r.handle({ type: 'worker-ready', initialPolicy: CLEAR });
+    r.handle({ type: 'invalidate', reason: 'mcp-tool' });
+    // Turning preparation off, or the browser re-sending the stored "off" on
+    // reconnect, says nothing about the device someone is driving.
+    expect(r.handle({ type: 'preferences-changed' })).toEqual([]);
+    expect(r.state).toMatchObject({ kind: 'stale', reason: 'mcp-tool' });
+    expect(holdReason(r.state)).toBe('mcp-tool');
+  });
+
   it('a held worker that sat a run out stays held when the run ends', () => {
     for (const ended of [{ stopped: false }, { stopped: false, failed: true }, { stopped: true }]) {
       const r = new DeviceReadiness(1, makeEnv());

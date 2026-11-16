@@ -3705,6 +3705,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           }
         })());
       } else if (worker.codeStale && !worker.busy) {
+        // Held workers too: dispatch never re-checks `codeStale`, so a worker
+        // skipped here could run this run's files on old code. An adopting
+        // respawn keeps the hold; one with its own daemon relaunches the app.
         work.push(recycleWorker(worker, 'source files changed'));
       }
     }
