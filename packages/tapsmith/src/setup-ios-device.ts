@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { listPhysicalDevices, type PhysicalDeviceInfo } from './ios-devicectl.js';
 import { findDeviceXctestrun, staleNpmDeviceBuild } from './ios-device-resolve.js';
 import { displayPath } from './ios-agent-paths.js';
-import { parseCodesignIdentities, readXcodeRegisteredTeams } from './build-ios-agent.js';
+import { readKeychainSigningIdentities, readXcodeRegisteredTeams, type KeychainIdentity } from './build-ios-agent.js';
 import { getProfileExpiryInfo, formatExpiryWarning, EXPIRY_WARNING_DAYS } from './ios-profile-expiry.js';
 import { formatJson, jsonError, type JsonCheck } from './cli-json.js';
 
@@ -123,9 +123,9 @@ export function checkIproxy(): CheckResult {
  *   (1) keychain must contain at least one "Apple Development" / "Apple
  *       Distribution" certificate — this proves there's a usable cert
  *       somewhere on the machine.
- *   (2) Xcode must have at least one Apple ID signed in so
- *       `IDEProvisioningTeams` is populated — `xcodebuild`'s automatic
- *       signing requires this even when the keychain has a valid cert.
+ *   (2) Xcode must have at least one Apple ID signed in, so it has
+ *       registered teams (`readXcodeRegisteredTeams`) — `xcodebuild`'s
+ *       automatic signing requires this even when the keychain has a valid cert.
  *
  * The common failure mode (old Xcode install, imported cert without account)
  * is (1) OK but (2) missing. That produces the cryptic "No Account for Team
@@ -133,12 +133,9 @@ export function checkIproxy(): CheckResult {
  * xcodebuild runs.
  */
 export function checkSigningIdentities(): CheckResult {
-  let raw: string;
+  let keychain: KeychainIdentity[];
   try {
-    raw = execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    keychain = readKeychainSigningIdentities();
   } catch {
     return {
       label: 'Code signing identity',
@@ -149,7 +146,6 @@ export function checkSigningIdentities(): CheckResult {
       ],
     };
   }
-  const keychain = parseCodesignIdentities(raw);
   if (keychain.length === 0) {
     return {
       label: 'Code signing identity',
@@ -182,9 +178,10 @@ export function checkSigningIdentities(): CheckResult {
 
   // Warn (but don't fail) if keychain teams and Xcode teams don't overlap.
   // This is usually a stale keychain cert from a different team — the Xcode
-  // team is what xcodebuild will actually use, so we proceed.
+  // team is what xcodebuild will actually use, so we proceed. A cert's team is
+  // its subject's OU, never the ID in brackets in its name (PILOT-1203).
   const xcodeTeamIds = new Set(xcodeTeams.map((t) => t.teamId));
-  const overlap = keychain.some((k) => xcodeTeamIds.has(k.teamId));
+  const overlap = keychain.some((k) => k.teamId !== undefined && xcodeTeamIds.has(k.teamId));
 
   const teamsDesc = xcodeTeams.length === 1
     ? xcodeTeams[0]!.teamId
