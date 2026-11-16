@@ -277,3 +277,29 @@ struct AccessibilityView: View {
         .navigationTitle("Accessibility")
     }
 }
+
+// ─── Toolbar ───
+
+/// A real bottom toolbar over a list that scrolls under it (PILOT-1207): its
+/// buttons take touches, and a row behind it is covered. iOS 27 also adds a
+/// full-window, empty "Toolbar" node to every app window, which must not.
+struct ToolbarScreenView: View {
+    @State private var status = "None"
+
+    var body: some View {
+        List {
+            Text("Last action: \(status)")
+            ForEach(1...40, id: \.self) { i in
+                Button("Row \(i)") { status = "Row \(i)" }
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .bottomBar) {
+                Button("Archive") { status = "Archive" }
+                Spacer()
+                Button("Compose") { status = "Compose" }
+            }
+        }
+        .navigationTitle("Toolbar")
+    }
+}

@@ -11,6 +11,7 @@ import {
   NativeSlowLoadScreen,
   NativeTabsScreen,
   NativeTogglesScreen,
+  NativeToolbarScreen,
   UIKitControlsScreen,
   UIKitDialogsScreen,
   UIKitGesturesScreen,
@@ -22,6 +23,7 @@ type NativeFixtures = {
   home: NativeHomeScreen
   login: NativeLoginScreen
   toggles: NativeTogglesScreen
+  toolbar: NativeToolbarScreen
   list: NativeListScreen
   dialogs: NativeDialogsScreen
   scroll: NativeScrollScreen
@@ -41,6 +43,7 @@ export const test = base.extend<NativeFixtures>({
   home: async ({ device }, use) => { await use(new NativeHomeScreen(device)) },
   login: async ({ device }, use) => { await use(new NativeLoginScreen(device)) },
   toggles: async ({ device }, use) => { await use(new NativeTogglesScreen(device)) },
+  toolbar: async ({ device }, use) => { await use(new NativeToolbarScreen(device)) },
   list: async ({ device }, use) => { await use(new NativeListScreen(device)) },
   dialogs: async ({ device }, use) => { await use(new NativeDialogsScreen(device)) },
   scroll: async ({ device }, use) => { await use(new NativeScrollScreen(device)) },
