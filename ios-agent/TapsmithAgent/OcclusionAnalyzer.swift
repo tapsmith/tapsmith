@@ -311,14 +311,19 @@ struct OcclusionAnalyzer {
     /// (PILOT-1207), empty when the screen has no toolbar and otherwise
     /// holding the toolbar's items, laid out in it as floating capsules.
     /// Clipping by its frame would call everything in the container covered.
-    /// A real bar never covers all of its container's content; one alone in
-    /// a wrapper of its own size (a `UIViewRepresentable`) is laid over
-    /// nothing, so it stays a bar. What a host holds still covers what it is
-    /// drawn over, as an interactive control painted after the target.
+    /// A real bar never covers all of its container's content: one in a
+    /// wrapper of its own size (a `UIViewRepresentable`, a React Native view
+    /// around a custom tab bar) fills a container no bigger than a bar, so a
+    /// host's container must be more than a third of its window's height —
+    /// a screen, or a sheet down to a medium detent. What a host holds still
+    /// covers what it is drawn over, as an interactive control painted after
+    /// the target.
     private func isBarHost(_ i: Int) -> Bool {
         guard let p = nodes[i].parent, i > p + 1 else { return false }
         let container = nodes[p].frame
-        guard container.width > 0, container.height > 0 else { return false }
+        var window = nodes[i].window.map { nodes[$0].frame } ?? screen
+        if window.height <= 0 { window = screen }
+        guard container.width > 0, container.height > window.height / 3 else { return false }
         return nodes[i].frame.insetBy(dx: -1, dy: -1).contains(container)
     }
 

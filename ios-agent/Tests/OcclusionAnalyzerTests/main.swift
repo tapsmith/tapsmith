@@ -368,6 +368,19 @@ check("a bar alone in a wrapper of its own size still covers what is under it",
       ]).analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
       .covered(by: "toolbar"))
 
+// ... and so does one in a bar-sized wrapper with something laid out before
+// it (a badge before a custom React Native tab bar): its container is no
+// bigger than a bar, so it is not a host.
+checkPoint("a bar in a bar-sized wrapper after a sibling still clips a row half under it",
+           analyzer(ios27Form + [
+               (5, .cell, "", "", R(16, 770, 370, 60)),
+               (3, .other, "", "", R(0, 790, 402, 84)),
+               (4, .staticText, "3", "", R(300, 792, 16, 16)),
+               (4, .tabBar, "", "", R(0, 790, 402, 84)),
+               (5, .button, "Home", "", R(20, 795, 80, 50)),
+           ]).analyze(.init(frame: R(16, 770, 370, 60), elementType: .cell, label: "", identifier: ""), isHittable: true),
+           CGPoint(x: 201, y: 780))
+
 // ─── Scroll viewports ───
 
 // A row scrolled half out of its scroll view, under a JS header (an unlabeled
