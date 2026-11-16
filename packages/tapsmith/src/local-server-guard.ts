@@ -1,6 +1,6 @@
 /**
  * Guards for the HTTP and WebSocket servers Tapsmith opens on loopback
- * (UI mode, its MCP endpoint, `tapsmith show-trace`) — PILOT-1215.
+ * (UI mode, its MCP endpoint, `tapsmith show-trace`).
  *
  * Binding to 127.0.0.1 keeps other machines out, but not other web pages:
  * any site open in the user's browser can open a WebSocket to

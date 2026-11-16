@@ -5252,8 +5252,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   // the device (cross-site WebSocket hijacking, PILOT-1215).
   const wss = createLocalWebSocketServer(server, {
     onRefused: (origin, host) => {
-      const from = origin !== undefined ? `a page on ${origin}` : `a client addressed to "${host ?? ''}"`;
-      console.warn(`${YELLOW}UI mode refused a connection from ${from}: only the UI page itself (http://127.0.0.1:<port>/ or http://localhost:<port>/) may connect.${RESET}`);
+      const from = origin !== undefined ? `a page on "${origin}"` : `a client addressed to "${host ?? ''}"`;
+      // Handshakes arrive only after listen(), so the port is known by now.
+      console.warn(`${YELLOW}UI mode refused a connection from ${from}: only the UI page itself (http://127.0.0.1:${actualPort}/ or http://localhost:${actualPort}/) may connect.${RESET}`);
     },
   });
 
