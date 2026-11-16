@@ -559,6 +559,52 @@ class CommandHandler {
         return refreshedApp
     }
 
+    /// Asks the daemon to press a tap in the middle of the command being
+    /// handled (`HostTouch`): at a point in the helper's space, held so many
+    /// milliseconds, waiting at most so long for the answer. Set by the socket
+    /// server around each command.
+    var hostTap: ((CGPoint, Int, TimeInterval) -> HostTouch.Outcome)?
+    /// Whether the daemon offered to press taps for this command
+    /// (`params.hostTouch`), and has not since said it cannot.
+    private var hostTouchOffered = false
+
+    /// Tap at `point` (the app's interface space, on a screen of `screen`)
+    /// through the daemon's HID helper, when it offered (`HostTouch`). False
+    /// when the agent's own touch must make the tap: nothing was pressed.
+    private func tapThroughHost(at point: CGPoint, hold: TimeInterval, screen: CGSize) -> Bool {
+        guard let hostTap,
+              let plan = HostTouch.plan(
+                  offered: hostTouchOffered, point: point, hold: hold, screen: screen,
+                  device: Self.deviceTurn(XCUIDevice.shared.orientation)
+              )
+        else { return false }
+        let wait = HostTouch.replyWait(now: Date(), readDeadline: commandReadDeadline)
+        guard wait > 0 else { return false }
+        switch hostTap(plan.point, plan.holdMs, wait) {
+        case .delivered:
+            return true
+        case .notSent(let why):
+            // No helper: not asked again for this command's other taps.
+            NSLog("[TapsmithCommand] the daemon could not press the tap (\(why)); using the agent's own touch")
+            hostTouchOffered = false
+            return false
+        case .failed(let why):
+            // It may have landed: not pressed again. What the tap was for is
+            // checked by its caller.
+            NSLog("[TapsmithCommand] the daemon's tap at \(Self.describe(point)) was not confirmed (\(why))")
+            hostTouchOffered = false
+            return true
+        }
+    }
+
+    /// A tap at a point of an element whose touch was planned
+    /// (`plannedScreenSize`): through the daemon's HID helper when it offered,
+    /// else the agent's own touch.
+    private func tapPlannedPoint(_ point: CGPoint, hold: TimeInterval) {
+        if tapThroughHost(at: point, hold: hold, screen: plannedScreenSize ?? snapshotFinder.screenSize) { return }
+        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
+    }
+
     func handle(rawJson: String) -> String {
         guard let data = rawJson.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -575,6 +621,7 @@ class CommandHandler {
         commandReadDeadline = (params["readTimeoutMs"] as? NSNumber)
             .map { Date(timeIntervalSinceNow: $0.doubleValue / 1000) }
         snapshotFinder.commandDeadline = commandReadDeadline
+        hostTouchOffered = (params[HostTouch.offerParam] as? Bool) == true
 
         do {
             var result: [String: Any]?
@@ -960,19 +1007,22 @@ class CommandHandler {
     /// second at most (`IdleSettle`).
     private func waitForScreenIdle(timeoutMs: Int64) {
         let deadline = IdleSettle.deadline(now: Date(), timeoutMs: timeoutMs, readDeadline: commandReadDeadline)
-        // Only a screen size already cached: reading it afresh queries the
-        // app's window, which can wait on the app.
-        if let region = IdleSettle.screenRegion(actionExecutor.cachedScreenSize) { idleRegion = region }
-        guard let region = idleRegion else {
+        guard let sample = wholeScreenSampler() else {
             IdleSettle.sleepUntil(deadline, now: Date.init, sleep: Thread.sleep(forTimeInterval:))
             return
         }
-        IdleSettle.wait(
-            deadline: deadline,
-            now: Date.init,
-            sleep: Thread.sleep(forTimeInterval:),
-            sample: { RegionScreenshot.captureData(region, of: XCUIScreen.main, with: RegionScreenshot.settleJPEGAPI) }
-        )
+        IdleSettle.wait(deadline: deadline, now: Date.init, sleep: Thread.sleep(forTimeInterval:), sample: sample)
+    }
+
+    /// Samples what the whole screen shows, for a wait that ends when it
+    /// holds still (`IdleSettle`, `KeyboardSettle`). nil when the screen's
+    /// size is not known.
+    private func wholeScreenSampler() -> (() -> Data?)? {
+        // Only a screen size already cached: reading it afresh queries the
+        // app's window, which can wait on the app.
+        if let region = IdleSettle.screenRegion(actionExecutor.cachedScreenSize) { idleRegion = region }
+        guard let region = idleRegion else { return nil }
+        return { RegionScreenshot.captureData(region, of: XCUIScreen.main, with: RegionScreenshot.settleJPEGAPI) }
     }
 
     private func refuseIfLate(_ clock: TouchPlanClock) throws {
@@ -1334,20 +1384,14 @@ class CommandHandler {
         within area: CGRect?
     ) throws {
         keyboardFirstGate.arm()
-        let target = TypingFocus.Input(
-            frame: CGRect(
-                x: element.bounds.left, y: element.bounds.top,
-                width: element.bounds.width, height: element.bounds.height
-            ),
-            className: element.className,
-            identifier: element.resourceId ?? "",
-            placeholder: element.hint ?? ""
-        )
+        let target = typingFocusTarget(element)
         let focusedBefore = snapshotFinder.liveFocusedTypingInput()
         // A further tap on a field that did take focus moves its caret, so
         // each tap gets at least this long to report focus, whatever the
-        // caller's settle time.
-        let focusWait = max(settleTime, 0.5)
+        // caller's settle time: the half second it had after the agent's own
+        // tap, plus the ~150 ms that tap took to come back (the daemon's
+        // comes back as soon as the touch is lifted).
+        let focusWait = max(settleTime, KeyboardSettle.focusReportWaitSeconds)
         var tried: [CGPoint] = []
         if let area {
             let first = TypingFocus.trailingPoint(in: area)
@@ -1393,8 +1437,39 @@ class CommandHandler {
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
-        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: tapHold(on: element))
+        tapPlannedPoint(point, hold: tapHold(on: element))
         snapshotFinder.recordFocusedTextInputHint(element)
+    }
+
+    /// `focus`'s tap: tap `element` at `point` to give it the keyboard focus,
+    /// and give it until it has it (`KeyboardSettle.focusTapWaitSeconds` at
+    /// most, for a field that never reports focus). The daemon's HID tap
+    /// comes back as soon as the touch is lifted, before the app has acted on
+    /// it; the agent's own tap took ~150 ms to come back. Not a check:
+    /// `focusElementForTyping` is the one that fails a field that took no
+    /// focus.
+    private func tapForFocus(_ element: ElementInfo, at point: CGPoint) {
+        let target = typingFocusTarget(element)
+        let focusedBefore = snapshotFinder.liveFocusedTypingInput()
+        let tappedAt = Date()
+        tapPlannedPoint(point, hold: tapHold(on: element))
+        let focusBy = tappedAt.addingTimeInterval(KeyboardSettle.focusTapWaitSeconds)
+        while typingFocusVerdict(target, tappedAt: point, focusedBefore: focusedBefore) != .focused, Date() < focusBy {
+            Thread.sleep(forTimeInterval: KeyboardSettle.focusPollSeconds)
+        }
+    }
+
+    /// `element` as the typing focus check compares it with the focused input.
+    private func typingFocusTarget(_ element: ElementInfo) -> TypingFocus.Input {
+        TypingFocus.Input(
+            frame: CGRect(
+                x: element.bounds.left, y: element.bounds.top,
+                width: element.bounds.width, height: element.bounds.height
+            ),
+            className: element.className,
+            identifier: element.resourceId ?? "",
+            placeholder: element.hint ?? ""
+        )
     }
 
     /// The hold for a tap on `element` planned without a UI tree read (a
@@ -1436,7 +1511,7 @@ class CommandHandler {
                 return true
             }
             if CFAbsoluteTimeGetCurrent() >= deadline { return verdict == .unverifiable }
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: KeyboardSettle.focusPollSeconds)
         }
     }
 
@@ -1460,7 +1535,7 @@ class CommandHandler {
             let snap = try? app.snapshot()
             let dict = snap.map { $0.dictionaryRepresentation } ?? [:]
             if hasKeyboardInSnapshot(dict) { return }
-            Thread.sleep(forTimeInterval: 0.15)
+            Thread.sleep(forTimeInterval: KeyboardSettle.pollSeconds)
         }
     }
 
@@ -2298,10 +2373,19 @@ class CommandHandler {
             if target == nil {
                 // Already first responder behind a cover: clear it as is.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(
-                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
+                // The select-all below comes a quarter of a second after the
+                // touch, as it did when the agent's own tap took ~150 ms to
+                // come back and a 0.1 s sleep followed. The daemon's tap comes
+                // back at once, and the gap is kept rather than shortened: a
+                // tap in a text input places the caret, and a caret placed
+                // after the select-all would drop the selection (the
+                // backspace would then delete one character, not the text).
+                let tappedAt = Date()
+                tapPlannedPoint(CGPoint(x: area.midX, y: area.midY), hold: tapHold(on: element))
+                IdleSettle.sleepUntil(
+                    tappedAt.addingTimeInterval(KeyboardSettle.clearTapSettleSeconds),
+                    now: Date.init, sleep: Thread.sleep(forTimeInterval:)
                 )
-                Thread.sleep(forTimeInterval: 0.1)
             } else if let xcElem = try? getXCUIElement(element.elementId), xcElem.isHittable {
                 xcElem.tap()
                 // Match the snapshot path's 0.1s wait so the upcoming
@@ -2652,9 +2736,9 @@ class CommandHandler {
             if target == nil {
                 // Verified focused behind a cover: nothing to do.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(
-                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
-                )
+                // What comes next (a key press, a keyboard check) expects the
+                // field to have the focus.
+                tapForFocus(element, at: CGPoint(x: area.midX, y: area.midY))
             } else {
                 let xcElem = try getXCUIElement(element.elementId)
                 try actionExecutor.focus(xcElem)
@@ -3330,14 +3414,23 @@ class CommandHandler {
     /// later — give it that moment, so a following command that waits for a
     /// keyboard element to appear (type()) does not find the leaving one
     /// (best effort: it is already off the screen). Then let the app's own
-    /// animated relayout settle.
+    /// animated relayout settle: until the screen holds still
+    /// (`KeyboardSettle`), which a screen that does not move with its
+    /// keyboard does at once.
     private func settleAfterKeyboardDismissed(by deadline: Date? = nil) {
         var treeDeadline = Date(timeIntervalSinceNow: 1.0)
         if let deadline { treeDeadline = min(treeDeadline, deadline) }
         while keyboardPresence() == .offScreen, Date() < treeDeadline {
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: KeyboardSettle.pollSeconds)
         }
-        Thread.sleep(forTimeInterval: 0.35)
+        let stillBy = Date(timeIntervalSinceNow: KeyboardSettle.maxWaitSeconds)
+        if let sample = wholeScreenSampler() {
+            KeyboardSettle.waitUntilStill(
+                deadline: stillBy, now: Date.init, sleep: Thread.sleep(forTimeInterval:), sample: sample
+            )
+        } else {
+            IdleSettle.sleepUntil(stillBy, now: Date.init, sleep: Thread.sleep(forTimeInterval:))
+        }
         snapshotFinder.clearFocusedTextInputHint()
         keyboardFirstGate.disarm()
     }
@@ -3523,7 +3616,9 @@ class CommandHandler {
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
-            guard EventSynthesizer.tap(at: key, hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
+            guard dismissTap(at: key, hold: TapTiming.hold(for: .key), screen: planner.screen.size) else {
+                return .notPossible("the tap could not be synthesized")
+            }
             return .keyboardStayed
         case .blankTap:
             guard let field = snapshotFinder.liveFocusedTextInput() else {
@@ -3533,7 +3628,9 @@ class CommandHandler {
                 return .notPossible("no blank spot beside the field above the keyboard")
             }
             // A blank spot: nothing known is there.
-            guard EventSynthesizer.tap(at: point, hold: TapTiming.hold(for: nil)) else { return .notPossible("the tap could not be synthesized") }
+            guard dismissTap(at: point, hold: TapTiming.hold(for: nil), screen: planner.screen.size) else {
+                return .notPossible("the tap could not be synthesized")
+            }
             return .keyboardStayed
         case .returnKey:
             switch planner.returnKey(focusedInput: snapshotFinder.liveFocusedTextInput()?.elementType) {
@@ -3550,6 +3647,13 @@ class CommandHandler {
         }
     }
 
+    /// A dismiss strategy's tap, at a point planned on a screen of `screen`:
+    /// through the daemon's HID helper when it offered, else the agent's own
+    /// touch. False when nothing could be pressed.
+    private func dismissTap(at point: CGPoint, hold: TimeInterval, screen: CGSize) -> Bool {
+        tapThroughHost(at: point, hold: hold, screen: screen) || EventSynthesizer.tap(at: point, hold: hold)
+    }
+
     /// Poll the snapshot tree until the keyboard disappears or the deadline
     /// passes. Returns true once the keyboard is gone.
     /// Always checks at least once, so a zero timeout is a single check.
@@ -3558,7 +3662,7 @@ class CommandHandler {
         while true {
             if keyboardGoneNow() == true { return true }
             if Date() >= deadline { return false }
-            Thread.sleep(forTimeInterval: 0.15)
+            Thread.sleep(forTimeInterval: KeyboardSettle.pollSeconds)
         }
     }
 

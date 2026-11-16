@@ -96,6 +96,108 @@ fn stamp_read_timeout(json: &mut Value, read_timeout: Duration) {
     }
 }
 
+/// A tap the agent asks the daemon to press in the middle of a command
+/// (PILOT-1132): the focusing tap of a `typeText`, the blank-spot tap of a
+/// `hideKeyboard`. On an iOS simulator the daemon's HID helper presses it in
+/// a fraction of the time XCTest's event synthesis takes, and only the agent
+/// knows, part-way through the command, where and when to press.
+///
+/// The request travels on the command's own connection, before the command's
+/// answer, one line each way:
+///
+/// ```text
+/// agent  → {"hostRequest":{"seq":1,"method":"tap","x":201.5,"y":310,"holdMs":0}}
+/// daemon → {"hostReply":{"seq":1,"status":"delivered"}}
+/// ```
+///
+/// `x`/`y` are in the helper's space (logical points, native portrait).
+/// The agent only asks when the command carried `params.hostTouch: true`
+/// ([`stamp_host_touch`]), so an older daemon is never sent a request, and
+/// an older agent ignores the stamp.
+#[derive(Debug, Clone, PartialEq)]
+// Only the macOS-only HID helper presses a tap.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct HostTap {
+    pub x: f64,
+    pub y: f64,
+    /// How long the touch is held, in milliseconds (None: the helper's
+    /// default).
+    pub hold_ms: Option<u64>,
+}
+
+/// What became of a [`HostTap`], as the agent is told (`status`).
+#[derive(Debug, Clone, PartialEq)]
+// Only the macOS-only HID helper delivers or fails a tap.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) enum HostTapOutcome {
+    /// Pressed and lifted.
+    Delivered,
+    /// Nothing was touched (no helper, or the request made no sense): the
+    /// agent makes the tap itself.
+    NotSent(String),
+    /// The helper took the tap and did not confirm it. Part of it may have
+    /// landed, so the agent must not tap again.
+    Failed(String),
+}
+
+pub(crate) type HostTapFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = HostTapOutcome> + Send + 'a>>;
+
+/// Presses the taps an agent asks for mid-command. The daemon passes one with
+/// every command to a device it can touch from the host (an iOS simulator);
+/// None for every other device.
+pub(crate) trait HostTouch: Send + Sync {
+    fn tap(&self, tap: HostTap) -> HostTapFuture<'_>;
+}
+
+/// Tell the agent that this daemon answers [`HostTap`] requests during the
+/// command (`params.hostTouch`).
+fn stamp_host_touch(json: &mut Value) {
+    if let Some(params) = json.get_mut("params").and_then(Value::as_object_mut) {
+        params.insert("hostTouch".to_string(), json!(true));
+    }
+}
+
+/// The request in a line the agent sent before its answer: its sequence
+/// number, and the tap it asks for (None when the request is not one this
+/// daemon knows, which is answered `notSent`). None when the line is not a
+/// request at all (the command's answer).
+fn parse_host_request(raw: &Value) -> Option<(u64, Option<HostTap>)> {
+    let request = raw.get("hostRequest")?.as_object()?;
+    let seq = request.get("seq").and_then(Value::as_u64).unwrap_or(0);
+    let coordinate = |key: &str| {
+        request
+            .get(key)
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && *v >= 0.0)
+    };
+    let tap = match (
+        request.get("method").and_then(Value::as_str),
+        coordinate("x"),
+        coordinate("y"),
+    ) {
+        (Some("tap"), Some(x), Some(y)) => Some(HostTap {
+            x,
+            y,
+            hold_ms: request.get("holdMs").and_then(Value::as_u64),
+        }),
+        _ => None,
+    };
+    Some((seq, tap))
+}
+
+/// The line that answers host request `seq`.
+fn host_reply_line(seq: u64, outcome: &HostTapOutcome) -> String {
+    let reply = match outcome {
+        HostTapOutcome::Delivered => json!({ "seq": seq, "status": "delivered" }),
+        HostTapOutcome::NotSent(why) => json!({ "seq": seq, "status": "notSent", "error": why }),
+        HostTapOutcome::Failed(why) => json!({ "seq": seq, "status": "failed", "error": why }),
+    };
+    let mut line = json!({ "hostReply": reply }).to_string();
+    line.push('\n');
+    line
+}
+
 /// Timeout for each half (connect, then read) of a liveness probe after an
 /// empty-response EOF. The probe is a real ping round-trip, so it has to
 /// leave a busy agent time to answer, but it sits on the command hot path
@@ -262,11 +364,15 @@ async fn try_send_persistent(
     stream: &mut PersistentStream,
     command: &AgentCommand,
     timeout: Duration,
+    host: Option<&dyn HostTouch>,
 ) -> std::result::Result<AgentResponse, SendError> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let read_timeout = read_timeout_for(timeout);
     let mut json_msg = command.to_json(&request_id);
     stamp_read_timeout(&mut json_msg, read_timeout);
+    if host.is_some() {
+        stamp_host_touch(&mut json_msg);
+    }
     let mut payload = serde_json::to_string(&json_msg)
         .map_err(|e| SendError::PostSend(anyhow!(e).context("Failed to serialize command")))?;
     debug!(payload = %payload, "Sending command to agent (persistent)");
@@ -287,9 +393,71 @@ async fn try_send_persistent(
         ));
     }
 
-    // Read — once flushed, the agent may have the command
+    // Read — once flushed, the agent may have the command. Until its answer
+    // comes, the agent may ask for taps (`HostTap`): each is pressed and
+    // answered, inside the same read timeout.
+    let deadline = tokio::time::Instant::now() + read_timeout;
+    let raw = loop {
+        let raw = read_agent_line(stream, deadline, read_timeout).await?;
+        let Some((seq, tap)) = parse_host_request(&raw) else {
+            break raw;
+        };
+        serve_host_request(stream, host, seq, tap, deadline, read_timeout).await?;
+    };
+    // Verify response ID matches to detect desync from a
+    // late response on a reused connection.
+    match raw.get("id").and_then(|v| v.as_str()) {
+        Some(resp_id) if resp_id != request_id => Err(SendError::PostSend(anyhow!(
+            "Response ID mismatch: expected '{request_id}', got '{resp_id}'"
+        ))),
+        _ => Ok(AgentResponse::from_json(&raw)),
+    }
+}
+
+/// Press the tap the agent asked for (request `seq`) and write the answer.
+/// `notSent` without pressing anything when this daemon has no way to touch
+/// the device (`host` is None) or does not know the request (`tap` is None).
+async fn serve_host_request(
+    stream: &mut PersistentStream,
+    host: Option<&dyn HostTouch>,
+    seq: u64,
+    tap: Option<HostTap>,
+    deadline: tokio::time::Instant,
+    read_timeout: Duration,
+) -> std::result::Result<(), SendError> {
+    let outcome = match (host, tap) {
+        (Some(host), Some(tap)) => tokio::time::timeout_at(deadline, host.tap(tap))
+            .await
+            .map_err(|_| {
+                SendError::PostSend(anyhow!("Agent command timed out after {read_timeout:?}"))
+            })?,
+        (None, _) => {
+            HostTapOutcome::NotSent("this daemon cannot touch the device from the host".into())
+        }
+        (_, None) => HostTapOutcome::NotSent("not a request this daemon knows".into()),
+    };
+    debug!(seq, ?outcome, "Answering the agent's host touch request");
+    let reply = host_reply_line(seq, &outcome);
+    stream
+        .writer
+        .write_all(reply.as_bytes())
+        .await
+        .map_err(|e| SendError::PostSend(anyhow!(e).context("Failed to write to agent socket")))?;
+    stream
+        .writer
+        .flush()
+        .await
+        .map_err(|e| SendError::PostSend(anyhow!(e).context("Failed to flush agent socket")))
+}
+
+/// Read one line the agent sent after a command was flushed to it, as JSON.
+async fn read_agent_line(
+    stream: &mut PersistentStream,
+    deadline: tokio::time::Instant,
+    read_timeout: Duration,
+) -> std::result::Result<Value, SendError> {
     let mut line = String::new();
-    let read_result = tokio::time::timeout(read_timeout, stream.reader.read_line(&mut line)).await;
+    let read_result = tokio::time::timeout_at(deadline, stream.reader.read_line(&mut line)).await;
 
     match read_result {
         Err(_) => Err(SendError::PostSend(anyhow!(
@@ -337,29 +505,22 @@ async fn try_send_persistent(
                 };
             }
             debug!(response = %line, "Received response from agent (persistent)");
-            let raw: Value = serde_json::from_str(line).map_err(|e| {
+            serde_json::from_str(line).map_err(|e| {
                 SendError::PostSend(anyhow!(e).context("Failed to parse agent response as JSON"))
-            })?;
-            // Verify response ID matches to detect desync from a
-            // late response on a reused connection.
-            match raw.get("id").and_then(|v| v.as_str()) {
-                Some(resp_id) if resp_id != request_id => {
-                    return Err(SendError::PostSend(anyhow!(
-                        "Response ID mismatch: expected '{request_id}', got '{resp_id}'"
-                    )));
-                }
-                _ => {}
-            }
-            Ok(AgentResponse::from_json(&raw))
+            })
         }
     }
 }
 
+/// Send `command` on the cached connection and wait for its answer. `host`
+/// presses the taps the agent asks for while it works on the command
+/// ([`HostTap`]); None when the daemon cannot touch this device from the host.
 pub(crate) async fn send_with_persistent_cache(
     cache: &AgentStreamCache,
     params: &ConnectionParams,
     command: &AgentCommand,
     timeout: Duration,
+    host: Option<&dyn HostTouch>,
 ) -> Result<AgentResponse> {
     let mut guard = cache.lock().await;
 
@@ -399,7 +560,7 @@ pub(crate) async fn send_with_persistent_cache(
         // cancelled mid-await, the stream is dropped rather than left
         // in a half-read state that would desync the next command.
         let mut stream = guard.take().unwrap();
-        match try_send_persistent(&mut stream, command, timeout).await {
+        match try_send_persistent(&mut stream, command, timeout, host).await {
             Ok(resp) => {
                 *guard = Some(stream);
                 return Ok(resp);
@@ -3141,10 +3302,12 @@ mod tests {
         let params = ConnectionParams { host_port: port };
         let cmd = AgentCommand::Screenshot {};
 
-        let r1 = send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2)).await;
+        let r1 =
+            send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2), None).await;
         assert!(r1.is_ok(), "first send failed: {:?}", r1.err());
 
-        let r2 = send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2)).await;
+        let r2 =
+            send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2), None).await;
         assert!(r2.is_ok(), "second send failed: {:?}", r2.err());
 
         assert_eq!(
@@ -3184,10 +3347,12 @@ mod tests {
         let params = ConnectionParams { host_port: port };
         let cmd = AgentCommand::Screenshot {};
 
-        let r1 = send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2)).await;
+        let r1 =
+            send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2), None).await;
         assert!(r1.is_ok(), "first send failed: {:?}", r1.err());
 
-        let r2 = send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2)).await;
+        let r2 =
+            send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2), None).await;
         assert!(
             r2.is_ok(),
             "second send failed (should have reconnected): {:?}",
@@ -3240,11 +3405,298 @@ mod tests {
         let cmd = AgentCommand::Screenshot {};
 
         let params1 = ConnectionParams { host_port: port1 };
-        let r1 = send_with_persistent_cache(&cache, &params1, &cmd, Duration::from_secs(2)).await;
+        let r1 =
+            send_with_persistent_cache(&cache, &params1, &cmd, Duration::from_secs(2), None).await;
         assert!(r1.is_ok());
 
         let params2 = ConnectionParams { host_port: port2 };
-        let r2 = send_with_persistent_cache(&cache, &params2, &cmd, Duration::from_secs(2)).await;
+        let r2 =
+            send_with_persistent_cache(&cache, &params2, &cmd, Duration::from_secs(2), None).await;
         assert!(r2.is_ok());
+    }
+
+    // ─── Host touch requests mid-command (PILOT-1132) ───
+
+    /// Records the taps it is asked for and answers each with `outcome`.
+    struct RecordingHost {
+        taps: std::sync::Mutex<Vec<HostTap>>,
+        outcome: HostTapOutcome,
+        delay: Duration,
+    }
+
+    impl RecordingHost {
+        fn answering(outcome: HostTapOutcome) -> Self {
+            Self {
+                taps: std::sync::Mutex::new(Vec::new()),
+                outcome,
+                delay: Duration::ZERO,
+            }
+        }
+
+        fn taps(&self) -> Vec<HostTap> {
+            self.taps.lock().unwrap().clone()
+        }
+    }
+
+    impl HostTouch for RecordingHost {
+        fn tap(&self, tap: HostTap) -> HostTapFuture<'_> {
+            Box::pin(async move {
+                self.taps.lock().unwrap().push(tap);
+                tokio::time::sleep(self.delay).await;
+                self.outcome.clone()
+            })
+        }
+    }
+
+    /// An agent that, for each command, sends `requests` one at a time
+    /// (waiting for each reply), then answers the command with the replies it
+    /// got and the command's params.
+    fn spawn_requesting_agent(listener: tokio::net::TcpListener, requests: Vec<&'static str>) {
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let requests = requests.clone();
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                tokio::spawn(async move {
+                    loop {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let command: Value = serde_json::from_str(line.trim()).unwrap();
+                        let mut replies = Vec::new();
+                        for request in &requests {
+                            let _ = write_half
+                                .write_all(format!("{request}\n").as_bytes())
+                                .await;
+                            let mut reply = String::new();
+                            if reader.read_line(&mut reply).await.unwrap_or(0) == 0 {
+                                return;
+                            }
+                            replies.push(serde_json::from_str::<Value>(reply.trim()).unwrap());
+                        }
+                        let answer = json!({
+                            "id": command["id"],
+                            "result": { "replies": replies, "params": command["params"] },
+                        });
+                        let _ = write_half.write_all(format!("{answer}\n").as_bytes()).await;
+                    }
+                });
+            }
+        });
+    }
+
+    async fn requesting_agent(requests: Vec<&'static str>) -> (AgentStreamCache, ConnectionParams) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_requesting_agent(listener, requests);
+        (
+            new_agent_stream_cache(),
+            ConnectionParams { host_port: port },
+        )
+    }
+
+    #[tokio::test]
+    async fn a_tap_the_agent_asks_for_mid_command_is_pressed_and_answered() {
+        let (cache, params) = requesting_agent(vec![
+            r#"{"hostRequest":{"seq":7,"method":"tap","x":201.5,"y":310,"holdMs":20}}"#,
+        ])
+        .await;
+        let host = RecordingHost::answering(HostTapOutcome::Delivered);
+
+        let resp = send_with_persistent_cache(
+            &cache,
+            &params,
+            &AgentCommand::HideKeyboard {},
+            Duration::from_secs(2),
+            Some(&host),
+        )
+        .await
+        .unwrap();
+
+        assert!(resp.success);
+        assert_eq!(
+            host.taps(),
+            vec![HostTap {
+                x: 201.5,
+                y: 310.0,
+                hold_ms: Some(20)
+            }]
+        );
+        assert_eq!(
+            resp.data["replies"],
+            json!([{ "hostReply": { "seq": 7, "status": "delivered" } }])
+        );
+        // The agent was told it may ask.
+        assert_eq!(resp.data["params"]["hostTouch"], true);
+    }
+
+    #[tokio::test]
+    async fn every_request_of_a_command_is_served_in_turn() {
+        let (cache, params) = requesting_agent(vec![
+            r#"{"hostRequest":{"seq":1,"method":"tap","x":10,"y":20}}"#,
+            r#"{"hostRequest":{"seq":2,"method":"tap","x":30,"y":40,"holdMs":0}}"#,
+        ])
+        .await;
+        let host = RecordingHost::answering(HostTapOutcome::Failed("no reply".into()));
+
+        let resp = send_with_persistent_cache(
+            &cache,
+            &params,
+            &AgentCommand::HideKeyboard {},
+            Duration::from_secs(2),
+            Some(&host),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            host.taps(),
+            vec![
+                HostTap {
+                    x: 10.0,
+                    y: 20.0,
+                    hold_ms: None
+                },
+                HostTap {
+                    x: 30.0,
+                    y: 40.0,
+                    hold_ms: Some(0)
+                },
+            ]
+        );
+        assert_eq!(
+            resp.data["replies"],
+            json!([
+                { "hostReply": { "seq": 1, "status": "failed", "error": "no reply" } },
+                { "hostReply": { "seq": 2, "status": "failed", "error": "no reply" } },
+            ])
+        );
+        // The connection is still good for the next command.
+        let again = send_with_persistent_cache(
+            &cache,
+            &params,
+            &AgentCommand::HideKeyboard {},
+            Duration::from_secs(2),
+            Some(&host),
+        )
+        .await
+        .unwrap();
+        assert!(again.success);
+        assert_eq!(host.taps().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_request_this_daemon_cannot_press_is_answered_not_sent() {
+        // An unknown method, a tap without a point, and one off the screen's
+        // positive space: nothing is pressed for any of them.
+        let (cache, params) = requesting_agent(vec![
+            r#"{"hostRequest":{"seq":1,"method":"swipe","x":10,"y":20}}"#,
+            r#"{"hostRequest":{"seq":2,"method":"tap","x":10}}"#,
+            r#"{"hostRequest":{"seq":3,"method":"tap","x":-4,"y":20}}"#,
+        ])
+        .await;
+        let host = RecordingHost::answering(HostTapOutcome::Delivered);
+
+        let resp = send_with_persistent_cache(
+            &cache,
+            &params,
+            &AgentCommand::HideKeyboard {},
+            Duration::from_secs(2),
+            Some(&host),
+        )
+        .await
+        .unwrap();
+
+        assert!(host.taps().is_empty());
+        let statuses: Vec<_> = resp.data["replies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["hostReply"]["status"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(statuses, vec!["notSent", "notSent", "notSent"]);
+    }
+
+    #[tokio::test]
+    async fn without_a_host_the_agent_is_not_invited_and_a_request_is_answered_not_sent() {
+        let (cache, params) = requesting_agent(vec![
+            r#"{"hostRequest":{"seq":1,"method":"tap","x":10,"y":20}}"#,
+        ])
+        .await;
+
+        let resp = send_with_persistent_cache(
+            &cache,
+            &params,
+            &AgentCommand::HideKeyboard {},
+            Duration::from_secs(2),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(resp.data["params"].get("hostTouch").is_none());
+        assert_eq!(
+            resp.data["replies"][0]["hostReply"]["status"],
+            json!("notSent")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_time_a_host_tap_takes_counts_against_the_commands_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_requesting_agent(
+            listener,
+            vec![r#"{"hostRequest":{"seq":1,"method":"tap","x":10,"y":20}}"#],
+        );
+        let mut stream = connect_persistent(port).await.ok().unwrap();
+        let mut host = RecordingHost::answering(HostTapOutcome::Delivered);
+        host.delay = Duration::from_secs(30);
+        let read_timeout = Duration::from_millis(150);
+        let deadline = tokio::time::Instant::now() + read_timeout;
+
+        let raw = read_agent_line(&mut stream, deadline, read_timeout).await;
+        // No command was sent: the agent has nothing to ask about yet.
+        assert!(matches!(raw, Err(SendError::PostSend(_))));
+
+        stream.writer.write_all(b"{\"id\":\"1\"}\n").await.unwrap();
+        let deadline = tokio::time::Instant::now() + read_timeout;
+        let raw = read_agent_line(&mut stream, deadline, read_timeout)
+            .await
+            .ok()
+            .unwrap();
+        let (seq, tap) = parse_host_request(&raw).unwrap();
+        let started = std::time::Instant::now();
+        let served =
+            serve_host_request(&mut stream, Some(&host), seq, tap, deadline, read_timeout).await;
+
+        match served {
+            Err(SendError::PostSend(e)) => assert!(e.to_string().contains("timed out"), "{e}"),
+            _ => panic!("a tap slower than the command's deadline must end the command"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_commands_answer_is_not_a_host_request() {
+        assert_eq!(
+            parse_host_request(&json!({ "id": "abc", "result": { "hostRequest": 1 } })),
+            None
+        );
+        assert_eq!(
+            parse_host_request(
+                &json!({ "hostRequest": { "seq": 4, "method": "tap", "x": 1, "y": 2 } })
+            ),
+            Some((
+                4,
+                Some(HostTap {
+                    x: 1.0,
+                    y: 2.0,
+                    hold_ms: None
+                })
+            ))
+        );
     }
 }

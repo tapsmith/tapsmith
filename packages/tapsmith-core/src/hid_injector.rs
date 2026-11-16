@@ -207,7 +207,7 @@ impl HidInjector {
     }
 
     #[cfg(test)]
-    fn with_helper_path(helper_path: PathBuf) -> Self {
+    pub(crate) fn with_helper_path(helper_path: PathBuf) -> Self {
         Self {
             helper_path,
             helpers: Mutex::new(HashMap::new()),
@@ -733,25 +733,27 @@ impl HidInjector {
     }
 }
 
+/// Write an executable stub helper script and return its path (kept alive by
+/// the returned tempdir).
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) fn stub_helper_for_test(body: &str) -> (tempfile::TempDir, PathBuf) {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
-    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tapsmith-ios-hid");
+    let mut f = std::fs::File::create(&path).unwrap();
+    write!(f, "#!/bin/sh\n{body}").unwrap();
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    (dir, path)
+}
 
-    /// Write an executable stub helper script and return its path (kept alive by
-    /// the returned tempdir).
-    fn stub_helper(body: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("tapsmith-ios-hid");
-        let mut f = std::fs::File::create(&path).unwrap();
-        write!(f, "#!/bin/sh\n{body}").unwrap();
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).unwrap();
-        (dir, path)
-    }
+#[cfg(test)]
+mod tests {
+    use super::stub_helper_for_test as stub_helper;
+    use super::*;
+    use std::time::Duration;
 
     /// Compile and run the pure-C protocol unit test (`native/hid_protocol_test.c`)
     /// so its coverage of the parser/normalizer runs under `cargo test` in CI,

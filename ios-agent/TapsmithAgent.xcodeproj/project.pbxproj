@@ -51,6 +51,9 @@
 		9990000000000000000000A3 /* DeepLinkVerify.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9990000000000000000000A4 /* DeepLinkVerify.swift */; };
 		9980000000000000000000A1 /* ScrollStepWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9980000000000000000000A2 /* ScrollStepWatch.swift */; };
 		3090000000000000000000A1 /* IdleSettle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3090000000000000000000A2 /* IdleSettle.swift */; };
+		1132200000000000000000A1 /* CommandMeta.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1132200000000000000000A2 /* CommandMeta.swift */; };
+		1132100000000000000000A1 /* KeyboardSettle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1132100000000000000000A2 /* KeyboardSettle.swift */; };
+		1132000000000000000000A1 /* HostTouch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1132000000000000000000A2 /* HostTouch.swift */; };
 		1129000000000000000000A1 /* AnimationsIdle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1129000000000000000000A2 /* AnimationsIdle.swift */; };
 		8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */; };
 		9D34B1A2E4F55C7BA08F3D01 /* SwipeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */; };
@@ -102,6 +105,9 @@
 		9990000000000000000000A4 /* DeepLinkVerify.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkVerify.swift; sourceTree = "<group>"; };
 		9980000000000000000000A2 /* ScrollStepWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollStepWatch.swift; sourceTree = "<group>"; };
 		3090000000000000000000A2 /* IdleSettle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdleSettle.swift; sourceTree = "<group>"; };
+		1132200000000000000000A2 /* CommandMeta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandMeta.swift; sourceTree = "<group>"; };
+		1132100000000000000000A2 /* KeyboardSettle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardSettle.swift; sourceTree = "<group>"; };
+		1132000000000000000000A2 /* HostTouch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostTouch.swift; sourceTree = "<group>"; };
 		1129000000000000000000A2 /* AnimationsIdle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimationsIdle.swift; sourceTree = "<group>"; };
 		8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchPlan.swift; sourceTree = "<group>"; };
 		9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeGeometry.swift; sourceTree = "<group>"; };
@@ -168,6 +174,9 @@
 				9990000000000000000000A4 /* DeepLinkVerify.swift */,
 				9980000000000000000000A2 /* ScrollStepWatch.swift */,
 				3090000000000000000000A2 /* IdleSettle.swift */,
+				1132200000000000000000A2 /* CommandMeta.swift */,
+				1132100000000000000000A2 /* KeyboardSettle.swift */,
+				1132000000000000000000A2 /* HostTouch.swift */,
 				1129000000000000000000A2 /* AnimationsIdle.swift */,
 				8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */,
 				9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */,
@@ -321,6 +330,9 @@
 				9990000000000000000000A3 /* DeepLinkVerify.swift in Sources */,
 				9980000000000000000000A1 /* ScrollStepWatch.swift in Sources */,
 				3090000000000000000000A1 /* IdleSettle.swift in Sources */,
+				1132200000000000000000A1 /* CommandMeta.swift in Sources */,
+				1132100000000000000000A1 /* KeyboardSettle.swift in Sources */,
+				1132000000000000000000A1 /* HostTouch.swift in Sources */,
 				1129000000000000000000A1 /* AnimationsIdle.swift in Sources */,
 				8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */,
 				9D34B1A2E4F55C7BA08F3D01 /* SwipeGeometry.swift in Sources */,

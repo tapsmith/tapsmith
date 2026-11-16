@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Network
 
@@ -6,6 +7,11 @@ import Network
 /// Protocol: newline-delimited JSON. Each line is a complete JSON object.
 /// Request:  {"id": "uuid", "method": "methodName", "params": {...}}
 /// Response: {"id": "uuid", "result": {...}} or {"id": "uuid", "error": {...}}
+///
+/// Between a request and its response the agent may ask the daemon to press
+/// a tap, on the same connection, and the daemon answers (`HostTouch`):
+/// Agent:    {"hostRequest": {"seq": 1, "method": "tap", ...}}
+/// Daemon:   {"hostReply": {"seq": 1, "status": "delivered"}}
 ///
 /// Commands are processed on the main thread via RunLoop to ensure XCUITest's
 /// accessibility operations (which require main RunLoop XPC callbacks) work
@@ -19,6 +25,12 @@ class SocketServer {
     /// Pending commands from the socket, to be processed on the main thread.
     private var pendingCommands: [(String, NWConnection)] = []
     private let commandLock = NSLock()
+
+    /// Where a command waits for the daemon's reply to a tap it asked the
+    /// daemon to press (`HostTouch`).
+    private let hostTouchMailbox = HostTouchMailbox()
+    /// The connection of the command being handled, guarded by `commandLock`.
+    private var commandConnection: NWConnection?
 
     @Volatile private var running = false
 
@@ -82,7 +94,13 @@ class SocketServer {
             commandLock.unlock()
 
             if let (line, connection) = pending {
+                setCommandConnection(connection)
+                commandHandler.hostTap = { [hostTouchMailbox] point, holdMs, wait in
+                    Self.requestHostTap(on: connection, mailbox: hostTouchMailbox, point: point, holdMs: holdMs, wait: wait)
+                }
                 let response = commandHandler.handle(rawJson: line)
+                commandHandler.hostTap = nil
+                setCommandConnection(nil)
                 let responseData = (response + "\n").data(using: .utf8)!
                 connection.send(content: responseData, completion: .contentProcessed { error in
                     if let error = error {
@@ -97,6 +115,44 @@ class SocketServer {
             let interval = pending != nil ? 0.001 : 0.01
             RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: interval))
         }
+    }
+
+    private func setCommandConnection(_ connection: NWConnection?) {
+        commandLock.lock()
+        commandConnection = connection
+        commandLock.unlock()
+    }
+
+    /// Ask the daemon, on the command's own connection, to press a tap
+    /// (`HostTouch`), and wait on the command's thread for its reply, which
+    /// the socket's queue leaves in `mailbox`.
+    private static func requestHostTap(
+        on connection: NWConnection,
+        mailbox: HostTouchMailbox,
+        point: CGPoint,
+        holdMs: Int,
+        wait: TimeInterval
+    ) -> HostTouch.Outcome {
+        let seq = mailbox.begin()
+        let line = HostTouch.requestLine(seq: seq, point: point, holdMs: holdMs)
+        guard !line.isEmpty else { return .notSent("the request could not be written") }
+        connection.send(content: (line + "\n").data(using: .utf8)!, completion: .contentProcessed { error in
+            // Never sent, so never pressed: the agent's own touch is safe.
+            if let error = error {
+                NSLog("[TapsmithSocket] Host touch request failed to send: \(error)")
+                mailbox.deliver(seq: seq, outcome: .notSent("the request could not be sent"))
+            }
+        })
+        return mailbox.wait(seq: seq, timeout: wait)
+    }
+
+    /// The connection ended: a command waiting on it for the daemon's reply
+    /// to a host touch gets none.
+    private func connectionEnded(_ connection: NWConnection) {
+        commandLock.lock()
+        let isCommands = commandConnection === connection
+        commandLock.unlock()
+        if isCommands { hostTouchMailbox.connectionLost() }
     }
 
     /// Stop the server.
@@ -121,6 +177,7 @@ class SocketServer {
 
             if let error = error {
                 NSLog("[TapsmithSocket] Read error: \(error)")
+                self.connectionEnded(connection)
                 connection.cancel()
                 return
             }
@@ -141,6 +198,14 @@ class SocketServer {
 
                 NSLog("[TapsmithSocket] Received: \(line.prefix(200))")
 
+                // The daemon's reply to a tap the running command asked it
+                // to press: for that command, which is waiting on the main
+                // thread, not for the queue behind it.
+                if let reply = HostTouch.reply(in: line) {
+                    self.hostTouchMailbox.deliver(seq: reply.seq, outcome: reply.outcome)
+                    continue
+                }
+
                 // Enqueue for main-thread processing
                 self.commandLock.lock()
                 self.pendingCommands.append((line, connection))
@@ -149,6 +214,7 @@ class SocketServer {
 
             if isComplete {
                 NSLog("[TapsmithSocket] Client disconnected")
+                self.connectionEnded(connection)
                 connection.cancel()
                 return
             }
