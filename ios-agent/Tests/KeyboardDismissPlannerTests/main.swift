@@ -624,6 +624,18 @@ do {
     checkTrue("iOS 27 host: its item still blocks a drag start", p.map { notInside($0, [capsule]) } ?? true, "\(String(describing: p))")
 }
 
+do {
+    // Only a bar can be a host: a control laid out the same way (filling its
+    // container, over a full-size earlier sibling) still blocks.
+    let split = scrollScreen.indices.dropFirst(2).first { scrollScreen[$0].type == .window } ?? scrollScreen.count
+    let coverRows: [Row] = Array(scrollScreen[..<split]) + [
+        (3, .other, "", "", screen),
+        (3, .button, "Cover", "", screen),
+    ] + Array(scrollScreen[split...])
+    check("container-sized control over a full-size sibling: no drag",
+          planner(coverRows).scrollSwipeStart(focusedFrame: R(16, 180, 370, 44)), nil)
+}
+
 // MARK: - 3. Blank spot
 
 do {

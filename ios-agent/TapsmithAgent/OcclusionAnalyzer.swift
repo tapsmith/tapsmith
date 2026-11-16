@@ -305,7 +305,8 @@ struct OcclusionAnalyzer {
         return container < t && nodes[container].subtreeEnd > t
     }
 
-    /// Whether bar `i` is the host of a bar rather than a bar: it fills its
+    /// Whether node `i` is the host of a bar rather than a bar (only a bar
+    /// type can be one; any other control still blocks): it fills its
     /// whole container and is laid over the content before it there — an
     /// earlier sibling that fills the container too. iOS 27 adds one as the
     /// last child of every navigation container, a window's or a sheet's of
@@ -320,7 +321,8 @@ struct OcclusionAnalyzer {
     /// control painted after the target. (`KeyboardDismissPlanner` treats a
     /// host as plain for the same reason.)
     func isBarHost(_ i: Int) -> Bool {
-        guard let p = nodes[i].parent else { return false }
+        guard Self.barTypes.contains(nodes[i].elementType),
+              let p = nodes[i].parent else { return false }
         let container = nodes[p].frame
         guard container.width > 0, container.height > 0,
               nodes[i].frame.insetBy(dx: -1, dy: -1).contains(container) else { return false }
