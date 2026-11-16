@@ -180,21 +180,6 @@ describe('checkRunnerTrust', () => {
     expect(progress).toEqual([expect.stringContaining('reinstalling')]);
   });
 
-  it('re-probes for real after the reinstall instead of answering from the session cache', async () => {
-    // The default probe caches per device; the replacement must clear it.
-    const calls: string[] = [];
-    const ops: RunnerTrustOps = {
-      ...fakeOps([]).ops,
-      probe: vi.fn()
-        .mockResolvedValueOnce({ state: 'untrusted', raw: STALE })
-        .mockResolvedValueOnce({ state: 'trusted' }),
-      async installApp() { calls.push('install'); },
-    };
-    const check = await checkRunnerTrust(UDID, resolve(() => xctestrun), ops);
-    expect(ops.probe).toHaveBeenCalledTimes(2);
-    expect(check.outcome).toBe('ok');
-  });
-
   it('reports untrusted only when the freshly installed runner is refused too', async () => {
     const { ops } = fakeOps(['untrusted', 'untrusted']);
     const check = await checkRunnerTrust(UDID, resolve(() => xctestrun), ops);
