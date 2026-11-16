@@ -5,10 +5,9 @@
  * Opens the default browser automatically.
  */
 
-import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { refuseForeignHost } from '../local-server-guard.js';
+import { createLocalHttpServer } from '../local-server-guard.js';
 
 const VIEWER_HTML_PATH = path.resolve(import.meta.dirname, '../trace-viewer/index.html');
 
@@ -44,9 +43,8 @@ export async function showTrace(options: ShowTraceOptions): Promise<{ port: numb
     viewerHtml = buildFallbackViewer();
   }
 
-  const server = http.createServer((req, res) => {
-    // Loopback Host and Origin only: a DNS-rebinding page must not read the trace (PILOT-1215).
-    if (refuseForeignHost(req, res)) return;
+  // Local requests only: a DNS-rebinding page must not read the trace (PILOT-1215).
+  const server = createLocalHttpServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost`);
 
     // Serve the viewer HTML

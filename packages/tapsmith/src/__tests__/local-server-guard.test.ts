@@ -2,11 +2,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   isLoopbackHost,
-  isLoopbackOrigin,
   isSameOriginRequest,
-  refuseForeignHost,
+  createLocalHttpServer,
   createLocalWebSocketServer,
 } from '../local-server-guard.js';
 
@@ -27,18 +28,6 @@ describe('isLoopbackHost', () => {
   ])('refuses %s', (host) => {
     expect(isLoopbackHost(host)).toBe(false);
   });
-});
-
-describe('isLoopbackOrigin', () => {
-  it.each([undefined, 'http://localhost:6274', 'http://127.0.0.1:9274', 'https://localhost', 'http://[::1]:3000'])(
-    'accepts %s',
-    (origin) => { expect(isLoopbackOrigin(origin)).toBe(true); },
-  );
-
-  it.each(['https://evil.example', 'http://localhost.evil.example', 'null', 'not a url', 'file:///tmp/x.html', 'chrome-extension://abc'])(
-    'refuses %s',
-    (origin) => { expect(isLoopbackOrigin(origin)).toBe(false); },
-  );
 });
 
 describe('isSameOriginRequest', () => {
@@ -82,9 +71,9 @@ async function listen(server: http.Server): Promise<number> {
 }
 
 /** Raw request, so the Host header can be anything (fetch forbids setting it). */
-function rawGet(port: number, headers: Record<string, string>, path = '/'): Promise<{ status: number; body: string }> {
+function rawGet(port: number, headers: Record<string, string>, method = 'GET'): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const r = http.request({ host: '127.0.0.1', port, path, headers, setHost: false }, (res) => {
+    const r = http.request({ host: '127.0.0.1', port, path: '/', method, headers, setHost: false }, (res) => {
       let body = '';
       res.on('data', (c: Buffer) => { body += c.toString(); });
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
@@ -94,10 +83,9 @@ function rawGet(port: number, headers: Record<string, string>, path = '/'): Prom
   });
 }
 
-describe('refuseForeignHost', () => {
+describe('createLocalHttpServer', () => {
   async function guarded(): Promise<number> {
-    return listen(http.createServer((rq, rs) => {
-      if (refuseForeignHost(rq, rs)) return;
+    return listen(createLocalHttpServer((_rq, rs) => {
       rs.writeHead(200);
       rs.end('ok');
     }));
@@ -117,6 +105,18 @@ describe('refuseForeignHost', () => {
     expect(res.status).toBe(403);
     expect(res.body).toContain('evil.example');
     expect(res.body).toMatch(/127\.0\.0\.1|localhost/);
+  });
+
+  it('serves its own page and refuses every other page, local or not', async () => {
+    const port = await guarded();
+    expect((await rawGet(port, { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }, 'POST')).status).toBe(200);
+    // A page on another local port (a dev server, any local tool) posting a
+    // CORS "simple" request needs no preflight, so only the server can stop it.
+    const other = await rawGet(port, { host: `127.0.0.1:${port}`, origin: 'http://localhost:3000' }, 'POST');
+    expect(other.status).toBe(403);
+    expect(other.body).toContain('http://localhost:3000');
+    expect((await rawGet(port, { host: `127.0.0.1:${port}`, origin: 'https://evil.example' }, 'POST')).status).toBe(403);
+    expect((await rawGet(port, { host: `127.0.0.1:${port}`, origin: 'null' }, 'POST')).status).toBe(403);
   });
 
   it('refuses a request with no Host header', async () => {
@@ -174,5 +174,33 @@ describe('createLocalWebSocketServer', () => {
     await connect(port, {}, 'https://other.example');
     expect(onRefused).toHaveBeenCalledTimes(2);
     expect(onRefused).toHaveBeenNthCalledWith(1, 'https://evil.example', `127.0.0.1:${port}`);
+  });
+});
+
+// Every HTTP or WebSocket server Tapsmith opens must go through the guarded
+// factories above — a raw `http.createServer` or `new WebSocketServer` would
+// let any web page in the browser reach it again (PILOT-1215).
+describe('local listeners', () => {
+  it('are all created through local-server-guard', () => {
+    const srcDir = path.resolve(import.meta.dirname, '..');
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== '__tests__' && entry.name !== 'node_modules') walk(full);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry.name) || full.endsWith('local-server-guard.ts')) continue;
+        const text = fs.readFileSync(full, 'utf-8');
+        text.split('\n').forEach((line, i) => {
+          if (/\bhttps?\.createServer\(|\bnew\s+WebSocketServer\(|\bnew\s+WebSocket\.Server\(/.test(line)) {
+            offenders.push(`${path.relative(srcDir, full)}:${i + 1}`);
+          }
+        });
+      }
+    };
+    walk(srcDir);
+    expect(offenders).toEqual([]);
   });
 });

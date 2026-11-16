@@ -14,13 +14,12 @@ import { createNetworkApiScanner } from '../network-api-scan.js';
  * @see PILOT-87
  */
 
-import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync, fork, type ChildProcess } from 'node:child_process';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import type { WebSocket } from 'ws';
-import { createLocalWebSocketServer, refuseForeignHost } from '../local-server-guard.js';
+import { createLocalHttpServer, createLocalWebSocketServer } from '../local-server-guard.js';
 import { McpEventEmitter } from '../mcp/events.js';
 import { McpSessionRouter } from '../mcp/http-session-router.js';
 import { configureMcpConnection, type UiDaemonPorts } from '../mcp/connection.js';
@@ -5157,10 +5156,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }
   }
 
-  const server = http.createServer((req, res) => {
-    // Only requests addressed to loopback: a DNS-rebinding page must not
-    // read traces or videos through its own hostname (PILOT-1215).
-    if (refuseForeignHost(req, res)) return;
+  // Only the UI's own page and local tools: a DNS-rebinding page must not
+  // read traces or videos through its own hostname (PILOT-1215).
+  const server = createLocalHttpServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -5382,12 +5380,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   // ─── MCP Server (separate fixed port) ───
 
   const MCP_DEFAULT_PORT = 9274;
-  const mcpHttpServer = http.createServer(async (req, res) => {
-    // Loopback Host, and loopback Origin for browser clients (e.g. the MCP
-    // Inspector on another localhost port): no other web page may call the
-    // device tools or inject /mcp-events (PILOT-1215; the MCP spec requires
-    // servers to validate Origin).
-    if (refuseForeignHost(req, res)) return;
+  // Local clients only (`tapsmith mcp-server`, MCP HTTP clients): no web
+  // page may call the device tools or inject /mcp-events (PILOT-1215; the MCP
+  // spec requires servers to validate Origin).
+  const mcpHttpServer = createLocalHttpServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
 
     // Streamable HTTP endpoint — handles POST (JSON-RPC) + GET (SSE stream) + DELETE (session close)

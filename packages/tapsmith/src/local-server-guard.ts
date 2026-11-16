@@ -8,9 +8,12 @@
  * DNS-rebinding site can reach every route under its own hostname. So, as
  * Playwright does for its own local servers (`computeAllowedHosts` /
  * `isAllowedHost` in packages/utils/httpServer.ts, `_isAllowedOrigin` in
- * wsServer.ts), every request must name a loopback Host, and a browser
- * Origin must be loopback too. The UI's WebSocket goes one step further and
- * accepts only the UI's own page: Origin must be the very host it connects to.
+ * wsServer.ts), every request must name a loopback Host. A browser Origin
+ * must be stricter than Playwright's "any loopback port": it must be the very
+ * host the request is addressed to — the page this server served — because a
+ * page on another local port (a dev server, any local tool) can still post a
+ * CORS "simple" request with no preflight, and none of these servers has a
+ * cross-origin browser client.
  *
  * A request with no Origin header is not from a web page (browsers always
  * send Origin on WebSocket handshakes and on cross-origin requests), so it is
@@ -18,7 +21,7 @@
  * allowed.
  */
 
-import type * as http from 'node:http';
+import * as http from 'node:http';
 import { WebSocketServer } from 'ws';
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -44,26 +47,6 @@ export function isLoopbackHost(host: string | undefined): boolean {
   return rest === '' || /^:\d{1,5}$/.test(rest);
 }
 
-function parseHttpOrigin(origin: string): URL | undefined {
-  try {
-    const url = new URL(origin);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * True when a request's Origin is absent (not a web page) or is a page served
- * from this machine's loopback interface, on any port. Opaque origins
- * (`null`: file://, sandboxed iframes) and non-web schemes are refused.
- */
-export function isLoopbackOrigin(origin: string | undefined): boolean {
-  if (origin === undefined) return true;
-  const url = parseHttpOrigin(origin);
-  return url !== undefined && LOOPBACK_HOSTNAMES.has(url.hostname.toLowerCase());
-}
-
 /**
  * True when a request's Origin is absent (not a web page) or is exactly the
  * origin the request is addressed to — i.e. the page this server served.
@@ -76,29 +59,46 @@ export function isSameOriginRequest(req: http.IncomingMessage): boolean {
   if (origin === undefined) return true;
   const host = req.headers.host?.toLowerCase();
   if (!host) return false;
-  const url = parseHttpOrigin(origin);
-  return url !== undefined && url.protocol === 'http:' && url.host.toLowerCase() === host;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false; // `null` (file://, sandboxed iframes) and garbage
+  }
+  return url.protocol === 'http:' && url.host.toLowerCase() === host;
 }
 
 /**
- * Answers 403 and returns true when an HTTP request does not name a loopback
- * Host (a DNS-rebinding page) or carries a browser Origin that is not
- * loopback. Call first in a request handler: `if (refuseForeignHost(req, res)) return;`.
+ * True when a request comes from this machine and not from another web page:
+ * it names a loopback Host (no DNS rebinding) and its Origin, if any, is the
+ * page this server served.
  */
-export function refuseForeignHost(req: http.IncomingMessage, res: http.ServerResponse): boolean {
-  const host = req.headers.host;
-  if (!isLoopbackHost(host)) {
-    res.writeHead(403, { 'Content-Type': 'text/plain' });
-    res.end(`Forbidden: Tapsmith only answers requests addressed to 127.0.0.1 or localhost, not "${host ?? ''}".\n`);
-    return true;
-  }
-  const origin = req.headers.origin;
-  if (!isLoopbackOrigin(origin)) {
-    res.writeHead(403, { 'Content-Type': 'text/plain' });
-    res.end(`Forbidden: Tapsmith does not accept requests from pages on "${origin ?? ''}".\n`);
-    return true;
-  }
-  return false;
+function isLocalRequest(req: http.IncomingMessage): boolean {
+  return isLoopbackHost(req.headers.host) && isSameOriginRequest(req);
+}
+
+function refusalReason(req: http.IncomingMessage): string {
+  return isLoopbackHost(req.headers.host)
+    ? `Forbidden: Tapsmith does not accept requests from pages on "${req.headers.origin ?? ''}".\n`
+    : `Forbidden: Tapsmith only answers requests addressed to 127.0.0.1 or localhost, not "${req.headers.host ?? ''}".\n`;
+}
+
+/**
+ * An HTTP server that answers 403 to any request that is not local (see
+ * {@link isLocalRequest}) before `handler` sees it. Every HTTP server Tapsmith
+ * opens is created here (a unit test enforces it).
+ */
+export function createLocalHttpServer(
+  handler: (req: http.IncomingMessage, res: http.ServerResponse) => void | Promise<void>,
+): http.Server {
+  return http.createServer((req, res) => {
+    if (!isLocalRequest(req)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end(refusalReason(req));
+      return;
+    }
+    void handler(req, res);
+  });
 }
 
 export interface LocalWebSocketServerOptions {
@@ -122,7 +122,7 @@ export function createLocalWebSocketServer(
   return new WebSocketServer({
     server,
     verifyClient: ({ req }, done) => {
-      if (isLoopbackHost(req.headers.host) && isSameOriginRequest(req)) {
+      if (isLocalRequest(req)) {
         done(true);
         return;
       }
