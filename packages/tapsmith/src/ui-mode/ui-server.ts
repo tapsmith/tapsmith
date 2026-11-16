@@ -19,7 +19,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync, fork, type ChildProcess } from 'node:child_process';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
-import { WebSocketServer, type WebSocket } from 'ws';
+import type { WebSocket } from 'ws';
+import { createLocalWebSocketServer, refuseForeignHost } from '../local-server-guard.js';
 import { McpEventEmitter } from '../mcp/events.js';
 import { McpSessionRouter } from '../mcp/http-session-router.js';
 import { configureMcpConnection, type UiDaemonPorts } from '../mcp/connection.js';
@@ -5157,6 +5158,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   }
 
   const server = http.createServer((req, res) => {
+    // Only requests addressed to loopback: a DNS-rebinding page must not
+    // read traces or videos through its own hostname (PILOT-1215).
+    if (refuseForeignHost(req, res)) return;
     const url = new URL(req.url ?? '/', 'http://localhost');
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -5244,7 +5248,16 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
   // ─── WebSocket Server ───
 
-  const wss = new WebSocketServer({ server });
+  // The socket drives the session — runs, taps, typing, results — so only
+  // the UI's own page (or a local non-browser client) may open it. Any other
+  // page in the user's browser could otherwise connect to 127.0.0.1 and drive
+  // the device (cross-site WebSocket hijacking, PILOT-1215).
+  const wss = createLocalWebSocketServer(server, {
+    onRefused: (origin, host) => {
+      const from = origin !== undefined ? `a page on ${origin}` : `a client addressed to "${host ?? ''}"`;
+      console.warn(`${YELLOW}UI mode refused a connection from ${from}: only the UI page itself (http://127.0.0.1:<port>/ or http://localhost:<port>/) may connect.${RESET}`);
+    },
+  });
 
   // ws re-emits the HTTP server's 'error' events here; without a listener
   // they rethrow as uncaughtException and kill the process before the bind
@@ -5370,6 +5383,11 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
   const MCP_DEFAULT_PORT = 9274;
   const mcpHttpServer = http.createServer(async (req, res) => {
+    // Loopback Host, and loopback Origin for browser clients (e.g. the MCP
+    // Inspector on another localhost port): no other web page may call the
+    // device tools or inject /mcp-events (PILOT-1215; the MCP spec requires
+    // servers to validate Origin).
+    if (refuseForeignHost(req, res)) return;
     const url = new URL(req.url ?? '/', 'http://localhost');
 
     // Streamable HTTP endpoint — handles POST (JSON-RPC) + GET (SSE stream) + DELETE (session close)

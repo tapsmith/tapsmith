@@ -18,6 +18,8 @@ To set a specific port:
 npx tapsmith test --ui --ui-port 8080
 ```
 
+The UI server and its MCP endpoint listen on `127.0.0.1` only, and answer only requests addressed to `127.0.0.1`, `localhost` or `[::1]`. Only the UI's own page can open the UI's WebSocket, so another site open in your browser cannot drive the session. Open the UI at the printed address (or through a port forward to `localhost`); a page or client that is turned away gets `403 Forbidden`, and the terminal says which origin was refused.
+
 ## Features
 
 The UI provides:
