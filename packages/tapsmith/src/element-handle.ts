@@ -1598,6 +1598,24 @@ export class ElementHandle {
   }
 
   /**
+   * @internal — For an assertion that saw no element on a positional handle:
+   * ` (nth(i): expected at least N element(s), but found M)`,
+   * from one more read, so its message names the short index as an action's
+   * does instead of implying the locator matches nothing. '' when the handle
+   * has no index, the read now finds the target, or the read fails (the
+   * assertion is failing anyway; its own message stands).
+   */
+  async _positionalMissDetailNow(): Promise<string> {
+    if (this._options.nthIndex === undefined) return '';
+    try {
+      const tick = await this._resolveTick(TICK_READ_BUDGET_MS);
+      return tick.kind === 'miss' ? positionalMissDetail(tick.positionalMiss) : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /**
    * @internal — Everything a not-found message says after its first
    * sentence, as ". …" to append to it: the locators that do
    * match the same words on screen now (asked of the device agent, for an
