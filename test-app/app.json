@@ -47,6 +47,7 @@
       "expo-router",
       "./plugins/with-network-security-config",
       "./plugins/with-webview-debugging",
+      "./plugins/with-scene-lifecycle",
       "expo-secure-store"
     ],
     "experiments": {

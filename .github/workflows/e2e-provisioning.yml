@@ -336,7 +336,7 @@ jobs:
         with:
           path: e2e/fixtures/TapsmithTestApp.app
           key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
-            'test-app/package-lock.json', 'test-app/app.json',
+            'test-app/plugins/**', 'test-app/package-lock.json', 'test-app/app.json',
             'test-app/metro.config.js',
             'packages/tapsmith-react-native/src/**',
             'packages/tapsmith-react-native/package.json',
