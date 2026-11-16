@@ -337,6 +337,37 @@ check("a toolbar spanning its window narrower than the screen is a host too",
       ]).analyze(.init(frame: R(20, 183, 160, 22), elementType: .textField, label: "", identifier: ""), isHittable: true),
       .clear(point: CGPoint(x: 100, y: 194), visible: R(20, 183, 160, 22)))
 
+// A sheet on iOS 27 gets its own host, the size of the sheet's container
+// (below the status bar), laid over the sheet's nav bar and content.
+let ios27Sheet: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .other, "", "", R(0, 62, 402, 812)),
+    (4, .navigationBar, "", "Sheet", R(0, 78, 402, 106)),
+    (5, .other, "", "", R(316, 82, 66, 36)),
+    (6, .button, "Done", "", R(316, 82, 66, 36)),
+    (5, .staticText, "Sheet", "", R(16, 135, 93, 41)),
+    (4, .other, "", "", R(0, 62, 402, 812)),
+    (5, .staticText, "Sheet content", "", R(147, 501, 107, 21)),
+    (4, .toolbar, "Toolbar", "Toolbar", R(0, 62, 402, 812)),
+    (5, .other, "", "", R(0, 62, 402, 812)),
+]
+for hittable in [true, false] {
+    checkPoint("iOS 27: a sheet's own toolbar host does not cover its Done button (hittable: \(hittable))",
+               analyzer(ios27Sheet).analyze(button("Done", R(316, 82, 66, 36)), isHittable: hittable),
+               CGPoint(x: 349, y: 100))
+}
+// A real bar wrapped in a view of its own size (a UIViewRepresentable host)
+// fills its container too, but is laid over nothing in it: still a bar.
+check("a bar alone in a wrapper of its own size still covers what is under it",
+      analyzer(ios27Form + [
+          (5, .cell, "", "", R(16, 800, 370, 40)),
+          (3, .other, "", "", R(0, 790, 402, 84)),
+          (4, .toolbar, "", "", R(0, 790, 402, 84)),
+      ]).analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      .covered(by: "toolbar"))
+
 // ─── Scroll viewports ───
 
 // A row scrolled half out of its scroll view, under a JS header (an unlabeled

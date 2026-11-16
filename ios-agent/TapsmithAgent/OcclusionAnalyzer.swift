@@ -25,8 +25,9 @@ import XCTest
 ///   content passes under a nav bar even though the bar comes first in the
 ///   tree) or painted after it — not over a sheet presented on top of their
 ///   screen. They clip the visible area like the keyboard does.
-///   A bar node the size of its whole window is not a bar but the host of
-///   one (iOS 27, PILOT-1207): only the controls in it cover anything.
+///   A bar node that fills its container over the content before it is not
+///   a bar but the host of one (iOS 27, PILOT-1207): only the controls in it
+///   cover anything.
 /// - **An interactive control painted after the target** (later in a
 ///   pre-order walk, which is the drawing order) that is not the target's own
 ///   descendant and contains the touch point: a button, link, input, cell,
@@ -190,7 +191,7 @@ struct OcclusionAnalyzer {
         for (i, node) in nodes.enumerated() where Self.barTypes.contains(node.elementType) {
             if let w = node.window, keyboardWindows.contains(w) { continue }
             if isSelfOrAncestor(i, of: targetIndex, targetFrame: target.frame) { continue }
-            if isWindowSizedBarHost(i) { continue }
+            if isBarHost(i) { continue }
             if !barCovers(i, target: targetIndex) { continue }
             clips.append((node.frame, describe(node)))
         }
@@ -304,18 +305,21 @@ struct OcclusionAnalyzer {
         return container < t && nodes[container].subtreeEnd > t
     }
 
-    /// Whether bar `i` spans its whole window, so its frame is not where the
-    /// bar is drawn. iOS 27 gives every app window a last child `Toolbar`
-    /// the size of the window (PILOT-1207): empty when the screen has no
-    /// toolbar, and otherwise the host of the toolbar's items, laid out in it
-    /// as floating capsules. Clipping by that frame would call everything in
-    /// the window covered. A real bar never covers its whole window, so this
-    /// is the host on any runtime; what it holds still covers what it is
+    /// Whether bar `i` is the host of a bar rather than a bar: it fills its
+    /// whole container and is laid over the content before it there. iOS 27
+    /// adds one as the last child of every app window and of every sheet
+    /// (PILOT-1207), empty when the screen has no toolbar and otherwise
+    /// holding the toolbar's items, laid out in it as floating capsules.
+    /// Clipping by its frame would call everything in the container covered.
+    /// A real bar never covers all of its container's content; one alone in
+    /// a wrapper of its own size (a `UIViewRepresentable`) is laid over
+    /// nothing, so it stays a bar. What a host holds still covers what it is
     /// drawn over, as an interactive control painted after the target.
-    private func isWindowSizedBarHost(_ i: Int) -> Bool {
-        var window = nodes[i].window.map { nodes[$0].frame } ?? screen
-        if window.width <= 0 || window.height <= 0 { window = screen }
-        return nodes[i].frame.insetBy(dx: -1, dy: -1).contains(window)
+    private func isBarHost(_ i: Int) -> Bool {
+        guard let p = nodes[i].parent, i > p + 1 else { return false }
+        let container = nodes[p].frame
+        guard container.width > 0, container.height > 0 else { return false }
+        return nodes[i].frame.insetBy(dx: -1, dy: -1).contains(container)
     }
 
     // MARK: - Keyboard
