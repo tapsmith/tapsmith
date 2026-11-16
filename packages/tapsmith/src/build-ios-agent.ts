@@ -135,7 +135,7 @@ export interface KeychainIdentity {
  *
  * The ID in brackets is the certificate's own identifier, not the team, so
  * this returns no team: the team is the certificate subject's OU, which
- * `parseCertificateTeams` reads (PILOT-1203).
+ * `parseCertificateTeams` reads.
  */
 export function parseFindIdentityOutput(rawOutput: string): Array<{ sha1: string, name: string }> {
   const bySha1 = new Map<string, { sha1: string, name: string }>();
@@ -511,7 +511,7 @@ export function matchKnownErrorHint(line: string, ctx: HintContext = { xcodeTeam
 
 /**
  * The hints for a failed build's output: each once, in order, and without the
- * provisioning-profile hint when an account error caused it (PILOT-1203).
+ * provisioning-profile hint when an account error caused it.
  */
 export function selectErrorHints(lines: string[], xcodeTeams: SigningIdentity[]): ErrorHint[] {
   const ctx: HintContext = { xcodeTeams };
