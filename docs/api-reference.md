@@ -3229,7 +3229,8 @@ for the device, `tapsmith ios network setup-simulator` for a simulator.
 
 Build the signed `TapsmithAgent` XCUITest runner for physical devices with
 your provisioning profile. Auto-detects the Apple Developer team ID from
-Xcode's preferences (or keychain) if `--team-id` is omitted. `-v` /
+the accounts signed in to Xcode if `--team-id` is omitted (when Xcode has none, from
+the team of your keychain's signing certificate). `-v` /
 `--verbose` streams the raw `xcodebuild` output.
 
 The agent source comes from `<cwd>/ios-agent/` in a Tapsmith checkout (`--cwd`
