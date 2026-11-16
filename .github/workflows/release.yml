@@ -86,6 +86,12 @@ jobs:
             strip "$HELPER" 2>/dev/null || true
           fi
 
+      # Without the HID helper every HID-routed gesture silently downgrades to
+      # the flaky XCTest agent path, so never publish a macOS daemon without it.
+      - name: Verify HID helper was built (macOS)
+        if: runner.os == 'macOS'
+        run: test -x target/${{ matrix.target }}/release/tapsmith-ios-hid
+
       - name: Ad-hoc codesign (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -167,11 +173,11 @@ jobs:
       matrix:
         include:
           - runner: xcode-27
+            xcode: '27.2'
+            sdk: '27.2'
+          - runner: xcode-27
             xcode: '27.1'
             sdk: '27.1'
-          - runner: xcode-27
-            xcode: '27.0'
-            sdk: '27.0'
           - runner: macos-26
             xcode: '26.6'
             sdk: '26.5'
