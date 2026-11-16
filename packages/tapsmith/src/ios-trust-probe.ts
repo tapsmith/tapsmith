@@ -286,7 +286,8 @@ export function describeRunnerTrustFailure(check: RunnerTrustCheck): { lines: st
     case 'profile-expired':
       return {
         lines: [
-          `The provisioning profile of the local agent build expired on ${check.expiry.expiresAt.slice(0, 10)}, so the device refuses its runner.`,
+          `The provisioning profile of the local agent build expired on ${check.expiry.expiresAt.slice(0, 10)}, so the device refuses its runner`,
+          `(${check.runnerApp}).`,
           'Re-run `tapsmith ios build-agent` to sign it with a current profile.',
         ],
         error: 'iOS agent provisioning profile expired',
@@ -294,8 +295,8 @@ export function describeRunnerTrustFailure(check: RunnerTrustCheck): { lines: st
     case 'install-failed':
       return {
         lines: [
-          'The Tapsmith runner on the device cannot launch, and installing the local build in its place failed:',
-          ...check.detail.split('\n').map((line) => `  ${line}`),
+          'The Tapsmith runner on the device could not launch, so Tapsmith removed it, but installing the local build in its place failed:',
+          ...installErrorLines(check.detail).map((line) => `  ${line}`),
           'Re-run `tapsmith ios build-agent`, and check the device is registered to your team',
           '(Xcode → Window → Devices and Simulators).',
         ],
@@ -312,6 +313,17 @@ export function describeRunnerTrustFailure(check: RunnerTrustCheck): { lines: st
         error: 'iOS developer certificate not trusted on device',
       };
   }
+}
+
+/**
+ * The useful lines of a devicectl install failure: devicectl's own message and
+ * hint, without node's `Command failed: <whole command line>` echo or blank lines.
+ */
+function installErrorLines(detail: string): string[] {
+  return detail
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== '' && !line.trimStart().startsWith('Command failed:'));
 }
 
 const RUNNER_UNINSTALL_TIMEOUT_MS = 60_000;

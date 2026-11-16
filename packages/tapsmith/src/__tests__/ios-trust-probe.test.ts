@@ -205,17 +205,30 @@ describe('checkRunnerTrust', () => {
     expect(calls.some((c) => c.startsWith('uninstall') || c.startsWith('install'))).toBe(false);
     const text = describeRunnerTrustFailure(check)!.lines.join('\n');
     expect(text).toContain('2026-11-01');
+    expect(text).toContain(runnerApp);
     expect(text).toContain('tapsmith ios build-agent');
     expect(text).not.toContain('VPN & Device Management');
   });
 
   it('reports a failed install with its detail and a rebuild hint, not a trust hint', async () => {
     const { ops } = fakeOps(['untrusted'], {
-      installError: new Error('devicectl install failed for Runner.app:\n  hint: The application could not be installed because its profile does not include this device.'),
+      // The shape installAppOnDevice throws: its prefix, node's command echo, devicectl's stderr, the hint.
+      installError: new Error([
+        `devicectl install failed for ${runnerApp} on ${UDID}:`,
+        `Command failed: xcrun devicectl device install app --device ${UDID} --json-output /var/folders/x/tapsmith-devicectl-install-app-1.json ${runnerApp}`,
+        'ERROR: Failed to install the app on the device. (com.apple.dt.CoreDeviceError error 3002.)',
+        '',
+        '  hint: The application could not be installed because its profile does not include this device.',
+      ].join('\n')),
     });
     const check = await checkRunnerTrust(UDID, resolve(() => xctestrun), ops);
     expect(check.outcome).toBe('install-failed');
-    const text = describeRunnerTrustFailure(check)!.lines.join('\n');
+    const lines = describeRunnerTrustFailure(check)!.lines;
+    const text = lines.join('\n');
+    expect(text).toContain('removed it');
+    expect(text).toContain('CoreDeviceError error 3002');
+    expect(lines.some((line) => line.trim().startsWith('Command failed:'))).toBe(false);
+    expect(lines.some((line) => line.trim() === '')).toBe(false);
     expect(text).toContain('does not include this device');
     expect(text).toContain('tapsmith ios build-agent');
     expect(text).not.toContain('VPN & Device Management');
