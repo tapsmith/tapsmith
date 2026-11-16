@@ -349,7 +349,7 @@ export async function resolveTeamId(explicit?: string): Promise<string> {
     yellow(
       'Warning: a signing certificate is present in the keychain, but Xcode has no ' +
         'registered Apple Developer account. `xcodebuild` may refuse this team with ' +
-        '"No Account for Team". Fix: open Xcode → Settings → Accounts and sign in.',
+        '"No Accounts" or "No Account for Team". Fix: open Xcode → Settings → Accounts and sign in.',
     ),
   );
   if (keychainTeams.length === 1) {

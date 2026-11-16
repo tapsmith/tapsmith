@@ -167,7 +167,7 @@ export function checkSigningIdentities(): CheckResult {
       ok: false,
       fix: [
         `Keychain has ${keychain.length} signing cert(s), but Xcode has no Apple ID`,
-        'signed in. `xcodebuild` will fail with "No Account for Team ..." until',
+        'signed in. `xcodebuild` will fail with "No Accounts" or "No Account for Team" until',
         'you sign in via:',
         '  1) Open Xcode → Settings → Accounts',
         '  2) Click + → Apple ID',
