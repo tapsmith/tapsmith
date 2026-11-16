@@ -167,11 +167,11 @@ jobs:
       matrix:
         include:
           - runner: xcode-27
+            xcode: '27.2'
+            sdk: '27.2'
+          - runner: xcode-27
             xcode: '27.1'
             sdk: '27.1'
-          - runner: xcode-27
-            xcode: '27.0'
-            sdk: '27.0'
           - runner: macos-26
             xcode: '26.6'
             sdk: '26.5'
