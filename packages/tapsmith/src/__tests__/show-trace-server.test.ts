@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as http from 'node:http';
 import { zipSync } from 'fflate';
 
 // We need to test the server module. Mock `open` to avoid opening a browser.
@@ -64,6 +65,32 @@ describe('showTrace', () => {
 
     const resp = await fetch(`http://127.0.0.1:${result.port}/unknown`);
     expect(resp.status).toBe(404);
+  });
+
+  // PILOT-1215: another web page must not be able to read the local trace —
+  // neither cross-origin (no CORS grant) nor through a DNS-rebound hostname.
+  it('does not grant other origins read access to the trace', async () => {
+    const tracePath = createDummyTrace();
+    const result = await showTrace({ tracePath, port: 0 });
+    cleanup = result.close;
+
+    const resp = await fetch(`http://127.0.0.1:${result.port}/trace.zip`);
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('refuses requests addressed to a non-loopback host', async () => {
+    const tracePath = createDummyTrace();
+    const result = await showTrace({ tracePath, port: 0 });
+    cleanup = result.close;
+
+    const status = await new Promise<number>((resolve, reject) => {
+      http.request(
+        { host: '127.0.0.1', port: result.port, path: '/trace.zip', headers: { host: `evil.example:${result.port}` }, setHost: false },
+        (res) => { res.resume(); resolve(res.statusCode ?? 0); },
+      ).on('error', reject).end();
+    });
+    expect(status).toBe(403);
   });
 
   it('throws for non-existent trace file', async () => {
