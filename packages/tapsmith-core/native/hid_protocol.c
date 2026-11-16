@@ -15,8 +15,29 @@ double hid_normalize(double point, double extentPt) {
   return clamp01(point / extentPt);
 }
 
+int hid_contact_after(HidCmd cmd, int contactDown, int sent) {
+  switch (cmd) {
+    case HID_DOWN:
+    case HID_MOVE:
+      return 1;
+    case HID_UP:
+    case HID_CANCEL:
+      return sent ? 0 : contactDown;
+    case HID_TAP:
+    case HID_DOUBLE_TAP:
+      return 0;
+    case HID_INVALID:
+    default:
+      return contactDown;
+  }
+}
+
+int hid_lifts_held_contact(HidCmd cmd, int contactDown) {
+  return contactDown && (cmd == HID_TAP || cmd == HID_DOUBLE_TAP);
+}
+
 HidEvent hid_parse_line(const char *line) {
-  HidEvent e = { .cmd = HID_INVALID, .x = 0.0, .y = 0.0 };
+  HidEvent e = { .cmd = HID_INVALID, .x = 0.0, .y = 0.0, .holdMs = HID_DEFAULT_HOLD };
   if (!line) return e;
 
   while (*line && isspace((unsigned char)*line)) line++;
@@ -24,11 +45,13 @@ HidEvent hid_parse_line(const char *line) {
 
   if (c == 'c') { e.cmd = HID_CANCEL; return e; }
 
-  int isDoubleTap = (c == 't' && line[1] == '2' &&
-                     (line[2] == '\0' || isspace((unsigned char)line[2])));
-  if (!isDoubleTap && c != 'd' && c != 'm' && c != 'u') return e;
+  /* t1 / t2: a whole tap or double tap, with an optional hold. */
+  int isTapLine = (c == 't' && (line[1] == '1' || line[1] == '2') &&
+                   (line[2] == '\0' || isspace((unsigned char)line[2])));
+  int isDoubleTap = isTapLine && line[1] == '2';
+  if (!isTapLine && c != 'd' && c != 'm' && c != 'u') return e;
 
-  const char *rest = line + (isDoubleTap ? 2 : 1);
+  const char *rest = line + (isTapLine ? 2 : 1);
   char *end = NULL;
   double x = strtod(rest, &end);
   if (end == rest) return e;          /* no x parsed */
@@ -36,9 +59,22 @@ HidEvent hid_parse_line(const char *line) {
   double y = strtod(rest2, &end);
   if (end == rest2) return e;         /* no y parsed */
 
+  if (isTapLine) {
+    const char *rest3 = end;
+    while (*rest3 && isspace((unsigned char)*rest3)) rest3++;
+    if (*rest3) {
+      long hold = strtol(rest3, &end, 10);
+      if (end == rest3 || hold < 0 || hold > HID_MAX_HOLD_MS) return e;
+      while (*end && isspace((unsigned char)*end)) end++;
+      if (*end) return e;               /* trailing junk */
+      e.holdMs = (int)hold;
+    }
+  }
+
   e.x = x;
   e.y = y;
   e.cmd = isDoubleTap ? HID_DOUBLE_TAP
+        : isTapLine   ? HID_TAP
         : (c == 'd')  ? HID_DOWN
         : (c == 'm')  ? HID_MOVE
                       : HID_UP;

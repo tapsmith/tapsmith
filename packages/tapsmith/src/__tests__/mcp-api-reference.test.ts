@@ -62,11 +62,11 @@ describe('tapsmith://api-reference', () => {
 });
 
 describe('resolveApiReferencePath', () => {
-  it('finds the copy the build bundles into dist/docs, the only one an installed package has', async () => {
+  it('finds the copy the build bundles into the package docs/, the only one an installed package has', async () => {
     const { resolveApiReferencePath } = await import('../mcp/api-reference.js');
     // node_modules/tapsmith/dist/mcp, with no repo around it.
     const pkg = path.join(tmpDir, 'node_modules', 'tapsmith');
-    const bundled = write(pkg, 'dist/docs/api-reference.md', '# bundled');
+    const bundled = write(pkg, 'docs/api-reference.md', '# bundled');
     expect(resolveApiReferencePath(path.join(pkg, 'dist', 'mcp'))).toBe(bundled);
   });
 
@@ -79,8 +79,15 @@ describe('resolveApiReferencePath', () => {
   it('prefers the bundled copy when a built dist/ sits inside the repo', async () => {
     const { resolveApiReferencePath } = await import('../mcp/api-reference.js');
     write(tmpDir, 'docs/api-reference.md', '# repo');
-    const bundled = write(tmpDir, 'packages/tapsmith/dist/docs/api-reference.md', '# bundled');
+    const bundled = write(tmpDir, 'packages/tapsmith/docs/api-reference.md', '# bundled');
     expect(resolveApiReferencePath(path.join(tmpDir, 'packages', 'tapsmith', 'dist', 'mcp'))).toBe(bundled);
+  });
+
+  it('reads the repo copy from src/mcp even when a build left a bundled copy beside src/', async () => {
+    const { resolveApiReferencePath } = await import('../mcp/api-reference.js');
+    const repoDoc = write(tmpDir, 'docs/api-reference.md', '# repo');
+    write(tmpDir, 'packages/tapsmith/docs/api-reference.md', '# a build leftover');
+    expect(resolveApiReferencePath(path.join(tmpDir, 'packages', 'tapsmith', 'src', 'mcp'))).toBe(repoDoc);
   });
 
   it("never serves the user's own docs/api-reference.md from an installed package", async () => {
@@ -101,7 +108,7 @@ describe('registerApiReferenceResource', () => {
   it('serves the file it resolved, read when asked for', async () => {
     const { registerApiReferenceResource } = await import('../mcp/api-reference.js');
     const pkg = path.join(tmpDir, 'node_modules', 'tapsmith');
-    const bundled = write(pkg, 'dist/docs/api-reference.md', '# first');
+    const bundled = write(pkg, 'docs/api-reference.md', '# first');
     const server = new McpServer({ name: 't', version: '0' });
     registerApiReferenceResource(server, path.join(pkg, 'dist', 'mcp'));
     const client = await connect(server);
@@ -139,7 +146,7 @@ describe('registerApiReferenceResource', () => {
     expect(stderr).toHaveBeenCalledTimes(1);
     const message = String(stderr.mock.calls[0][0]);
     expect(message).toContain(URI);
-    expect(message).toContain(path.join(tmpDir, 'packages', 'tapsmith', 'dist', 'docs', 'api-reference.md'));
+    expect(message).toContain(path.join(tmpDir, 'packages', 'tapsmith', 'docs', 'api-reference.md'));
     expect(message).toContain(path.join(tmpDir, 'docs', 'api-reference.md'));
     // stdout carries the stdio protocol; a warning there would corrupt it.
     expect(stdoutLog).not.toHaveBeenCalled();

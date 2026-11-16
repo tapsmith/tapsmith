@@ -86,6 +86,22 @@ export interface WatchRunMessage {
    */
   runMode: Extract<RunMode, 'watch' | 'mcp'>
   /**
+   * Whether the session's test files use the network APIs — the parent's
+   * scan, passed on as `RunOptions.networkApisInRun`. Required:
+   * a parent that left it out would leave mocking on the late on-demand start.
+   */
+  networkApisInRun: boolean
+  /**
+   * Whether the app this child adopts was launched with the network proxy
+   * up: the parent started it first (its session-open scan found the network
+   * APIs), or an earlier child relaunched the app behind it (its
+   * `appBehindProxy`). False when the app was launched without it — the MCP
+   * server's own launch, or a watch session whose first mocking test was
+   * written later — so a failed test's unfired routes can name the late
+   * start. Required.
+   */
+  proxyStartedBeforeLaunch: boolean
+  /**
    * The parent's sticky reset-capability knowledge for the primary device
    * (in-app hooks detected, …). This child is forked fresh per run, so
    * without it every run would start undetected and `appReset: 'auto'` would
@@ -116,6 +132,12 @@ export interface WatchRunFileDoneMessage {
   resetCapabilities?: ResetCapabilities
   /** The same, for every device of the group, keyed by serial. */
   groupResetCapabilities?: Record<string, ResetCapabilities>
+  /**
+   * Whether the primary's app now runs behind the network proxy (this run
+   * relaunched it with the proxy up), for the parent's next
+   * `proxyStartedBeforeLaunch`. Omitted when this run never started the proxy.
+   */
+  appBehindProxy?: boolean
 }
 
 export interface WatchRunErrorMessage {
@@ -186,7 +208,15 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       })),
     ],
     config,
-    { claimSession: currentSession(), label, adoptVerify: !config.package, connectTimeoutMs: 5_000 },
+    // Adopting a running app, so the runner starts the proxy at the file; the
+    // open still tells the daemon a proxy will run, for the app's relaunches.
+    {
+      claimSession: currentSession(),
+      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0, startedBeforeLaunch: msg.proxyStartedBeforeLaunch },
+      label,
+      adoptVerify: !config.package,
+      connectTimeoutMs: 5_000,
+    },
   );
 
   // Created BEFORE preflight so a stop that lands during wake/unlock/app-reset
@@ -243,6 +273,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       },
       resetCapabilities: sessions[0].capabilities,
       runMode: msg.runMode,
+      networkApisInRun: msg.networkApisInRun,
       projectUseOptions: msg.projectUseOptions,
       projectName: msg.projectName,
       testFilter: msg.testFilter,
@@ -259,6 +290,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       suite: serializeSuiteResult(suiteResult, 0),
       resetCapabilities: sessions[0].capabilities,
       groupResetCapabilities: Object.fromEntries(sessions.map((s) => [s.serial, s.capabilities])),
+      ...(sessions[0].device._appBehindProxy === undefined ? {} : { appBehindProxy: sessions[0].device._appBehindProxy }),
     });
   } finally {
     disposeActionProgressPrinter();

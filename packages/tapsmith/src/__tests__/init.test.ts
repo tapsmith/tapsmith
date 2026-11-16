@@ -788,6 +788,15 @@ describe('wizardNextSteps() (PILOT-562)', () => {
     expect(steps.map(([, cmd]) => cmd)).toEqual(['npx tapsmith verify', 'npx tapsmith test', 'npx tapsmith list-devices', 'npx tapsmith doctor']);
   });
 
+  it('lists the plugin install for each coding agent the project uses, after the health check', () => {
+    const steps = wizardNextSteps('npx tapsmith', { agents: ['claude', 'codex', 'cursor'] });
+    expect(steps.slice(4)).toEqual([
+      ['Claude Code plugin', 'claude plugin marketplace add tapsmith/tapsmith && claude plugin install tapsmith@tapsmith'],
+      ['Codex plugin', 'codex plugin marketplace add tapsmith/tapsmith && codex plugin add tapsmith@tapsmith'],
+      ['Cursor plugin', 'see "Install the plugin" in node_modules/tapsmith/docs/mcp-server.md'],
+    ]);
+  });
+
   it('puts a declined install first (PILOT-551)', () => {
     const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith' });
     expect(steps[0]).toEqual(['Install Tapsmith', 'npm i -D tapsmith']);

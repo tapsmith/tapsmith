@@ -109,6 +109,24 @@ class AgentInput(
         steps: Int,
     ): Boolean = gestures.stepSwipe(x1, y1, x2, y2, steps)
 
+    /** [swipe]'s moves, then a rest at the end before the lift, so nothing flings (PILOT-973). */
+    fun drag(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        steps: Int,
+    ): Boolean = gestures.stepDrag(x1, y1, x2, y2, steps)
+
+    /** scrollIntoView()'s step drag: short, backdated, ending in a CANCEL (PILOT-998). */
+    fun scrollStepDrag(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        steps: Int,
+    ): Boolean = gestures.scrollStepDrag(x1, y1, x2, y2, steps)
+
     /** UiDevice.pressKeyCode. */
     fun pressKey(keyCode: Int): Boolean = gestures.pressKey(keyCode)
 
@@ -128,9 +146,14 @@ class AgentInput(
         return pressed
     }
 
-    /** UiObject2.click: a press and an immediate release at the center of its visible bounds. */
+    /**
+     * UiObject2.click: a press and a release at the center of its visible
+     * bounds, with no hold between them, as [click] at a point (a gesture path
+     * would hold it a frame).
+     */
     fun click(element: UiObject2) {
-        gestures.perform(PointerPath(GestureGeometry.center(element.visibleBounds.toBox())))
+        val center = GestureGeometry.center(element.visibleBounds.toBox())
+        gestures.click(center.x, center.y)
     }
 
     /** UiObject2.swipe: over [percent] of the element less its margins, at [speedPxPerSec]. */

@@ -32,6 +32,7 @@ import {
   recordLaunchedEmulators,
   unrecordLaunchedEmulators,
   probeDeviceHealth,
+  probeDeviceHealthIfSettled,
   filterHealthyDevices,
   prefilterDevicesForStrategy,
   provisionEmulators,
@@ -66,6 +67,9 @@ import lockfile from 'proper-lockfile';
 
 const manifestFile = path.join(os.tmpdir(), 'tapsmith-emulators.json');
 
+/** `dumpsys window windows` while the launcher's ANR dialog is up. */
+const ANR_WINDOWS = '  Window #6 Window{8667851 u0 Application Not Responding: com.google.android.apps.nexuslauncher}:\n';
+
 /** `uiautomator dump` of a real "Pixel Launcher isn't responding" dialog,
  *  captured on an API 36 emulator (PILOT-398). */
 const LAUNCHER_ANR_FIXTURE = fs.readFileSync(
@@ -97,6 +101,43 @@ describe('emulator utilities', () => {
   });
 
   describe('probeDeviceHealth', () => {
+    const HEALTHY_SHELL = {
+      'adb|-s|emulator-5554|shell|echo|__tapsmith_health_ok__': '__tapsmith_health_ok__\n',
+      'adb|-s|emulator-5554|shell|getprop|sys.boot_completed': '1\n',
+      'adb|-s|emulator-5554|shell|pm|path|android': 'package:/system/framework/framework-res.apk\n',
+    };
+    const DUMP = 'adb|-s|emulator-5554|exec-out|uiautomator|dump|/dev/tty';
+    const WINDOWS = 'adb|-s|emulator-5554|shell|dumpsys|window|windows';
+    const NO_DIALOG_WINDOWS = '  Window #5 Window{a7b1ce u0 StatusBar}:\n'
+      + '  Window #8 Window{a5e2d1d u0 com.example.app/com.example.app.MainActivity}:\n';
+    /** Records every adb command, answering like a healthy device. */
+    const recording = (responses: Record<string, string | Error>) => {
+      const calls: string[] = [];
+      const inner = makePermissiveExec(responses);
+      const exec = ((file: string, args: string[], opts: unknown) => {
+        calls.push([file, ...args].join('|'));
+        return (inner as unknown as (f: string, a: string[], o: unknown) => string)(file, args, opts);
+      }) as unknown as typeof import('node:child_process').execFileSync;
+      return { exec, calls };
+    };
+
+    it('skips the hierarchy dump when the window list shows no ANR or crash dialog', () => {
+      // `uiautomator dump` waits for an idle screen: seconds on a live app,
+      // where the window list takes ~50 ms.
+      const { exec, calls } = recording({ ...HEALTHY_SHELL, [WINDOWS]: NO_DIALOG_WINDOWS });
+      expect(probeDeviceHealth('emulator-5554', exec)).toEqual({ serial: 'emulator-5554', healthy: true });
+      expect(calls).toContain(WINDOWS);
+      expect(calls).not.toContain(DUMP);
+    });
+
+    it('reads the hierarchy when a dialog window is listed, or the window list cannot be read', () => {
+      for (const windows of [ANR_WINDOWS, new Error('device offline'), '', 'Error: dumpsys window not found']) {
+        const { exec, calls } = recording({ ...HEALTHY_SHELL, [WINDOWS]: windows, [DUMP]: '<hierarchy><node text="Home" /></hierarchy>' });
+        expect(probeDeviceHealth('emulator-5554', exec).healthy).toBe(true);
+        expect(calls).toContain(DUMP);
+      }
+    });
+
     it('accepts a healthy emulator', () => {
       const exec = makeExec({
         'adb|-s|emulator-5554|shell|echo|__tapsmith_health_ok__': '__tapsmith_health_ok__\n',
@@ -156,6 +197,7 @@ describe('emulator utilities', () => {
         'adb|-s|emulator-5554|shell|pm|path|android': 'package:/system/framework/framework-res.apk\n',
         'adb|-s|emulator-5554|exec-out|uiautomator|dump|/dev/tty':
           'UI hierchary dumped to: /dev/tty\n<hierarchy><node text="Pixel Launcher isn&apos;t responding" /></hierarchy>\n',
+        'adb|-s|emulator-5554|shell|dumpsys|window|windows': ANR_WINDOWS,
       });
 
       const result = probeDeviceHealth('emulator-5554', exec);
@@ -193,6 +235,31 @@ describe('emulator utilities', () => {
       expect(probeDeviceHealth('emulator-5554', exec).reason).toBe(
         'blocking system dialog detected: "Pixel Launcher isn\'t responding"',
       );
+    });
+  });
+
+  describe('probeDeviceHealthIfSettled', () => {
+    const UPTIME = 'adb|-s|emulator-5554|shell|cat|/proc/uptime';
+    const probe = vi.fn((serial: string) => ({ serial, healthy: true }));
+    beforeEach(() => probe.mockClear());
+
+    it('probes once a device that has been up for a minute', () => {
+      const exec = makeExec({ [UPTIME]: '61.20 240.11\n' });
+      expect(probeDeviceHealthIfSettled('emulator-5554', exec, probe)).toEqual({ serial: 'emulator-5554', healthy: true });
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+
+    it('counts a device up for exactly a minute as settled', () => {
+      const exec = makeExec({ [UPTIME]: '60.00 240.11\n' });
+      expect(probeDeviceHealthIfSettled('emulator-5554', exec, probe)).toEqual({ serial: 'emulator-5554', healthy: true });
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers nothing for a device that just booted, or whose uptime cannot be read', () => {
+      for (const uptime of ['12.04 30.00\n', 'garbage', new Error('device offline')]) {
+        expect(probeDeviceHealthIfSettled('emulator-5554', makeExec({ [UPTIME]: uptime }), probe)).toBeUndefined();
+      }
+      expect(probe).not.toHaveBeenCalled();
     });
   });
 

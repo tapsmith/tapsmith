@@ -482,6 +482,33 @@ describe('run child naming', () => {
   });
 });
 
+describe('whether the app runs behind the proxy, across children (PILOT-1013)', () => {
+  const RUN_FILE = '/repo/tests/a.test.ts';
+
+  async function runOnce(dispatcher: HeadlessTestDispatcher, child: ScriptedChild, appBehindProxy?: boolean): Promise<WatchRunMessage> {
+    vi.mocked(fork).mockReturnValue(child as unknown as ReturnType<typeof fork>);
+    const run = internalsOf(dispatcher)._runFileInChild(RUN_FILE);
+    await untilRunning(child);
+    const msg = child.send.mock.calls[0][0] as WatchRunMessage;
+    child.emit('message', { ...(fileDone(RUN_FILE, [], 1) as object), ...(appBehindProxy === undefined ? {} : { appBehindProxy }) });
+    await run;
+    return msg;
+  }
+
+  it('starts from the server\'s own launch, then carries what each child learned', async () => {
+    const dispatcher = armDispatcher(scriptedChild(), [RUN_FILE]);
+    // The MCP server launched the app without the proxy; this child
+    // relaunches it behind the proxy.
+    expect((await runOnce(dispatcher, scriptedChild(), true)).proxyStartedBeforeLaunch).toBe(false);
+    // So the next one is told; it never starts the proxy, which leaves that as it was.
+    expect((await runOnce(dispatcher, scriptedChild())).proxyStartedBeforeLaunch).toBe(true);
+    // This one reports the app is not behind it…
+    expect((await runOnce(dispatcher, scriptedChild(), false)).proxyStartedBeforeLaunch).toBe(true);
+    // …so the next is told it was launched without.
+    expect((await runOnce(dispatcher, scriptedChild())).proxyStartedBeforeLaunch).toBe(false);
+  });
+});
+
 describe('a file that failed to load (PILOT-545)', () => {
   it('keeps the runner\'s load-failure result flagged as file-level, so a later real run retires it', async () => {
     const child = scriptedChild();

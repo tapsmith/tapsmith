@@ -348,7 +348,9 @@ function checkScreenshots(archive, r) {
     // origin (or an edge past the far side) for an element the viewport clips —
     // a partially scrolled row is the common case. What cannot happen is a box
     // sitting entirely off the frame, which is what a coordinate-space mismatch
-    // produces.
+    // produces — except for a query row that captured before it scrolled or
+    // waited: iOS reports a below-the-fold element's real frame then.
+    if (capturesBeforeItWaits(step.action)) continue
     r.check(
       b.right > 0 && b.bottom > 0 && b.left < frameWidth && b.top < frameHeight,
       `step ${step.actionIndex} recorded an element box with no overlap with the ${frame} ` +
@@ -356,6 +358,11 @@ function checkScreenshots(archive, r) {
     )
   }
   r.note(`${checkedBoxes} element boxes checked against the ${frame} frame`)
+}
+
+/** A query row whose frame is taken before it waits or scrolls to its target. */
+function capturesBeforeItWaits(action) {
+  return action === "find" || action === "scrollIntoView" || /^waitFor\(/.test(action ?? "")
 }
 
 function checkHierarchies(archive, r) {
@@ -421,7 +428,10 @@ function checkHierarchies(archive, r) {
   //
   // Only actions qualify. An assertion's capture is taken *before* it polls, by
   // design, so the trace shows the screen the wait started from — its target
-  // legitimately may not be on screen yet.
+  // legitimately may not be on screen yet. The same holds for the `find`,
+  // `waitFor(...)` and `scrollIntoView` query rows, which are action-typed but
+  // capture before they wait or scroll, so they are skipped too (the test this
+  // drives calls none of them, but `--verify-only` may read any trace).
   //
   // Deliberately not gated on `step.bounds` (which the box check above does
   // skip when absent): bounds come from a separate 100ms `findElement` lookup
@@ -432,6 +442,7 @@ function checkHierarchies(archive, r) {
   let verifiedPairings = 0
   for (const step of archive.steps) {
     if (step.type !== "action" || !step.hasHierarchyBefore) continue
+    if (capturesBeforeItWaits(step.action)) continue
     const needle = selectorName(step.selector)
     if (needle === null) continue
     const xml = unescapeXml(new TextDecoder().decode(
@@ -453,13 +464,13 @@ function checkHierarchies(archive, r) {
   // captures are best-effort with a 5s timeout, and a slow a11y dump drops the
   // claim without failing the run.
   const namedActions = archive.steps.filter(
-    (s) => s.type === "action" && selectorName(s.selector) !== null,
+    (s) => s.type === "action" && !capturesBeforeItWaits(s.action) && selectorName(s.selector) !== null,
   )
   if (namedActions.length === 0) {
     r.check(
       false,
-      "no action recorded a named selector, so capture/step pairing could not be cross-checked " +
-        "against real device data",
+      "no action recorded a named selector (find/waitFor/scrollIntoView rows do not count), so " +
+        "capture/step pairing could not be cross-checked against real device data",
     )
   } else {
     r.check(

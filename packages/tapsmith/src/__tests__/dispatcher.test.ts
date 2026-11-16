@@ -84,6 +84,7 @@ function makeOpts(projects: ResolvedProject[], workers: number): DispatcherOptio
     testFiles: projects.flatMap((p) => p.testFiles),
     workers,
     forceInstall: false,
+    networkApisInRun: false,
     projects,
   };
 }
@@ -132,6 +133,18 @@ describe('planMultiBucket()', () => {
       ['1-ios|iPhone 16|', 1],
     ]));
     expect(plans.map((p) => p.bucketOpts.forceInstall)).toEqual([true, true]);
+  });
+
+  it('hands every bucket whether the run uses the network APIs (PILOT-1013)', () => {
+    const projects = [
+      makeProject('a', 'android|emu1||', ['t1.test.ts']),
+      makeProject('b', 'ios|iPhone 16|', ['t2.test.ts']),
+    ];
+    const plans = planMultiBucket({ ...makeOpts(projects, 2), networkApisInRun: true }, new Map([
+      ['0-android|emu1||', 1],
+      ['1-ios|iPhone 16|', 1],
+    ]));
+    expect(plans.map((p) => p.bucketOpts.networkApisInRun)).toEqual([true, true]);
   });
 
   it('routes each file only to the bucket that owns it', () => {

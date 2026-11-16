@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import {
+  ImageBackground,
   Keyboard,
   Pressable,
   ScrollView,
@@ -35,6 +36,11 @@ import { useLocalSearchParams } from "expo-router"
 //   key must not make the app's ambiguous (PILOT-756). Its taps are counted
 //   in "done". Only on request, so the row does not push "Centre action"
 //   off the screen centre the hideKeyboard() checks above rely on.
+// - With `?background=1`, the screen is drawn over a full-screen
+//   ImageBackground and inside a ScrollView with React Native's default
+//   keyboardShouldPersistTaps ("never"), like a typical login form. The
+//   image is behind everything, so it must not stop hideKeyboard() from
+//   tapping or dragging beside the field (PILOT-1177).
 export default function KeyboardScreen() {
   const [plainText, setPlainText] = useState("")
   const [goText, setGoText] = useState("")
@@ -48,7 +54,9 @@ export default function KeyboardScreen() {
   const [backgroundTaps, setBackgroundTaps] = useState(0)
   const [doneText, setDoneText] = useState("")
   const [doneTaps, setDoneTaps] = useState(0)
-  const showDone = useLocalSearchParams<{ done?: string }>().done === "1"
+  const params = useLocalSearchParams<{ done?: string; background?: string }>()
+  const showDone = params.done === "1"
+  const onBackground = params.background === "1"
 
   // A warm reset navigates here rather than remounting, so clear local state
   // explicitly when the epoch moves.
@@ -70,7 +78,7 @@ export default function KeyboardScreen() {
   }, [resetEpoch])
 
   const content = (
-    <View style={styles.container}>
+    <View style={[styles.container, onBackground && styles.transparent]}>
       <TextInput
         style={styles.input}
         value={plainText}
@@ -175,6 +183,20 @@ export default function KeyboardScreen() {
     </View>
   )
 
+  if (onBackground) {
+    // A bundled image, as an app's ImageBackground would use. CI's typecheck
+    // has no image module types (Expo generates them only on `expo start`),
+    // so it is required rather than imported.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const backgroundImage = require("../assets/splash-icon.png")
+    return (
+      <ImageBackground source={backgroundImage} style={styles.fill} resizeMode="cover">
+        <ScrollView style={styles.fill} contentContainerStyle={styles.fill}>
+          {content}
+        </ScrollView>
+      </ImageBackground>
+    )
+  }
   if (inScrollView) {
     return (
       <ScrollView
@@ -216,6 +238,9 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
     backgroundColor: "#f5f5f5",
+  },
+  transparent: {
+    backgroundColor: "transparent",
   },
   input: {
     backgroundColor: "#fff",

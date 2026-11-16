@@ -437,6 +437,67 @@ struct OcclusionAnalyzer {
         return result
     }
 
+    /// The types of the elements the target sits in, innermost first (an
+    /// alert, a segmented control: `TapTiming` holds a touch inside some of
+    /// them longer). Empty when the target cannot be located in the tree.
+    func ancestorTypes(of target: Target) -> [XCUIElement.ElementType] {
+        guard let t = locate(target) else { return [] }
+        return ancestors(of: t).map { nodes[$0].elementType }
+    }
+
+    /// The frames of the texts in the tree whose label or identifier is
+    /// `text`, shown or not, as the snapshot reported them.
+    func textFrames(_ text: String) -> [CGRect] {
+        nodes.indices.filter { isText($0, text) }.map { snapshotFrames[$0] }
+    }
+
+    /// A dropdown option's text as the tree shows it (`optionText`).
+    enum OptionText: Equatable {
+        /// Touch it at `point`, the uncovered point `analyze` picked; it sits
+        /// in elements of `ancestorTypes` (for `TapTiming`).
+        case touchable(point: CGPoint, ancestorTypes: [XCUIElement.ElementType])
+        /// In the tree, but no copy can be touched where it is: below the fold
+        /// of its list, or covered.
+        case present
+        /// Not in the tree.
+        case absent
+    }
+
+    /// Where to touch the dropdown option whose text (label or identifier)
+    /// is `text`: the first copy in the tree that `analyze` finds uncovered,
+    /// touched at the point it picked (clear of the keyboard and bars).
+    /// Copies at the frames in `excluding` are left out: what showed the text
+    /// before the dropdown opened (its trigger, the screen behind). The first
+    /// of the rest, not the last: an inline dropdown's options come right
+    /// after its trigger, ahead of the content they push down (where the same
+    /// text, moved, is no longer at an excluded frame), and a popup's options
+    /// are then the only copies left.
+    func optionText(_ text: String, excluding: [CGRect] = []) -> OptionText {
+        var present = false
+        for i in nodes.indices where isText(i, text) {
+            if excluding.contains(where: { Self.framesMatch($0, snapshotFrames[i]) }) { continue }
+            present = true
+            let node = nodes[i]
+            let target = Target(frame: snapshotFrames[i], elementType: node.elementType, label: node.label,
+                                identifier: node.identifier)
+            if let point = touchPoint(target) {
+                return .touchable(point: point, ancestorTypes: ancestors(of: i).map { nodes[$0].elementType })
+            }
+        }
+        return present ? .present : .absent
+    }
+
+    /// The uncovered point `analyze` picks on a target XCUITest has not
+    /// vouched for, or nil when it is off screen, covered or not found.
+    func touchPoint(_ target: Target) -> CGPoint? {
+        guard case .clear(let point, _) = analyze(target, isHittable: false) else { return nil }
+        return point
+    }
+
+    private func isText(_ i: Int, _ text: String) -> Bool {
+        nodes[i].elementType == .staticText && (nodes[i].label == text || nodes[i].identifier == text)
+    }
+
     /// `@tapsmith/react-native`'s test hooks marker: a screen-sized
     /// transparent text in a `pointerEvents="none"` wrapper, painted after all
     /// content (versions before PILOT-830 also drew a small visible copy in a

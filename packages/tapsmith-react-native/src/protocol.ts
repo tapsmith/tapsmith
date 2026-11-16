@@ -4,15 +4,22 @@
  * Kotlin or Swift implementation follows the same three rules.
  *
  *   marker (always-present a11y text):
- *     tapsmith-hooks:<version>;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>[;err=<urlencoded>]
+ *     tapsmith-hooks:<version>;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>[;writes=<n>][;err=<urlencoded>]
  *
  *   `boot` is a random token generated once per app process. The epoch counter
  *   lives in memory and restarts at 0 after a cold relaunch, so a reset that
  *   is delivered cold (the daemon's periodic cold-launch valve, or a retry) can
  *   never satisfy "epoch greater than before" — a changed `boot` tells the
  *   daemon it is looking at a fresh process, where any epoch ≥ 1 is the ack.
+ *   `writes` counts the persisted writes the hooks saw in this process (see
+ *   writes.ts). It is present only when the app can reset while keeping its
+ *   data (`onReload`), and lets Tapsmith keep a restored `appState` between
+ *   tests instead of restoring it again. Unknown fields are ignored by every
+ *   reader, so it needs no protocol version bump.
  *   request (deep link the daemon opens):
- *     <prefix><target>?__tapsmith_reset=1&nonce=<opaque>
+ *     <prefix><target>?__tapsmith_reset=1&nonce=<opaque>[&__tapsmith_keep=1]
+ *   `__tapsmith_keep=1`: reset in-memory state only (`onReload`), keeping the
+ *   app's persisted data — no `clear`, no `onReset`.
  *   ack:
  *     the marker's epoch is strictly greater than it was before the request
  */
@@ -20,6 +27,7 @@
 export const PROTOCOL_VERSION = 1;
 export const MARKER_PREFIX = 'tapsmith-hooks:';
 export const RESET_QUERY_FLAG = '__tapsmith_reset';
+export const KEEP_DATA_QUERY_FLAG = '__tapsmith_keep';
 
 export interface MarkerFields {
   epoch: number;
@@ -34,6 +42,12 @@ export interface MarkerFields {
   urlPrefix: string;
   /** Per-process token (see the module comment); omitted only by pre-boot markers. */
   boot?: string;
+  /**
+   * Persisted writes counted in this process; omitted when the app cannot
+   * reset while keeping its data (no `onReload`) or its stores cannot be
+   * tracked.
+   */
+  writes?: number;
   /** Last reset error, if the handler threw. */
   error?: string;
 }
@@ -55,6 +69,7 @@ export function formatMarker(fields: MarkerFields): string {
     ...(fields.nav !== undefined ? [`nav=${fields.nav}`] : []),
     ...(fields.boot ? [`boot=${fields.boot}`] : []),
     `url=${fields.urlPrefix}`,
+    ...(fields.writes !== undefined ? [`writes=${fields.writes}`] : []),
   ];
   if (fields.error) {
     // Truncate by code point, not UTF-16 unit: a cut through a surrogate pair
@@ -81,6 +96,7 @@ export function parseMarker(text: string): (MarkerFields & { version: number }) 
   let nav: number | undefined;
   let urlPrefix = '';
   let boot: string | undefined;
+  let writes: number | undefined;
   let error: string | undefined;
   for (const field of rest) {
     const eq = field.indexOf('=');
@@ -91,6 +107,7 @@ export function parseMarker(text: string): (MarkerFields & { version: number }) 
     else if (key === 'nav') nav = Number.parseInt(value, 10);
     else if (key === 'url') urlPrefix = value;
     else if (key === 'boot' && value) boot = value;
+    else if (key === 'writes') writes = Number.parseInt(value, 10);
     else if (key === 'err' && value) {
       try { error = decodeURIComponent(value); } catch { error = value; }
     }
@@ -100,6 +117,7 @@ export function parseMarker(text: string): (MarkerFields & { version: number }) 
     version, epoch, urlPrefix, error,
     ...(nav !== undefined && Number.isFinite(nav) ? { nav } : {}),
     ...(boot ? { boot } : {}),
+    ...(writes !== undefined && Number.isFinite(writes) ? { writes } : {}),
   };
 }
 
@@ -107,6 +125,11 @@ export interface ResetRequest {
   /** Route the reset should land on, e.g. `/`, `/login`. */
   target: string;
   nonce: string;
+  /**
+   * Keep the app's persisted data: reset in-memory state only (`onReload`).
+   * Tapsmith asks for it between tests that restore the same `appState`.
+   */
+  keepData?: boolean;
 }
 
 /**
@@ -127,7 +150,11 @@ export function parseResetRequest(url: string): ResetRequest | undefined {
     params.set(safeDecode(k), safeDecode(v));
   }
   if (!params.has(RESET_QUERY_FLAG)) return undefined;
-  return { target: routeOf(url.slice(0, q)), nonce: params.get('nonce') ?? '' };
+  return {
+    target: routeOf(url.slice(0, q)),
+    nonce: params.get('nonce') ?? '',
+    ...(params.get(KEEP_DATA_QUERY_FLAG) === '1' ? { keepData: true } : {}),
+  };
 }
 
 /**

@@ -30,6 +30,17 @@ export const APP_RESET_SCOPES: readonly AppResetScope[] = ['auto', 'file', 'test
 /** Default for {@link TapsmithConfig.appResetColdEvery}. */
 export const DEFAULT_APP_RESET_COLD_EVERY = 10;
 export type Platform = 'android' | 'ios';
+/** `reducedMotion` values, as in Playwright. */
+export type ReducedMotion = 'reduce' | 'no-preference';
+
+/**
+ * `reducedMotion` as the daemon's SetDevice flag: `true` turns the
+ * device's animations off for the session, `false` undoes that, and unset
+ * (the option left out) changes nothing.
+ */
+export function reduceMotionFlag(value: ReducedMotion | undefined): boolean | undefined {
+  return value === undefined ? undefined : value === 'reduce';
+}
 
 export type { TraceMode, TraceConfig, VideoMode, VideoConfig };
 
@@ -187,6 +198,20 @@ export interface TapsmithConfig {
   appResetScope?: AppResetScope;
 
   /**
+   * Where the declared app reset leaves the app: the screen a scope's tests
+   * start on. A path (`'/settings'`, `'/search?q=x'`) is resolved against the
+   * URL prefix `@tapsmith/react-native` publishes, so a warm reset lands on it
+   * in one delivery; a full deep link (`'myapp:///settings'`) also works for
+   * apps without the hooks. When the reset cannot land there itself (a
+   * restart, clear or restored `appState`, or a warm reset that fell back),
+   * the runner opens the route as a deep link afterwards. Unset: the app's
+   * launch route. No effect with `appReset: 'none'`.
+   *
+   * Most useful per scope: `test.use({ appResetScope: 'test', appResetRoute: '/settings' })`.
+   */
+  appResetRoute?: string;
+
+  /**
    * Bound the warm window: after this many consecutive warm resets the next
    * one is delivered cold (terminate + relaunch), which keeps iOS simulator
    * accessibility trees from drifting during long all-warm sessions. Only
@@ -220,6 +245,23 @@ export interface TapsmithConfig {
    * config change. See `docs/telemetry.md`.
    */
   telemetry?: boolean;
+
+  /**
+   * `'reduce'` turns the device's animations off for the session, the mobile
+   * counterpart of Playwright's `reducedMotion`. On Android it sets the
+   * window, transition and animator duration scales to 0 when the device is
+   * selected, and puts the device's own values back when the session ends
+   * (after a crash, the next session on that device does). Apps see this as
+   * the system "remove animations" setting, so one that reads it may behave
+   * differently. On an iOS simulator it makes UIKit animations run ten times
+   * faster (UIKit's `UIAnimationDragCoefficient`) in apps launched from then
+   * on, and puts the simulator back the same way; apps do not see it as the
+   * Reduce Motion setting, and the keyboard's animation is not affected. Not
+   * applied on physical iOS devices. `'no-preference'` (the default) leaves
+   * the device's settings alone. Root config only: every project on a device
+   * shares it.
+   */
+  reducedMotion?: ReducedMotion;
 
   /**
    * Delay in milliseconds between keystrokes when typing text.
@@ -392,6 +434,7 @@ export type UseOptions = Partial<Pick<TapsmithConfig,
   | 'resetAppWaitMs'
   | 'appReset'
   | 'appResetScope'
+  | 'appResetRoute'
   | 'appResetColdEvery'
   | 'doubleTapInterval'
   | 'baseURL'
@@ -846,9 +889,19 @@ export function validateRecordingModes(
  * accepted values instead of silently falling back to a default.
  */
 export function validateAppResetOptions(
-  options: Pick<Partial<TapsmithConfig>, 'appReset' | 'appResetScope' | 'appResetColdEvery'>,
+  options: Pick<Partial<TapsmithConfig>, 'appReset' | 'appResetScope' | 'appResetRoute' | 'appResetColdEvery'>,
   source = 'config',
 ): void {
+  const route: unknown = options.appResetRoute;
+  // null reads as unset, like the optional path options.
+  if (route != null
+    && (typeof route !== 'string' || !(route.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(route)))) {
+    throw invalid(
+      source,
+      `appResetRoute must be a path starting with '/' (e.g. '/settings') or a full deep link `
+        + `(e.g. 'myapp:///settings') (got ${JSON.stringify(route)})`,
+    );
+  }
   if (options.appResetColdEvery !== undefined
     && (!Number.isInteger(options.appResetColdEvery) || options.appResetColdEvery < 0)) {
     throw invalid(source, `appResetColdEvery must be a non-negative integer (got ${JSON.stringify(options.appResetColdEvery)})`);
@@ -1072,9 +1125,11 @@ const ROOT_CHECKS: { readonly [K in keyof TapsmithConfig]-?: KeyCheck } = {
   resetAppWaitMs: nonNegativeMs,
   appReset: delegated('appReset', (o) => validateAppResetOptions(o)),
   appResetScope: delegated('appResetScope', (o) => validateAppResetOptions(o)),
+  appResetRoute: delegated('appResetRoute', (o) => validateAppResetOptions(o)),
   appResetColdEvery: delegated('appResetColdEvery', (o) => validateAppResetOptions(o)),
   ui: optionObject(UI_KEYS, delegated('ui', (o) => validateUiOptions(o))),
   telemetry: aBoolean,
+  reducedMotion: oneOf(['reduce', 'no-preference']),
   typingDelay: nonNegativeMs,
   doubleTapInterval: positiveMs,
   simulator: optionalString,
@@ -1127,6 +1182,7 @@ const USE_CHECKS: { readonly [K in keyof UseOptions]-?: KeyCheck } = {
   resetAppWaitMs: ROOT_CHECKS.resetAppWaitMs,
   appReset: ROOT_CHECKS.appReset,
   appResetScope: ROOT_CHECKS.appResetScope,
+  appResetRoute: ROOT_CHECKS.appResetRoute,
   appResetColdEvery: ROOT_CHECKS.appResetColdEvery,
   doubleTapInterval: ROOT_CHECKS.doubleTapInterval,
   baseURL: ROOT_CHECKS.baseURL,

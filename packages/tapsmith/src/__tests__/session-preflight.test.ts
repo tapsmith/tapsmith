@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { androidHierarchyHasRenderedContent, androidHierarchyHasText, collectAnsweredSystemDialogs, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities } from '../session-preflight.js';
+import { androidHierarchyHasRenderedContent, androidHierarchyHasText, collectAnsweredSystemDialogs, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities, startAndroidLaunchEarly } from '../session-preflight.js';
 import type { AppResetPolicy } from '../app-reset.js';
 import { onActionProgress, type ActionProgressEvent } from '../action-progress.js';
 import { isRecoverableInfrastructureError } from '../worker-protocol.js';
@@ -47,12 +47,16 @@ function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]
       hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>',
       errorMessage: '',
     })),
+    // A daemon without the agent-side wait by default, so the dump-polling
+    // tests below keep exercising that path; the PILOT-976 tests opt in.
+    waitForAppReady: vi.fn(async () => ({ requestId: '1', ready: false, supported: false })),
     takeSystemDialogEvents: vi.fn(async (): Promise<import('../grpc-client.js').TakeSystemDialogEventsResponse> => ({ requestId: '1', events: [] })),
   };
 
   return {
     label: 'Worker 0 (emulator-5554)',
     notices: [] as import('../session-preflight.js').PreflightNotice[],
+    relaunches: { count: 0 },
     config: { package: 'com.example.app', activity: '.MainActivity' },
     device,
     client,
@@ -60,13 +64,25 @@ function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]
   };
 }
 
-const iosHierarchy = { requestId: '1', hierarchyXml: '<hierarchy><node /></hierarchy>', errorMessage: '' };
+/** An iOS app that has drawn its first screen. */
+const iosHierarchy = {
+  requestId: '1',
+  hierarchyXml: '<hierarchy><XCUIElementTypeApplication label="Example"><XCUIElementTypeStaticText label="Home" /></XCUIElementTypeApplication></hierarchy>',
+  errorMessage: '',
+};
+/** A React Native app on iOS right after launch, before its bundle renders:
+ *  the application, a window and empty containers (PILOT-1058). */
+const iosShell = {
+  requestId: '1',
+  hierarchyXml: '<hierarchy><XCUIElementTypeApplication label="Example"><XCUIElementTypeWindow label=""><XCUIElementTypeOther label="" identifier="" /></XCUIElementTypeWindow></XCUIElementTypeApplication></hierarchy>',
+  errorMessage: '',
+};
 
 /** A daemon ResetApp outcome as Device._resetApp reports it. */
 function resetResult(
   mode: 'warm' | 'restart' | 'clear',
-  overrides: Partial<import('../device.js').AppResetResult> = {},
-): import('../device.js').AppResetResult {
+  overrides: Partial<import('../device.js').InternalAppResetResult> = {},
+): import('../device.js').InternalAppResetResult {
   return {
     modeRequested: mode,
     modeUsed: mode,
@@ -74,6 +90,7 @@ function resetResult(
     coldLaunch: mode !== 'warm',
     durationMs: 120,
     hooksDetected: false,
+    targetReached: false,
     steps: [{ name: mode === 'warm' ? 'warm-deep-link' : mode, durationMs: 120, ok: true }],
     ...overrides,
   };
@@ -209,6 +226,82 @@ describe('session-preflight', () => {
     });
     expect(prepared.policy).toEqual({ mode: 'clear', scope: 'file' });
   });
+
+  describe('Android startup launch alongside the agent start', () => {
+    it('clears before it returns, and launches without waiting for the launch', async () => {
+      const ctx = makeContext();
+      const order: string[] = [];
+      vi.mocked(ctx.device.terminateApp).mockImplementation(async () => { order.push('terminate'); });
+      vi.mocked(ctx.device.clearAppData).mockImplementation(async () => { order.push('clear'); });
+      let finishLaunch!: () => void;
+      vi.mocked(ctx.device.launchApp).mockImplementation(() => {
+        order.push('launch');
+        return new Promise<undefined>((resolve) => { finishLaunch = () => resolve(undefined); });
+      });
+
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: false });
+
+      // The clear has finished (it must come before the agent starts), and
+      // the launch is under way but not awaited.
+      expect(order).toEqual(['terminate', 'clear', 'launch']);
+      expect(ctx.device.launchApp).toHaveBeenCalledWith('com.example.app', { activity: '.MainActivity', waitForIdle: false });
+      let settled = false;
+      void early!.launched.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finishLaunch();
+      await expect(early!.launched).resolves.toBe(true);
+      expect(ctx.device.startAgent).not.toHaveBeenCalled();
+    });
+
+    it('only launches a freshly installed app (nothing to clear)', async () => {
+      const ctx = makeContext();
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: true });
+      await expect(early!.launched).resolves.toBe(true);
+      expect(ctx.device.terminateApp).not.toHaveBeenCalled();
+      expect(ctx.device.clearAppData).not.toHaveBeenCalled();
+      expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+    });
+
+    it('a terminate that fails (app not running) still clears and launches', async () => {
+      const ctx = makeContext();
+      vi.mocked(ctx.device.terminateApp).mockRejectedValueOnce(new Error('not running'));
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: false });
+      await expect(early!.launched).resolves.toBe(true);
+      expect(ctx.device.clearAppData).toHaveBeenCalled();
+    });
+
+    it('a failed clear launches nothing, so the usual launch path runs it all after the agent', async () => {
+      const ctx = makeContext();
+      vi.mocked(ctx.device.clearAppData).mockRejectedValueOnce(new Error('Failed to clear app data'));
+      await expect(startAndroidLaunchEarly(ctx, { freshInstall: false })).resolves.toBeUndefined();
+      expect(ctx.device.launchApp).not.toHaveBeenCalled();
+    });
+
+    it('a failed launch reports false instead of rejecting', async () => {
+      const ctx = makeContext();
+      vi.mocked(ctx.device.launchApp).mockRejectedValueOnce(new Error('Failed to launch app'));
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: false });
+      await expect(early!.launched).resolves.toBe(false);
+    });
+
+    it('launchConfiguredApp with appLaunched skips the clear and launch but still waits and probes', async () => {
+      const ctx = makeContext();
+      const prepared = await launchConfiguredApp(ctx, 'startup launch', { appLaunched: true, hooksProbeMs: 0 });
+      expect(ctx.device.terminateApp).not.toHaveBeenCalled();
+      expect(ctx.device.clearAppData).not.toHaveBeenCalled();
+      expect(ctx.device.startAgent).not.toHaveBeenCalled();
+      expect(ctx.device.launchApp).not.toHaveBeenCalled();
+      expect(ctx.client.ping).toHaveBeenCalled();
+      expect(ctx.client.getUiHierarchy).toHaveBeenCalled();
+      expect(prepared).toMatchObject({ policy: { mode: 'clear', scope: 'file' }, source: 'startup launch' });
+
+      const fresh = makeContext();
+      await launchConfiguredApp(fresh, 'startup launch', { freshInstall: true, appLaunched: true, hooksProbeMs: 0 });
+      expect(fresh.device.launchApp).not.toHaveBeenCalled();
+    });
+  });
+
   it('restore policy never clears app data (appState restore owns isolation)', async () => {
     // Regression: a scope that restores a non-empty appState must NOT pm-clear
     // first. On Android pm clear wipes the AndroidKeyStore keys that decrypt
@@ -362,6 +455,7 @@ describe('session-preflight', () => {
         resetAppWaitMs: 321,
       },
     });
+    vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
 
     const report = await executeAppReset(ctx, WARM_FILE, { phase: 'file reset' });
 
@@ -372,6 +466,613 @@ describe('session-preflight', () => {
     expect(ctx.device.clearAppData).not.toHaveBeenCalled();
     expect(report).toMatchObject({ origin: 'inline', modeUsed: 'warm', fellBack: false });
     expect(report.steps.map((s) => s.name)).toEqual(['warm-deep-link', 'resetApp', 'settle', 'ensureSessionReady', 'waitForAppReady']);
+  });
+
+  describe('start route (appResetRoute, PILOT-1064)', () => {
+    const HOOKED = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=3;url=app:///" /></hierarchy>';
+    const hooked = (overrides: Partial<Parameters<typeof makeContext>[0]> = {}) => {
+      const ctx = makeContext(overrides);
+      ctx.capabilities = { hooksDetected: true, hooksUrlPrefix: 'app:///' };
+      return ctx;
+    };
+    const route = (policy: AppResetPolicy, r: string): AppResetPolicy => ({ ...policy, route: r });
+
+    it('a warm hooks reset carries the route, and lands on it in one delivery', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+
+      const report = await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test' });
+
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ mode: 'warm', target: '/settings' }));
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+      expect(report.steps.map((s) => s.name)).not.toContain('openRoute');
+    });
+
+    describe('a warm reset that landed on the route, then had its app relaunched by the readiness check, opens the route again', () => {
+      it('iOS: the app was no longer in the foreground', async () => {
+        const ctx = hooked({ config: { package: 'com.example.app', platform: 'ios' } });
+        vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+        vi.mocked(ctx.device.getAppState).mockResolvedValueOnce('background' as never);
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: HOOKED, errorMessage: '' });
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+        const report = await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test' });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        // The relaunched app is a bare shell again: the route waits for it to
+        // render (PILOT-1058), even though the warm reset itself needed no wait.
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+        const names = report.steps.map((st) => st.name);
+        expect(names.indexOf('waitForAppReady')).toBeLessThan(names.indexOf('openRoute'));
+      });
+
+      it('Android: the app was gone from the screen', async () => {
+        const ctx = hooked();
+        vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+        vi.mocked(ctx.device.currentPackage).mockResolvedValueOnce('com.android.launcher');
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce({
+          requestId: '1', hierarchyXml: '<hierarchy><node package="com.android.launcher" text="Apps" /></hierarchy>', errorMessage: '',
+        });
+
+        const report = await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test' });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+        const names = report.steps.map((st) => st.name);
+        expect(names.indexOf('waitForAppReady')).toBeLessThan(names.indexOf('openRoute'));
+      });
+    });
+
+    it('a warm reset that fell back to clear opens the route afterwards', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', {
+        modeUsed: 'clear', fellBack: true, coldLaunch: true, hooksDetected: true, targetReached: false,
+      }));
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        const report = await executeAppReset(ctx, route(WARM_TEST, '/settings?tab=2'), { phase: 'before test' });
+
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings?tab=2');
+        expect(report.steps.at(-1)).toMatchObject({ name: 'openRoute', ok: true, detail: 'app:///settings?tab=2' });
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it('a warm reset the daemon could only confirm on "/" opens the route afterwards', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: false }));
+
+      await executeAppReset(ctx, route(WARM_TEST, '/modal'), { phase: 'before test' });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///modal');
+    });
+
+    it('clear, restart and restore policies open the route once the app is ready', async () => {
+      for (const policy of [CLEAR_FILE, { mode: 'restart' as const, scope: 'test' as const }, { ...CLEAR_FILE, appState: '/abs/auth.tar.gz' }]) {
+        const ctx = hooked();
+        const report = await executeAppReset(ctx, route(policy, '/profile'), { phase: 'file reset' });
+
+        expect(vi.mocked(ctx.device._resetApp).mock.calls.every(([, o]) => !('target' in o))).toBe(true);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///profile');
+        const names = report.steps.map((s) => s.name);
+        expect(names.indexOf('openRoute')).toBeGreaterThan(names.indexOf('ensureSessionReady'));
+      }
+    });
+
+    it('a prepared device at another route is navigated, not reset again', async () => {
+      const ctx = hooked();
+      const prepared = { policy: WARM_FILE, preparedAt: Date.now(), durationMs: 1_000, source: 'the file-entry reset' };
+
+      const report = await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared });
+
+      expect(report.origin).toBe('prepared');
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+    });
+
+    it('a prepared device already at the route needs nothing', async () => {
+      const ctx = hooked();
+      const prepared = { policy: route(WARM_FILE, '/settings'), preparedAt: Date.now(), durationMs: 1_000, source: 'the entry reset' };
+
+      await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+
+    describe('a prepared device the readiness check relaunched opens the route again', () => {
+      // The app stopped before adoption: it is on its launch screen now,
+      // whatever route the preparation left it on.
+      const prepared = () => ({ policy: route(WARM_FILE, '/settings'), preparedAt: Date.now(), durationMs: 1_000, source: 'the entry reset' });
+
+      it('iOS: the app was no longer in the foreground', async () => {
+        const ctx = hooked({ config: { package: 'com.example.app', platform: 'ios' } });
+        vi.mocked(ctx.device.getAppState).mockResolvedValueOnce('notRunning' as never);
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+        await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared: prepared() });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+        expect(ctx.device._resetApp).not.toHaveBeenCalled();
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+
+      it('counts the relaunch on the session, for checks made outside the reset', async () => {
+        const ctx = hooked({ config: { package: 'com.example.app', platform: 'ios' } });
+        vi.mocked(ctx.device.getAppState).mockResolvedValueOnce('notRunning' as never);
+
+        await ensureSessionReady(ctx, 'before test');
+        expect(ctx.relaunches.count).toBe(1);
+        await ensureSessionReady(ctx, 'before test');
+        expect(ctx.relaunches.count).toBe(1);
+      });
+
+      it('Android: the app was gone from the screen', async () => {
+        const ctx = hooked();
+        vi.mocked(ctx.device.currentPackage).mockResolvedValueOnce('com.android.launcher');
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce({
+          requestId: '1', hierarchyXml: '<hierarchy><node package="com.android.launcher" text="Apps" /></hierarchy>', errorMessage: '',
+        });
+
+        await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared: prepared() });
+
+        expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+
+      it('a recovered session', async () => {
+        const ctx = hooked();
+        vi.mocked(ctx.client.ping).mockResolvedValueOnce({ version: '0.1.0', agentConnected: false });
+
+        await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared: prepared() });
+
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      });
+    });
+
+    it('appReset none does not navigate (no reset ran to land anywhere)', async () => {
+      const ctx = hooked();
+      const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'startup launch' };
+
+      await executeAppReset(ctx, route({ mode: 'none', scope: 'file' }, '/settings'), { phase: 'file reset' });
+      await executeAppReset(ctx, route({ mode: 'none', scope: 'file' }, '/settings'), { phase: 'file reset', prepared });
+
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+
+    it('a full deep link under the hooks prefix is sent warm as a path', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+
+      await executeAppReset(ctx, route(WARM_TEST, 'app:///settings'), { phase: 'before test' });
+
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ target: '/settings' }));
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+
+    it('a full deep link outside the hooks prefix resets to "/" and opens the link', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+
+      await executeAppReset(ctx, route(WARM_TEST, 'https://example.com/promo'), { phase: 'before test' });
+
+      expect(vi.mocked(ctx.device._resetApp).mock.calls[0][1]).not.toHaveProperty('target');
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('https://example.com/promo');
+    });
+
+    it('an app without hooks opens a full deep link after its clear reset', async () => {
+      const ctx = makeContext();
+      ctx.capabilities = { hooksDetected: false };
+
+      await executeAppReset(ctx, route(CLEAR_FILE, 'app:///settings'), { phase: 'file reset' });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+    });
+
+    it('a path learns the prefix from the marker when the session has not recorded it', async () => {
+      const ctx = makeContext();
+      ctx.capabilities = { hooksDetected: true };
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: HOOKED, errorMessage: '' });
+
+      await executeAppReset(ctx, route(CLEAR_FILE, '/settings'), { phase: 'file reset' });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      expect(ctx.capabilities.hooksUrlPrefix).toBe('app:///');
+    });
+
+    // E2E iOS (PR #521): a session whose startup probe missed the marker under
+    // load records hooksDetected=false. That is "never seen", not proof of no
+    // hooks, so a path still looks for the marker for the whole budget.
+    it('a path keeps looking for the marker when the session never saw it, and upgrades detection', async () => {
+      const ctx = makeContext();
+      ctx.capabilities = { hooksDetected: false };
+      const prepared = { policy: WARM_FILE, preparedAt: Date.now(), durationMs: 1_000, source: 'the file-entry reset' };
+      const missed = { requestId: '1', hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>', errorMessage: '' };
+      // The marker shows up only after a moment (mid-transition, a slow dump).
+      const showsAt = Date.now() + 400;
+      vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => (
+        Date.now() < showsAt ? missed : { requestId: '2', hierarchyXml: HOOKED, errorMessage: '' }
+      ));
+
+      await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      expect(ctx.capabilities).toMatchObject({ hooksDetected: true, hooksUrlPrefix: 'app:///' });
+    });
+
+    it('a route that cannot be opened fails naming appResetRoute', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device.openDeepLink).mockRejectedValueOnce(new Error('openDeepLink: navigation was not acknowledged'));
+
+      const err = await executeAppReset(ctx, route(CLEAR_FILE, '/no-such-route'), { phase: 'file reset' }).catch((e: unknown) => e);
+
+      expect((err as Error).message).toMatch(/^Could not open appResetRoute '\/no-such-route' \(app:\/\/\/no-such-route\): openDeepLink: navigation was not acknowledged/);
+    });
+
+    it('a path on an app without hooks fails, naming the full-link form', async () => {
+      const ctx = makeContext({ config: { package: 'com.example.app', activity: '.MainActivity', appReset: 'clear' } });
+      ctx.capabilities = { hooksDetected: false };
+
+      const err = await executeAppReset(ctx, route(CLEAR_FILE, '/settings'), { phase: 'file reset', hooksProbeMs: 0 }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/appResetRoute '\/settings' is a path/);
+      expect((err as Error).message).toMatch(/myapp:\/\/\/settings/);
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('keeping a restored appState between tests', () => {
+    // Real files: the baseline records each archive's mtime and size.
+    const archiveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-kept-restore-'));
+    const ARCHIVE = path.join(archiveDir, 'auth.tar.gz');
+    const OTHER_ARCHIVE = path.join(archiveDir, 'admin.tar.gz');
+    fs.writeFileSync(ARCHIVE, 'auth');
+    fs.writeFileSync(OTHER_ARCHIVE, 'admin');
+    afterAll(() => { fs.rmSync(archiveDir, { recursive: true, force: true }); });
+    const RESTORE_WARM: AppResetPolicy = { mode: 'warm', scope: 'test', appState: ARCHIVE };
+    /** A warm reset the hook ran as a keep (the daemon passed the keep flag on). */
+    const keepResult = (overrides: Parameters<typeof resetResult>[1] = {}) =>
+      resetResult('warm', { hooksDetected: true, keptAppData: true, ...overrides });
+
+    /** A hooked app whose marker reports `boot` and `writes` (undefined = no write support). */
+    function hookedApp(initial: { boot: string; writes?: number }) {
+      const app = { ...initial };
+      const ctx = makeContext({ capabilities: { hooksDetected: true, hooksUrlPrefix: 'app:///' } });
+      vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => ({
+        requestId: '1',
+        hierarchyXml: `<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;nav=0;boot=${app.boot};url=app:///${app.writes === undefined ? '' : `;writes=${app.writes}`}" /></hierarchy>`,
+        errorMessage: '',
+      }));
+      // A restore relaunches the app: a new process with its own boot token,
+      // and a write count that starts again from zero.
+      let launches = 0;
+      vi.mocked(ctx.device.restartApp).mockImplementation(async () => {
+        launches += 1;
+        app.boot = `relaunch${launches}`;
+        if (app.writes !== undefined) app.writes = 0;
+      });
+      vi.mocked(ctx.device._resetApp).mockImplementation(async () => keepResult());
+      return { ctx, app };
+    }
+
+    it('restores cold the first time, says why, and records the write count it left', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 4 });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledWith('com.example.app', ARCHIVE);
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: false });
+      expect(report.reason).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+    });
+
+    it('resets warm, keeping the data, while the app has written nothing since the restore', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device.restoreAppState).mockClear();
+      vi.mocked(ctx.device.restartApp).mockClear();
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, route: '/profile' }, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).not.toHaveBeenCalled();
+      expect(ctx.device.restartApp).not.toHaveBeenCalled();
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({
+        mode: 'warm', keepAppData: true, fallback: false, recoverable: true, target: '/profile',
+      }));
+      // The legacy link cannot keep data.
+      expect(vi.mocked(ctx.device._resetApp).mock.calls[0][1]).not.toHaveProperty('resetDeepLink');
+      expect(report).toMatchObject({ origin: 'inline', modeUsed: 'warm', fellBack: false });
+      expect(report.reason).toBe('kept auth.tar.gz: no persisted writes since the restore');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+    });
+
+    it('restores cold again after a test wrote persisted data, and names the drift', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      app.writes = 2;
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report.modeUsed).toBe('restore');
+      expect(report.reason).toBe('warm skipped: the app wrote persisted data since the restore (2 writes)');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('restores cold when the app relaunched since the restore', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      app.boot = 'crashed-and-relaunched';
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toMatch(/^warm skipped: the app relaunched since the restore/);
+    });
+
+    it('restores cold every time for an app that does not report writes, says how to fix it, and reads the marker once', async () => {
+      const { ctx } = hookedApp({ boot: 'b0' });
+      const first = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const second = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.capabilities?.appStateBaseline).toBeUndefined();
+      for (const report of [first, second]) {
+        expect(report.reason).toMatch(/^warm skipped: the app does not report persisted writes \(give <TapsmithTestHooks> onReload and track; a tracked store whose methods cannot be wrapped/);
+      }
+      // One read, after the first relaunch; the build's answer does not change.
+      expect(first.steps.map((s) => s.name)).toEqual(['restoreAppState', 'restartApp', 'ensureSessionReady', 'waitForAppReady', 'readWriteCount']);
+      expect(second.steps.map((s) => s.name)).not.toContain('readWriteCount');
+    });
+
+    it('stops trying to keep once warm resets write themselves twice in a row', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      // An onReload that writes back what it reads.
+      vi.mocked(ctx.device._resetApp).mockImplementation(async () => {
+        app.writes = (app.writes ?? 0) + 1;
+        return keepResult();
+      });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockClear();
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toMatch(/^warm skipped: the app writes persisted data during its warm resets/);
+      expect(report.steps.map((s) => s.name)).not.toContain('readWriteCount');
+    });
+
+    it('bounds a run of kept resets with a cold restore (appResetColdEvery), not a daemon relaunch', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.config = { ...ctx.config, appResetColdEvery: 2 };
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const kept = [
+        await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' }),
+        await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' }),
+      ];
+      const third = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(kept.map((r) => r.modeUsed)).toEqual(['warm', 'warm']);
+      expect(vi.mocked(ctx.device._resetApp).mock.calls.every(([, o]) => o.coldEveryNResets === 0)).toBe(true);
+      expect(third).toMatchObject({ modeUsed: 'restore', fellBack: false });
+      expect(third.reason).toBe('warm skipped: 2 resets in a row kept auth.tar.gz (appResetColdEvery)');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ kept: 0 });
+    });
+
+    it('restores cold on a forced-cold reset (retry, fresh start after a failure)', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test', forceCold: true });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toBe('warm skipped: a retry restores the archive cold');
+    });
+
+    it('restores a different archive cold', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, appState: OTHER_ARCHIVE }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.restoreAppState).toHaveBeenLastCalledWith('com.example.app', OTHER_ARCHIVE);
+      expect(report.reason).toBe('warm skipped: the last restore on this device was of auth.tar.gz');
+    });
+
+    it('never tries warm under a cold policy, and reads no write count for it', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.capabilities = { hooksDetected: true, hooksUrlPrefix: 'app:///', appStateBaseline: { archive: ARCHIVE, archiveStamp: 'x', boot: 'b0', writes: 0, kept: 0 } };
+
+      const report = await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'restart' }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.modeUsed).toBe('restore');
+      expect(report.reason).toBe("warm skipped: appReset is 'restart'");
+    });
+
+    it('says nothing extra for an app without hooks (nothing was skipped)', async () => {
+      const ctx = makeContext({ capabilities: { hooksDetected: false } });
+
+      const report = await executeAppReset(ctx, { mode: 'clear', scope: 'test', appState: ARCHIVE }, { phase: 'before test' });
+
+      expect(report.reason).toBeUndefined();
+    });
+
+    it('restores the archive when the warm reset fails, and reports the fallback', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockRejectedValueOnce(new Error('in-app reset reported an error: no onReload'));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toMatch(/^warm reset keeping auth\.tar\.gz failed \(.*no onReload\); restored it cold/);
+      expect(report.steps.find((s) => s.name === 'resetApp')?.ok).toBe(false);
+      // The fallback is a cold restore like any other: the next one can keep.
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('restores cold when the app wrote during the warm reset (a save it had scheduled)', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        app.writes = 1;
+        return keepResult();
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe('the app wrote persisted data during the warm reset (1 write); restored auth.tar.gz cold');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('restores the archive when the daemon cleared the app after all', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('clear', { modeRequested: 'warm', fellBack: true, reason: 'boom' }));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+    });
+
+    it('restores cold after a warm reset that relaunched the app: writes just before it cannot be checked', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        app.boot = 'valve';
+        app.writes = 0;
+        return keepResult({ coldLaunch: true, reason: 'cold relaunch: warm-window bound reached (10 resets)' });
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe('the warm reset relaunched the app (cold relaunch: warm-window bound reached (10 resets)), so writes made just before it cannot be ruled out; restored auth.tar.gz cold');
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch2', writes: 0 });
+    });
+
+    it('retries a marker read that misses once', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce({ requestId: '1', hierarchyXml: '', errorMessage: 'snapshot failed' });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(report.modeUsed).toBe('warm');
+    });
+
+    it('restores cold when a warm reset relaunched the app without the daemon noticing (new boot on the re-read)', async () => {
+      const { ctx, app } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        app.boot = 'escalated';
+        return keepResult({ coldLaunch: false });
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe('the warm reset relaunched the app, so writes made just before it cannot be ruled out; restored auth.tar.gz cold');
+    });
+
+    it('restores cold when the re-read after the reset finds no count: a write during the reset cannot be ruled out', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      const empty = { requestId: '1', hierarchyXml: '<hierarchy/>', errorMessage: '' };
+      vi.mocked(ctx.device._resetApp).mockImplementationOnce(async () => {
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce(empty).mockResolvedValueOnce(empty).mockResolvedValueOnce(empty);
+        return keepResult();
+      });
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toBe("could not read the app's write count after the warm reset; restored auth.tar.gz cold");
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+    });
+
+    it('restores cold when the archive was saved again since it was restored', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      fs.writeFileSync(ARCHIVE, 'auth, saved again by a setup re-run');
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(report.reason).toBe('warm skipped: auth.tar.gz was saved again since it was restored');
+    });
+
+    it("explains that appState '' clears even with hooks", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('clear'));
+
+      const report = await executeAppReset(ctx, { mode: 'warm', scope: 'test', appState: '' }, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ mode: 'clear' }));
+      expect(report.reason).toBe("warm skipped: appState '' clears the app's data");
+    });
+    it('restores cold, and stops trying, when the daemon cannot pass the keep request on (one older than the SDK)', async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+      // An old daemon ignores keep_app_data: the hook ran its full reset,
+      // which may clear data the write count cannot see.
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true }));
+
+      const report = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device.restoreAppState).toHaveBeenCalledTimes(2);
+      expect(report).toMatchObject({ modeUsed: 'restore', fellBack: true });
+      expect(report.reason).toMatch(/^tapsmith-core did not pass the request to keep the app's data on to the app \(a daemon older than this SDK.*\); restored auth\.tar\.gz cold$/);
+      vi.mocked(ctx.device._resetApp).mockClear();
+
+      const next = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(next.reason).toMatch(/^warm skipped: tapsmith-core did not pass the request to keep/);
+    });
+
+    it("records the baseline on a restore under appReset 'auto' whose read finds hooks not seen before, so the next restore keeps", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      // A fresh MCP session: nothing probed yet, so 'auto' resolved to clear.
+      ctx.capabilities = {};
+
+      const first = await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'clear' }, { phase: 'before test' });
+
+      expect(ctx.capabilities?.hooksDetected).toBe(true);
+      expect(ctx.capabilities?.appStateBaseline).toMatchObject({ archive: ARCHIVE, boot: 'relaunch1', writes: 0 });
+      expect(first.reason).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
+
+      const second = await executeAppReset(ctx, RESTORE_WARM, { phase: 'before test' });
+
+      expect(second.modeUsed).toBe('warm');
+      expect(second.reason).toBe('kept auth.tar.gz: no persisted writes since the restore');
+    });
+
+    it("records no baseline under an explicit appReset: 'clear' even when the app has hooks", async () => {
+      const { ctx } = hookedApp({ boot: 'b0', writes: 0 });
+      ctx.capabilities = {};
+      ctx.config = { ...ctx.config, appReset: 'clear' };
+
+      await executeAppReset(ctx, { ...RESTORE_WARM, mode: 'clear' }, { phase: 'before test' });
+
+      expect(ctx.capabilities?.appStateBaseline).toBeUndefined();
+    });
   });
 
   describe('Android app readiness after a cold launch', () => {
@@ -452,6 +1153,74 @@ describe('session-preflight', () => {
       expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
     });
 
+    describe('agent-side readiness (PILOT-976)', () => {
+      it('a clear reset asks the daemon once instead of polling dumps', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+        const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', 10_000, expect.any(Number));
+        // ensureSessionReady's own read only: no dump polling for content.
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
+      });
+
+      it('an app that never shows text is let through with the breadcrumb, without dump polling', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: false, supported: true });
+        const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        try {
+          await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+          expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('showed no rendered content');
+        } finally {
+          stderr.mockRestore();
+        }
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
+      });
+
+      it('a clear keeps its own wait even on a daemon known to wait for rendering', async () => {
+        const ctx = {
+          ...makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } }),
+          capabilities: { daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
+        };
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+        const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+        expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+      });
+
+      it('a daemon that predates the RPC gets the dump polling', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockRejectedValue(Object.assign(new Error('12 UNIMPLEMENTED: unknown method'), { code: 12 }));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(rendered);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(3);
+      });
+
+      it('a failed wait falls back to dump polling for what is left of the budget', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockRejectedValue(new Error('14 UNAVAILABLE: connection dropped'));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(rendered);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(2);
+      });
+
+    });
+
+
     it('startup launch waits for rendered content before probing for hooks', async () => {
       const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
       const marker = { requestId: '3', hierarchyXml: '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;boot=abc;url=app:///" /></hierarchy>', errorMessage: '' };
@@ -464,6 +1233,166 @@ describe('session-preflight', () => {
       await launchConfiguredApp(ctx, 'startup', { freshInstall: true, hooksProbeMs: 0 });
 
       expect((ctx as { capabilities?: { hooksDetected?: boolean } }).capabilities?.hooksDetected).toBe(true);
+    });
+  });
+
+  describe('iOS rendered-content readiness (PILOT-1058)', () => {
+    const iosCtx = () => makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'ios' } });
+
+    it('an acknowledged warm reset keeps only the hierarchy check: the epoch proves rendering', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosShell);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, epochBefore: 3, epochAfter: 4 }));
+
+      await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
+
+      expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
+    });
+
+    it('a warm reset the daemon delivered cold waits for rendered content like a relaunch', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, coldLaunch: true }));
+
+      await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
+
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+    });
+
+    it('a clear reset asks the daemon to wait for rendered content', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosShell);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+      const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', 10_000, expect.any(Number));
+    });
+
+    it('records that the daemon waits for rendering once it answers the RPC', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect((ctx as { capabilities?: { daemonWaitsForRender?: boolean } }).capabilities?.daemonWaitsForRender).toBe(true);
+    });
+
+    it('a clear on a daemon known to wait for rendering skips the repeat wait, keeping the hierarchy check', async () => {
+      const ctx = {
+        ...iosCtx(),
+        capabilities: { daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
+      };
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+
+      const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
+      expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+    });
+
+    it('a clear on a daemon known to wait still waits when the readiness check relaunched the app after it', async () => {
+      // The daemon's wait came before that relaunch, so the app is a bare
+      // shell again; the start route (PILOT-1064) is opened only after it renders.
+      const ctx = {
+        ...iosCtx(),
+        capabilities: { hooksDetected: true, hooksUrlPrefix: 'app:///', daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
+      };
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.device.getAppState).mockResolvedValueOnce('notRunning' as never);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+      const report = await executeAppReset(ctx, { ...CLEAR_FILE, route: '/settings' }, { phase: 'file reset' });
+
+      expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      const names = report.steps.map((st) => st.name);
+      expect(names.indexOf('waitForAppReady')).toBeLessThan(names.indexOf('openRoute'));
+    });
+
+    it('a warm reset delivered cold still waits on a daemon known to wait: only its relaunch rungs do', async () => {
+      const ctx = {
+        ...iosCtx(),
+        capabilities: { hooksDetected: true, daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
+      };
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, coldLaunch: true }));
+
+      await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
+
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+    });
+
+    it('without the daemon wait, polls past the empty React Native shell until the app renders', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValue(iosHierarchy);
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      // Every shell read is spent waiting; the first rendered read ends the wait.
+      const reads = vi.mocked(ctx.client.getUiHierarchy).mock.calls.length;
+      expect(reads).toBeGreaterThanOrEqual(4);
+    });
+
+    it('an app that never draws content is let through after the bound, with the breadcrumb', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosShell);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: false, supported: true });
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await expect(executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' })).resolves.toBeDefined();
+        expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('showed no rendered content');
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it('an empty hierarchy is still not ready: the content wait runs only once the app is up', async () => {
+      const ctx = iosCtx();
+      const empty = { requestId: '1', hierarchyXml: '', errorMessage: 'Unable to lookup in current state' };
+      vi.mocked(ctx.client.getUiHierarchy)
+        .mockResolvedValueOnce(empty)
+        .mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+    });
+
+    it('a hooked session stuck on clear upgrades to warm once the relaunched app has rendered (regression)', async () => {
+      const ctx = {
+        ...iosCtx(),
+        capabilities: { hooksDetected: false } as import('../app-reset.js').ResetCapabilities,
+      };
+      const markerScreen = {
+        requestId: '1',
+        hierarchyXml: '<hierarchy><XCUIElementTypeApplication label="Example"><XCUIElementTypeStaticText label="Home" />'
+          + '<XCUIElementTypeOther label="tapsmith-hooks:1;epoch=0;nav=0;boot=abc;url=app:///" /></XCUIElementTypeApplication></hierarchy>',
+        errorMessage: '',
+      };
+      // The relaunched app is the bare shell for the first reads, then renders.
+      vi.mocked(ctx.client.getUiHierarchy)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValue(markerScreen);
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.capabilities.hooksDetected).toBe(true);
     });
   });
 
@@ -1088,12 +2017,13 @@ describe('session-preflight', () => {
     vi.mocked(ctx.client.getUiHierarchy)
       .mockResolvedValueOnce({ requestId: '1', hierarchyXml: '', errorMessage: '' })
       .mockResolvedValueOnce({ requestId: '1', hierarchyXml: '  ', errorMessage: '' })
-      .mockResolvedValueOnce({ requestId: '1', hierarchyXml: '<hierarchy><node /></hierarchy>', errorMessage: '' });
+      .mockResolvedValue(iosHierarchy);
 
     await launchConfiguredApp(ctx, 'startup', { hooksProbeMs: 0 });
 
-    // 3 hierarchy calls (2 empty + 1 non-empty) + the reset-capabilities probe
-    expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(4);
+    // 3 hierarchy calls (2 empty + 1 non-empty), one rendered-content read
+    // (this daemon has no agent-side wait), and the reset-capabilities probe
+    expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(5);
   });
   describe('blocking system dialogs (PILOT-398)', () => {
     const PKG = 'com.example.app';
@@ -1542,7 +2472,7 @@ describe('session-preflight', () => {
 
       await launchConfiguredApp(ctx, 'startup launch', { freshInstall: true, hooksProbeMs: 0 });
 
-      expect(ctx.capabilities).toEqual({ hooksDetected: true });
+      expect(ctx.capabilities).toEqual({ hooksDetected: true, hooksUrlPrefix: 'app:///' });
     });
 
     it('a marker without a URL prefix does not count as usable hooks', async () => {
@@ -1815,7 +2745,7 @@ describe('session-preflight', () => {
           errorMessage: '',
         });
 
-      expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true });
+      expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true, hooksUrlPrefix: 'exp://x/' });
       expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(3);
     });
 
@@ -1832,6 +2762,78 @@ describe('session-preflight', () => {
       // Already concluded: a later probe is single-shot (watch/MCP re-probe per file).
       await probeResetCapabilities(ctx, { pollMs: 5_000 });
       expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(polled + 1);
+    });
+
+    describe('stopping early on an app that has rendered without the marker', () => {
+      const HOME = '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>';
+      const SPLASH = '<hierarchy><node package="com.example.app" text="" /><node package="com.android.systemui" text="12:00" /></hierarchy>';
+      const MARKER_XML = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>';
+      const read = (xml: string) => ({ requestId: '1', hierarchyXml: xml, errorMessage: '' });
+      let tmp: string;
+      beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-probe-')); });
+      afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+      /** A project whose package.json lists `deps`. */
+      function project(deps: Record<string, string>): string {
+        fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ dependencies: deps }));
+        return tmp;
+      }
+      function probeContext(rootDir: string | undefined, platform: 'android' | 'ios' = 'android') {
+        return makeContext({ config: { package: 'com.example.app', activity: '.MainActivity', platform, rootDir } });
+      }
+
+      it('stops after two reads of rendered UI without the marker, for a project without the hooks', async () => {
+        // Every app without @tapsmith/react-native paid the whole budget at
+        // each session start.
+        const ctx = probeContext(project({ expo: '~58.0.0' }));
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(read(HOME));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(2);
+      });
+
+      it('keeps the whole budget for a project that depends on the hooks, or one it cannot look up', async () => {
+        // A hooked app can render a screen before the root that mounts the marker.
+        for (const rootDir of [project({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }), undefined]) {
+          const ctx = probeContext(rootDir);
+          vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(read(HOME));
+          await probeResetCapabilities(ctx, { pollMs: 700 });
+          expect(vi.mocked(ctx.client.getUiHierarchy).mock.calls.length).toBeGreaterThan(2);
+        }
+      });
+
+      it('counts only consecutive reads of the app\'s own rendered UI', async () => {
+        const ctx = probeContext(project({}));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(read(SPLASH))
+          .mockResolvedValueOnce(read(HOME))
+          .mockRejectedValueOnce(new Error('agent busy'))
+          .mockResolvedValueOnce(read(HOME))
+          .mockResolvedValueOnce(read(SPLASH))
+          .mockResolvedValue(read(HOME));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(7);
+      });
+
+      it('still finds a marker that mounts after the first rendered read', async () => {
+        const ctx = probeContext(project({}));
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce(read(HOME)).mockResolvedValue(read(MARKER_XML));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true, hooksUrlPrefix: 'exp://x/' });
+      });
+
+      it('on iOS, counts an element of the app with a label or identifier, not the application node or keyboard', async () => {
+        const app = (inner: string) => `<hierarchy><XCUIElementTypeApplication label="Example" identifier="" type="XCUIElementTypeApplication">${inner}</XCUIElementTypeApplication></hierarchy>`;
+        const ctx = probeContext(project({}), 'ios');
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(read(app('<XCUIElementTypeWindow label="" identifier="" type="XCUIElementTypeWindow" />')))
+          .mockResolvedValueOnce(read(app('<XCUIElementTypeKeyboard label="" identifier="" type="XCUIElementTypeKeyboard" tapsmith-non-app="true"><XCUIElementTypeKey label="q" identifier="q" type="XCUIElementTypeKey" /></XCUIElementTypeKeyboard>')))
+          .mockResolvedValue(read(app('<XCUIElementTypeStaticText label="Welcome" identifier="" type="XCUIElementTypeStaticText" />')));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(4);
+      });
     });
 
     it('a probe failure leaves the capabilities as they were', async () => {

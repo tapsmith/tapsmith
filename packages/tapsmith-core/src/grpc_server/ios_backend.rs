@@ -2,12 +2,30 @@
 //! the only path on physical devices.
 
 use super::device_backend::{
-    ActionResult, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
+    ActionResult, AgentLaunched, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
 };
 use super::*;
 
 pub(super) struct IosBackend<'a> {
     pub(super) svc: &'a TapsmithServiceImpl,
+}
+
+impl IosBackend<'_> {
+    /// `launchApp`/`restartApp` with `waitForIdle` hand back an app that has
+    /// drawn its first screen, as a reset rung's relaunch does
+    /// (`relaunch_app`). The relaunch probe's idle wait ends as soon as the
+    /// screen holds still, and a blank launch screen holds still: without
+    /// this, a non-waiting read made straight after the launch
+    /// (`isVisible()`) answered for the launch screen about half the time.
+    /// Bounded by the launch's idle budget and best-effort, as the reset's
+    /// wait is: a text-free first screen falls through.
+    async fn wait_for_first_render(&self, package_name: &str, idle_timeout_ms: u64) {
+        let timeout = Duration::from_millis(idle_timeout_ms).min(IOS_RENDER_READY_TIMEOUT);
+        let _ = self
+            .svc
+            .wait_for_ios_rendered_content(package_name, timeout)
+            .await;
+    }
 }
 
 #[async_trait::async_trait]
@@ -340,6 +358,14 @@ impl DeviceBackend for IosBackend<'_> {
         ))
     }
 
+    async fn wait_for_app_ready(&self, package: &str, timeout: Duration) -> Option<bool> {
+        // The agent's rendered-content wait (PILOT-1058); `None` from an
+        // agent that predates it, and the SDK polls dumps instead.
+        self.svc
+            .wait_for_ios_rendered_content(package, timeout)
+            .await
+    }
+
     async fn relaunch_app(
         &self,
         serial: &str,
@@ -349,7 +375,17 @@ impl DeviceBackend for IosBackend<'_> {
     ) -> Result<(), String> {
         self.svc
             .reset_ios_app(serial, package_name, wait_for_idle, idle_timeout_ms)
-            .await
+            .await?;
+        // A restart/clear rung hands back an app ready for input, as the
+        // Android rung does: the relaunched React Native app is a bare shell
+        // until its bundle renders, and the warm deep link or hooks-marker
+        // read that follows a reset would misfire into it (PILOT-1058).
+        // Best-effort and bounded — a text-free first screen falls through.
+        let _ = self
+            .svc
+            .wait_for_ios_rendered_content(package_name, IOS_RENDER_READY_TIMEOUT)
+            .await;
+        Ok(())
     }
 
     async fn wipe_app_data(&self, serial: &str, package_name: &str) -> Result<(), String> {
@@ -385,16 +421,7 @@ impl DeviceBackend for IosBackend<'_> {
             .await
         {
             Ok(ref container) => {
-                if let Err(e) = ios::device::clear_container(container).await {
-                    warn!(error = %e, "Failed to clear app container, continuing anyway");
-                }
-                if !ios::device::keychain_state_disabled() {
-                    if let Some(keychain_dir) = ios::device::simulator_keychain_dir(container) {
-                        if let Err(e) = ios::device::clear_keychain(serial, &keychain_dir).await {
-                            warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                        }
-                    }
-                }
+                ios::device::wipe_simulator_app_data(serial, container).await;
             }
             Err(e) => {
                 debug!(error = %e, "Could not get app container (app may not be installed)");
@@ -470,18 +497,18 @@ impl DeviceBackend for IosBackend<'_> {
         // land; the worst case is the status quo plus one bounded
         // warm window (IOS_OPEN_DEEP_LINK_WARM_TIMEOUT_MS).
         //
-        // `force_cold_launch` skips the warm attempt entirely. The SDK
-        // sets it for the between-file soft reset: a July 2026 local
-        // soak of the full E2E suite showed that sessions running
-        // all-warm for ~60+ deliveries accumulate native navigation
-        // state that observably diverges from a cold launch (screen
-        // a11y trees stop being flattened — strict-mode selectors that
-        // matched one element start matching two — and element ids go
-        // stale), while every file-sized warm window (~20-30
-        // deliveries from a cold start) stayed green. Cold-launching
-        // at file boundaries pins each file to the exact starting
-        // state it had before warm delivery existed and bounds the
-        // warm window to one file.
+        // A `Cold` delivery skips the warm attempt entirely. The SDK asks
+        // for it only on retry attempts (and `openDeepLink`'s
+        // `forceColdLaunch`); between-file resets with the in-app hooks
+        // are warm. Long all-warm runs are bounded instead by the reset
+        // ladder's warm-window valve (`appResetColdEvery`, default 10),
+        // which delivers every Nth consecutive warm reset cold: a July
+        // 2026 local soak of the full E2E suite showed that sessions
+        // running all-warm for ~60+ deliveries accumulate native
+        // navigation state that diverges from a cold launch (screen a11y
+        // trees stop being flattened, so strict-mode selectors that
+        // matched one element start matching two, and element ids go
+        // stale).
         if delivery != DeepLinkDelivery::Cold {
             let warm_command = AgentCommand::OpenDeepLink {
                 url: uri.to_string(),
@@ -571,10 +598,23 @@ impl DeviceBackend for IosBackend<'_> {
                     "display is not rendering and an app relaunch cannot recover a dead \
                      compositor; rebooting the simulator and restarting the agent"
                 );
+                // The HID helper's connection to the simulator does not
+                // survive the reboot: every touch after it would be rejected
+                // (`err send rejected`) (PILOT-1072). Stop it now; a new one
+                // starts once the simulator is back.
+                #[cfg(target_os = "macos")]
+                self.svc.hid_injector.shutdown(&serial).await;
                 let _ = ios::device::shutdown_simulator(&serial).await;
                 if let Err(e) = ios::device::boot_simulator(&serial).await {
                     warn!(%serial, error = %e, "simulator reboot failed; continuing with re-delivery");
                 } else {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let hid = Arc::clone(&self.svc.hid_injector);
+                        let udid = serial.to_string();
+                        let epoch = hid.stop_epoch(&udid);
+                        tokio::spawn(async move { hid.warm(&udid, epoch).await });
+                    }
                     // Give SpringBoard a moment past `Booted` before
                     // asking xcodebuild to install/launch the runner.
                     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -596,25 +636,21 @@ impl DeviceBackend for IosBackend<'_> {
             // can't tell that apart from a legitimate delivery whose
             // destination renders like the current screen — the app
             // silently stays where it was while the reset "succeeds".
-            // The agent now confirms the process died; when it can't
-            // (observed under CoreSimulator pressure with agent
-            // commands running 10-40s), force it host-side before
-            // delivering.
-            let terminate_confirmed = matches!(
-                self.svc.send_agent_command_with_timeout(
-                    &AgentCommand::TerminateApp {
-                        package: bundle_id.clone(),
-                    },
-                    10_000,
-                )
-                .await,
-                Ok(resp) if resp.success
-            );
+            // The terminate is `simctl terminate`, whose own result confirms
+            // the app stopped, falling back to the agent's verifying
+            // terminate when it does not (PILOT-1062); when neither confirms
+            // the process died (observed under CoreSimulator pressure with
+            // agent commands running 10-40s), force it host-side once more
+            // before delivering.
+            let terminate_confirmed = self
+                .svc
+                .terminate_ios_app_confirmed(&serial, &bundle_id, 10_000)
+                .await;
             if !terminate_confirmed {
                 warn!(
                     %serial, uri = %uri,
-                    "agent could not confirm app termination; forcing simctl \
-                     terminate so openurl cold-launches the app"
+                    "neither simctl nor the agent confirmed app termination; forcing \
+                     simctl terminate so openurl cold-launches the app"
                 );
                 let _ = ios::device::terminate_app(&serial, &bundle_id).await;
             }
@@ -775,6 +811,10 @@ impl DeviceBackend for IosBackend<'_> {
                 .action_error(request_id, "LAUNCH_FAILED", error_message)
                 .await);
         }
+        if req.wait_for_idle {
+            self.wait_for_first_render(&req.package_name, idle_timeout_ms)
+                .await;
+        }
 
         Ok(Response::new(proto::ActionResponse {
             request_id,
@@ -782,6 +822,7 @@ impl DeviceBackend for IosBackend<'_> {
             error_type: String::new(),
             error_message: String::new(),
             screenshot: Vec::new(),
+            app_launched_fresh: false,
         }))
     }
 
@@ -811,6 +852,10 @@ impl DeviceBackend for IosBackend<'_> {
                 .svc
                 .action_error(request_id, "LAUNCH_FAILED", error_message)
                 .await);
+        }
+        if req.wait_for_idle {
+            self.wait_for_first_render(&req.package_name, idle_timeout_ms)
+                .await;
         }
 
         Ok(TapsmithServiceImpl::success_action_response(request_id))
@@ -884,6 +929,7 @@ impl DeviceBackend for IosBackend<'_> {
                 error_type: String::new(),
                 error_message: String::new(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             }));
         }
         let serial = self.svc.active_serial().await?;
@@ -898,29 +944,9 @@ impl DeviceBackend for IosBackend<'_> {
             .await
         {
             Ok(ref container) => {
-                if let Err(e) = ios::device::clear_container(container).await {
-                    warn!(error = %e, "Failed to clear app container, continuing anyway");
-                }
-                // Also clear the simulator's device-level keychain so
-                // keychain-backed auth state (e.g. Firebase Auth)
-                // doesn't survive a "full" data clear, leaving a
-                // half-signed-in app. The keychain is device-global,
-                // so this clears it for every app on the simulator —
-                // acceptable for test-owned simulators.
-                if !ios::device::keychain_state_disabled() {
-                    match ios::device::simulator_keychain_dir(container) {
-                        Some(keychain_dir) => {
-                            if let Err(e) =
-                                ios::device::clear_keychain(&serial, &keychain_dir).await
-                            {
-                                warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                            }
-                        }
-                        None => {
-                            warn!(container = %container, "Could not derive simulator keychain dir; keychain not cleared");
-                        }
-                    }
-                }
+                // Data container, then the device-global keychain — acceptable
+                // for test-owned simulators.
+                ios::device::wipe_simulator_app_data(&serial, container).await;
             }
             Err(e) => {
                 debug!(error = %e, "Could not get app container (app may not be installed)");
@@ -932,6 +958,7 @@ impl DeviceBackend for IosBackend<'_> {
             error_type: String::new(),
             error_message: String::new(),
             screenshot: Vec::new(),
+            app_launched_fresh: false,
         }))
     }
 
@@ -947,8 +974,10 @@ impl DeviceBackend for IosBackend<'_> {
     ) -> ActionResult {
         let pkg = &req.package_name;
         let local_path = &req.path;
+        let mut timer = crate::timing::PhaseTimer::new("appstate", "save");
 
         if self.svc.is_active_ios_physical().await {
+            timer.note("target", "physical");
             // Physical devices: use `xcrun devicectl device copy from
             // --domain-type appDataContainer` to pull the app's data
             // container to a scratch directory, then tar it for
@@ -993,6 +1022,7 @@ impl DeviceBackend for IosBackend<'_> {
             return match output {
                 Ok(out) if out.status.success() => {
                     info!(%pkg, %local_path, "iOS physical app state saved");
+                    timer.succeed();
                     Ok(TapsmithServiceImpl::success_action_response(request_id))
                 }
                 Ok(out) => {
@@ -1017,8 +1047,15 @@ impl DeviceBackend for IosBackend<'_> {
             };
         }
         // iOS simulator: app container is on the host filesystem.
-        // Use simctl to find it, then tar it directly.
-        let container = match self.svc.get_app_container_cached(&serial, pkg).await {
+        // Use simctl to find it, then tar it directly. Finding it and
+        // terminating the app (to flush its data) are independent simctl
+        // calls, each up to seconds on a loaded host: run them together.
+        let (container, _) = tokio::join!(
+            self.svc.get_app_container_cached(&serial, pkg),
+            ios::device::terminate_app(&serial, pkg),
+        );
+        timer.phase("locate_terminate");
+        let container = match container {
             Ok(path) => path,
             Err(e) => {
                 return Ok(self
@@ -1031,9 +1068,6 @@ impl DeviceBackend for IosBackend<'_> {
                     .await);
             }
         };
-
-        // Terminate the app to flush data
-        let _ = ios::device::terminate_app(&serial, pkg).await;
 
         // Stage the simulator's device-level keychain db so the
         // archive captures keychain-backed state (Firebase Auth and
@@ -1061,6 +1095,7 @@ impl DeviceBackend for IosBackend<'_> {
                 }
             }
         }
+        timer.phase("keychain");
 
         // Create tar.gz archive of the data container, excluding
         // caches and ephemeral data that inflates the archive
@@ -1095,10 +1130,12 @@ impl DeviceBackend for IosBackend<'_> {
             .args(&tar_args)
             .output()
             .await;
+        timer.phase("tar");
 
         match output {
             Ok(out) if out.status.success() => {
                 info!(%pkg, %local_path, "iOS app state saved");
+                timer.succeed();
                 Ok(TapsmithServiceImpl::success_action_response(request_id))
             }
             Ok(out) => {
@@ -1131,8 +1168,10 @@ impl DeviceBackend for IosBackend<'_> {
     ) -> ActionResult {
         let pkg = &req.package_name;
         let local_path = &req.path;
+        let mut timer = crate::timing::PhaseTimer::new("appstate", "restore");
 
         if self.svc.is_active_ios_physical().await {
+            timer.note("target", "physical");
             // Physical: extract the archive locally, then push each
             // top-level child (`Documents`, `Library`, `tmp`) back
             // into the app container via `devicectl device copy to
@@ -1247,6 +1286,7 @@ impl DeviceBackend for IosBackend<'_> {
                     .await);
             }
             info!(%pkg, %local_path, "iOS physical app state restored");
+            timer.phase("copy");
             // Reinstalling + pushing the container replaces the app
             // bundle under the running XCUITest runner. The agent's
             // cached XCUIApplication references become stale in a
@@ -1269,13 +1309,19 @@ impl DeviceBackend for IosBackend<'_> {
                     )
                     .await);
             }
+            timer.phase("agent_restart");
+            timer.succeed();
             return Ok(TapsmithServiceImpl::success_action_response(request_id));
         }
         // iOS simulator: terminate the app, clear the data container,
-        // then extract the saved archive.
-        let _ = ios::device::terminate_app(&serial, pkg).await;
-
-        let container = match self.svc.get_app_container_cached(&serial, pkg).await {
+        // then extract the saved archive. Terminating and locating the
+        // container are independent simctl calls: run them together.
+        let (container, _) = tokio::join!(
+            self.svc.get_app_container_cached(&serial, pkg),
+            ios::device::terminate_app(&serial, pkg),
+        );
+        timer.phase("locate_terminate");
+        let container = match container {
             Ok(path) => path,
             Err(e) => {
                 return Ok(self
@@ -1297,6 +1343,7 @@ impl DeviceBackend for IosBackend<'_> {
         if let Err(e) = ios::device::clear_container(&container).await {
             warn!(%pkg, error = %e, "clear_container failed, continuing");
         }
+        timer.phase("container");
 
         // Archives saved by newer daemons carry the simulator
         // keychain under a reserved member; older archives don't,
@@ -1311,6 +1358,7 @@ impl DeviceBackend for IosBackend<'_> {
             }
             _ => false,
         };
+        timer.phase("list");
 
         // Exclude both the `./`-prefixed form (how bsdtar stores it
         // when we add it on save) and the bare form, so the keychain
@@ -1348,31 +1396,39 @@ impl DeviceBackend for IosBackend<'_> {
             .await
             .unwrap_or_else(|e| Err(std::io::Error::other(e)))
         };
+        timer.phase("extract");
 
         match output {
             Ok(out) if out.status.success() => {
                 if has_keychain && !ios::device::keychain_state_disabled() {
-                    if let Err(e) =
-                        restore_simulator_keychain(&serial, &container, local_path).await
-                    {
-                        // Failing silently here would reproduce the
-                        // half-restored auth state this feature
-                        // exists to fix — surface it instead.
-                        return Ok(self
-                            .svc
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Keychain restore failed: {e}"),
-                            )
-                            .await);
+                    let restored =
+                        restore_simulator_keychain(&serial, &container, local_path).await;
+                    timer.phase("keychain");
+                    match restored {
+                        Ok(how) => timer.note("keychain", how.as_str()),
+                        Err(e) => {
+                            // Failing silently here would reproduce the
+                            // half-restored auth state this feature
+                            // exists to fix — surface it instead.
+                            return Ok(self
+                                .svc
+                                .action_error(
+                                    request_id,
+                                    "APP_STATE_RESTORE_FAILED",
+                                    format!("Keychain restore failed: {e}"),
+                                )
+                                .await);
+                        }
                     }
                 } else if has_keychain {
                     debug!(%pkg, "Archive contains keychain state but TAPSMITH_NO_KEYCHAIN_STATE is set; skipping keychain restore");
+                    timer.note("keychain", "disabled");
                 } else {
                     debug!(%pkg, "Archive has no keychain member (saved by an older version); skipping keychain restore");
+                    timer.note("keychain", "none");
                 }
                 info!(%pkg, %local_path, container, "iOS simulator app state restored");
+                timer.succeed();
                 Ok(TapsmithServiceImpl::success_action_response(request_id))
             }
             Ok(out) => {
@@ -1592,6 +1648,7 @@ impl DeviceBackend for IosBackend<'_> {
                     Set iosXctestrun in your Tapsmith config."
                     .to_string(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             });
         }
         Ok(())
@@ -1610,17 +1667,15 @@ impl DeviceBackend for IosBackend<'_> {
         request_id: String,
         serial: String,
         req: &proto::StartAgentRequest,
-    ) -> Result<(), proto::ActionResponse> {
+    ) -> Result<AgentLaunched, proto::ActionResponse> {
         // ─── iOS: launch XCUITest agent ───
         let is_physical = self.svc.is_active_ios_physical().await;
 
-        // Apply test-friendly defaults every time the agent starts,
-        // not just on first boot — reused simulators may have stale config.
-        // Skipped entirely on physical devices: the simctl spawns
-        // would fail, and the device's defaults are user-owned anyway.
-        if !is_physical {
-            ios::device::configure_simulator(&serial).await;
-        }
+        // Test-friendly defaults are applied every time the agent starts (by
+        // `start_agent`, alongside it), not just on first boot — reused
+        // simulators may have stale config. Skipped entirely on physical
+        // devices: the simctl spawns would fail, and the device's defaults are
+        // user-owned anyway.
 
         // Drop any prior iproxy tunnel BEFORE start_agent so the
         // existing host port is free when start_agent tries to bind
@@ -1655,16 +1710,20 @@ impl DeviceBackend for IosBackend<'_> {
         }
 
         let agent_port = self.svc.agent.read().await.port();
-        let iproxy_handle = match ios::agent_launch::start_agent(
+        // On a simulator, `start_agent` also writes the test-friendly defaults,
+        // alongside xcodebuild's start rather than before it, and keeps the app
+        // from launching until they are written (PILOT-1134).
+        let started = ios::agent_launch::start_agent(
             &serial,
             &req.ios_xctestrun_path,
             &req.target_package,
             agent_port,
             is_physical,
+            req.clear_app_data_first,
         )
-        .await
-        {
-            Ok(handle) => handle,
+        .await;
+        let started = match started {
+            Ok(started) => started,
             Err(e) => {
                 error!(error = %e, "Failed to start iOS agent");
                 return Err(proto::ActionResponse {
@@ -1673,10 +1732,11 @@ impl DeviceBackend for IosBackend<'_> {
                     error_type: "AGENT_START_FAILED".to_string(),
                     error_message: e.to_string(),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 });
             }
         };
-        if let Some(handle) = iproxy_handle {
+        if let Some(handle) = started.iproxy {
             *self.svc.ios_iproxy.write().await = Some(handle);
         }
 
@@ -1686,7 +1746,9 @@ impl DeviceBackend for IosBackend<'_> {
             target_package: req.target_package.clone(),
             app_path: (!req.ios_app_path.is_empty()).then(|| req.ios_app_path.clone()),
         });
-        Ok(())
+        Ok(AgentLaunched {
+            app_launched_fresh: started.app_launched_fresh,
+        })
     }
 
     async fn connect_agent(&self, agent: &mut AgentConnection, serial: &str) -> anyhow::Result<()> {

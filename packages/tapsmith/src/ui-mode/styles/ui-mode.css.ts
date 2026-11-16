@@ -152,10 +152,6 @@ html, body, #app {
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-@keyframes flash-fail {
-  0% { background: oklch(0.68 0.2 25 / 0.3); }
-  100% { background: transparent; }
-}
 @keyframes ringPulse {
   0% { box-shadow: 0 0 0 0 oklch(0.78 0.15 var(--accent-h) / 0.4); }
   70% { box-shadow: 0 0 0 6px oklch(0.78 0.15 var(--accent-h) / 0); }
@@ -710,7 +706,6 @@ html, body, #app {
 .te-node:hover { background: var(--bg-hover); }
 .te-node.selected { background: var(--bg-active); border-left-color: var(--fg-dim); }
 .te-node.te-status-running { border-left-color: var(--run); }
-.te-node.te-status-flash-failed { animation: flash-fail 0.6s ease-out; }
 .te-node.te-node-project {
   margin-top: 4px;
   padding-top: 6px;
@@ -799,7 +794,6 @@ html, body, #app {
 .te-deps { font-size: 10px; color: var(--fg-muted); font-style: italic; flex-shrink: 0; margin-right: 4px; }
 
 .te-duration { font-size: 10px; color: var(--fg-muted); font-family: var(--font-mono); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.te-isolation { font-size: 9.5px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; margin-right: 6px; flex-shrink: 0; letter-spacing: 0.02em; line-height: 14px; }
 .te-devices { display: inline-flex; align-items: center; gap: 3px; font-size: 9.5px; color: var(--fg-muted); margin-right: 6px; flex-shrink: 0; letter-spacing: 0.02em; line-height: 14px; }
 .te-devices svg { flex-shrink: 0; opacity: 0.8; }
 

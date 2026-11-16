@@ -79,7 +79,12 @@ class TapsmithAgent : Instrumentation() {
                 log = { Log.i("TapsmithSystemDialog", it) },
             )
         val occlusionGuard = OcclusionGuard(device, this, elementFinder::nodeInfoFor, input, systemDialogs)
-        val waitEngine = WaitEngine(device, systemDialogs::answer)
+        val waitEngine =
+            WaitEngine(
+                device,
+                settleIdle = { quietMs, timeoutMs -> uiAutomation.waitForIdle(quietMs, timeoutMs) },
+                answerSystemDialogs = systemDialogs::answer,
+            )
         val actionExecutor = ActionExecutor(device, this, occlusionGuard, input)
         val hierarchyDumper = HierarchyDumper(device, this, elementFinder::composeShapeOf)
         val commandHandler =
@@ -90,6 +95,7 @@ class TapsmithAgent : Instrumentation() {
                 actionExecutor = actionExecutor,
                 waitEngine = waitEngine,
                 hierarchyDumper = hierarchyDumper,
+                appReadiness = AppReadinessProbe(this),
                 systemDialogs = systemDialogs,
             )
 

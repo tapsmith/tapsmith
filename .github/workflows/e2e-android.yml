@@ -52,24 +52,24 @@ jobs:
     name: Build SDK
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # dist/ is platform-independent (tsc output, proto copy, iOS agent
       # sources, vite web bundles), so build it once here instead of in each
       # of the shard jobs and the report job.
       - name: Cache SDK build
         id: sdk-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: packages/tapsmith/dist
           key: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
             'ios-agent/TapsmithAgent/**', 'ios-agent/TapsmithAgent.xcodeproj/**',
             'ios-agent/create-xcode-project.sh', 'ios-agent/Package.swift') }}
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
           cache-dependency-path: packages/tapsmith/package-lock.json
 
@@ -78,17 +78,18 @@ jobs:
         working-directory: packages/tapsmith
         run: npm ci && npm run build
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sdk-dist
-          retention-days: 1
+          # Outlives a next-day `--failed` re-run, whose Merge Reports needs it.
+          retention-days: 7
           path: packages/tapsmith/dist/
 
   build-daemon:
     name: Build Daemon
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
@@ -96,7 +97,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -110,7 +111,7 @@ jobs:
         working-directory: packages/tapsmith-core
         run: cargo build --release
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: daemon-binary
           retention-days: 1
@@ -120,15 +121,15 @@ jobs:
     name: Build Agent
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
         with:
           distribution: temurin
           java-version: 17
 
       - name: Cache Gradle
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.gradle/caches
@@ -142,7 +143,7 @@ jobs:
         working-directory: agent
         run: ./gradlew assembleDebug assembleDebugAndroidTest
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: agent-apks
           retention-days: 1
@@ -154,11 +155,11 @@ jobs:
     name: Build Test App
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Cache test app APK
         id: test-app-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: test-app/android/app/build/outputs/apk/release/app-release.apk
           key: test-app-android-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
@@ -168,16 +169,16 @@ jobs:
             'packages/tapsmith-react-native/package.json',
             'packages/tapsmith-react-native/tsconfig*.json') }}
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.test-app-cache.outputs.cache-hit != 'true'
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
           cache-dependency-path: |
             test-app/package-lock.json
             packages/tapsmith-react-native/package-lock.json
 
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
         if: steps.test-app-cache.outputs.cache-hit != 'true'
         with:
           distribution: temurin
@@ -207,7 +208,7 @@ jobs:
           EXPO_PUBLIC_TAPSMITH_HOOKS: "1"
         run: ./gradlew assembleRelease
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-app-apk
           retention-days: 1
@@ -225,7 +226,7 @@ jobs:
       matrix:
         shard: [ 1, 2, 3, 4, 5 ]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Enable KVM
         run: |
@@ -245,33 +246,33 @@ jobs:
           # saves anything (every shard re-downloaded the image, ~55 s).
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
 
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
           cache-dependency-path: |
             packages/tapsmith/package-lock.json
             e2e/package-lock.json
 
       - name: Download daemon binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: daemon-binary
           path: packages/tapsmith-core/target/release
 
       - name: Download agent APKs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: agent-apks
           path: agent/app/build/outputs/apk
 
       - name: Download test app APK
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: test-app-apk
           path: e2e/fixtures
@@ -279,7 +280,7 @@ jobs:
       # e2e/node_modules/tapsmith is a `file:../packages/tapsmith` symlink, so
       # the build has to land at that real path.
       - name: Download SDK build
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: sdk-dist
           path: packages/tapsmith/dist
@@ -289,7 +290,7 @@ jobs:
 
       - name: Cache Android system image
         id: system-image-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.ANDROID_HOME }}/system-images
           key: system-image-${{ env.ANDROID_SYSTEM_IMAGE }}-v1
@@ -381,7 +382,7 @@ jobs:
       # build must fall through to a fresh auth.setup run, never be reused.
       - name: Restore cached auth state
         id: auth-state-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.AUTH_STATE_ARCHIVE }}
           key: auth-state-android-${{ env.AUTH_STATE_CACHE_VERSION }}-${{
@@ -449,7 +450,7 @@ jobs:
         if: >-
           success() && steps.auth-state-cache.outputs.cache-hit != 'true'
           && hashFiles(env.AUTH_STATE_ARCHIVE) != ''
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.AUTH_STATE_ARCHIVE }}
           key: ${{ steps.auth-state-cache.outputs.cache-primary-key }}
@@ -457,8 +458,9 @@ jobs:
       # Record one trace against the live emulator and assert what is inside
       # it: decodable screenshots at the device's real resolution, hierarchy
       # dumps that contain the element each action resolved, and the app's real
-      # HTTPS traffic. The sharded run above records `retain-on-failure`
-      # traces nobody opens, so nothing else here would notice a trace that
+      # HTTPS traffic. The sharded run above keeps traces only for failed or
+      # retried attempts (`retain-on-failure-and-retries`), so on a green run
+      # nothing else here would notice a trace that
       # packages successfully but holds the wrong data. One shard is enough —
       # this verifies the recording path, not the tests.
       - name: Verify trace archive contents
@@ -473,11 +475,12 @@ jobs:
       # Network mocking with no trace config on an emulator whose adbd is not
       # root yet — a fresh CI emulator, as android-emulator-runner boots one
       # (PILOT-831). The shard run above rooted it, so `adb unroot` puts it
-      # back. The first route() starts the proxy on demand (PILOT-775); the CA
-      # install behind it roots adbd, and a root that lands mid-session ends
-      # the running agent. The session recovers and passes the retry, so a
-      # recovery fails the step too.
-      - name: Verify on-demand mocking from an unrooted adbd
+      # back. The tests call route(), so the proxy starts with the session,
+      # before the agent (PILOT-1013; on demand at the first route() before
+      # that, PILOT-775); the CA install behind it roots adbd, and a root that
+      # lands mid-session ends the running agent. The session recovers and
+      # passes the retry, so a recovery fails the step too.
+      - name: Verify untraced mocking from an unrooted adbd
         if: matrix.shard == 1
         working-directory: e2e
         env:
@@ -496,7 +499,7 @@ jobs:
             --grep "tracing off" --device "$SERIAL" 2>&1 | tee /tmp/untraced-run.txt
           STATUS=${PIPESTATUS[0]}
           if grep -qE 'Recovering session|[0-9]+ flaky' /tmp/untraced-run.txt; then
-            echo "::error::On-demand mocking from an unrooted adbd needed a session recovery (PILOT-831)"
+            echo "::error::Untraced mocking from an unrooted adbd needed a session recovery (PILOT-831)"
             exit 1
           fi
           exit "$STATUS"
@@ -523,7 +526,7 @@ jobs:
 
       - name: Upload blob report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: blob-report-${{ matrix.shard }}
           retention-days: 7
@@ -531,7 +534,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-results-${{ matrix.shard }}
           retention-days: 7
@@ -556,7 +559,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Enable KVM
         run: |
@@ -576,33 +579,33 @@ jobs:
           # saves anything (every shard re-downloaded the image, ~55 s).
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
 
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
           cache-dependency-path: |
             packages/tapsmith/package-lock.json
             e2e/package-lock.json
 
       - name: Download daemon binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: daemon-binary
           path: packages/tapsmith-core/target/release
 
       - name: Download agent APKs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: agent-apks
           path: agent/app/build/outputs/apk
 
       - name: Download test app APK
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: test-app-apk
           path: e2e/fixtures
@@ -610,7 +613,7 @@ jobs:
       # e2e/node_modules/tapsmith is a `file:../packages/tapsmith` symlink, so
       # the build has to land at that real path.
       - name: Download SDK build
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: sdk-dist
           path: packages/tapsmith/dist
@@ -620,7 +623,7 @@ jobs:
 
       - name: Cache Android system image
         id: system-image-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.ANDROID_HOME }}/system-images
           key: system-image-${{ env.ANDROID_SYSTEM_IMAGE }}-v1
@@ -754,7 +757,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-results-multi-device
           retention-days: 7
@@ -767,14 +770,20 @@ jobs:
   e2e-report:
     name: Merge Reports
     needs: [ build-sdk, e2e-test ]
-    if: always() && needs.build-sdk.result == 'success'
+    # !cancelled(): a superseded run has nothing to report. It still runs after a
+    # single job was cancelled (no runner, timeout-minutes), when the gate needs it.
+    if: ${{ !cancelled() && needs.build-sdk.result == 'success' }}
     runs-on: ubuntu-latest
+    # actions: merge-reports-gate.mjs reads this run's job list.
+    permissions:
+      actions: read
+      contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
           cache-dependency-path: |
             packages/tapsmith/package-lock.json
@@ -785,7 +794,7 @@ jobs:
         run: npm ci
 
       - name: Download SDK build
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: sdk-dist
           path: packages/tapsmith/dist
@@ -794,7 +803,7 @@ jobs:
         run: chmod +x packages/tapsmith/dist/bin.js packages/tapsmith/dist/cli.js
 
       - name: Download all blob reports
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: blob-report-*
           path: all-blob-reports
@@ -804,16 +813,19 @@ jobs:
         working-directory: e2e
         run: npm ci
 
+      # Fails only on a real merge error or a shard with no results that no failed
+      # job accounts for. See e2e/utils/merge-gate-checks.mjs.
       - name: Merge reports
         working-directory: e2e
-        run: npx tapsmith merge-reports ../all-blob-reports -c
-          tapsmith.config.android-ci.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node merge-reports-gate.mjs ../all-blob-reports tapsmith.config.android-ci.mjs
 
       # always(): merge-reports exits 1 when a shard's blob is missing, but it
       # still writes the report for the shards that did finish.
       - name: Upload HTML report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: e2e-report
           retention-days: 30

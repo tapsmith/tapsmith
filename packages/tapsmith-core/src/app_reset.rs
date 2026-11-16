@@ -30,6 +30,11 @@ pub const HOOKS_MARKER_PREFIX: &str = "tapsmith-hooks:";
 /// The one marker protocol version this daemon understands.
 pub const HOOKS_MARKER_VERSION: u32 = 1;
 pub const RESET_QUERY_FLAG: &str = "__tapsmith_reset=1";
+/// Added to a reset link that must keep the app's persisted data: the hook
+/// resets in-memory state only (its `onReload`), skipping `clear` and
+/// `onReset`. Sent between tests that restore the same `appState` archive,
+/// once the hook's `writes` count shows the data still matches it.
+pub const KEEP_DATA_QUERY_FLAG: &str = "__tapsmith_keep=1";
 
 /// Parsed `@tapsmith/react-native` marker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,13 +157,14 @@ pub fn hooks_acknowledged(
     }
 }
 
-/// `<prefix><target>?__tapsmith_reset=1&nonce=<nonce>`.
+/// `<prefix><target>?__tapsmith_reset=1&nonce=<nonce>`, plus
+/// `&__tapsmith_keep=1` when `keep_data` asks the hook to keep persisted data.
 ///
 /// The module publishes a prefix that already ends in `/` (`myapp:///`,
 /// `exp://host:8081/--/`) so the daemon only has to append the route; a
 /// prefix without one gets a single `/` added. `target_path`'s own leading
 /// slash is dropped so it never doubles.
-pub fn build_reset_url(prefix: &str, target_path: &str, nonce: &str) -> String {
+pub fn build_reset_url(prefix: &str, target_path: &str, nonce: &str, keep_data: bool) -> String {
     let base = if prefix.ends_with('/') {
         prefix.to_string()
     } else {
@@ -174,7 +180,12 @@ pub fn build_reset_url(prefix: &str, target_path: &str, nonce: &str) -> String {
         Some(q) => format!("{q}&"),
         None => String::new(),
     };
-    format!("{base}{path}?{sep_query}{RESET_QUERY_FLAG}&nonce={nonce}")
+    let keep = if keep_data {
+        format!("&{KEEP_DATA_QUERY_FLAG}")
+    } else {
+        String::new()
+    };
+    format!("{base}{path}?{sep_query}{RESET_QUERY_FLAG}&nonce={nonce}{keep}")
 }
 
 fn xml_unescape(s: &str) -> String {
@@ -297,6 +308,14 @@ impl ResetPolicyState {
             self.consecutive_warm_failures = 0;
             self.valve_relaunches = 0;
         }
+    }
+
+    /// The app was relaunched outside the reset ladder (`RestartApp`, as the
+    /// runner's `appState` restore does): like a cold rung, it starts a fresh
+    /// warm window. Without this, warm resets kept between restores would hit
+    /// the window bound counted across those relaunches.
+    pub fn note_relaunch(&mut self) {
+        self.warm_resets_since_cold = 0;
     }
 
     /// A warm attempt failed verification. Recorded whether or not the ladder
@@ -831,24 +850,50 @@ mod tests {
     #[test]
     fn builds_reset_urls_for_scheme_and_expo_prefixes() {
         assert_eq!(
-            build_reset_url("myapp:///", "/", "n1"),
+            build_reset_url("myapp:///", "/", "n1", false),
             "myapp:///?__tapsmith_reset=1&nonce=n1"
         );
         assert_eq!(
-            build_reset_url("myapp:///", "/login", "n2"),
+            build_reset_url("myapp:///", "/login", "n2", false),
             "myapp:///login?__tapsmith_reset=1&nonce=n2"
         );
         assert_eq!(
-            build_reset_url("myapp://", "login", "n2b"),
+            build_reset_url("myapp://", "login", "n2b", false),
             "myapp://login?__tapsmith_reset=1&nonce=n2b"
         );
         assert_eq!(
-            build_reset_url("exp://10.0.0.5:8081/--/", "settings?tab=2", "n3"),
+            build_reset_url("exp://10.0.0.5:8081/--/", "settings?tab=2", "n3", false),
             "exp://10.0.0.5:8081/--/settings?tab=2&__tapsmith_reset=1&nonce=n3"
         );
         assert_eq!(
-            build_reset_url("myapp:///", "", "n4"),
+            build_reset_url("myapp:///", "", "n4", false),
             "myapp:///?__tapsmith_reset=1&nonce=n4"
+        );
+    }
+
+    #[test]
+    fn a_relaunch_outside_the_ladder_starts_a_fresh_warm_window() {
+        let mut state = ResetPolicyState {
+            warm_resets_since_cold: 10,
+            consecutive_warm_failures: 1,
+            valve_relaunches: 0,
+        };
+        assert!(state.cold_reason(false, 10).is_some());
+        state.note_relaunch();
+        assert_eq!(state.cold_reason(false, 10), None);
+        // The failure streak is about the hook, not the window: kept.
+        assert_eq!(state.consecutive_warm_failures, 1);
+    }
+
+    #[test]
+    fn keep_data_reset_urls_carry_the_keep_flag() {
+        assert_eq!(
+            build_reset_url("myapp:///", "/", "n1", true),
+            "myapp:///?__tapsmith_reset=1&nonce=n1&__tapsmith_keep=1"
+        );
+        assert_eq!(
+            build_reset_url("exp://10.0.0.5:8081/--/", "settings?tab=2", "n2", true),
+            "exp://10.0.0.5:8081/--/settings?tab=2&__tapsmith_reset=1&nonce=n2&__tapsmith_keep=1"
         );
     }
 

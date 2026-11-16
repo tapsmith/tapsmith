@@ -44,6 +44,7 @@ vi.mock('../device-claims.js', async (importOriginal) => {
 });
 
 const bundleMatch = vi.hoisted(() => ({ calls: [] as Array<[string, string]>, result: true }));
+vi.mock('../timing-log.js', () => ({ timingLog: vi.fn() }));
 vi.mock('../app-bundle-match.js', () => ({
   appBundlesMatch: (installed: string, candidate: string) => {
     bundleMatch.calls.push([installed, candidate]);
@@ -560,6 +561,25 @@ describe('installAppIfAbsent (PILOT-496)', () => {
     expect(simctl).toEqual(['get_app_container', 'install']);
   });
 
+  it('writes a boot-stage app_install timing line for each outcome (PILOT-1134)', async () => {
+    const { timingLog } = await import('../timing-log.js');
+    vi.mocked(timingLog).mockClear();
+    mockedExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[1] === 'get_app_container') throw exited(2);
+      return '' as unknown as Buffer;
+    });
+    installAppIfAbsent('A', '/app.app', 'com.example.app');
+    mockedExecFileSync.mockImplementation(() => '' as unknown as Buffer);
+    installAppIfAbsent('A', '/app.app', 'com.example.app');
+    mockedExecFileSync.mockImplementation(() => { throw timedOut(); });
+    installAppIfAbsent('A', '/app.app', 'com.example.app');
+    const lines = vi.mocked(timingLog).mock.calls.map(([line]) => line);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^kind=boot name=app_install dur_ms=\d+ result=installed check_ms=\d+ platform=ios stage=boot$/);
+    expect(lines[1]).toMatch(/ result=present /);
+    expect(lines[2]).toMatch(/ result=unknown /);
+  });
+
   it('leaves an installed app to the session, which checks the build', () => {
     const simctl: string[] = [];
     mockedExecFileSync.mockImplementation((cmd: string, args: string[]) => {
@@ -790,6 +810,26 @@ describe('cleanupStaleSimulators', () => {
 
     const result = cleanupStaleSimulators('iPhone 16');
     expect(result.killed).toContain('ORPHAN');
+  });
+
+  it('hands back the listing it read, without the simulators it deleted, so the caller need not list again', () => {
+    mockedReadFileSync.mockReturnValue('[]');
+    let lists = 0;
+    mockedExecFileSync.mockImplementation((cmd: string, args: string[]) => {
+      const a = args as string[];
+      if (cmd === 'xcrun' && a?.[0] === 'simctl' && a?.[1] === 'list') {
+        lists++;
+        return makeSimctlOutput([
+          { udid: 'MINE', name: 'iPhone 16', state: 'Booted' },
+          { udid: 'ORPHAN', name: 'iPhone 16 (Tapsmith Worker 1)', state: 'Booted' },
+        ]) as unknown as Buffer;
+      }
+      return '' as unknown as Buffer;
+    });
+
+    const result = cleanupStaleSimulators('iPhone 16');
+    expect(lists).toBe(1);
+    expect(result.simulators?.map((sim) => sim.udid)).toEqual(['MINE']);
   });
 
   // Phase 1's view of the manifest is as old as the sweep, and its lock is
@@ -1146,7 +1186,7 @@ describe('simulators another live Tapsmith session holds', () => {
     claims.held = new Set(['HELD_CLONE', 'HELD_ORPHAN']);
 
     const result = cleanupStaleSimulators('iPhone 16');
-    expect(result).toEqual({ reusable: [], killed: [] });
+    expect(result).toMatchObject({ reusable: [], killed: [] });
     expect(calls.some((c) => c[2] === 'delete' || c[2] === 'shutdown')).toBe(false);
     // Still recorded: its owner's clone stays in the manifest.
     const written = JSON.parse(String(mockedWriteFileSync.mock.calls.at(-1)?.[1] ?? '[]')) as Array<{ udid: string }>;

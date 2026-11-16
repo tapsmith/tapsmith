@@ -498,6 +498,45 @@ npx tapsmith test
 
 See [Android emulator image requirements](network.md#android-emulator-image-requirements) for details on why the system image type matters for network capture.
 
+### Turning animations off
+
+Set `reducedMotion: "reduce"` in the config to run Android tests with the system animations off,
+and iOS simulator tests with UIKit animations ten times faster:
+
+```typescript
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  apk: "./app/build/outputs/apk/release/app-release.apk",
+  reducedMotion: "reduce",
+});
+```
+
+Tapsmith sets the window, transition and animator duration scales to 0 when it selects the
+device, and puts the device's own values back when the session ends (or, after a run that was
+killed, when the next session selects that device). Screen transitions then finish at once, so
+tests wait less, and fewer taps land on an element that is still moving. You no longer need
+`adb shell settings put global …_animation_scale 0` steps in the workflow.
+
+It is opt-in because apps see it as the system's "Remove animations" setting: an app that reads
+that setting (React Native's `AccessibilityInfo.isReduceMotionEnabled()`, for example) or relies on
+animator callbacks can behave differently from a user's device.
+
+On an iOS simulator, Tapsmith turns on UIKit's `UIAnimationDragCoefficient` (at 0.1) when it
+selects the simulator: it sets the `UIKit/UIPreferences` feature flag in the simulator's launchd
+environment and the coefficient in its global defaults, so every app launched from then on runs
+its UIKit and Core Animation animations ten times faster, however it is launched (including the
+cold deep-link resets). It puts the simulator back the same way when the session ends. Apps do
+not see this as the Reduce Motion setting, and the keyboard's and the Home screen's animations are
+not affected, so the gain is smaller than on Android: on a test-app screen push and back, about
+10%. An app that is already running keeps its speed until it is next launched, which Tapsmith does
+when it starts. If the simulator's launchd environment already has a `FEATUREFLAGS_ENABLED` value
+of its own, Tapsmith leaves it alone and does not speed animations up (the daemon log says so). On
+a loaded runner a freshly booted simulator can be slow to answer: Tapsmith tries again before the
+agent launches the app, and if the simulator still does not answer, the run prints a
+`reducedMotion could not be applied` warning and tries again at the next agent start. It is not
+applied on physical iOS devices.
+
 ### ADB Setup
 
 Most CI images with Android tooling already have ADB on the PATH. If yours does not:

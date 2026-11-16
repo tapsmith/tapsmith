@@ -138,14 +138,28 @@ final class UIKitTableViewController: UITableViewController {
             done.isEnabled = false
             done.sizeToFit()
             cell.accessoryView = done
+        case let text where Self.hasDetailButton(text):
+            // Many rows with the same "More Info" detail button, to tell
+            // which row's button a tap reached (PILOT-952).
+            cell.accessoryType = .detailDisclosureButton
         default: cell.accessoryType = .disclosureIndicator
         }
         return cell
     }
 
+    /// Rows 50 to 100 have a detail button.
+    private static func hasDetailButton(_ text: String) -> Bool {
+        guard let n = Int(text.dropFirst("Row ".count)) else { return false }
+        return n >= 50
+    }
+
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         selection.text = "Selected: \(rows[indexPath.row])"
+    }
+
+    override func tableView(_ tableView: UITableView, accessoryButtonTappedForRowWith indexPath: IndexPath) {
+        selection.text = "Info: \(rows[indexPath.row])"
     }
 
     override func tableView(

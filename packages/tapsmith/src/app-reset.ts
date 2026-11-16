@@ -30,14 +30,67 @@ export interface AppResetPolicy {
    * declared no app state and `mode` alone applies.
    */
   appState?: string;
+  /**
+   * Where the reset leaves the app (`appResetRoute`): a path resolved against
+   * the hooks' URL prefix, or a full deep link. `undefined` = the app's launch
+   * route, with no navigation.
+   */
+  route?: string;
 }
 
 /** What the device/session can offer, discovered at runtime. */
 export interface ResetCapabilities {
   /** `@tapsmith/react-native` reset hooks were detected in the app's UI hierarchy. */
   hooksDetected?: boolean;
+  /**
+   * The daemon answered `WaitForAppReady` for this session's app, so its
+   * restart/clear rungs already wait for rendered content before returning
+   * (the RPC and that wait shipped together). On iOS the SDK then skips its
+   * own repeat of that wait.
+   */
+  daemonWaitsForRender?: boolean;
   /** Physical device (not a simulator/emulator). */
   isPhysical?: boolean;
+  /**
+   * The URL prefix the hooks marker publishes (`myapp:///`), read with the
+   * marker. Resolves a path `appResetRoute` into a deep link when the reset
+   * itself could not land on it.
+   */
+  hooksUrlPrefix?: string;
+  /**
+   * The saved app state the last cold restore put on the device, with the
+   * hooks marker's `boot` token and `writes` count read right after it. While
+   * the app is still that process and its write count has not moved, the data
+   * on the device still matches the archive, and the next restore of the same
+   * archive can be a warm reset that keeps it. Self-validating — any other
+   * relaunch changes `boot` — so a copy carried into a watch-mode or MCP
+   * child never vouches for a different process.
+   */
+  appStateBaseline?: AppStateBaseline;
+  /**
+   * What this session learnt about keeping restored data, so resets stop
+   * paying for attempts that cannot succeed: the app reports no writes (its
+   * build has no `onReload`/`track`), or its warm resets keep writing
+   * themselves (an `onReload` that writes back what it reads), or the
+   * daemon cannot pass a keep request on (one older than the SDK).
+   */
+  appStateKeep?: { noWrites?: boolean; writingKeeps?: number; daemonCannotKeep?: boolean };
+}
+
+export interface AppStateBaseline {
+  /** Absolute path of the restored archive. */
+  archive: string;
+  /** The archive file's mtime and size when it was restored: a re-saved archive holds other data. */
+  archiveStamp: string;
+  boot: string;
+  writes: number;
+  /**
+   * Warm resets that kept this restore since it ran. The SDK bounds them
+   * itself (`appResetColdEvery`) by restoring cold, rather than letting the
+   * daemon's warm-window valve relaunch the app during a keep and then
+   * restore on top of it.
+   */
+  kept: number;
 }
 
 /**
@@ -90,7 +143,7 @@ export interface AppResetReport {
  */
 export function resolveAppResetPolicy(
   scopeOptions: { appState?: string } | undefined,
-  config: Pick<TapsmithConfig, 'appReset' | 'appResetScope' | 'resetAppDeepLink' | 'rootDir'>,
+  config: Pick<TapsmithConfig, 'appReset' | 'appResetScope' | 'appResetRoute' | 'resetAppDeepLink' | 'rootDir'>,
   caps: ResetCapabilities = {},
 ): AppResetPolicy {
   const warmAvailable = !!caps.hooksDetected || !!config.resetAppDeepLink;
@@ -111,6 +164,7 @@ export function resolveAppResetPolicy(
   const scope: ResolvedAppResetScope = requestedScope === 'auto' ? 'file' : requestedScope;
 
   const policy: AppResetPolicy = { mode, scope };
+  if (config.appResetRoute) policy.route = config.appResetRoute;
   if (appState !== undefined) {
     policy.appState = appState === ''
       ? ''
@@ -157,15 +211,52 @@ export function satisfies(have: AppResetPolicy, want: AppResetPolicy): boolean {
 
 export function appResetPolicyEquals(a: AppResetPolicy | undefined, b: AppResetPolicy | undefined): boolean {
   if (!a || !b) return a === b;
-  return a.mode === b.mode && a.scope === b.scope && a.appState === b.appState;
+  return a.mode === b.mode && a.scope === b.scope && a.appState === b.appState && a.route === b.route;
 }
 
-/** Trace-friendly action label: "App reset (clear)". */
+/** Trace-friendly action label: "App reset (clear)", "App reset (warm → /settings)". */
 export function describeAction(policy: AppResetPolicy): string {
   const action = appResetAction(policy);
-  return action.kind === 'restore'
-    ? `App reset (restore ${path.basename(action.archive)})`
-    : `App reset (${action.kind})`;
+  const label = action.kind === 'restore' ? `restore ${path.basename(action.archive)}` : action.kind;
+  return policy.route !== undefined && action.kind !== 'none'
+    ? `App reset (${label} → ${policy.route})`
+    : `App reset (${label})`;
+}
+
+// ─── Start route (appResetRoute) ───
+
+/** A route given as a full deep link (`myapp:///settings`) rather than a path. */
+export function isDeepLinkRoute(route: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(route);
+}
+
+function prefixBase(urlPrefix: string): string {
+  return urlPrefix.endsWith('/') ? urlPrefix : `${urlPrefix}/`;
+}
+
+/**
+ * The in-app path a warm reset should carry for `route`: a path as given, or
+ * a deep link relative to the hooks' URL prefix. `undefined` when a deep link
+ * is not under the prefix (or the prefix is not known yet) — the reset then
+ * lands on `/` and the runner opens the link itself.
+ */
+export function warmResetTarget(route: string, urlPrefix: string | undefined): string | undefined {
+  if (!isDeepLinkRoute(route)) return route;
+  if (!urlPrefix) return undefined;
+  const base = prefixBase(urlPrefix);
+  if (route === urlPrefix || route === base) return '/';
+  return route.startsWith(base) ? `/${route.slice(base.length)}` : undefined;
+}
+
+/**
+ * The deep link that opens `route`: a deep link as given, or a path joined to
+ * the hooks' URL prefix the way the daemon builds reset links (one `/`
+ * between them). `undefined` for a path when no prefix is known.
+ */
+export function routeDeepLink(route: string, urlPrefix: string | undefined): string | undefined {
+  if (isDeepLinkRoute(route)) return route;
+  if (!urlPrefix) return undefined;
+  return prefixBase(urlPrefix) + route.trim().replace(/^\/+/, '');
 }
 
 // ─── @tapsmith/react-native hooks marker ───
@@ -177,6 +268,13 @@ export interface HooksMarker {
   nav?: number;
   /** URL prefix the module builds reset links from; empty when it could not determine one. */
   urlPrefix: string;
+  /** Per-process token: changes whenever the app process is recreated. */
+  boot?: string;
+  /**
+   * Persisted writes the hooks counted in this process. Present only when
+   * the app can reset while keeping its data (`onReload` + `track`).
+   */
+  writes?: number;
   error?: string;
 }
 
@@ -200,6 +298,8 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
   let epoch: number | undefined;
   let nav: number | undefined;
   let urlPrefix = '';
+  let boot: string | undefined;
+  let writes: number | undefined;
   let error: string | undefined;
   for (const field of fields) {
     const eq = field.indexOf('=');
@@ -209,6 +309,8 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
     if (key === 'epoch') epoch = Number.parseInt(value, 10);
     else if (key === 'nav') nav = Number.parseInt(value, 10);
     else if (key === 'url') urlPrefix = value;
+    else if (key === 'boot' && value) boot = value;
+    else if (key === 'writes' && /^\d+$/.test(value)) writes = Number.parseInt(value, 10);
     else if (key === 'err' && value) {
       try { error = decodeURIComponent(value); } catch { error = value; }
     }
@@ -217,6 +319,8 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
   return {
     version, epoch, urlPrefix,
     ...(nav !== undefined && Number.isFinite(nav) ? { nav } : {}),
+    ...(boot ? { boot } : {}),
+    ...(writes !== undefined ? { writes } : {}),
     ...(error ? { error } : {}),
   };
 }

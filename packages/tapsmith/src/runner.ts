@@ -17,14 +17,14 @@ import * as os from 'node:os';
 import { NetworkSnapshots } from './trace/network-snapshots.js';
 import { decodeHttpBody, headerValue } from './http-body.js';
 import type { TapsmithConfig, Platform, UseOptions } from './config.js';
-import { pendingWaiterMark, type Device } from './device.js';
+import { pendingWaiterMark, type Device, type RouteRegistrationRecord } from './device.js';
 import type { TapsmithReporter } from './reporter.js';
 import { fileLoadFailureTitle, loadErrorForReport } from './load-failure.js';
 import { APIRequestContext } from './api-request.js';
 import { flushSoftErrors } from './expect.js';
 import { FixtureRegistry, resolveFixtures, fixtureParameterNames, functionHasParameters, type FixtureDefinitions, type BuiltinFixtures } from './fixtures.js';
 import { resolveTraceConfig, type TraceConfig } from './trace/types.js';
-import { shouldRecord, shouldRetain } from './trace/trace-mode.js';
+import { shouldRecord, shouldRetain, uiModeTraceMode } from './trace/trace-mode.js';
 import { resolveVideoConfig } from './video/types.js';
 import { appendEventsToTrace, packageTrace, readTraceActionCount } from './trace/trace-packager.js';
 import { TraceCollector, extractSourceLocation, screenshotFileName, setActiveTraceCollector, withActiveTraceCollector } from './trace/trace-collector.js';
@@ -42,7 +42,7 @@ import {
   type PreparedState,
   type ResetCapabilities,
 } from './app-reset.js';
-import { collectAnsweredSystemDialogs, executeAppReset, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
+import { collectAnsweredSystemDialogs, executeAppReset, reopenStartRoute, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
 import { deviceGroupSize, resolveDeviceGroup, validateAppResetOptions, validateDevicesOption, validateRecordingModes } from './config.js';
 import { type AttemptToken } from './attempt-fence.js';
 import { isRunnerTimeoutError, runBounded } from './run-bounded.js';
@@ -310,8 +310,9 @@ function _warnRoutesWithoutProxy(fullName: string, deviceName: string | undefine
     ? 'but network capture failed to start on this device (see the "Network capture" warning above), ' +
       'so no request could reach them.'
     : 'but network capture was not running, so no request could reach them. Routes go through the ' +
-      'network proxy, which the test runner starts on the first route(), waitForRequest() or ' +
-      'waitForResponse() of a test file, or for a test whose trace records network traffic.';
+      'network proxy, which the test runner starts with the session when the run\'s test files call ' +
+      'route(), waitForRequest() or waitForResponse(), on the first such call of a test file, or for a ' +
+      'test whose trace records network traffic.';
   _warnCaptureOnce(
     'device.route() handlers never fired',
     `${who}"${fullName}" registered route handlers, ${why} ` +
@@ -370,20 +371,75 @@ function armOnDemandNetworkCapture(opts: RunOptions): void {
 }
 
 /**
+ * Start every device's proxy now, before the file's worker fixtures, hooks
+ * and first test, when the run's test files use the network APIs
+ * (`RunOptions.networkApisInRun`): connections the app opens from
+ * here on go through it, so a test that mocks a server an earlier test
+ * already talked to still sees its requests. Once per device — usually the
+ * session open already did it, before the app launched; this covers sessions
+ * that adopted a running app (watch and MCP re-runs, an adopted UI-mode
+ * primary). Silent, like the open's start: the start at the beginning of
+ * each test reports a running proxy's warnings inside that test, and a failed
+ * start is tried again, and reported, by the on-demand start of a test that
+ * needs it.
+ */
+async function startSessionNetworkCapture(opts: RunOptions): Promise<void> {
+  if (!opts.networkApisInRun) return;
+  const devices = allDevices(opts);
+  const httpPorts = resolveTraceConfig(opts.config.trace).networkHttpPorts;
+  for (const d of devices) {
+    // The app is already running here: the session open did not start the
+    // proxy before launching it (it adopted a running app, or the run's
+    // first mocking test was written after the session opened).
+    await d._startNetworkProxyForSession?.({ requireIsolation: devices.length > 1, httpPorts, appRunning: true });
+  }
+}
+
+/**
  * Warn that a failed test's routes never fired although the proxy was running, when
  * the capture shows why (PILOT-775): the device passed HTTPS through
  * uncaptured (a Google Play emulator image cannot trust Tapsmith's CA; a
  * configured or certificate-rejecting host is tunneled), or the proxy only
- * came up with the test's first route, after the app may have opened the
- * connections it went on using. Neither shows: nothing to say — the app may
- * simply not have made the request.
+ * came up with the test's first route, or with its file in a session whose
+ * app was already running, after the app may have opened the
+ * connections it went on using. Also (PILOT-1196): the proxy captured a
+ * request matching a route before that route was registered (an app that
+ * fetches as it launches), or captured nothing from the app at all. None
+ * shows: nothing to say — the app may simply not have made the request.
  */
 function _warnUnfiredRoutes(
   fullName: string,
   deviceName: string | undefined,
-  reasons: { passthroughHosts: string[]; proxyStartedMidTest: boolean },
+  reasons: {
+    passthroughHosts: string[];
+    proxyStartedLate: 'mid-test' | 'after-launch' | undefined;
+    /** Requests matching a route that the proxy captured before that route was registered. */
+    earlyRequests: EarlyRouteRequest[];
+    /** Whether the proxy saw any request from the app; undefined when this test drained no capture. */
+    appTrafficSeen: boolean | undefined;
+  },
 ): void {
   const possible: string[] = [];
+  if (reasons.earlyRequests.length > 0) {
+    const shown = reasons.earlyRequests.slice(0, 3).map((r) =>
+      `${r.method ? `${r.method} ` : ''}${r.url} ${formatLeadTime(r.msBefore)} before the route for ${r.pattern} was registered`,
+    );
+    const more = reasons.earlyRequests.length > 3 ? `, and ${reasons.earlyRequests.length - 3} more` : '';
+    possible.push(
+      `the app sent ${shown.join(', and ')}${more} — a route only sees requests sent after it is registered ` +
+        '(register it before the step that sends the request: relaunch the app after registering it, with ' +
+        'device.restartApp(), or register it in beforeAll and reset with a relaunch before every test — appReset ' +
+        "'restart' or 'clear' with appResetScope 'test'; a warm reset does not relaunch the app), and the app may answer a repeat of that " +
+        'request from its HTTP cache, which no route sees',
+    );
+  }
+  if (reasons.appTrafficSeen === false) {
+    possible.push(
+      'the network proxy saw no request from the app during this test (if the test reached the step that sends ' +
+        'the request, the app may have sent it over a connection it opened before the proxy started, or answered ' +
+        'it from its HTTP cache)',
+    );
+  }
   if (reasons.passthroughHosts.length > 0) {
     const hosts = reasons.passthroughHosts.slice(0, 5).join(', ') +
       (reasons.passthroughHosts.length > 5 ? `, and ${reasons.passthroughHosts.length - 5} more` : '');
@@ -393,11 +449,22 @@ function _warnUnfiredRoutes(
         "Google APIs image —, the host is in trace.networkPassthroughHosts, or the app rejected Tapsmith's certificate)",
     );
   }
-  if (reasons.proxyStartedMidTest) {
+  if (reasons.proxyStartedLate === 'after-launch') {
+    possible.push(
+      'the network proxy started at the beginning of this file, after the app was already running ' +
+        '(the session\'s first test that mocks was written after it started, or the app was launched before ' +
+        'the session), and connections the app had already opened bypass it until the app is relaunched ' +
+        '(relaunch the app — a clear reset or device.restartApp() — or restart watch or UI mode, which then ' +
+        'starts the proxy before the app launches)',
+    );
+  }
+  if (reasons.proxyStartedLate === 'mid-test') {
     possible.push(
       'the network proxy started on demand during this test or its hooks, and connections the app had ' +
-        'already opened bypass it (register routes before the app first talks to that server, e.g. before ' +
-        'launchApp() or in beforeEach, or record network in the trace so the proxy starts with each test)',
+        'already opened bypass it (Tapsmith starts it with the session when it finds route(), ' +
+        'waitForRequest() or waitForResponse() in the run\'s test files or the local modules they import, ' +
+        'and did not find this call — make it from a test file or a local helper rather than an npm ' +
+        'package or a computed method name, or record network in the trace so the proxy starts with each test)',
     );
   }
   if (possible.length === 0) return;
@@ -409,6 +476,54 @@ function _warnUnfiredRoutes(
       possible.map((p, i) => `(${i + 1}) ${p}`).join('; ') +
       '. See https://tapsmith.dev/guides/network/#prerequisites',
   );
+}
+
+/**
+ * When the current test file's run began (its root scope), so the
+ * unfired-route reasons ignore what the proxy captured before it — between
+ * runs of a UI-mode, watch or MCP session, say (PILOT-1196). A worker runs
+ * one file at a time.
+ */
+let _fileRunStartedAtMs: number | undefined;
+
+/** A captured request that matched a route registered after it was sent (PILOT-1196). */
+interface EarlyRouteRequest {
+  method: string;
+  url: string;
+  pattern: string;
+  msBefore: number;
+}
+
+/** A captured request, as the unfired-route reasons read it. */
+interface CapturedAppRequest {
+  method: string;
+  url: string;
+  startTimeMs: number;
+  routeAction: string;
+}
+
+/**
+ * The captured requests (not passed through: those carry only a host) that
+ * matched one of the test's routes before it was registered, oldest first,
+ * each named once against the first route it matches.
+ */
+function earlyRouteRequests(
+  requests: CapturedAppRequest[],
+  registrations: RouteRegistrationRecord[],
+): EarlyRouteRequest[] {
+  const early: EarlyRouteRequest[] = [];
+  for (const req of [...requests].sort((a, b) => a.startTimeMs - b.startTimeMs)) {
+    if (req.routeAction === 'passthrough') continue;
+    const route = registrations.find((r) => req.startTimeMs < r.registeredAtMs && r.matches(req.url));
+    if (route) {
+      early.push({ method: req.method, url: req.url, pattern: route.pattern, msBefore: route.registeredAtMs - req.startTimeMs });
+    }
+  }
+  return early;
+}
+
+function formatLeadTime(ms: number): string {
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
 /** How a test ended. */
@@ -1248,6 +1363,9 @@ export interface RunOptions {
    * Setup work that runs inside the beforeEach trace group. Use this for
    * any device actions (e.g. session readiness checks) so they appear
    * grouped in the trace viewer instead of as ungrouped top-level events.
+   * Every embedder passes a readiness check (`ensureSessionReady`) on each
+   * device, and nothing else: on Android its idle settle stands in for the
+   * runner's pre-test idle wait on a device it did not relaunch.
    */
   beforeEachTest?: (fullName: string) => Promise<void>;
   abortFileOnError?: (error: Error) => boolean;
@@ -1282,6 +1400,18 @@ export interface RunOptions {
    */
   runMode: RunMode;
   /**
+   * Whether the run's test files use `route()`, `waitForRequest()`,
+   * `waitForResponse()` or `on('request' | 'response')`
+   * (`testFilesUseNetworkApis`) — deliberately REQUIRED, like
+   * `resetCapabilities`. When true, the runner starts each device's network
+   * proxy before the file's first hook if the session open has not already,
+   * so the app's connections go through it before any test mocks them.
+   * Every embedder scans the files its session can run (the whole run, not
+   * this file: the test that sends direct traffic need not use the APIs) and
+   * passes the answer here. Pass `false` only for runs with no device.
+   */
+  networkApisInRun: boolean;
+  /**
    * @internal — per-device prepared state, keyed by device name, shared down
    * the describe tree so each device's preparation is consumed exactly once
    * per file (by whichever scope resets that device first).
@@ -1295,6 +1425,13 @@ export interface RunOptions {
    * scope inheriting the parent's policy must reset back to it.
    */
   _applied?: { current?: AppResetPolicy };
+  /**
+   * @internal — the start route (`appResetRoute`) the most recent reset left
+   * the device on, until the next test starts. The embedder's own readiness
+   * check (`beforeEachTest`) can relaunch the app in between, putting it back
+   * on its launch screen; the runner then opens the route again.
+   */
+  _startRoute?: { pending?: string };
   /** @internal Warnings from preflight notices, waiting for the next test result. */
   _preflightWarnings?: string[];
   /**
@@ -1547,6 +1684,33 @@ function validateHookFixtures(
  * in which case the scope's hooks and app reset must not run either (they
  * would cost seconds and have no test to be attributed to).
  */
+// ─── UI-mode run policy (PILOT-1175) ───
+
+/**
+ * How many times a failed test is retried in this run: the scope's resolved
+ * `retries` (config, project `use`, `test.use()`, `describe.configure()`),
+ * except in UI mode, which never retries — as Playwright's UI runner
+ * overrides `retries` to 0. A failure stays on screen to inspect, and the
+ * user reruns it explicitly, which replaces it. Session recovery
+ * (`abortFileOnError`, the UI worker's file recovery) and auto-waiting are
+ * separate mechanisms and unaffected. Keyed on `runMode`, which is required
+ * and set to 'ui' by the UI worker alone, so every UI entry point (single
+ * test, file, Run all, UI watch, the UI server's MCP) gets the same policy.
+ */
+function testRetries(opts: RunOptions): number {
+  return opts.runMode === 'ui' ? 0 : opts.config.retries;
+}
+
+/**
+ * The trace config a scope records with: in UI mode a retry-only mode
+ * records as `on` (`uiModeTraceMode`), as the UI worker already turns `off`
+ * into `on`, since the live view is built from the trace.
+ */
+function runTraceConfig(opts: RunOptions): TraceConfig {
+  const config = resolveTraceConfig(opts.config.trace);
+  return opts.runMode === 'ui' ? { ...config, mode: uiModeTraceMode(config.mode) } : config;
+}
+
 /**
  * Apply a scope's `test.use()` overrides. `timeout` is handled separately via
  * the device (it only affects assertion/action auto-wait, not the test-level
@@ -2024,9 +2188,12 @@ async function runTracedAppReset(
       );
       reports.set(rd.name, report);
       // `appReset: 'none'` does nothing worth a row (the policy is in the trace
-      // metadata); prepared / fallback outcomes get a summary row per device.
+      // metadata); prepared / fallback outcomes get a summary row per device,
+      // and so does an `appState` reset that explains itself (a restore kept
+      // warm, or why a warm reset was skipped).
       const isNone = appResetAction(policy).kind === 'none';
-      if (collector && !isNone && (report.origin !== 'inline' || report.fellBack)) {
+      const explainsAppState = policy.appState !== undefined && report.reason !== undefined;
+      if (collector && !isNone && (report.origin !== 'inline' || report.fellBack || explainsAppState)) {
         collector.addActionEvent({
           category: 'device',
           action: 'appReset',
@@ -2056,10 +2223,48 @@ async function runTracedAppReset(
     // holder would be discarded with a rethrown infra error).
     if (failure) throw failure.reason;
     drainPreflightNotices(opts, collector);
+    if (opts._startRoute) {
+      opts._startRoute.pending = policy.route !== undefined && appResetAction(policy).kind !== 'none' ? policy.route : undefined;
+    }
     return reports;
   } finally {
     collector?.endGroup();
   }
+}
+
+function relaunchCounts(opts: RunOptions): Map<string, number> {
+  return new Map(resettableDevices(opts).map((rd) => [rd.name, rd.sessionContext.relaunches.count]));
+}
+
+/**
+ * The devices the embedder's readiness check (`beforeEachTest`) has just
+ * settled: on Android its session check waits for the app to go idle before
+ * it reads the screen, and nothing acts on the app after that — unless the
+ * check relaunched it, which starts a fresh launch the pre-test idle wait
+ * still covers. iOS's session check does not wait for idle.
+ */
+function settledByReadinessCheck(opts: RunOptions, relaunchesBefore: Map<string, number>): Set<Device> {
+  return new Set(resettableDevices(opts)
+    .filter((rd) => rd.sessionContext.config.platform !== 'ios'
+      && rd.sessionContext.relaunches.count === relaunchesBefore.get(rd.name))
+    .map((rd) => rd.device));
+}
+
+/**
+ * The reset left the app on its start route, then the embedder's readiness
+ * check (`beforeEachTest`) relaunched it — onto its launch screen. Open the
+ * route again on each device that was relaunched, so the test still starts
+ * where the scope declared.
+ */
+async function reopenStartRouteAfterRelaunch(opts: RunOptions, before: Map<string, number>): Promise<void> {
+  const route = opts._startRoute?.pending;
+  if (route === undefined) return;
+  await Promise.all(resettableDevices(opts)
+    .filter((rd) => rd.sessionContext.relaunches.count !== before.get(rd.name))
+    .map((rd) => reopenStartRoute(
+      { ...rd.sessionContext, config: { ...opts.config, device: rd.serial ?? opts.config.device } },
+      route,
+    )));
 }
 
 
@@ -2110,6 +2315,7 @@ async function runSuiteContext(
   const defaultTestTimeoutMs = opts.config.timeout * 3;
   const testTimeoutMs = scopeTimeout ? Math.max(defaultTestTimeoutMs, scopeTimeout) : defaultTestTimeoutMs;
   const isRoot = parentPrefix === '';
+  if (isRoot) _fileRunStartedAtMs = Date.now();
   // A serial scope inside another serial group stays part of that group.
   const serialGroup = inherited.serialGroup ?? (ctx.mode === 'serial' ? { failed: false } : undefined);
   const canReset = !!opts.config.package && resettableDevices(opts).length > 0;
@@ -2214,7 +2420,7 @@ async function runSuiteContext(
   let beforeAllCollector: TraceCollector | null = null;
   let beforeAllFirstFullName: string | undefined;
   if (scopeHasRunnable && (ctx.beforeAll.length > 0 || needsScopeReset || freshStartAtEntry) && primary) {
-    const traceConfig = resolveTraceConfig(opts.config.trace);
+    const traceConfig = runTraceConfig(opts);
     if (shouldRecord(traceConfig.mode, 0)) {
       // Tag beforeAll trace events with the first test that will run in
       // this scope — possibly inside a nested describe. An enclosing scope
@@ -2510,7 +2716,7 @@ async function runSuiteContext(
     let screenshotPath: string | undefined;
     let tracePath: string | undefined;
     let videoPath: string | undefined;
-    const maxRetries = opts.config.retries;
+    const maxRetries = testRetries(opts);
     let lastAttempt = 0;
     let attemptStart = testStart;
     // First failed attempt's error + artifacts. When the test ultimately
@@ -2524,7 +2730,7 @@ async function runSuiteContext(
       screenshotPath?: string;
       videoPath?: string;
     } | undefined;
-    const traceConfig = resolveTraceConfig(opts.config.trace);
+    const traceConfig = runTraceConfig(opts);
     const videoConfig = resolveVideoConfig(opts.config.video);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -2596,8 +2802,43 @@ async function runSuiteContext(
       // (true when the proxy came up on demand during the test), and the
       // HTTPS hosts their proxy passed through uncaptured — the likely
       // reasons (PILOT-775).
-      const unfiredRouteDevices = new Map<Device, boolean>();
+      const unfiredRouteDevices = new Map<Device, {
+        proxyStartedLate: 'mid-test' | 'after-launch' | undefined;
+        registrations: RouteRegistrationRecord[];
+      }>();
       const passthroughHosts = new Map<Device, Set<string>>();
+      // What each drained device's proxy captured from the app (not OS
+      // services) this test, for the same reasons (PILOT-1196) — with what
+      // it captured before the test's capture start cleared it (the
+      // daemon's summaries of an app reset's launch requests, a beforeAll).
+      // A device with no entry here drained no capture, so nothing is known.
+      // Summaries from before this file's run began (an idle UI-mode or
+      // watch session between runs) say nothing about this test's routes.
+      // Whether the app sent anything is judged on the requests that started
+      // during this attempt: a drain repeats every still-open stream (an SSE
+      // or gRPC stream opened at launch) with its original start time.
+      const capturedAppRequests = new Map<Device, CapturedAppRequest[]>();
+      const appTrafficInTest = new Map<Device, boolean>();
+      const attemptStartedAtMs = Date.now();
+      const noteCapture = (
+        d: Device,
+        res: { entries: RawNetworkEntries; entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }> },
+      ): void => {
+        const seen = capturedAppRequests.get(d) ?? [];
+        const since = _fileRunStartedAtMs ?? 0;
+        let inTest = appTrafficInTest.get(d) ?? false;
+        const before = res.entriesBeforeStart ?? [];
+        for (const e of [...before, ...res.entries]) {
+          if (e.osService || e.startTimeMs < since) continue;
+          if (!before.includes(e) && e.startTimeMs >= attemptStartedAtMs) inTest = true;
+          // A stream open across drains is named once.
+          else if (seen.some((s) => s.startTimeMs === e.startTimeMs && s.url === e.url)) continue;
+          seen.push({ method: e.method, url: e.url, startTimeMs: e.startTimeMs, routeAction: e.routeAction });
+        }
+        capturedAppRequests.set(d, seen);
+        appTrafficInTest.set(d, inTest);
+        notePassthrough(d, res.entries);
+      };
       const notePassthrough = (d: Device, entries: RawNetworkEntries): void => {
         // Not an OS service's tunnel (PILOT-782): Google Play services passing
         // its pinned hosts through is no reason for the app's routes not firing.
@@ -2619,7 +2860,7 @@ async function runSuiteContext(
           try {
             const res = await d._stopNetworkCapture({ keepRunning: true });
             if (!res.success) continue;
-            notePassthrough(d, res.entries);
+            noteCapture(d, res);
             // Clients that rejected the MITM certificate (PILOT-712), once
             // per run per host as on the traced path.
             if (d._networkCaptureRoute === 'ios-system-proxy') continue;
@@ -2888,21 +3129,29 @@ async function runSuiteContext(
 
           // Setup work that may issue device actions (e.g. ensureSessionReady
           // in UI worker mode). Runs inside the beforeEach group.
+          let settledByReadiness: ReadonlySet<Device> = new Set();
           if (opts.beforeEachTest) {
+            const relaunchesBefore = relaunchCounts(opts);
             try {
               await opts.beforeEachTest(fullName);
             } finally {
               drainPreflightNotices(opts, traceCollector);
             }
+            settledByReadiness = settledByReadinessCheck(opts, relaunchesBefore);
+            await reopenStartRouteAfterRelaunch(opts, relaunchesBefore);
           }
+          // The test now owns the screen: a later relaunch is not the reset's.
+          if (opts._startRoute) opts._startRoute.pending = undefined;
 
           // Give the device a moment to go idle before each test, so the
           // previous test's toasts, animations and async work settle before
           // hooks and assertions start (flakiness under load, e.g. parallel
           // workers sharing host CPU). Bounded: on a screen that never goes
           // idle the Android agent blocks for the whole budget it is given.
-          // Best effort — don't fail the test if an idle wait times out.
-          await forEachDeviceBestEffort(opts, (d) => d.waitForIdle(PRE_TEST_IDLE_TIMEOUT_MS));
+          // Best effort — don't fail the test if an idle wait times out. A
+          // device the readiness check just settled skips it: a second settle
+          // only doubled the wait on a screen that never goes idle.
+          await forEachDeviceBestEffort(opts, (d) => settledByReadiness.has(d) ? undefined : d.waitForIdle(PRE_TEST_IDLE_TIMEOUT_MS));
 
           if (hasTestScopedFixtures) {
             // Collect the fixture names destructured by the test and its hooks.
@@ -3077,13 +3326,17 @@ async function runSuiteContext(
         // (PILOT-517). Optional call: lifecycle mocks stand in for Device.
         const startedOnDemand = d._takeProxyStartedOnDemand?.() ?? false;
         const registered = d._takeRouteRegistrations?.() ?? 0;
+        const registrations = d._takeRouteRegistrationLog?.() ?? [];
         const handled = d._takeRouteHandlerCalls?.() ?? 0;
         if (registered > 0 && !d._networkProxyRunning) {
           _warnRoutesWithoutProxy(fullName, d._traceDeviceId, recording && traceConfig.network);
         } else if ((registered > 0 || d._routeManager?.hasRoutes) && handled === 0) {
           // The test's own routes, or ones a beforeAll or worker fixture keeps
           // live for it.
-          unfiredRouteDevices.set(d, startedOnDemand);
+          unfiredRouteDevices.set(d, {
+            proxyStartedLate: startedOnDemand ? 'mid-test' : d._proxyStartedAfterLaunch ? 'after-launch' : undefined,
+            registrations,
+          });
         }
         if (d._routeManager?.hasTestRoutes) await d._routeManager.removeTestRoutes();
         // device.on() listeners the test added end with it too (PILOT-775).
@@ -3218,7 +3471,7 @@ async function runSuiteContext(
                   );
                 }
                 snapshotsFor(d).update(res.entries);
-                notePassthrough(d, res.entries);
+                noteCapture(d, res);
               } else {
                 console.warn(`[tapsmith] Network capture stopped with error: ${res.errorMessage}`);
               }
@@ -3353,10 +3606,15 @@ async function runSuiteContext(
       // never fired: say why when the capture shows a likely reason
       // (PILOT-775). A passing test's unfired route is just a mock the app
       // did not need.
-      for (const [d, startedOnDemand] of status === 'failed' ? unfiredRouteDevices : []) {
+      for (const [d, { proxyStartedLate, registrations }] of status === 'failed' ? unfiredRouteDevices : []) {
+        const captured = capturedAppRequests.get(d);
+        const earlyRequests = captured ? earlyRouteRequests(captured, registrations) : [];
         _warnUnfiredRoutes(fullName, d._traceDeviceId, {
           passthroughHosts: [...(passthroughHosts.get(d) ?? [])],
-          proxyStartedMidTest: startedOnDemand,
+          proxyStartedLate,
+          earlyRequests,
+          // An early request already explains an empty test capture.
+          appTrafficSeen: captured ? earlyRequests.length > 0 || appTrafficInTest.get(d) === true : undefined,
         });
       }
 
@@ -3570,7 +3828,7 @@ async function runSuiteContext(
   // the test finished — beforeAll-style replay into a live collector is no
   // longer possible at this point).
   if (scopeHasRunnable && ctx.afterAll.length > 0 && primary) {
-    const traceConfig = resolveTraceConfig(opts.config.trace);
+    const traceConfig = runTraceConfig(opts);
     // Find the last test that actually ran, to tag events. Derived from the
     // recorded results (which include nested suites, already executed by
     // this point) rather than re-deriving skip/.only/filter predicates —
@@ -3917,6 +4175,7 @@ async function runTestFileOwned(
 
   // Before the worker fixtures, which may register routes too (PILOT-775).
   armOnDemandNetworkCapture(opts);
+  await startSessionNetworkCapture(opts);
 
   let fileRegistry = new FixtureRegistry();
   for (const r of allEntryRegistries) {
@@ -3976,6 +4235,7 @@ async function runTestFileOwned(
     testFilePath: filePath,
     _prepared: new Map(opts.devices.flatMap((d) => (d.prepared ? [[d.name, d.prepared] as const] : []))),
     _applied: {},
+    _startRoute: {},
     _abortFileController: abortFileController,
     abortSignal: abortFileController
       ? (opts.abortSignal

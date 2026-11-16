@@ -5,7 +5,7 @@
  * per-node play buttons, watch toggles, and filtering.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback } from 'preact/hooks';
 import { ArrowLeft, Check, ChevronsDownUp, ChevronsUpDown, Circle, CircleSlash, Eye, Link, LoaderCircle, Play, Search, Smartphone, Square, X } from 'lucide-preact';
 import type { TestTreeNode, ClientMessage } from '../ui-protocol.js';
 
@@ -217,21 +217,6 @@ function TreeNode({ node, depth, parentProjectName, expandedNodes, selectedTestI
   const isSelected = selectedTestId === node.id;
   const hasChildren = node.children && node.children.length > 0;
 
-  // Status flash animation (failures only — green flashes are distracting)
-  const prevStatusRef = useRef(node.status);
-  const [flashClass, setFlashClass] = useState('');
-
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = node.status;
-    if (prev === 'running' && node.status === 'failed') {
-      setFlashClass('te-status-flash-failed');
-      const timer = setTimeout(() => setFlashClass(''), 600);
-      return () => clearTimeout(timer);
-    }
-    setFlashClass('');
-  }, [node.status]);
-
   const pending = pendingIds.has(node.id);
 
   const handleRun = useCallback((e: Event) => {
@@ -279,7 +264,7 @@ function TreeNode({ node, depth, parentProjectName, expandedNodes, selectedTestI
   return (
     <div class="te-node-group" role="presentation">
       <div
-        class={`te-node node ${isSelected ? 'selected' : ''} te-node-${node.type} ${runningClass} ${flashClass}`}
+        class={`te-node node ${isSelected ? 'selected' : ''} te-node-${node.type} ${runningClass}`}
         role="treeitem"
         aria-label={label}
         aria-level={depth + 1}
@@ -313,13 +298,6 @@ function TreeNode({ node, depth, parentProjectName, expandedNodes, selectedTestI
           const group = devicesBadge(node);
           return group
             ? <span class="te-devices" data-testid="node-devices" title={group.title}><Smartphone size={10} /> {group.label}</span>
-            : null;
-        })()}
-
-        {(() => {
-          const iso = isolationBadge(node);
-          return iso
-            ? <span class="te-isolation" data-testid="node-isolation" title={iso.title}>{iso.label}</span>
             : null;
         })()}
 
@@ -406,40 +384,6 @@ function devicesBadge(node: TestTreeNode): { label: string; title: string } | un
     label: names ? names.join(' · ') : `${use.devices} devices`,
     title: `Each test drives ${use.devices} devices${names ? `: ${names.join(', ')}` : ''} (use.devices)`,
   };
-}
-
-/**
- * The declared isolation for a node, when it declares one — a file or suite's
- * `test.use()`, or the project's `use` on the project row. Nothing is shown
- * for the implicit default, and nothing for what a row merely inherits, so
- * the tree stays quiet unless something opts in.
- */
-function isolationBadge(node: TestTreeNode): { label: string; title: string } | undefined {
-  const use = node.use;
-  if (!use) return undefined;
-  const parts: string[] = [];
-  let label: string | undefined;
-  if (use.appState) {
-    label = 'state';
-    parts.push(`Restores saved app state: ${use.appState}`);
-  } else if (use.appState === '') {
-    label = 'clear';
-    parts.push('Starts from cleared app data (appState: "")');
-  } else if (use.appReset && use.appReset !== 'auto') {
-    label = use.appReset;
-    parts.push(`appReset: ${use.appReset}`);
-  }
-  // A scope on its own is a declaration too (`test.use({ appResetScope:
-  // 'test' })` keeps the configured mode but resets before every test).
-  if (use.appResetScope === 'test') {
-    label = label ? `${label} / test` : 'per test';
-    parts.push('Reset before every test');
-  } else if (use.appResetScope === 'file') {
-    label ??= 'per file';
-    parts.push('Reset once per file');
-  }
-  if (!label) return undefined;
-  return { label, title: parts.join('\n') };
 }
 
 function formatDuration(ms: number): string {

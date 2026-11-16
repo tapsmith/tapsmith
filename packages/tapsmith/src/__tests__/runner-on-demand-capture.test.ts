@@ -70,7 +70,7 @@ function makeOpts(device: Device, config: Partial<TapsmithConfig> = {}): RunOpti
     config: makeConfig(config),
     devices: [{ name: 'device-1', device }],
     resetCapabilities: {},
-    runMode: 'test',
+    runMode: 'test', networkApisInRun: false,
   };
 }
 

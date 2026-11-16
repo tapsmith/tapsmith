@@ -18,6 +18,8 @@ const workerRunnerMocks = vi.hoisted(() => {
 const sessionPreflightMocks = vi.hoisted(() => ({
   ensureSessionReady: vi.fn(async () => {}),
   launchConfiguredApp: vi.fn(async () => {}),
+  // No early launch: the startup launch runs its usual sequence after the agent.
+  startAndroidLaunchEarly: vi.fn(async () => undefined),
 }));
 
 vi.mock('../runner.js', () => ({
@@ -42,6 +44,7 @@ vi.mock('../device.js', () => ({
       unlock: vi.fn(async () => {}),
       installApk: vi.fn(async () => {}),
       startAgent: vi.fn(async () => {}),
+      _startAgent: vi.fn(async () => ({ appLaunchedFresh: false })),
       close: vi.fn(),
     };
   }),
@@ -210,6 +213,7 @@ describe('worker-runner IPC reporting', () => {
         daemonPort: 19_000,
         config: makeSerializedConfig({ package: 'com.example.app' }),
         forceInstall: false,
+        networkApisInRun: false,
       } satisfies MainToWorkerMessage);
       await ready;
 
@@ -283,6 +287,7 @@ describe('worker-runner init', () => {
         daemonPort: 19_000,
         config: makeSerializedConfig({ package: 'com.example.app', apk: 'app.apk' }),
         forceInstall,
+        networkApisInRun: false,
       } satisfies MainToWorkerMessage);
       await ready;
       // The mocked module outlives resetModules: this init's Device is the latest.

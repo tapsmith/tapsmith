@@ -7,6 +7,9 @@ package tapsmith;
 service TapsmithService {
   rpc FindElement(FindElementRequest) returns (FindElementResponse);
   rpc FindElements(FindElementsRequest) returns (FindElementsResponse);
+  // One scrollIntoView() step in one device call (PILOT-998): drag the list,
+  // wait for it to go quiet, find the element, and say whether the list moved.
+  rpc ScrollStep(ScrollStepRequest) returns (ScrollStepResponse);
   // Evaluate several selectors against one UI snapshot, without waiting, so
   // locator suggestions and match counts come from the agent's own matching
   // (PILOT-848). Each selector gets its own result; one bad selector fails
@@ -52,6 +55,9 @@ service TapsmithService {
   rpc GetCurrentActivity(GetCurrentActivityRequest) returns (GetCurrentActivityResponse);
   rpc TerminateApp(TerminateAppRequest) returns (ActionResponse);
   rpc GetAppState(GetAppStateRequest) returns (GetAppStateResponse);
+  // Wait, bounded, for a just-(re)launched app to draw real content
+  // (PILOT-976). Android only; other platforms answer `supported = false`.
+  rpc WaitForAppReady(WaitForAppReadyRequest) returns (WaitForAppReadyResponse);
   rpc ClearAppData(ClearAppDataRequest) returns (ActionResponse);
   rpc GrantPermission(GrantPermissionRequest) returns (ActionResponse);
   rpc RevokePermission(RevokePermissionRequest) returns (ActionResponse);
@@ -215,8 +221,17 @@ message ActionResponse {
   string request_id = 1;
   bool success = 2;
   string error_type = 3;
+  // The failure's reason when success is false. On a successful StartAgent
+  // or StartNetworkCapture: a warning for the run, or empty
+  // (StartAgent: a reducedMotion speed-up that could not be applied on an iOS
+  // simulator, PILOT-1073).
   string error_message = 4;
   bytes screenshot = 5;
+  // StartAgent only: the agent launched the target app as part of this start
+  // (a fresh runner, not a reused one), and, when the request set
+  // clear_app_data_first, only after the app's data was wiped. The caller can
+  // then take that launch as its clean startup launch. False everywhere else.
+  bool app_launched_fresh = 6;
 }
 
 // ─── Requests ───
@@ -244,6 +259,55 @@ message FindElementsResponse {
   string request_id = 1;
   repeated ElementInfo elements = 2;
   string error_message = 3;
+}
+
+// One scrollIntoView() step (PILOT-998): drag inside `region` (or a scroll
+// container the agent picks), wait for the list to stop changing, then find
+// `selector` as FindElements does, from the screen the drag left.
+message ScrollStepRequest {
+  string request_id = 1;
+  Selector selector = 2;
+  // The find's read budget, as FindElementsRequest.timeout_ms. The step's
+  // drag and quiet wait come on top of it.
+  uint64 timeout_ms = 3;
+  // The way the finger moves ("up" drags the content up, revealing what is
+  // below), as SwipeRequest.direction.
+  string direction = 4;
+  // The scroll container to drag in. Unset: the agent picks one (Android),
+  // or the step is unsupported (iOS).
+  Bounds region = 5;
+  // The drag's length as a fraction of the region along its axis. Below 0.5
+  // it is a short nudge around the region's centre.
+  float distance = 6;
+  // Before dragging, wait for the screen to go quiet and find afresh; when
+  // the element is on screen, do not drag (the first step confirms the first
+  // miss, PILOT-283).
+  bool find_first = 7;
+}
+
+message ScrollStepResponse {
+  enum Moved {
+    MOVED_UNSPECIFIED = 0;
+    // The list under the finger scrolled.
+    MOVED_YES = 1;
+    // Nothing under the finger scrolled: the end of the content, or the drag
+    // missed the list.
+    MOVED_NO = 2;
+  }
+  string request_id = 1;
+  repeated ElementInfo elements = 2;
+  string error_message = 3;
+  Moved moved = 4;
+  // The region the step dragged in: the one sent, or the one the agent
+  // picked. Unset when it dragged across the screen or did not drag.
+  Bounds region = 5;
+  // False when find_first found the element on screen, so nothing was dragged.
+  bool swiped = 6;
+  // The device cannot make a scroll step (an agent that predates it, a
+  // physical iOS device, an iOS step without a region, an iOS screen whose
+  // turn the agent cannot tell): nothing was done, and the caller scrolls
+  // the old way.
+  bool unsupported = 7;
 }
 
 message EvaluateSelectorsRequest {
@@ -328,6 +392,12 @@ message SwipeRequest {
   // container it picked, so the swipe cannot land outside a dialog or on a
   // header above the list.
   Bounds region = 7;
+  // End without momentum: the finger rests at the end before it lifts, so the
+  // content stops where the finger does, and the swipe returns as soon as it
+  // lifts instead of waiting for a fling to settle. scrollIntoView() sends it
+  // for vertical swipes on Android (PILOT-973); the iOS agent ignores it. Only for a region or
+  // screen swipe.
+  bool drag = 8;
 }
 
 // Coordinate-based gestures. Coordinates are logical points (Android: pixels,
@@ -486,6 +556,16 @@ message SetDeviceRequest {
   // host-based passthrough; HTTP/2-only clients (gRPC) are always
   // tunneled automatically regardless of this list (PILOT-231).
   repeated string passthrough_hosts = 5;
+  // `reducedMotion` from tapsmith.config.ts (PILOT-971). true: turn the
+  // Android animation scales (window, transition, animator duration) off for
+  // the session and restore the device's own values when it ends; false: undo
+  // what this daemon turned off; unset: leave this daemon's setting as it is.
+  // Either way the daemon restores scales left off by a daemon that died.
+  // On an iOS simulator, true speeds UIKit animations up tenfold for apps
+  // launched from then on (the UIKit/UIPreferences feature flag in launchd's
+  // environment and UIAnimationDragCoefficient 0.1 in the global defaults),
+  // restored the same way. Physical iOS devices ignore it.
+  optional bool reduce_motion = 6;
 }
 
 message StartAgentRequest {
@@ -502,6 +582,13 @@ message StartAgentRequest {
   // Same semantics as SetDeviceRequest.network_tracing_enabled — gates
   // `ensure_ios_physical_proxy` pre-arming on the start_agent path.
   bool network_tracing_enabled = 7;
+  // iOS simulators: when this start launches the agent afresh, wipe the
+  // target app's data (as ClearAppData does) while xcodebuild starts, before
+  // the runner launches the app. The response's app_launched_fresh says
+  // whether that happened; when it did not (a reused runner, a physical
+  // device, a failed wipe) the data is untouched or partly wiped, and the
+  // caller must clear and relaunch the app itself.
+  bool clear_app_data_first = 8;
 }
 
 message PingRequest {}
@@ -641,6 +728,23 @@ message GetAppStateRequest {
 message GetAppStateResponse {
   string request_id = 1;
   string state = 2;  // "not_installed" | "stopped" | "background" | "foreground"
+}
+
+message WaitForAppReadyRequest {
+  string request_id = 1;
+  string package_name = 2;
+  uint64 timeout_ms = 3;  // 0 = the daemon's default (10s)
+}
+
+message WaitForAppReadyResponse {
+  string request_id = 1;
+  // A node of the package carries text or a content description. False when
+  // the timeout passed first, which is not an error: an app whose first
+  // screen has no text never becomes "ready".
+  bool ready = 2;
+  // False when the active platform has no such wait; `ready` is then
+  // meaningless and the caller uses its own readiness check.
+  bool supported = 3;
 }
 
 message ClearAppDataRequest {
@@ -801,6 +905,12 @@ message ResetAppRequest {
   // promise is state-clearing, and a restart keeps persisted data. Explicit
   // `device.resetApp()` calls leave this false and keep the gentler ladder.
   bool fallback_to_clear = 11;
+  // Ask the in-app hook to keep the app's persisted data: the reset link
+  // carries `__tapsmith_keep=1`, and the hook resets in-memory state only.
+  // Set by the runner between tests that restore the same `appState` archive
+  // once the hook reports no persisted writes since the restore. Only the
+  // hooks rung can keep data, so the legacy `reset_deep_link` is ignored.
+  bool keep_app_data = 12;
 }
 
 message ResetStep {
@@ -830,6 +940,16 @@ message ResetAppResponse {
   uint64 epoch_before = 13;
   uint64 epoch_after = 14;
   repeated ResetStep steps = 15;
+  // The app ended on the requested `target_path`: an in-app hooks reset was
+  // acknowledged on that route. False after a restart or clear (the app is at
+  // its launch route), a legacy reset deep link, or a hooks reset the daemon
+  // had to re-deliver to "/" because the target screen hid the marker.
+  bool target_reached = 16;
+  // The request asked to keep the app's persisted data (`keep_app_data`) and
+  // the in-app hook acknowledged a reset link that carried
+  // `__tapsmith_keep=1`. A daemon that predates the field leaves it false, so
+  // the SDK never mistakes that daemon's data-clearing reset for a keep.
+  bool kept_app_data = 17;
 }
 
 // ─── App State Snapshot (PILOT-115) ───
@@ -1002,8 +1122,8 @@ message CapturedNetworkEntry {
   bool request_body_omitted = 17;
   bool response_body_omitted = 18;
   // The connection came from an OS service (a system daemon or system app),
-  // not an app. Set on route_action "passthrough" markers only, on routes
-  // that can tell (Android transparent capture, iOS simulator redirector).
+  // not an app. Set on every entry such a connection records, on routes that
+  // can tell (Android transparent capture, iOS simulator redirector).
   bool os_service = 19;
 }
 
@@ -1024,6 +1144,11 @@ message StopNetworkCaptureResponse {
   // nothing about the app under test. Only routes that can attribute a
   // connection fill it: Android transparent capture, iOS simulator redirector.
   repeated string os_service_tls_rejected_hosts = 6;
+  // Entries a capture start cleared since the previous stop: what the app sent
+  // between tests (an app reset's launch requests, a beforeAll). Headers and
+  // bodies are empty. Only for naming a request sent before a test's route was
+  // registered; never part of the test's capture.
+  repeated CapturedNetworkEntry entries_before_start = 7;
 }
 
 // ─── Physical iOS device network capture (PILOT-185) ───

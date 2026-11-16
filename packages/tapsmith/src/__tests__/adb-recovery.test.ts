@@ -14,6 +14,8 @@ interface FakeAdbOptions {
   echo?: AdbReply;
   /** Results of successive stability waits (the last one repeats). */
   stability: DeviceHealthResult[];
+  /** The one-probe answer for a settled device; undefined = not settled. */
+  settled?: DeviceHealthResult;
   heldElsewhere?: DeviceClaim[];
   startServer?: AdbReply;
 }
@@ -41,6 +43,10 @@ function fakeAdb(opts: FakeAdbOptions) {
       if (cmd.endsWith('shell echo __tapsmith_health_ok__')) return reply(opts.echo ?? new Error('ETIMEDOUT'));
       if (cmd === 'start-server') return reply(opts.startServer ?? '');
       return '';
+    },
+    probeIfSettled: async (serial) => {
+      calls.push(`<probe settled ${serial}>`);
+      return opts.settled;
     },
     waitForStable: async (serial) => {
       calls.push(`<wait for ${serial}>`);
@@ -73,6 +79,34 @@ function claim(device: string, pid = 4242): DeviceClaim {
 // ─── Tests ───
 
 describe('checkPinnedDeviceHealth (PILOT-475)', () => {
+  it('takes one probe of a settled device as the answer, without the stability wait', async () => {
+    const adb = fakeAdb({ devices: [devicesOutput(`${SERIAL}\tdevice`)], stability: [shellDead], settled: healthy });
+    await checkPinnedDeviceHealth(SERIAL, adb.deps);
+    expect(adb.calls.filter((c) => c.startsWith('<'))).toEqual([`<probe settled ${SERIAL}>`]);
+  });
+
+  it('waits for stability when the device is not settled, or its one probe is unhealthy', async () => {
+    for (const settled of [undefined, { serial: SERIAL, healthy: false, reason: 'package manager is not ready' }]) {
+      const adb = fakeAdb({ devices: [devicesOutput(`${SERIAL}\tdevice`)], stability: [healthy], settled });
+      await checkPinnedDeviceHealth(SERIAL, adb.deps);
+      expect(adb.calls.filter((c) => c.startsWith('<'))).toEqual([`<probe settled ${SERIAL}>`, `<wait for ${SERIAL}>`]);
+    }
+  });
+
+  it('re-checks a recovered device with the stability wait, never the one-probe shortcut', async () => {
+    // After a reconnect the device's uptime is unchanged, but its adbd just
+    // came back: only consecutive healthy probes say it stays up.
+    const adb = fakeAdb({
+      devices: [devicesOutput(`${SERIAL}\tdevice`)],
+      stability: [shellDead, healthy],
+      settled: shellDead,
+    });
+    await checkPinnedDeviceHealth(SERIAL, adb.deps);
+    expect(adb.calls.filter((c) => c.startsWith('<probe settled'))).toHaveLength(1);
+    expect(adb.calls.filter((c) => c.startsWith('<wait for'))).toHaveLength(2);
+    expect(adb.mutating()).toEqual([`-s ${SERIAL} reconnect`]);
+  });
+
   it('touches nothing when the device is healthy', async () => {
     const adb = fakeAdb({ devices: [devicesOutput(`${SERIAL}\tdevice`)], stability: [healthy] });
     await checkPinnedDeviceHealth(SERIAL, adb.deps);

@@ -4,7 +4,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native"
 import { useAuth } from "./auth-context"
 
 export default function ProfileScreen() {
-  const { email, loading, logout } = useAuth()
+  const { email, loading, logout, reloadCount } = useAuth()
   const router = useRouter()
 
   // Gate: redirect to login if not authenticated
@@ -39,6 +39,12 @@ export default function ProfileScreen() {
         <Text style={styles.label}>Account status</Text>
         <Text style={styles.value} testID="profile-status">
           Authenticated
+        </Text>
+      </View>
+      <View style={styles.card}>
+        <Text style={styles.label}>Reloads kept from storage</Text>
+        <Text style={styles.value} testID="profile-reload-count">
+          {String(reloadCount)}
         </Text>
       </View>
       <TouchableOpacity

@@ -703,12 +703,26 @@ fn extract_devicectl_error_hint(json_body: Option<&str>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Launch an app on a simulator by bundle ID.
+/// `simctl launch --terminate-running-process`: simctl stops a running
+/// instance first and launches once it is gone, in one call (PILOT-976). The
+/// daemon used to run `simctl terminate`, sleep a fixed 300 ms, then launch.
+fn simctl_relaunch_args<'a>(udid: &'a str, bundle_id: &'a str) -> [&'a str; 5] {
+    [
+        "simctl",
+        "launch",
+        "--terminate-running-process",
+        udid,
+        bundle_id,
+    ]
+}
+
+/// Launch a fresh process of an app on a simulator, terminating the running
+/// one first if there is one.
 #[instrument]
-pub async fn launch_app(udid: &str, bundle_id: &str) -> Result<()> {
+pub async fn relaunch_app(udid: &str, bundle_id: &str) -> Result<()> {
     let output = bounded_output(
         "simctl launch",
-        Command::new("xcrun").args(["simctl", "launch", udid, bundle_id]),
+        Command::new("xcrun").args(simctl_relaunch_args(udid, bundle_id)),
         SIMCTL_TIMEOUT,
     )
     .await?;
@@ -780,6 +794,55 @@ pub async fn terminate_app(udid: &str, bundle_id: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// What a `simctl terminate` reported about the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SimTerminate {
+    /// simctl stopped the app; it returns once launchd has reaped it.
+    Terminated,
+    /// The app was not running ("found nothing to terminate").
+    NotRunning,
+    /// Anything else: the app's state is unknown.
+    Failed(String),
+}
+
+impl SimTerminate {
+    /// Whether the app is known not to be running afterwards.
+    pub fn app_is_stopped(&self) -> bool {
+        matches!(self, Self::Terminated | Self::NotRunning)
+    }
+}
+
+/// Read a `simctl terminate` result. simctl exits 0 once the app is gone,
+/// and fails with ESRCH ("found nothing to terminate") when it was not
+/// running; any other failure says nothing about the app.
+fn classify_simctl_terminate(success: bool, stderr: &str) -> SimTerminate {
+    if success {
+        SimTerminate::Terminated
+    } else if stderr.contains("found nothing to terminate") {
+        SimTerminate::NotRunning
+    } else {
+        SimTerminate::Failed(stderr.trim().to_string())
+    }
+}
+
+/// Terminate an app on a simulator and report what simctl said about it.
+#[instrument]
+pub async fn terminate_app_reporting(udid: &str, bundle_id: &str) -> SimTerminate {
+    match bounded_output(
+        "simctl terminate",
+        Command::new("xcrun").args(["simctl", "terminate", udid, bundle_id]),
+        SIMCTL_TIMEOUT,
+    )
+    .await
+    {
+        Ok(output) => classify_simctl_terminate(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stderr),
+        ),
+        Err(e) => SimTerminate::Failed(e.to_string()),
+    }
 }
 
 /// Open a URL on a simulator (deep link).
@@ -994,11 +1057,10 @@ pub async fn boot_simulator(udid: &str) -> Result<()> {
 ///
 /// **Caller's responsibility** to skip this for physical devices — invoking
 /// it against a real device's UDID is wasted work (the simctl spawns will
-/// fail) but won't cause data loss. The `grpc_server::start_agent` handler
-/// already branches on `is_active_ios_physical()` and skips this call on
-/// physical-device runs to keep the simulator hot path free of any extra
-/// devicectl latency.
+/// fail) but won't cause data loss. `agent_launch::start_agent` runs it on
+/// simulators only, alongside the agent's launch.
 pub async fn configure_simulator(udid: &str) {
+    let started = std::time::Instant::now();
     // Disable "Save Password?" dialog which blocks the UI during login tests.
     // The setting must be written to multiple domains because Apple has moved
     // the password autofill control across iOS versions and frameworks.
@@ -1009,7 +1071,7 @@ pub async fn configure_simulator(udid: &str) {
         "com.apple.Password", // Passwords framework (iOS 26+)
     ];
 
-    // Best-effort, but bounded: this runs inside StartAgent, and an unbounded
+    // Best-effort, but bounded: StartAgent waits for it, and an unbounded
     // `simctl spawn` against a wedged CoreSimulator was observed stalling
     // agent start past its whole 240s client deadline. The domains are
     // written concurrently so the worst case is one bound rather than four,
@@ -1019,7 +1081,9 @@ pub async fn configure_simulator(udid: &str) {
     // then covered the first sign-in of the run (both failing iOS shard-5
     // runs of Sep 2026 show the timed-out writes in the daemon log).
     let mut pending: Vec<&'static str> = AUTOFILL_DOMAINS.to_vec();
+    let mut passes = 0;
     for pass in 1..=AUTOFILL_WRITE_PASSES {
+        passes = pass;
         let handles: Vec<_> = pending
             .drain(..)
             .map(|domain| {
@@ -1050,6 +1114,12 @@ pub async fn configure_simulator(udid: &str) {
             "password autofill could not be disabled; the Keychain \"Save Password?\" sheet may appear after a sign-in"
         );
     }
+    crate::timing::timing_log!(
+        "kind=boot name=configure_simulator dur_ms={} ok={} passes={passes} failed={}",
+        started.elapsed().as_millis(),
+        pending.is_empty(),
+        pending.len()
+    );
 }
 
 /// Bound for one `simctl spawn defaults write`. Generous enough to survive
@@ -1188,6 +1258,47 @@ pub async fn clear_container(container_path: &str) -> Result<()> {
     }
     info!(container_path, "Cleared app data container");
     Ok(())
+}
+
+/// Wipe a simulator app's data — the `ClearAppData` RPC's simulator steps:
+/// its data container, then (unless keychain state is turned off) the
+/// simulator's device-global keychain, so keychain-backed auth state (e.g.
+/// Firebase Auth) does not survive a full clear and leave a half-signed-in
+/// app. Best-effort: each failure is logged and the rest still runs.
+/// Returns whether every step succeeded.
+pub async fn wipe_simulator_app_data(udid: &str, container: &str) -> bool {
+    let started = std::time::Instant::now();
+    let mut complete = true;
+    if let Err(e) = clear_container(container).await {
+        warn!(error = %e, "Failed to clear app container, continuing anyway");
+        complete = false;
+    }
+    let container_ms = started.elapsed().as_millis();
+    let keychain = if keychain_state_disabled() {
+        "disabled"
+    } else {
+        match simulator_keychain_dir(container) {
+            Some(keychain_dir) => match clear_keychain(udid, &keychain_dir).await {
+                Ok(how) => how.as_str(),
+                Err(e) => {
+                    warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
+                    complete = false;
+                    "failed"
+                }
+            },
+            None => {
+                warn!(container = %container, "Could not derive simulator keychain dir; keychain not cleared");
+                complete = false;
+                "no_dir"
+            }
+        }
+    };
+    let total_ms = started.elapsed().as_millis();
+    crate::timing::timing_log!(
+        "kind=appstate name=clear dur_ms={total_ms} ok={complete} container_ms={container_ms} keychain={keychain} keychain_ms={}",
+        total_ms - container_ms
+    );
+    complete
 }
 
 /// Whether a top-level entry of a data container belongs to the simulator's
@@ -1359,7 +1470,7 @@ pub async fn stage_keychain_files(
 /// `-wal`/`-shm` when present in src, deleting stale ones in the destination
 /// when absent), then restart securityd so it re-reads the swapped db.
 #[instrument(skip_all, fields(udid))]
-pub async fn swap_keychain_files(
+async fn swap_keychain_files(
     udid: &str,
     keychain_dir: &std::path::Path,
     src_dir: &std::path::Path,
@@ -1424,33 +1535,207 @@ pub async fn swap_keychain_files(
     Ok(())
 }
 
-/// Delete the simulator's keychain db files, then restart securityd so it
-/// recreates a fresh, empty keychain. Device-global: clears keychain items
-/// for every app on the simulator.
+/// How [`restore_keychain`] put an archived keychain back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeychainRestore {
+    /// The archived keychain held no items, so the live one was cleared.
+    Cleared(KeychainClear),
+    /// The archived files were swapped in and securityd restarted.
+    Swapped,
+}
+
+impl KeychainRestore {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cleared(clear) => clear.as_str(),
+            Self::Swapped => "swapped",
+        }
+    }
+}
+
+/// Make the simulator's keychain at `keychain_dir` hold what the archived
+/// keychain files in `src_dir` hold. An archived keychain with no items
+/// beyond a fresh keychain's own rows (an app that keeps its state outside
+/// the keychain) is restored by clearing the live one, which needs no
+/// securityd restart (see [`clear_keychain`]). Anything else, including a
+/// database the item count cannot read, is swapped in.
+pub async fn restore_keychain(
+    udid: &str,
+    keychain_dir: &std::path::Path,
+    src_dir: &std::path::Path,
+) -> Result<KeychainRestore> {
+    if keychain_items_to_clear(src_dir).await == Some(0) {
+        return clear_keychain(udid, keychain_dir)
+            .await
+            .map(KeychainRestore::Cleared);
+    }
+    swap_keychain_files(udid, keychain_dir, src_dir).await?;
+    Ok(KeychainRestore::Swapped)
+}
+
+/// How [`clear_keychain`] cleared the simulator keychain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeychainClear {
+    /// It already held nothing beyond a fresh keychain's own rows.
+    AlreadyClear,
+    /// `simctl keychain reset`: securityd emptied it in place.
+    Reset,
+    /// The reset failed, so the db files were deleted and securityd
+    /// restarted.
+    Restarted,
+}
+
+impl KeychainClear {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyClear => "already_clear",
+            Self::Reset => "reset",
+            Self::Restarted => "restarted",
+        }
+    }
+}
+
+/// Empty the simulator's keychain. Device-global: clears keychain items for
+/// every app on the simulator.
+///
+/// `simctl keychain reset` asks the running securityd to empty its keychain
+/// (leaving the same two rows a newly created one holds, and the trust
+/// store's root certificates untouched) in ~0.3 s. Restarting securityd
+/// instead costs ~1 s, and up to ~10 s when its last start was under 10 s
+/// ago: launchd throttles the respawn, and securityd is down meanwhile, so
+/// anything the app launch needs from it waits too (PILOT-1069). The reset
+/// path is only left when the reset itself fails.
 #[instrument(skip_all, fields(udid))]
-pub async fn clear_keychain(udid: &str, keychain_dir: &std::path::Path) -> Result<()> {
+pub async fn clear_keychain(udid: &str, keychain_dir: &std::path::Path) -> Result<KeychainClear> {
+    // A keychain that is exactly what a clear leaves — securityd's own two
+    // rows and nothing else — needs nothing. Any other row, in any access
+    // group (Apple's included), means something wrote to it since, so it is
+    // cleared.
+    if keychain_items_to_clear(keychain_dir).await == Some(0) {
+        debug!(
+            udid,
+            "Simulator keychain is as a clear leaves it; nothing to clear"
+        );
+        return Ok(KeychainClear::AlreadyClear);
+    }
+    match reset_keychain(udid).await {
+        Ok(()) => {
+            info!(udid, "Simulator keychain cleared");
+            return Ok(KeychainClear::Reset);
+        }
+        Err(e) => {
+            warn!(udid, error = %e, "simctl keychain reset failed; deleting the keychain and restarting securityd instead");
+        }
+    }
+    delete_keychain_and_restart_securityd(udid, keychain_dir).await?;
+    Ok(KeychainClear::Restarted)
+}
+
+/// `simctl keychain <udid> reset`.
+async fn reset_keychain(udid: &str) -> Result<()> {
+    let output = bounded_output(
+        "simctl keychain reset",
+        Command::new("xcrun").args(["simctl", "keychain", udid, "reset"]),
+        SIMCTL_TIMEOUT,
+    )
+    .await?;
+    if !output.status.success() {
+        bail!(
+            "simctl keychain reset exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Delete the simulator's keychain db files, then restart securityd so it
+/// recreates a fresh, empty keychain.
+async fn delete_keychain_and_restart_securityd(
+    udid: &str,
+    keychain_dir: &std::path::Path,
+) -> Result<()> {
     // Unlink the db files *while securityd is still running*: its open fds keep
     // the old inodes alive (any final flush lands there and is discarded when
     // the process dies), so the delete can't race a respawn. Then restart so a
     // fresh securityd opens the db by name, finds nothing, and recreates an
     // empty keychain.
-    let mut removed = 0;
-    for name in SIM_KEYCHAIN_FILES {
-        let path = keychain_dir.join(name);
-        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            tokio::fs::remove_file(&path)
-                .await
-                .with_context(|| format!("Failed to delete keychain file {name}"))?;
-            removed += 1;
+    //
+    // The unlink and the restart run as one task of their own, so a caller
+    // that is cancelled (a timeout, an aborted agent start) cannot stop
+    // between them and leave securityd serving the deleted keychain — which
+    // every later clear would then miss, finding no files to delete.
+    let udid_owned = udid.to_string();
+    let dir = keychain_dir.to_path_buf();
+    tokio::spawn(async move {
+        let udid = udid_owned.as_str();
+        let mut removed = 0;
+        for name in SIM_KEYCHAIN_FILES {
+            let path = dir.join(name);
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                tokio::fs::remove_file(&path)
+                    .await
+                    .with_context(|| format!("Failed to delete keychain file {name}"))?;
+                removed += 1;
+            }
         }
+        if removed == 0 {
+            // No database while securityd runs: an earlier clear unlinked it
+            // and never got to the restart. securityd may still be serving
+            // the deleted one, so restart it anyway.
+            debug!(
+                udid,
+                "No simulator keychain files on disk; restarting securityd anyway"
+            );
+        }
+        restart_securityd(udid).await?;
+        info!(udid, "Simulator keychain cleared");
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow!("keychain clear task failed: {e}"))?
+}
+
+/// How many items the simulator keychain at `keychain_dir` holds beyond the
+/// two that securityd writes when it creates an empty keychain (one
+/// `com.apple.security.securityd` password, one `com.apple.security.octagon`
+/// internet password) — `Some(0)` means the keychain is exactly as a clear
+/// leaves it — or `None` when that cannot be read (no database, a schema this
+/// query does not know, sqlite3 failing): the caller then clears it as if it
+/// held some. Every other item counts, whatever its access group: Apple's
+/// own groups included, since an app run can leave rows there too (saved
+/// passwords, CFNetwork credentials, a system service the app woke). Read-only.
+async fn keychain_items_to_clear(keychain_dir: &std::path::Path) -> Option<u64> {
+    let db = keychain_dir.join(SIM_KEYCHAIN_FILES[0]);
+    if !tokio::fs::try_exists(&db).await.unwrap_or(false) {
+        return None;
     }
-    if removed == 0 {
-        debug!(udid, "No simulator keychain files to clear");
-        return Ok(());
+    let uri = format!("file:{}?mode=ro", db.display());
+    let output = bounded_output(
+        "sqlite3 keychain items",
+        Command::new("/usr/bin/sqlite3").args(["-readonly", &uri, KEYCHAIN_ITEMS_TO_CLEAR_QUERY]),
+        Duration::from_secs(5),
+    )
+    .await
+    .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    restart_securityd(udid).await?;
-    info!(udid, "Simulator keychain cleared");
-    Ok(())
+    parse_keychain_item_count(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Counts the keychain's items (passwords, internet passwords, keys,
+/// certificates), less at most one row each of the two a freshly created
+/// keychain holds.
+const KEYCHAIN_ITEMS_TO_CLEAR_QUERY: &str = "select \
+     (select count(*) from genp) + (select count(*) from inet) \
+     + (select count(*) from keys) + (select count(*) from cert) \
+     - min(1, (select count(*) from genp where agrp = 'com.apple.security.securityd')) \
+     - min(1, (select count(*) from inet where agrp = 'com.apple.security.octagon'))";
+
+/// sqlite3's answer to [`KEYCHAIN_ITEMS_TO_CLEAR_QUERY`]: one count, or `None`.
+fn parse_keychain_item_count(stdout: &str) -> Option<u64> {
+    stdout.trim().parse().ok()
 }
 
 /// Restart securityd inside the simulator so it re-reads the keychain db
@@ -1630,6 +1915,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn simctl_terminate_result_says_whether_the_app_is_stopped() {
+        assert_eq!(
+            classify_simctl_terminate(true, ""),
+            SimTerminate::Terminated
+        );
+        // Real stderr from Xcode 27 for an app that is not running (exit 3).
+        let not_running = "An error was encountered processing the command \
+            (domain=NSPOSIXErrorDomain, code=3):\nSimulator device failed to terminate \
+            dev.tapsmith.testapp.\nfound nothing to terminate\n";
+        assert_eq!(
+            classify_simctl_terminate(false, not_running),
+            SimTerminate::NotRunning
+        );
+        let failed =
+            classify_simctl_terminate(false, "Unable to lookup in current state: Shutdown\n");
+        assert_eq!(
+            failed,
+            SimTerminate::Failed("Unable to lookup in current state: Shutdown".to_string())
+        );
+        assert!(SimTerminate::Terminated.app_is_stopped());
+        assert!(SimTerminate::NotRunning.app_is_stopped());
+        assert!(!failed.app_is_stopped());
+    }
+
+    #[test]
+    fn simctl_relaunch_terminates_the_running_process_in_the_same_call() {
+        assert_eq!(
+            simctl_relaunch_args("UDID", "com.example"),
+            [
+                "simctl",
+                "launch",
+                "--terminate-running-process",
+                "UDID",
+                "com.example"
+            ]
+        );
+    }
+
+    #[test]
     fn keychain_dir_derived_from_standard_container_path() {
         let container = "/Users/sam/Library/Developer/CoreSimulator/Devices/ABC-123/data/Containers/Data/Application/DEF-456";
         assert_eq!(
@@ -1655,6 +1979,171 @@ mod tests {
     fn keychain_dir_rejects_unrecognized_path() {
         assert_eq!(simulator_keychain_dir("/some/random/path"), None);
         assert_eq!(simulator_keychain_dir(""), None);
+    }
+
+    #[test]
+    fn keychain_item_count_parses_one_number_only() {
+        assert_eq!(parse_keychain_item_count("0\n"), Some(0));
+        assert_eq!(parse_keychain_item_count("3"), Some(3));
+        assert_eq!(parse_keychain_item_count(""), None);
+        assert_eq!(
+            parse_keychain_item_count("Error: no such table: genp"),
+            None
+        );
+    }
+
+    /// A keychain database with the four item tables, holding `items`
+    /// (table, access group).
+    #[cfg(target_os = "macos")]
+    fn keychain_db(items: &[(&str, Option<&str>)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sql = String::from(
+            "create table genp(agrp text); create table inet(agrp text); \
+             create table keys(agrp text); create table cert(agrp text);",
+        );
+        for (table, agrp) in items {
+            match agrp {
+                Some(g) => sql.push_str(&format!("insert into {table} values('{g}');")),
+                None => sql.push_str(&format!("insert into {table} values(null);")),
+            }
+        }
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(dir.path().join(SIM_KEYCHAIN_FILES[0]))
+            .arg(sql)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        dir
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_freshly_created_keychain_holds_nothing_to_clear() {
+        // Exactly what securityd writes when it creates an empty keychain
+        // (seen on every simulator right after a clear): one securityd row
+        // and one octagon row.
+        let dir = keychain_db(&[
+            ("genp", Some("com.apple.security.securityd")),
+            ("inet", Some("com.apple.security.octagon")),
+        ]);
+        assert_eq!(keychain_items_to_clear(dir.path()).await, Some(0));
+        let empty = keychain_db(&[]);
+        assert_eq!(keychain_items_to_clear(empty.path()).await, Some(0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn every_item_a_fresh_keychain_lacks_is_counted_whatever_its_group() {
+        // Apple's own groups too: an app run can leave rows under them
+        // (saved passwords, CFNetwork credentials, services the app woke),
+        // and the bare `apple` / `ichat` groups unentitled processes use.
+        for (table, agrp) in [
+            ("genp", "com.apple.findmy.findmylocated"),
+            ("genp", "com.apple.cfnetwork"),
+            ("inet", "com.apple.password-manager"),
+            ("genp", "apple"),
+            ("keys", "ichat"),
+            ("cert", "com.apple.security.sos"),
+        ] {
+            let dir = keychain_db(&[
+                ("genp", Some("com.apple.security.securityd")),
+                ("inet", Some("com.apple.security.octagon")),
+                (table, Some(agrp)),
+            ]);
+            assert_eq!(
+                keychain_items_to_clear(dir.path()).await,
+                Some(1),
+                "{table} {agrp}"
+            );
+        }
+        // A second row in a fresh keychain's own groups is not fresh either.
+        let dir = keychain_db(&[
+            ("genp", Some("com.apple.security.securityd")),
+            ("genp", Some("com.apple.security.securityd")),
+            ("inet", Some("com.apple.security.octagon")),
+        ]);
+        assert_eq!(keychain_items_to_clear(dir.path()).await, Some(1));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_apps_keychain_items_are_counted_in_every_table() {
+        let dir = keychain_db(&[
+            ("genp", Some("com.apple.security.securityd")),
+            ("genp", Some("ABCDE12345.dev.tapsmith.testapp")),
+            ("inet", Some("dev.tapsmith.testapp")),
+            ("keys", Some("ABCDE12345.com.example.shared")),
+            ("cert", None),
+        ]);
+        assert_eq!(keychain_items_to_clear(dir.path()).await, Some(4));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_unreadable_keychain_is_not_taken_for_an_empty_one() {
+        // No database at all, and one whose schema the query does not know.
+        let missing = tempfile::tempdir().unwrap();
+        assert_eq!(keychain_items_to_clear(missing.path()).await, None);
+        let other = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(other.path().join(SIM_KEYCHAIN_FILES[0]))
+            .arg("create table items(x text);")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(keychain_items_to_clear(other.path()).await, None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn restoring_a_keychain_with_no_items_is_a_clear_not_a_swap() {
+        // An archive saved with nothing in the keychain (an app that keeps
+        // its state outside it): restoring it onto a keychain that is
+        // already as a clear leaves it changes nothing — no files are
+        // swapped and securityd is not restarted (the bogus udid would fail
+        // any simctl call).
+        let src = keychain_db(&[
+            ("genp", Some("com.apple.security.securityd")),
+            ("inet", Some("com.apple.security.octagon")),
+        ]);
+        let live = keychain_db(&[("genp", Some("com.apple.security.securityd"))]);
+        let live_db = live.path().join(SIM_KEYCHAIN_FILES[0]);
+        let before = std::fs::read(&live_db).unwrap();
+        let outcome = restore_keychain("not-a-udid", live.path(), src.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            KeychainRestore::Cleared(KeychainClear::AlreadyClear)
+        );
+        assert_eq!(std::fs::read(&live_db).unwrap(), before);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_keychain_holding_items_is_swapped_in() {
+        // An item beyond a fresh keychain's own rows, or a database the
+        // count query cannot read, is swapped in: the files land in the
+        // live dir before securityd is restarted (which fails here).
+        for src in [
+            keychain_db(&[("genp", Some("ABCDE12345.dev.tapsmith.testapp"))]),
+            {
+                let other = tempfile::tempdir().unwrap();
+                std::fs::write(other.path().join(SIM_KEYCHAIN_FILES[0]), b"not sqlite").unwrap();
+                other
+            },
+        ] {
+            let live = keychain_db(&[]);
+            let result = restore_keychain("not-a-udid", live.path(), src.path()).await;
+            assert!(
+                result.is_err(),
+                "securityd restart on a bogus udid must fail"
+            );
+            assert_eq!(
+                std::fs::read(live.path().join(SIM_KEYCHAIN_FILES[0])).unwrap(),
+                std::fs::read(src.path().join(SIM_KEYCHAIN_FILES[0])).unwrap(),
+            );
+        }
     }
 
     #[test]

@@ -13,10 +13,9 @@ import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 // tell what hideKeyboard() touched, not just whether it resolved.
 
 describe("hideKeyboard() on a screen without a scroll view", () => {
-  test.use({ appResetScope: "test" })
+  test.use({ appResetScope: "test", appResetRoute: "/keyboard" })
 
   test.beforeEach(async ({ device, keyboardScreen }) => {
-    await openScreen(device, "/keyboard")
     await expect(keyboardScreen.counts).toBeVisible()
   })
 
@@ -111,5 +110,24 @@ describe("hideKeyboard() on a screen without a scroll view", () => {
     await expect(keyboardScreen.counts).toHaveText(counts({}))
     await expect.poll(() => device.isKeyboardShown()).toBe(false)
     await expect(keyboardScreen.plainInput).toHaveValue("a")
+  })
+
+  // PILOT-1177: a full-screen background image (React Native's
+  // ImageBackground) sits behind the whole form. iOS counted it as something
+  // a touch must not land on, so it blocked every blank spot and drag start,
+  // and hideKeyboard() failed. Here the field's return key is "go", which
+  // must not be pressed either: only a tap or drag beside the field works.
+  test("dismisses the keyboard on a form drawn over a background image", async ({ device, keyboardScreen }) => {
+    await openScreen(device, "/keyboard?background=1")
+    await expect(keyboardScreen.counts).toBeVisible()
+    await keyboardScreen.openKeyboard("go")
+    await expectSoftwareKeyboardShown(device)
+
+    await device.hideKeyboard()
+
+    await expect.poll(() => device.isKeyboardShown()).toBe(false)
+    // "go" was not pressed, and nothing else was touched.
+    await expect(keyboardScreen.goInput).toHaveValue("a")
+    await expect(keyboardScreen.counts).toHaveText(counts({}))
   })
 })

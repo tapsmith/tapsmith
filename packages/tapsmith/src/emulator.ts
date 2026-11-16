@@ -1331,24 +1331,40 @@ export function blockingDialogOwnersViaAdb(
   serial: string,
   exec: ExecFileSyncLike = execFileSync,
 ): string[] {
+  return blockingDialogWindowsViaAdb(serial, exec) ?? [];
+}
+
+/**
+ * {@link blockingDialogOwnersViaAdb}, but undefined when the window list could
+ * not be read (adb failed, or the output lists no window at all), so a caller
+ * can tell "no dialog" from "could not look". The window titles are set by the
+ * framework in code, not from translated resources, so they read the same in
+ * every locale.
+ */
+function blockingDialogWindowsViaAdb(
+  serial: string,
+  exec: ExecFileSyncLike,
+): string[] | undefined {
+  let output: string;
   try {
-    const output = String(exec('adb', ['-s', serial, 'shell', 'dumpsys', 'window', 'windows'], {
+    output = String(exec('adb', ['-s', serial, 'shell', 'dumpsys', 'window', 'windows'], {
       encoding: 'utf-8',
       timeout: 10_000,
       // The full window dump can pass execFileSync's 1 MiB default.
       maxBuffer: 32 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
     }));
-    const owners = new Set<string>();
-    // The title names the process; a `:service` suffix is dropped so an app's
-    // secondary process still reads as the app.
-    for (const match of output.matchAll(/Window\{[0-9a-f]+ u\d+ (?:Application Not Responding|Application Error): ([^\s}:]+)(?::[^\s}]*)?\}/g)) {
-      owners.add(match[1]);
-    }
-    return [...owners];
   } catch {
-    return [];
+    return undefined;
   }
+  if (!/Window\{[0-9a-f]+ u\d+ /.test(output)) return undefined;
+  const owners = new Set<string>();
+  // The title names the process; a `:service` suffix is dropped so an app's
+  // secondary process still reads as the app.
+  for (const match of output.matchAll(/Window\{[0-9a-f]+ u\d+ (?:Application Not Responding|Application Error): ([^\s}:]+)(?::[^\s}]*)?\}/g)) {
+    owners.add(match[1]);
+  }
+  return [...owners];
 }
 
 /** `"<title>" (<owner>)` — the one way a blocking dialog is named to users. */
@@ -1700,6 +1716,12 @@ export function probeDeviceHealth(
     return { serial, healthy: false, reason: 'package manager is unresponsive' };
   }
 
+  // An ANR or crash dialog has a window of its own, titled by the framework.
+  // The window list (~50 ms) rules one out; the hierarchy dump that finds and
+  // names the dialog waits for the screen to go idle, seconds on a live app,
+  // so it runs only when the list shows such a window or cannot be read.
+  if (blockingDialogWindowsViaAdb(serial, exec)?.length === 0) return { serial, healthy: true };
+
   const hierarchy = readUiHierarchyViaAdb(serial, exec);
   if (hierarchy) {
     const blockingDialog = detectBlockingSystemDialog(hierarchy);
@@ -1722,6 +1744,36 @@ export function probeDeviceHealth(
   }
 
   return { serial, healthy: true };
+}
+
+/** Uptime after which a device is past its boot, and one healthy probe is enough. */
+const SETTLED_UPTIME_SECONDS = 60;
+
+/**
+ * One health probe of a device that has been up for a minute, or undefined
+ * when it has not (or its uptime cannot be read). Consecutive probes
+ * ({@link waitForDeviceStability}) are for a device that just booted, whose
+ * adbd and package manager can still drop out; one that has been up for a
+ * minute is past that, and waiting two seconds for a second probe only slows
+ * every run down.
+ */
+export function probeDeviceHealthIfSettled(
+  serial: string,
+  exec: ExecFileSyncLike = execFileSync,
+  probe: (serial: string) => DeviceHealthResult = (s) => probeDeviceHealth(s, exec),
+): DeviceHealthResult | undefined {
+  let uptime: number;
+  try {
+    uptime = Number.parseFloat(String(exec('adb', ['-s', serial, 'shell', 'cat', '/proc/uptime'], {
+      encoding: 'utf-8',
+      timeout: 5_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })));
+  } catch {
+    return undefined;
+  }
+  if (!(uptime >= SETTLED_UPTIME_SECONDS)) return undefined;
+  return probe(serial);
 }
 
 /**

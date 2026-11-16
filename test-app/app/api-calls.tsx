@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useLocalSearchParams } from "expo-router"
+import { useEffect, useState } from "react"
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native"
 
 interface Post {
@@ -35,6 +36,15 @@ export default function ApiCallsScreen() {
       setLoading("")
     }
   }
+
+  // `?autoload=posts` fetches the posts as the screen mounts, so a deep link
+  // that cold-launches the app sends the request in its first moments — the
+  // launch-time request e2e checks the proxy sees (PILOT-1196).
+  const { autoload } = useLocalSearchParams<{ autoload?: string }>()
+  useEffect(() => {
+    if (autoload === "posts") void fetchPosts()
+    // Once per mount: fetchPosts is recreated every render.
+  }, [autoload])
 
   const fetchUser = async () => {
     setLoading("user")

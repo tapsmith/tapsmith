@@ -97,6 +97,7 @@ describe('config validation at load (PILOT-552)', () => {
     it.each([
       ['screenshot', '"on-failure"', "screenshot must be one of 'always', 'only-on-failure', 'never'"],
       ['deviceStrategy', '"avd"', "deviceStrategy must be 'prefer-connected' or 'avd-only'"],
+      ['reducedMotion', 'true', "reducedMotion must be 'reduce' or 'no-preference' (got true)"],
     ])('rejects an unknown %s', async (key, value, expected) => {
       expect((await loadError(`{ ${key}: ${value} }`)).message).toContain(expected);
     });
@@ -203,6 +204,19 @@ describe('config validation at load (PILOT-552)', () => {
       expect(err.configPath).toBe(path.join(root, 'tapsmith.config.mjs'));
     });
 
+    it.each([
+      ['"settings"', "appResetRoute must be a path starting with '/' (e.g. '/settings') or a full deep link (e.g. 'myapp:///settings') (got \"settings\")"],
+      ['""', 'appResetRoute must be a path starting with'],
+      ['42', 'appResetRoute must be a path starting with'],
+    ])('rejects appResetRoute: %s', async (value, expected) => {
+      expect((await loadError(`{ appResetRoute: ${value} }`)).message).toContain(expected);
+    });
+
+    it('rejects an appResetRoute without a leading slash in a project `use`', async () => {
+      expect((await loadError('{ projects: [{ name: "p", use: { appResetRoute: "settings" } }] }')).message)
+        .toContain('projects[0].use.appResetRoute must be a path starting with');
+    });
+
     it('rejects a null in a project `use` at load, not at project resolution', async () => {
       expect((await loadError('{ projects: [{ name: "p", use: { appReset: null, platform: null } }] }')).message)
         .toMatch(/projects\[0\]\.use\.appReset must be one of[\s\S]*projects\[0\]\.use\.platform must be 'android' or 'ios' \(got null\)/);
@@ -241,7 +255,7 @@ describe('config validation at load (PILOT-552)', () => {
         daemonBin: '/bin/x', device: 'emulator-5554', devices: 2, deviceStrategy: 'avd-only',
         rootDir: '.', outputDir: 'out', package: 'com.x', agentApk: 'a', agentTestApk: 'b',
         iosXctestrun: 'x', resetAppDeepLink: 'x://reset', resetAppWaitMs: 500,
-        appReset: 'warm', appResetScope: 'test', appResetColdEvery: 0,
+        appReset: 'warm', appResetScope: 'test', appResetColdEvery: 0, appResetRoute: '/home',
         ui: { prepareBetweenRuns: false, prepareDelayMs: 10 }, telemetry: false,
         typingDelay: 10, doubleTapInterval: 50, simulator: 'iPhone 16',
         reporter: [['list'], ['json', { outputFile: 'r.json' }], 'dot'], workers: 3,
@@ -252,7 +266,7 @@ describe('config validation at load (PILOT-552)', () => {
         projects: [{
           name: 'p', testMatch: ['x'], testIgnore: ['y'], dependencies: [], workers: 1,
           grep: [/a/], grepInvert: /b/,
-          use: { timeout: 1, appState: './s.tar.gz', platform: 'android', avd: 'Pixel' },
+          use: { timeout: 1, appState: './s.tar.gz', platform: 'android', avd: 'Pixel', appResetRoute: 'app:///a' },
         }],
       }\n`);
       await expect(loadConfig(root)).resolves.toMatchObject({ platform: 'android', workers: 3 });
@@ -313,6 +327,14 @@ describe('config validation at load (PILOT-552)', () => {
     it('explains a root-only option put inside `use`', async () => {
       expect((await loadError('{ projects: [{ name: "a", use: { reporter: "dot" } }] }')).message).toContain(
         "projects[0].use.reporter can't be set per project; set it at the top level of the config",
+      );
+    });
+
+    // PILOT-971: projects on one device target share its device, so a
+    // per-project value could not be honoured.
+    it('keeps reducedMotion a root-level option', async () => {
+      expect((await loadError('{ projects: [{ name: "a", use: { reducedMotion: "reduce" } }] }')).message).toContain(
+        "projects[0].use.reducedMotion can't be set per project; set it at the top level of the config",
       );
     });
 

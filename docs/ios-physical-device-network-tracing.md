@@ -27,7 +27,7 @@ export default defineConfig({
 });
 ```
 
-With `trace.mode` off, Tapsmith starts no proxy until a test calls `device.route()`, `waitForRequest()` or `waitForResponse()`, which start it on demand. Turning `trace.mode` on starts it for every test, so the trace records each test's traffic.
+With `trace.mode` off, Tapsmith starts the proxy only for a run whose tests call `device.route()`, `waitForRequest()` or `waitForResponse()`: as the session starts, or on demand at the first such call (see [Network prerequisites](network.md#prerequisites)). Turning `trace.mode` on starts it for every test, so the trace records each test's traffic.
 
 ## One-time device setup
 

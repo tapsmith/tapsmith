@@ -7,6 +7,8 @@
 import { test, expect } from "../fixtures.js"
 import { GESTURES_FILE, singleFileTree } from "../messages/scenarios.js"
 import { action, actionCompleted, actionStarted, group } from "../messages/trace.js"
+import { ScreenshotPane } from "../../panes/screenshot.pane.js"
+import { solidPng } from "../../png.js"
 
 const DOUBLE_TAP = "Gestures screen > double tap registers double tap gesture"
 const TEST_NAME = "double tap registers double tap gesture"
@@ -235,6 +237,67 @@ test.describe("Run lifecycle", () => {
 
       await expect(explorer.node(TEST_NAME)).toHaveAttribute("data-status", "running")
       await expect(actions.items).toHaveCount(0)
+    })
+  })
+
+  // PILOT-1175: UI mode never retries a failed test (the runner sends one
+  // test-start per run), so a failure stays on screen until the user reruns
+  // it, and the rerun replaces it outright — actions, the captures stored by
+  // the action indices both runs reuse, the error and the status.
+  test.describe("a manual rerun of a failed test", () => {
+    const pngSize = (img: HTMLImageElement) => [img.naturalWidth, img.naturalHeight]
+
+    test("keeps the failure inspectable, then shows only the new run", async ({
+      app,
+      explorer,
+      actions,
+      detailTabs,
+      page,
+    }) => {
+      const ui = app
+      const screenshot = new ScreenshotPane(page)
+      const node = explorer.node(TEST_NAME)
+      await explorer.expandAll()
+
+      // The failed run: two steps, a 40x80 capture at index 0, an error.
+      ui.send({ type: "run-start", fileCount: 1 })
+      ui.send({ type: "test-start", fullName: DOUBLE_TAP, filePath: GESTURES_FILE })
+      ui.send(
+        ...action({ testFullName: DOUBLE_TAP, actionIndex: 0, action: "launchApp", screenshotBefore: solidPng(40, 80).toString("base64") }),
+        ...action({ testFullName: DOUBLE_TAP, actionIndex: 1, action: "longPress", success: false, error: "first run failed" }),
+      )
+      ui.send({ type: "test-status", fullName: DOUBLE_TAP, filePath: GESTURES_FILE, status: "failed", duration: 900, error: "first run failed" })
+      ui.send({ type: "run-end", status: "failed", duration: 900, passed: 0, failed: 1, skipped: 0 })
+
+      await node.click()
+      await expect(node).toHaveAttribute("data-status", "failed")
+      await expect(actions.items).toHaveCount(2)
+      await actions.item("launchApp").click()
+      await expect.poll(() => screenshot.image.evaluate(pngSize)).toEqual([40, 80])
+      await detailTabs.tab("Errors").click()
+      await expect(detailTabs.errorEntries.first()).toContainText("first run failed")
+
+      // The user reruns it. The row goes back to running with nothing left
+      // of the failed run.
+      ui.send({ type: "run-start", fileCount: 1, filePath: GESTURES_FILE, testFilter: DOUBLE_TAP })
+      ui.send({ type: "test-start", fullName: DOUBLE_TAP, filePath: GESTURES_FILE })
+      await expect(node).toHaveAttribute("data-status", "running")
+      await expect(actions.items).toHaveCount(0)
+
+      // The new run reuses index 0 for a different step and capture.
+      ui.send(...action({ testFullName: DOUBLE_TAP, actionIndex: 0, action: "swipe", screenshotBefore: solidPng(20, 40, [0, 255, 0]).toString("base64") }))
+      ui.send({ type: "test-status", fullName: DOUBLE_TAP, filePath: GESTURES_FILE, status: "passed", duration: 300 })
+      ui.send({ type: "run-end", status: "passed", duration: 300, passed: 1, failed: 0, skipped: 0 })
+
+      await expect(node).toHaveAttribute("data-status", "passed")
+      await expect(actions.items).toHaveCount(1)
+      await expect(actions.item("swipe")).toBeVisible()
+      await expect(actions.item("launchApp")).toHaveCount(0)
+      await expect(actions.item("longPress")).toHaveCount(0)
+      await actions.item("swipe").click()
+      await expect.poll(() => screenshot.image.evaluate(pngSize)).toEqual([20, 40])
+      await detailTabs.tab("Errors").click()
+      await expect(detailTabs.errorEntries).toHaveCount(0)
     })
   })
 

@@ -5,15 +5,17 @@ import { execFileSync, type ChildProcess, type StdioOptions } from 'node:child_p
 import { withFileLockSync } from '../file-lock.js';
 import { TapsmithGrpcClient, type DeviceInfoProto } from '../grpc-client.js';
 import { findDaemonBin } from '../daemon-bin.js';
-import { pickFreePort } from '../port-utils.js';
-import { resolveDeviceGroup, primaryDevicePin, type TapsmithConfig } from '../config.js';
+import { connectionRefused, pickFreePort } from '../port-utils.js';
+import { resolveDeviceGroup, primaryDevicePin, reduceMotionFlag, type TapsmithConfig } from '../config.js';
 import { loadMcpConfig } from './config-loader.js';
 import { configDeviceTarget, configTargetMissMessage, type ConfigDeviceTarget } from './config-device-target.js';
 import { describeUnusableAndroidDevices, pinnedDeviceUnusableMessage, type AdbStateEntry } from '../device-advice.js';
 import { uiPortFilePath, allUiPortFiles, mcpDaemonRegistryPath } from './port-file.js';
+import type { UiSessionProject } from './ui-session.js';
 import { openDaemonLog, readDaemonLogSince } from './daemon-log.js';
 import { awaitDaemonStart, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed } from '../daemon-start.js';
 import { withDetail } from '../error-detail.js';
+import { AGENT_START_RETRY_DELAY_MS, startAgentWithRetry } from '../worker-protocol.js';
 import {
   DaemonClaimedError,
   DeviceClaimedError,
@@ -878,6 +880,9 @@ async function discover(): Promise<void> {
     const results = await Promise.all(entries.map(async ([address, source]) => {
       let client: TapsmithGrpcClient | undefined;
       try {
+        // A candidate nothing listens on is answered at once, not after the
+        // gRPC wait's full second.
+        if (await connectionRefused(address)) return null;
         client = new TapsmithGrpcClient(address);
         const alive = await client.waitForReady(1_000);
         if (alive && await startedByAnotherSession(client, address, source)) {
@@ -1861,7 +1866,7 @@ async function prepareTarget(
     if (!alreadyServed) giveBack(serial, conn);
   };
   try {
-    await setDeviceExplained(conn.client, serial);
+    await setDeviceExplained(conn.client, serial, reduceMotionFlag(config?.reducedMotion));
   } catch (err) {
     releaseOnFailure();
     throw err;
@@ -1993,6 +1998,14 @@ export interface UiDaemonPorts {
   daemons?: UiDaemonRecord[]
   owned?: string[]
   devices?: string[]
+  /** The session's MCP endpoint. */
+  mcpUrl?: string
+  /** The project the session was started for: see `uiSessionMatchesProject`. */
+  project?: UiSessionProject
+  /** The UI server's process. */
+  pid?: number
+  /** ISO time the session started. */
+  startedAt?: string
 }
 
 function parseUiDaemonPorts(data: UiDaemonPorts): UiDiscoveryResult {
@@ -2457,7 +2470,7 @@ async function setDeviceAndAgent(
 
   claimDeviceOrThrow(serial, currentSession(), { daemonAddress: address });
   try {
-    await setDeviceExplained(client, serial);
+    await setDeviceExplained(client, serial, reduceMotionFlag(config?.reducedMotion));
     log(`Using device: ${serial}`);
     await startAgentFromConfig(client, config, { serial });
   } catch (err) {
@@ -2522,14 +2535,25 @@ async function startAgentFromConfig(
   let failure: string | undefined;
   try {
     log('Starting agent on device...');
-    const res = await client.startAgent(
-      config?.package ?? '',
-      agentApk,
-      agentTestApk,
-      iosXctestrun,
+    // A transient failure (a slow runner's launch timeout, a dropped daemon
+    // connection) gets the one retry a test run's start gets (PILOT-948).
+    await startAgentWithRetry(
+      async () => {
+        const res = await client.startAgent(
+          config?.package ?? '',
+          agentApk,
+          agentTestApk,
+          iosXctestrun,
+        );
+        // A refusal is an answer, not an error: the daemon's reason is in it.
+        if (res?.success === false) throw new Error(res.errorMessage || 'the daemon refused to start the agent');
+        // A successful start can carry a warning, such as a reducedMotion
+        // speed-up the daemon could not apply (PILOT-1073).
+        if (res?.errorMessage) log(`warning: ${res.errorMessage}`);
+      },
+      (err) => log(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`),
+      { delayMs: AGENT_START_RETRY_DELAY_MS },
     );
-    // A refusal is an answer, not an error: the daemon's reason is in it.
-    if (res?.success === false) failure = res.errorMessage || 'the daemon refused to start the agent';
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err);
   }
@@ -2669,8 +2693,12 @@ export function closeAllClients(): void {
  * refusal (`success: false`) is left as before: not thrown here.
  * Exported for tests.
  */
-export async function setDeviceExplained(client: TapsmithGrpcClient, serial: string): Promise<void> {
-  const res = await client.setDevice(serial);
+export async function setDeviceExplained(
+  client: TapsmithGrpcClient,
+  serial: string,
+  reduceMotion?: boolean,
+): Promise<void> {
+  const res = await client.setDevice(serial, false, [], [], reduceMotion);
   if (res?.success !== false) return;
   const { explainDeviceNotFound } = await import('../ios-devicectl.js');
   const refusal = new Error(res.errorMessage);

@@ -532,5 +532,82 @@ if map.interactiveCover(of: lostTarget, at: [CGPoint(x: 350, y: 150)]) == nil {
     failures += 1; print("FAIL an unplaced target names no cover")
 }
 
+// A button's containers decide its hold (TapTiming): an alert's, an action
+// sheet's and a segmented control's buttons are UIKit controls.
+let alertRows: [Row] = [
+    (0, .application, "", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .button, "Behind", "", R(16, 100, 370, 56)),
+    (3, .segmentedControl, "", "", R(16, 170, 370, 32)),
+    (4, .button, "Large", "", R(200, 170, 186, 32)),
+    (2, .alert, "Delete?", "", R(40, 250, 322, 200)),
+    (3, .other, "", "", R(40, 250, 322, 200)),
+    (4, .button, "Delete", "", R(40, 400, 161, 50)),
+    (2, .sheet, "Share", "", R(0, 600, 402, 274)),
+    (3, .button, "Copy", "", R(16, 700, 370, 56)),
+]
+let alerts = analyzer(alertRows)
+let containerCases: [(String, OcclusionAnalyzer.Target, [XCUIElement.ElementType])] = [
+    ("a button in an alert sits in the alert", button("Delete", R(40, 400, 161, 50)), [.other, .alert, .window, .application]),
+    ("a button in an action sheet sits in the sheet", button("Copy", R(16, 700, 370, 56)), [.sheet, .window, .application]),
+    ("a segment sits in its segmented control", button("Large", R(200, 170, 186, 32)),
+     [.segmentedControl, .other, .window, .application]),
+    ("a button beside them sits in plain views", button("Behind", R(16, 100, 370, 56)), [.other, .window, .application]),
+    ("an unplaced target has no known containers", button("Gone", R(5, 5, 10, 10)), []),
+]
+for (name, target, want) in containerCases {
+    let got = alerts.ancestorTypes(of: target)
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got.map(\.rawValue))") }
+}
+
+// A dropdown's option is the first uncovered copy of its text, leaving out
+// what showed it before the dropdown opened, touched where `analyze` says.
+let optionRows: [Row] = [
+    (0, .application, "", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .staticText, "Medium", "", R(16, 100, 370, 20)),
+    (3, .other, "", "", R(16, 300, 370, 140)),
+    (4, .staticText, "Medium", "", R(16, 340, 370, 20)),
+    (4, .staticText, "Gone", "", R(16, 2000, 370, 20)),
+    (4, .staticText, "Under", "", R(16, 380, 370, 20)),
+    (4, .staticText, "Medium", "", R(16, 420, 370, 15)),
+    (3, .scrollView, "", "", R(16, 450, 370, 100)),
+    (4, .staticText, "Clipped", "", R(16, 560, 370, 20)),
+    (4, .staticText, "Half", "", R(16, 540, 370, 20)),
+    (3, .staticText, "Low", "", R(16, 590, 370, 30)),
+    (3, .button, "Cover", "", R(0, 370, 402, 40)),
+    (2, .sheet, "", "", R(0, 640, 402, 160)),
+    (3, .staticText, "Large", "", R(16, 700, 370, 20)),
+    (2, .toolbar, "", "", R(0, 600, 402, 40)),
+]
+let options = analyzer(optionRows)
+func touch(_ result: OcclusionAnalyzer.OptionText) -> CGPoint? {
+    if case .touchable(let point, _) = result { return point }
+    return nil
+}
+let optionCases: [(String, Bool)] = [
+    ("the first copy is the one picked", touch(options.optionText("Medium")) == CGPoint(x: 201, y: 110)),
+    ("a text shown before the dropdown opened is left out, not a later copy",
+     touch(options.optionText("Medium", excluding: [R(16, 100, 370, 20)])) == CGPoint(x: 201, y: 350)),
+    ("every copy there before leaves nothing",
+     options.optionText("Medium", excluding: options.textFrames("Medium")) == .absent),
+    ("a copy off screen before the open is left out, so it is not taken for the option",
+     options.optionText("Gone", excluding: options.textFrames("Gone")) == .absent),
+    ("an option a control covers is present but not touched", options.optionText("Under") == .present),
+    ("an option scrolled out of its list is present but not touched", options.optionText("Clipped") == .present),
+    ("an option off screen is present but not touched", options.optionText("Gone") == .present),
+    ("a missing option is absent", options.optionText("Missing") == .absent),
+    ("a half-shown option is touched in its shown part", touch(options.optionText("Half")) == CGPoint(x: 201, y: 545)),
+    ("an option half under a toolbar is touched clear of it", touch(options.optionText("Low")) == CGPoint(x: 201, y: 595)),
+]
+for (name, ok) in optionCases {
+    if ok { print("ok   \(name)") } else { failures += 1; print("FAIL \(name)") }
+}
+if case .touchable(_, let types) = options.optionText("Large"), types.contains(.sheet) {
+    print("ok   an option in a sheet sits in the sheet")
+} else { failures += 1; print("FAIL an option in a sheet sits in the sheet") }
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

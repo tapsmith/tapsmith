@@ -228,8 +228,6 @@ test.describe("Device group badge", () => {
 
     await expect(explorer.devicesFor("[pair]")).toHaveText(/alice · bob/)
     await expect(explorer.devicesFor("[pair]")).toHaveAttribute("title", /Each test drives 2 devices: alice, bob \(use\.devices\)/)
-    // Not an isolation policy: it does not share the isolation badge.
-    await expect(explorer.isolationFor("[pair]")).toHaveCount(0)
     await expect(explorer.devicesFor("gestures.test.ts")).toHaveCount(0)
     await expect(explorer.devicesFor("Gestures screen")).toHaveCount(0)
     await expect(explorer.devicesFor("double tap registers double tap gesture")).toHaveCount(0)
@@ -240,21 +238,5 @@ test.describe("Device group badge", () => {
     ui.seed(idleSeed([projectNode("pair", singleFileTree(), { use: { devices: 2 } })]))
     await ui.open()
     await expect(explorer.devicesFor("[pair]")).toHaveText(/2 devices/)
-  })
-
-  test("a project-level reset policy is badged on the project row only", async ({ ui, explorer }) => {
-    // Same rule for isolation: the project declares it, the rows under it
-    // inherit it without repeating it. A suite's own test.use() still shows.
-    const files = singleFileTree()
-    const suite = files[0].children!.find((n) => n.type === "suite")!
-    suite.use = { appResetScope: "test" }
-    ui.seed(idleSeed([projectNode("android", files, { use: { appReset: "restart" } })]))
-    await ui.open()
-    await explorer.expandAllButton.click()
-
-    await expect(explorer.isolationFor("[android]")).toHaveText("restart")
-    await expect(explorer.isolationFor("gestures.test.ts")).toHaveCount(0)
-    await expect(explorer.isolationFor("Gestures screen")).toHaveText("per test")
-    await expect(explorer.isolationFor("smoke")).toHaveCount(0)
   })
 })

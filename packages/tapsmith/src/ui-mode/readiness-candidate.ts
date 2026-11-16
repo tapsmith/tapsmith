@@ -131,7 +131,7 @@ export function mergeResetCapabilities(
     const value = next[key];
     if (value === undefined) continue;
     if (merged[key] === true) continue;
-    merged[key] = value;
+    Object.assign(merged, { [key]: value });
   }
   return merged;
 }

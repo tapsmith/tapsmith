@@ -16,27 +16,38 @@ import { execFileSync, type ChildProcess, type StdioOptions } from 'node:child_p
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
 import { deviceGroupSize, type TapsmithConfig } from './config.js';
-import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts } from './trace/types.js';
+import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts, resolveTraceConfig } from './trace/types.js';
 import { installedApkMatches, isPackageInstalled, waitForPackageIndexed } from './emulator.js';
 import { installApp, installAppAsync, installedAppMatches, isAppInstalled, probeSimulatorHealth, rebootSimulator } from './ios-simulator.js';
 import { findAgentApk, findAgentTestApk, missingAndroidAgentError } from './agent-resolve.js';
 import {
   AGENT_START_RETRY_DELAY_MS,
   DEVICE_SELECT_UNREACHABLE_GRACE_MS,
-  isRetryableAgentStartError,
   retryDeviceSelection,
+  startAgentWithRetry,
 } from './worker-protocol.js';
 import {
   ensureSessionReady,
   launchConfiguredApp,
+  startAndroidLaunchEarly,
+  type EarlyLaunch,
   checkMissingResetHooks,
   probeResetCapabilities,
   type SessionPreflightContext,
 } from './session-preflight.js';
 import { satisfies, type AppResetPolicy, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import { findDaemonBin } from './daemon-bin.js';
+import { timingLog } from './timing-log.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed, type DaemonStartOutcome } from './daemon-start.js';
 import { DaemonClaimedError, claimDeviceOrThrow, daemonDriverElsewhere, releaseDeviceClaim, type SessionIdentity } from './device-claims.js';
+
+/**
+ * Budget for each idle wait of a fresh emulator's warm-up launch. An app that
+ * goes idle ends the wait early; one that never does (a looping animation, a
+ * spinner) holds the Android agent for the whole budget, which was the config
+ * timeout, twice per session.
+ */
+const WARMUP_IDLE_TIMEOUT_MS = 5_000;
 
 // ─── Types ───
 
@@ -114,6 +125,21 @@ export interface OpenDeviceSessionOptions {
    * Required so an embedder cannot open a device without claiming it.
    */
   claimSession: SessionIdentity
+  /**
+   * Start the network proxy before the app is installed and launched, because
+   * the run's test files use the network APIs (`testFilesUseNetworkApis`):
+   * connections the app opens before the proxy starts bypass it,
+   * so a route registered later would never see them. `multiDevice` when the
+   * device belongs to a group of two or more (the capture must then be
+   * isolated per device). `false` when the run does not use them. With
+   * `adopt` the app is already running, so the runner starts the proxy at
+   * its first file instead; the open still tells the daemon a proxy will run,
+   * and `startedBeforeLaunch` says whether whoever launched it started the
+   * proxy first (so the runner's start is not named as a late one).
+   * Required, like `claimSession`, so no embedder opens a device without
+   * deciding.
+   */
+  startNetworkProxy: false | { multiDevice: boolean; startedBeforeLaunch?: boolean }
   onProgress?: (message: string) => void
   /**
    * Step-level progress for embedders with a step UI (the sequential CLI):
@@ -402,6 +428,16 @@ async function installAppUnderTest(
 ): Promise<InstallOutcome> {
   const progress = opts.onProgress ?? (() => {});
   const phase = opts.onPhase ?? (() => {});
+  // Session-start breakdown (PILOT-1134): one timing line per install check,
+  // in the daemon's timing log. `check_ms` is the installed-build comparison,
+  // the rest the install itself.
+  const started = Date.now();
+  let checkMs: number | undefined;
+  const checked = (): void => { checkMs = Date.now() - started; };
+  const timing = (result: string): void => {
+    const check = checkMs === undefined ? '' : ` check_ms=${checkMs}`;
+    timingLog(`kind=boot name=app_install dur_ms=${Date.now() - started} result=${result}${check} platform=${config.platform}`);
+  };
 
   if (config.platform !== 'ios') {
     if (!config.apk) {
@@ -417,9 +453,11 @@ async function installAppUnderTest(
     const buildDiffers = wasInstalled && !!config.package
       && installedApkMatches(serial, config.package, resolvedApk) === false;
     const upToDate = !opts.freshDevice && wasInstalled && !buildDiffers;
+    checked();
     if (upToDate && !opts.forceInstall) {
       progress(`app ${config.package} already installed (matching build), skipping APK install`);
       phase('install', 'complete', `${config.package} already installed (matching build)`);
+      timing('matching');
       return { freshInstall: false };
     }
     const why = buildDiffers ? ' (installed build differs)' : '';
@@ -429,10 +467,12 @@ async function installAppUnderTest(
       if (config.package) await waitForPackageIndexed(serial, config.package);
     } catch (err) {
       phase('install', 'fail', `failed to install ${path.basename(resolvedApk)}`);
+      timing('failed');
       throw new Error(`Failed to install app APK: ${err instanceof Error ? err.message : String(err)}`);
     }
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApk)}`);
+    timing(wasInstalled ? 'reinstalled' : 'installed');
     return { freshInstall: !wasInstalled };
   }
 
@@ -446,9 +486,11 @@ async function installAppUnderTest(
   const { isPhysicalDevice, installAppOnDevice, isAppInstalledOnDevice } = await import('./ios-devicectl.js');
   if (isPhysicalDevice(serial)) {
     const wasInstalled = !!config.package && (await isAppInstalledOnDevice(serial, config.package));
+    checked();
     if (wasInstalled && !opts.forceInstall && !opts.freshDevice) {
       progress(`app ${config.package} already installed, skipping app install`);
       phase('install', 'complete', `${config.package} already installed on device`);
+      timing('present');
       return { freshInstall: false };
     }
     progress(`${wasInstalled ? 'reinstalling' : 'installing'} ${path.basename(resolvedApp)} on device`);
@@ -456,13 +498,16 @@ async function installAppUnderTest(
       await installAppOnDevice(serial, resolvedApp);
     } catch (err) {
       phase('install', 'fail', `failed to install ${path.basename(resolvedApp)}`);
+      timing('failed');
       throw new Error(`Failed to install iOS app: ${err instanceof Error ? err.message : String(err)}`);
     }
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApp)} on ${serial}`);
+    timing(wasInstalled ? 'reinstalled' : 'installed');
     return { freshInstall: !wasInstalled };
   }
   if (opts.appInstalledFresh) {
+    // Timed where it happened (installAppIfAbsent's `stage=boot` line).
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApp)} while booting the simulator`);
     return { freshInstall: true };
@@ -473,9 +518,12 @@ async function installAppUnderTest(
   // With --force-install the build is not compared: it is reinstalled anyway.
   const wasInstalled = !!config.package && isAppInstalled(serial, config.package);
   const compared = !opts.freshDevice && !opts.forceInstall && wasInstalled;
-  if (compared && await installedAppMatches(serial, config.package!, resolvedApp)) {
+  const matches = compared && await installedAppMatches(serial, config.package!, resolvedApp);
+  checked();
+  if (matches) {
     progress(`app ${config.package} already installed (matching build), skipping app install`);
     phase('install', 'complete', `${config.package} already installed (matching build)`);
+    timing('matching');
     return { freshInstall: false };
   }
   const why = compared ? ' (installed build differs)' : '';
@@ -486,9 +534,11 @@ async function installAppUnderTest(
     () => {
       progress('app install complete');
       phase('install', 'complete', `installed ${path.basename(resolvedApp)}`);
+      timing(wasInstalled ? 'reinstalled' : 'installed');
     },
     (err: unknown) => {
       phase('install', 'fail', `failed to install ${path.basename(resolvedApp)}`);
+      timing('failed');
       throw new Error(`Failed to install iOS app: ${err instanceof Error ? err.message : String(err)}`);
     },
   );
@@ -522,11 +572,10 @@ export async function installConfiguredApp(
 }
 
 /**
- * Bring a simulator app to the foreground before the XCUITest agent attaches,
- * which avoids a brief black-screen flicker. Best-effort: the app may already
+ * Launch the configured app on a simulator. Best-effort: the app may already
  * be running. Physical devices are skipped — `simctl launch` is simulator-only.
  */
-async function prelaunchSimulatorApp(config: TapsmithConfig, serial: string): Promise<void> {
+async function launchSimulatorApp(config: TapsmithConfig, serial: string): Promise<void> {
   if (config.platform !== 'ios' || !config.package) return;
   const { isPhysicalDevice } = await import('./ios-devicectl.js');
   if (isPhysicalDevice(serial)) return;
@@ -588,7 +637,11 @@ export async function openDeviceSession(
 
   const device = new Device(client, config);
   if (opts.tagTraceEvents) device._traceDeviceId = spec.name;
-  const networkTracingEnabled = isNetworkTracingEnabled(config.trace);
+  // Whether this session's app runs behind the network proxy: the trace
+  // records network, or the run's tests use the network APIs (PILOT-1013).
+  // The daemon prepares for it (on an iOS simulator, gRPC's DNS resolver at
+  // every launch; on a physical iPhone, the Wi-Fi proxy) only when told.
+  const networkTracingEnabled = isNetworkTracingEnabled(config.trace) || opts.startNetworkProxy !== false;
   const capabilities: ResetCapabilities = {};
   const session: DeviceSession = {
     name: spec.name,
@@ -608,6 +661,7 @@ export async function openDeviceSession(
       networkTracingEnabled,
       capabilities,
       notices: [],
+      relaunches: { count: 0 },
     },
     daemonProcess: opts.daemonProcess,
     agentPort: opts.agentPort,
@@ -672,12 +726,25 @@ export async function openDeviceSession(
       }
     }
 
+    // Before the install, the agent and the launch, so the connections the
+    // app opens go through the proxy (on an iOS simulator, once the Network
+    // Extension has picked up the app's process, within about 2 s of launch).
+    // Silent: see `Device._startNetworkProxyForSession`.
+    if (opts.startNetworkProxy && !opts.adopt) {
+      progress('starting the network proxy');
+      await device._startNetworkProxyForSession({
+        requireIsolation: opts.startNetworkProxy.multiDevice,
+        httpPorts: resolveTraceConfig(config.trace).networkHttpPorts,
+      });
+    }
+
     if (opts.adopt) {
       // The daemon already installed, started the agent and launched (the
       // CLI's primary setup, or a previous run through the same daemon).
       // Resolve the artifact paths recovery needs, then verify and probe.
       Object.assign(session.context, opts.artifacts ?? await resolveAgentArtifacts(config, spec.serial, progress));
       if (opts.seedCapabilities) Object.assign(capabilities, opts.seedCapabilities);
+      if (opts.startNetworkProxy && opts.startNetworkProxy.startedBeforeLaunch) device._launchedBehindProxy = true;
       if (opts.adoptVerify ?? true) {
         progress('attaching to the device session');
         await ensureSessionReady(session.context, `${opts.label} adopt`);
@@ -717,32 +784,45 @@ export async function openDeviceSession(
     }
     Object.assign(session.context, artifacts);
     if (install.pending) await install.pending;
-    await prelaunchSimulatorApp(config, spec.serial);
-    const freshInstall = install.freshInstall;
+    let freshInstall = install.freshInstall;
+    // The iOS agent launches the app itself as it starts. Unless the app was
+    // just installed (no data to clear), it is asked to wipe the app's data
+    // first — while xcodebuild starts — so that launch can stand as the clean
+    // startup launch instead of being cleared and relaunched after it.
+    const isIos = config.platform === 'ios';
+    const clearAppDataFirst = isIos && !!config.package && !freshInstall;
+
+    // Android: clear the app and start its launch now, so its cold start
+    // overlaps the agent's start instead of following it. Not on an emulator
+    // this run just booted, which gets the whole sequence and a warm-up below.
+    // The launch never fails the open from here: if it did not go through,
+    // the launch below runs the usual sequence after the agent.
+    let earlyLaunch: EarlyLaunch | undefined;
+    if (config.platform !== 'ios' && config.package && !opts.freshDevice) {
+      progress(`launching ${config.package} while the agent starts`);
+      earlyLaunch = await startAndroidLaunchEarly(session.context, { freshInstall });
+    }
 
     progress('starting Tapsmith agent');
-    phase('agent', 'start', config.platform === 'ios'
+    phase('agent', 'start', isIos
       ? `starting iOS agent (${artifacts.iosXctestrunPath ? path.basename(artifacts.iosXctestrunPath) : 'xctestrun not set'})`
       : 'starting Android automation agent');
-    const startAgent = (): Promise<void> => device.startAgent(
-      config.package ?? '',
-      artifacts.agentApkPath,
-      artifacts.agentTestApkPath,
-      artifacts.iosXctestrunPath,
-      artifacts.iosAppPath,
+    const startAgent = (): Promise<{ appLaunchedFresh: boolean }> => device._startAgent({
+      targetPackage: config.package ?? '',
+      agentApkPath: artifacts.agentApkPath,
+      agentTestApkPath: artifacts.agentTestApkPath,
+      iosXctestrunPath: artifacts.iosXctestrunPath,
+      iosAppPath: artifacts.iosAppPath,
       networkTracingEnabled,
-    );
+      clearAppDataFirst,
+    });
+    let appLaunchedFresh = false;
     try {
-      try {
-        await startAgent();
-      } catch (err) {
-        if (!isRetryableAgentStartError(err)) throw err;
-        progress(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`);
-        // Let a transient agent-connection drop clear before the retry — an
-        // immediate re-attempt lands inside the same drop window (PILOT-282).
-        await new Promise((resolve) => setTimeout(resolve, AGENT_START_RETRY_DELAY_MS));
-        await startAgent();
-      }
+      ({ appLaunchedFresh } = await startAgentWithRetry(
+        startAgent,
+        (err) => progress(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`),
+        { delayMs: AGENT_START_RETRY_DELAY_MS },
+      ));
     } catch (err) {
       let message = err instanceof Error ? err.message : String(err);
       // No agent on the device and no APKs to install it from: say why the
@@ -755,14 +835,27 @@ export async function openDeviceSession(
     }
     progress('agent connected');
     phase('agent', 'complete', 'agent connected');
+    if (isIos && config.package) {
+      if (appLaunchedFresh) {
+        // The agent launched the app from wiped (or never-written) data: that
+        // is the startup launch, verified and probed like a fresh install's.
+        freshInstall = true;
+      } else if (freshInstall) {
+        // A runner that was already running never launched the app just
+        // installed under it.
+        await launchSimulatorApp(config, spec.serial);
+      }
+    }
 
     const launchPhase = opts.launchPhase ?? 'startup launch';
     if (config.package) {
       progress(`launching ${config.package}`);
       phase('launch', 'start', `launching ${config.package}`);
       try {
+        const appLaunched = earlyLaunch ? await earlyLaunch.launched : false;
         session.prepared = await launchConfiguredApp(session.context, launchPhase, {
           freshInstall,
+          ...(appLaunched ? { appLaunched } : {}),
           ...(opts.readinessAttempts !== undefined ? { readinessAttempts: opts.readinessAttempts } : {}),
         });
       } catch (err) {
@@ -783,10 +876,10 @@ export async function openDeviceSession(
     // that makes the first few tests unreasonably slow or time out.
     if (opts.freshDevice && config.package) {
       progress('warming up fresh emulator');
-      await device.waitForIdle();
+      await device.waitForIdle(WARMUP_IDLE_TIMEOUT_MS);
       await device.terminateApp(config.package);
       session.prepared = await launchConfiguredApp(session.context, 'emulator warmup launch');
-      await device.waitForIdle();
+      await device.waitForIdle(WARMUP_IDLE_TIMEOUT_MS);
     }
 
     return session;

@@ -1,5 +1,5 @@
 plugins {
-    id("com.android.application") version "9.5.0" apply false
+    id("com.android.application") version "9.5.1" apply false
     // AGP 9 compiles Kotlin itself (built-in Kotlin), so :app no longer applies
     // this plugin. Declaring it here only pins the Kotlin Gradle plugin AGP
     // uses above the version AGP bundles.

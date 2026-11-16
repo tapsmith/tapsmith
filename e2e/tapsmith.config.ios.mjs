@@ -6,6 +6,9 @@ export default defineConfig({
   app: "../test-app/build/Build/Products/Release-iphonesimulator/TapsmithTestApp.app",
   package: "dev.tapsmith.testapp",
   timeout: 10_000,
+  // Speeds UIKit animations up on the simulator, and exercises Tapsmith's
+  // setting and restore on every run (reduced-motion.ios.test.ts checks the setting).
+  reducedMotion: "reduce",
   retries: 0,
   screenshot: "only-on-failure",
   workers: 2,

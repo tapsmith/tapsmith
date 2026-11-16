@@ -621,6 +621,41 @@ function createAssertions(
     }
   };
 
+  /**
+   * Poll a single-element state or value matcher (PILOT-1198). The element
+   * must exist in both polarities, as in Playwright: a tick with no match
+   * answers `negated`, the one value that never settles the poll, so
+   * `expect(missing).not.toBeChecked()` waits out its timeout and fails
+   * instead of passing on `undefined?.checked !== true`. `missing` says
+   * whether the last tick found nothing, so the failure can say so.
+   */
+  const pollElement = async (
+    timeout: number,
+    test: (el: ElementInfo) => boolean,
+  ): Promise<{ result: boolean; missing: boolean }> => {
+    let missing = false;
+    const result = await poll(async () => {
+      const els = await resolveTick(handle, true);
+      missing = els.length === 0;
+      return missing ? negated : test(els[0]);
+    }, timeout, negated);
+    return { result, missing };
+  };
+
+  /** Fail a single-element matcher whose last tick matched nothing. */
+  const failMissing = async (expectation: string, timeout: number): Promise<never> => {
+    // An nth(i) past the end is a positional miss: name the index and the
+    // count, as an action does, rather than let it read as a selector miss.
+    const detail = await handle._positionalMissDetailNow();
+    const hint = await handle._locatorMissHelp({ waitedMs: timeout, positionalDetail: detail });
+    return fail(
+      `Expected element ${selectorDescription(handle)} ${negated ? "NOT " : ""}${expectation}, but no element matched${detail}${hint}`,
+    );
+  };
+
+  /** Whether a poll result fails the assertion in this polarity. */
+  const failed = (result: boolean): boolean => result === negated;
+
   const assertions: TapsmithAssertions = {
     get not(): TapsmithAssertions {
       return createAssertions(handle, !negated);
@@ -655,10 +690,8 @@ function createAssertions(
     async toBeEnabled(options) {
       const timeout = timeoutFor("toBeEnabled", options);
       const desc = selectorDescription(handle);
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        return els[0]?.enabled === true;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => el.enabled === true);
+      if (missing && failed(result)) await failMissing("to be enabled", timeout);
 
       if (!negated && !result) {
         fail(`Expected element ${desc} to be enabled, but it was not`);
@@ -685,14 +718,14 @@ function createAssertions(
       }
       const shown = typeof expected === "string" ? `"${expected}"` : String(expected);
       let lastText = "";
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          lastText = els[0].text;
-          return matchesExact(els[0].text, expected);
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        lastText = el.text;
+        return matchesExact(el.text, expected);
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: (negated ? "not " : "") + String(expected), actual: undefined };
+        await failMissing(`to have text ${shown}`, timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: String(expected), actual: lastText };
@@ -731,10 +764,8 @@ function createAssertions(
     async toBeChecked(options) {
       const timeout = timeoutFor("toBeChecked", options);
       const desc = selectorDescription(handle);
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        return els[0]?.checked === true;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => el.checked === true);
+      if (missing && failed(result)) await failMissing("to be checked", timeout);
 
       if (!negated && !result) {
         fail(`Expected element ${desc} to be checked, but it was not`);
@@ -749,10 +780,8 @@ function createAssertions(
     async toBeDisabled(options) {
       const timeout = timeoutFor("toBeDisabled", options);
       const desc = selectorDescription(handle);
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        return els.length > 0 && els[0].enabled === false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => el.enabled === false);
+      if (missing && failed(result)) await failMissing("to be disabled", timeout);
 
       if (!negated && !result) {
         fail(`Expected element ${desc} to be disabled, but it was not`);
@@ -774,14 +803,14 @@ function createAssertions(
       const timeout = timeoutFor("toBeEmpty", options);
       const desc = selectorDescription(handle);
       let lastText = "";
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          lastText = els[0].text;
-          return !els[0].text;
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        lastText = el.text;
+        return !el.text;
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: negated ? "not empty" : "(empty)", actual: undefined };
+        await failMissing("to be empty", timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: '(empty)', actual: lastText };
@@ -800,10 +829,8 @@ function createAssertions(
     async toBeFocused(options) {
       const timeout = timeoutFor("toBeFocused", options);
       const desc = selectorDescription(handle);
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        return els[0]?.focused === true;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => el.focused === true);
+      if (missing && failed(result)) await failMissing("to be focused", timeout);
 
       if (!negated && !result) {
         fail(`Expected element ${desc} to be focused, but it was not`);
@@ -829,14 +856,14 @@ function createAssertions(
         return;
       }
       let lastText = "";
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          lastText = els[0].text;
-          return matchesStringOrRegExp(els[0].text, expected);
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        lastText = el.text;
+        return matchesStringOrRegExp(el.text, expected);
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: `${negated ? "not " : ""}containing ${String(expected)}`, actual: undefined };
+        await failMissing(`to contain text ${String(expected)}`, timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: `containing ${String(expected)}`, actual: lastText };
@@ -887,16 +914,14 @@ function createAssertions(
       const timeout = timeoutFor("toHaveAttribute", options);
       const desc = selectorDescription(handle);
       let lastValue: unknown;
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          lastValue = (els[0] as unknown as Record<string, unknown>)[
-            name
-          ];
-          return lastValue === value;
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        lastValue = (el as unknown as Record<string, unknown>)[name];
+        return lastValue === value;
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: (negated ? "not " : "") + JSON.stringify(value), actual: undefined };
+        await failMissing(`to have attribute "${name}" = ${JSON.stringify(value)}`, timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: JSON.stringify(value), actual: JSON.stringify(lastValue) };
@@ -918,16 +943,16 @@ function createAssertions(
       const timeout = timeoutFor("toHaveAccessibleName", options);
       const desc = selectorDescription(handle);
       let lastName = "";
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          // The content description if set; else a text field's placeholder
-          // (PILOT-834); else the text.
-          lastName = elementAccessibleName(els[0]);
-          return matchesExact(lastName, name);
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        // The content description if set; else a text field's placeholder
+        // (PILOT-834); else the text.
+        lastName = elementAccessibleName(el);
+        return matchesExact(lastName, name);
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: (negated ? "not " : "") + String(name), actual: undefined };
+        await failMissing(`to have accessible name ${String(name)}`, timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: String(name), actual: lastName };
@@ -949,14 +974,14 @@ function createAssertions(
       const timeout = timeoutFor("toHaveAccessibleDescription", options);
       const desc = selectorDescription(handle);
       let lastDesc = "";
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          lastDesc = els[0].hint;
-          return matchesExact(lastDesc, description);
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        lastDesc = el.hint;
+        return matchesExact(lastDesc, description);
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: (negated ? "not " : "") + String(description), actual: undefined };
+        await failMissing(`to have accessible description ${String(description)}`, timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: String(description), actual: lastDesc };
@@ -979,16 +1004,15 @@ function createAssertions(
       const desc = selectorDescription(handle);
       const expected = normalizeRole(role);
       let lastRole = "";
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          // Use the role field from the agent if available, otherwise compute from className
-          lastRole =
-            els[0].role || classNameToRole(els[0].className);
-          return normalizeRole(lastRole) === expected;
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        // Use the role field from the agent if available, otherwise compute from className
+        lastRole = el.role || classNameToRole(el.className);
+        return normalizeRole(lastRole) === expected;
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: (negated ? "not " : "") + String(role), actual: undefined };
+        await failMissing(`to have role "${role}"`, timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: String(role), actual: lastRole };
@@ -1008,14 +1032,14 @@ function createAssertions(
       const timeout = timeoutFor("toHaveValue", options);
       const desc = selectorDescription(handle);
       let lastValue = "";
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          lastValue = els[0].text;
-          return els[0].text === value;
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        lastValue = el.text;
+        return el.text === value;
+      });
+      if (missing && failed(result)) {
+        handle._assertionResult = { expected: (negated ? "not " : "") + String(value), actual: undefined };
+        await failMissing(`to have value "${value}"`, timeout);
+      }
 
       if (!negated && !result) {
         handle._assertionResult = { expected: String(value), actual: lastValue };
@@ -1036,16 +1060,12 @@ function createAssertions(
     async toBeEditable(options) {
       const timeout = timeoutFor("toBeEditable", options);
       const desc = selectorDescription(handle);
-      const result = await poll(async () => {
-        const els = await resolveTick(handle, true);
-        if (els.length > 0) {
-          const isTextField =
-            els[0].role === "textfield" ||
-            EDITABLE_CLASSES.has(els[0].className);
-          return isTextField && els[0].enabled;
-        }
-        return false;
-      }, timeout, negated);
+      const { result, missing } = await pollElement(timeout, (el) => {
+        const isTextField =
+          el.role === "textfield" || EDITABLE_CLASSES.has(el.className);
+        return isTextField && el.enabled;
+      });
+      if (missing && failed(result)) await failMissing("to be editable", timeout);
 
       if (!negated && !result) {
         fail(`Expected element ${desc} to be editable, but it was not`);
@@ -1062,9 +1082,13 @@ function createAssertions(
       const requiredRatio = options?.ratio ?? 0;
       const desc = selectorDescription(handle);
       let lastRatio = 0;
+      let missing = false;
       const result = await poll(async () => {
         const els = await resolveTick(handle, true);
-        if (els.length > 0) {
+        // Unlike the other single-element matchers, a miss is an answer here:
+        // Playwright's not.toBeInViewport() passes when nothing matches.
+        missing = els.length === 0;
+        if (!missing) {
           lastRatio = els[0].viewportRatio ?? 0;
           if (requiredRatio > 0) {
             return lastRatio >= requiredRatio;
@@ -1073,6 +1097,10 @@ function createAssertions(
         }
         return false;
       }, timeout, negated);
+      if (missing && !negated && !result) {
+        handle._assertionResult = { expected: requiredRatio > 0 ? `ratio >= ${requiredRatio}` : 'in viewport', actual: undefined };
+        await failMissing(`to be in viewport${requiredRatio > 0 ? ` with ratio >= ${requiredRatio}` : ""}`, timeout);
+      }
 
       if (!negated && !result) {
         const ratioInfo =
@@ -1873,6 +1901,56 @@ function createWebViewAssertions(
     if (caughtErr !== undefined) throw caughtErr;
   };
 
+  /**
+   * Poll a value matcher with one strict, non-waiting read per tick (PILOT-227):
+   * a tick resolves once — throwing on an ambiguous match — instead of calling
+   * the locator's auto-waiting reader, which would block a whole tick for the
+   * locator timeout and ignore the assertion's own `timeout`.
+   *
+   * The element must exist in both polarities, as in Playwright (PILOT-1198):
+   * a tick that matched nothing, or whose read failed (a transport hiccup,
+   * retried), answers `negated`, the one value that never settles the poll —
+   * so `.not.toHaveText("x")` on a missing element fails instead of passing.
+   * A strict violation is an error, not a "keep polling" state.
+   */
+  const pollValue = async (
+    timeout: number,
+    valueJs: string,
+    test: (value: unknown) => boolean,
+  ): Promise<{ result: boolean; last: "found" | "missing" | Error }> => {
+    let last: "found" | "missing" | Error = "missing";
+    const result = await poll(
+      async () => {
+        try {
+          const tick = await locator._handle._valueTickLocator(locator, valueJs);
+          if (!tick.found) {
+            last = "missing";
+            return negated;
+          }
+          last = "found";
+          return test(tick.value);
+        } catch (err) {
+          if (isStrictModeViolation(err)) throw err;
+          last = err instanceof Error ? err : new Error(String(err));
+          return negated;
+        }
+      },
+      timeout,
+      negated,
+    );
+    return { result, last };
+  };
+
+  /** Fail a value matcher: `got` describes what the last found tick read. */
+  const failValue = (expectation: string, last: "found" | "missing" | Error, got: string): never => {
+    const reason = last === "missing"
+      ? "but no element matched"
+      : last instanceof Error
+        ? `but the element could not be read (${last.message})`
+        : `but got ${got}`;
+    return fail(`Expected "${locator._selector}" ${negated ? 'not ' : ''}${expectation}, ${reason}`);
+  };
+
   /** toBeHidden(), and toBeVisible({ visible: false }) with `via` naming it. */
   const expectHidden = async (timeout: number, via = ""): Promise<void> => {
     const result = await poll(
@@ -1945,31 +2023,15 @@ function createWebViewAssertions(
         assertWebViewTextExpected(expected, 'toHaveText');
         const timeout = timeoutFor("toHaveText", options);
         let lastText = '';
-        const result = await poll(
-          // Single-tick strict read (PILOT-227): resolves once per tick —
-          // throwing on an ambiguous match — instead of calling the locator's
-          // auto-waiting textContent(), which would block a whole tick for
-          // the locator timeout and ignore the assertion's own `timeout`.
-          async () => {
-            try {
-              const tick = await locator._handle._valueTickLocator(locator, 'el.textContent');
-              if (!tick.found) return false;
-              lastText = (tick.value as string) ?? '';
-              return matchesExact(lastText, expected);
-            } catch (err) {
-              // Strict mode: an ambiguous locator is an error, not a
-              // "keep polling" state. Transport hiccups keep polling.
-              if (isStrictModeViolation(err)) throw err;
-              return false;
-            }
-          },
-          timeout,
-          negated,
-        );
+        const { result, last } = await pollValue(timeout, 'el.textContent', (value) => {
+          lastText = (value as string) ?? '';
+          return matchesExact(lastText, expected);
+        });
         if (result === negated) {
-          fail(
-            `Expected "${locator._selector}" ${negated ? 'not ' : ''}to have text ${typeof expected === 'string' ? `"${expected}"` : String(expected)}, ` +
-            `but got "${lastText}"`,
+          failValue(
+            `to have text ${typeof expected === 'string' ? `"${expected}"` : String(expected)}`,
+            last,
+            `"${lastText}"`,
           );
         }
       });
@@ -1980,26 +2042,12 @@ function createWebViewAssertions(
         assertWebViewTextExpected(expected, 'toContainText');
         const timeout = timeoutFor("toContainText", options);
         let lastText = '';
-        const result = await poll(
-          async () => {
-            try {
-              const tick = await locator._handle._valueTickLocator(locator, 'el.textContent');
-              if (!tick.found) return false;
-              lastText = (tick.value as string) ?? '';
-              return matchesStringOrRegExp(lastText, expected);
-            } catch (err) {
-              if (isStrictModeViolation(err)) throw err;
-              return false;
-            }
-          },
-          timeout,
-          negated,
-        );
+        const { result, last } = await pollValue(timeout, 'el.textContent', (value) => {
+          lastText = (value as string) ?? '';
+          return matchesStringOrRegExp(lastText, expected);
+        });
         if (result === negated) {
-          fail(
-            `Expected "${locator._selector}" ${negated ? 'not ' : ''}to contain text "${expected}", ` +
-            `but got "${lastText}"`,
-          );
+          failValue(`to contain text "${expected}"`, last, `"${lastText}"`);
         }
       });
     },
@@ -2008,29 +2056,12 @@ function createWebViewAssertions(
       return traceAssertion('toHaveAttribute', async () => {
         const timeout = timeoutFor("toHaveAttribute", options);
         let lastValue: string | null = null;
-        const result = await poll(
-          async () => {
-            try {
-              const tick = await locator._handle._valueTickLocator(
-                locator,
-                `el.getAttribute(${JSON.stringify(name)})`,
-              );
-              if (!tick.found) return false;
-              lastValue = (tick.value as string | null) ?? null;
-              return lastValue === value;
-            } catch (err) {
-              if (isStrictModeViolation(err)) throw err;
-              return false;
-            }
-          },
-          timeout,
-          negated,
-        );
+        const { result, last } = await pollValue(timeout, `el.getAttribute(${JSON.stringify(name)})`, (v) => {
+          lastValue = (v as string | null) ?? null;
+          return lastValue === value;
+        });
         if (result === negated) {
-          fail(
-            `Expected "${locator._selector}" ${negated ? 'not ' : ''}to have attribute "${name}" = "${value}", ` +
-            `but got "${lastValue}"`,
-          );
+          failValue(`to have attribute "${name}" = "${value}"`, last, `"${lastValue}"`);
         }
       });
     },
@@ -2039,26 +2070,12 @@ function createWebViewAssertions(
       return traceAssertion('toHaveValue', async () => {
         const timeout = timeoutFor("toHaveValue", options);
         let lastValue = '';
-        const result = await poll(
-          async () => {
-            try {
-              const tick = await locator._handle._valueTickLocator(locator, 'el.value');
-              if (!tick.found) return false;
-              lastValue = (tick.value as string) ?? '';
-              return lastValue === expected;
-            } catch (err) {
-              if (isStrictModeViolation(err)) throw err;
-              return false;
-            }
-          },
-          timeout,
-          negated,
-        );
+        const { result, last } = await pollValue(timeout, 'el.value', (v) => {
+          lastValue = (v as string) ?? '';
+          return lastValue === expected;
+        });
         if (result === negated) {
-          fail(
-            `Expected "${locator._selector}" ${negated ? 'not ' : ''}to have value "${expected}", ` +
-            `but got "${lastValue}"`,
-          );
+          failValue(`to have value "${expected}"`, last, `"${lastValue}"`);
         }
       });
     },

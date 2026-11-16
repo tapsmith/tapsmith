@@ -34,14 +34,19 @@ interface DevicePaneProps {
   mirrorLoading: boolean
   platform?: 'android' | 'ios'
   interactive: boolean
+  /** The mirrored device's lock (the header toggle; the single view). */
   locked: boolean
   force: boolean
+  /** One "All" grid tile's lock: each follows its own worker's run (PILOT-1179). */
+  tileLock: (workerId: number) => { interactive: boolean, force: boolean }
   onToggleLock: () => void
   send: (msg: ClientMessage) => void
   /** Element pick mode on the live mirror (single-mirror view only). */
   pickMode: boolean
   onTogglePick: () => void
   pickAvailable: boolean
+  /** A test runs on the mirrored device and the mirror is locked: picking waits for it. */
+  pickPaused: boolean
   pickDpr: number
   pickHoverBounds: Bounds | null
   pickMatchBounds: Bounds[]
@@ -177,11 +182,13 @@ export function DevicePane({
   interactive,
   locked,
   force,
+  tileLock,
   onToggleLock,
   send,
   pickMode,
   onTogglePick,
   pickAvailable,
+  pickPaused,
   pickDpr,
   pickHoverBounds,
   pickMatchBounds,
@@ -246,7 +253,9 @@ export function DevicePane({
           aria-label={pickMode ? 'Picking element — click to cancel' : 'Pick an element to get a locator'}
           title={!pickAvailable && deviceViewMode === 'all' && workers.length > 1
             ? 'Select a device tab to pick'
-            : pickMode ? 'Picking element — click to cancel' : 'Pick an element to get a locator'}
+            : pickPaused
+              ? 'Locked while a test runs on this device. Unlock it to pick anyway, or pick from the trace\'s screenshot.'
+              : pickMode ? 'Picking element — click to cancel' : 'Pick an element to get a locator'}
         >
           <Focus size={15} aria-hidden="true" />
         </button>
@@ -305,8 +314,7 @@ export function DevicePane({
                 registerCanvas={registerCanvas}
                 unregisterCanvas={unregisterCanvas}
                 platform={v.platform}
-                interactive={interactive}
-                force={force}
+                {...tileLock(v.workerId)}
                 send={send}
               />
             ))}

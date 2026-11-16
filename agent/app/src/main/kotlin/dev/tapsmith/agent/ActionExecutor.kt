@@ -62,9 +62,6 @@ class ActionExecutor(
         /** Upper bound on a swipe's settle, for a scroll view that keeps moving. */
         private const val SWIPE_SETTLE_MAX_MS = 3000L
 
-        /** How long each press of a double tap (and a retried tap) is held. */
-        private const val TAP_PRESS_MS = 50L
-
         /** Time reserved after a focusing tap for the work that follows it
          *  (setting or clearing text and its idle waits), so the tap is not
          *  made when that work could not finish before the daemon gives up. */
@@ -105,7 +102,11 @@ class ActionExecutor(
      * passes [resolvedBounds] from a resolve that just completed (WaitEngine
      * has already settle-checked them), the stability wait is skipped —
      * repeating the check would only stack more blocking accessibility
-     * round-trips (PILOT-278).
+     * round-trips (PILOT-278). An element addressed by id passes
+     * [findSample], the bounds the find that resolved it read: one read at
+     * least two frames after it that shows the same bounds is enough
+     * ([FindSampleStability]); bounds that moved fall back to the polling
+     * check.
      *
      * A tap lands on whatever is on top, so [OcclusionGuard] picks the point:
      * the visible part of an element the keyboard half covers, and never an
@@ -126,14 +127,23 @@ class ActionExecutor(
         budget: ActionBudget,
         expected: TargetIdentity?,
         followUpMs: Long = 0,
+        findSample: FindSample<Rect>? = null,
     ) {
         try {
             // Bounds from before the keyboard went away are stale: the screen
             // lays itself out again without it.
             val keyboardPutAway = occlusionGuard.putKeyboardAwayFirst(element, budget)
             val trusted = resolvedBounds?.takeIf { !it.isEmpty && !keyboardPutAway }
+            val sample = findSample?.takeIf { trusted == null && !keyboardPutAway }
             val stableStart = SystemClock.uptimeMillis()
-            val bounds = trusted ?: waitForStableBounds(element)
+            val check = sample?.let { checkFindSample(element, it) }
+            val bounds =
+                trusted ?: when (check) {
+                    is SampleCheck.Stable -> check.bounds
+                    // The read that showed the move is the polling check's first.
+                    is SampleCheck.Moved -> waitForStableBounds(element, first = check.current)
+                    null -> waitForStableBounds(element)
+                }
             val stableMs = SystemClock.uptimeMillis() - stableStart
             val planStart = SystemClock.uptimeMillis()
             val point = planTouchPoint(element, bounds, budget, expected, followUpMs)
@@ -142,7 +152,8 @@ class ActionExecutor(
             clickAt(point, "tap element")
             Log.d(
                 TAG,
-                "tap phases: stableBounds=${stableMs}ms (resolvedBoundsReused=${trusted != null}) " +
+                "tap phases: stableBounds=${stableMs}ms (resolvedBoundsReused=${trusted != null}, " +
+                    "findSample=${check?.javaClass?.simpleName ?: "none"}) " +
                     "occlusion=${planMs}ms inject=${SystemClock.uptimeMillis() - injectStart}ms",
             )
         } catch (e: StaleObjectException) {
@@ -173,9 +184,10 @@ class ActionExecutor(
     private fun waitForStableBounds(
         element: UiObject2,
         timeoutMs: Long = STABLE_BOUNDS_TIMEOUT_MS,
+        first: Rect? = null,
     ): Rect {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
-        var prev = element.visibleBounds
+        var prev = first ?: element.visibleBounds
         while (SystemClock.uptimeMillis() < deadline) {
             CommandCancellation.sleep(STABLE_BOUNDS_POLL_MS)
             val readStart = SystemClock.uptimeMillis()
@@ -196,6 +208,22 @@ class ActionExecutor(
         // rather than failing.
         return prev
     }
+
+    /**
+     * One read of [element]'s bounds, at least two frames after the find that
+     * read [sample], compared with it ([FindSampleStability]).
+     */
+    private fun checkFindSample(
+        element: UiObject2,
+        sample: FindSample<Rect>,
+    ): SampleCheck<Rect> =
+        FindSampleStability.check(
+            sample,
+            isEmpty = { it.isEmpty },
+            now = SystemClock::uptimeMillis,
+            sleep = CommandCancellation::sleep,
+            read = { element.visibleBounds },
+        )
 
     /**
      * Tap at specific screen coordinates.
@@ -273,8 +301,8 @@ class ActionExecutor(
     /**
      * Tap at a planned point. A refused injection (the input dispatcher
      * dropping the event during a window transition on a loaded device) is
-     * retried once, with a shorter press, at the same point — never by the
-     * node click, which would ignore what covers the element.
+     * retried once at the same point — never by the node click, which would
+     * ignore what covers the element.
      */
     private fun clickAt(
         point: TouchPlan.Point,
@@ -282,7 +310,7 @@ class ActionExecutor(
     ) {
         if (input.click(point.x, point.y)) return
         Log.w(TAG, "$what: click at (${point.x}, ${point.y}) was refused; retrying once")
-        if (!input.click(point.x, point.y, TAP_PRESS_MS)) {
+        if (!input.click(point.x, point.y)) {
             throw ActionFailedException("Failed to $what at (${point.x}, ${point.y})")
         }
     }
@@ -639,24 +667,167 @@ class ActionExecutor(
         direction: String,
         speed: Int = 5000,
         distance: Double = 0.5,
-    ) = swipeRegion(HierarchyAttributes.Box(0, 0, device.displayWidth, device.displayHeight), direction, speed, distance)
+        drag: Boolean = false,
+    ) = swipeRegion(HierarchyAttributes.Box(0, 0, device.displayWidth, device.displayHeight), direction, speed, distance, drag)
 
     /**
      * Swipe inside [region] (screen pixels) in a given direction, through its
      * centre ([SwipeGeometry]). `scrollIntoView()` sends the scroll container
      * it picked (PILOT-934).
+     *
+     * With [drag] (`scrollIntoView()`, PILOT-973) the finger rests at the end
+     * before it lifts ([GestureInjector.stepDrag]), so nothing flings, and it
+     * returns as soon as the finger lifts: there is no fling to settle, and
+     * the caller reads the screen next. Otherwise the swipe flings and waits
+     * for the fling to come to rest ([settleAfterSwipe]).
      */
     internal fun swipeRegion(
         region: HierarchyAttributes.Box,
         direction: String,
         speed: Int = 5000,
         distance: Double = 0.5,
+        drag: Boolean = false,
     ) {
         val p = SwipeGeometry.points(region, direction, distance)
         val steps = (speed / 100).coerceIn(5, 100)
+        if (drag) {
+            // A refused drag moved nothing: report it, rather than let
+            // scrollIntoView() read the unchanged screen as the end of the list.
+            if (!input.drag(p.fromX, p.fromY, p.toX, p.toY, steps)) {
+                throw ActionFailedException("Failed to swipe $direction: the device refused the drag")
+            }
+            return
+        }
         input.swipe(p.fromX, p.fromY, p.toX, p.toY, steps)
         settleAfterSwipe(vertical = p.fromX == p.toX)
     }
+
+    // ─── scrollIntoView() steps (PILOT-998) ───
+
+    /** The whole screen, as a region. */
+    internal fun screenBox() = HierarchyAttributes.Box(0, 0, device.displayWidth, device.displayHeight)
+
+    /**
+     * A scroll step's drag inside [region] ([SwipeGeometry]): vertical ones
+     * are [GestureInjector.scrollStepDrag]s, which stop dead; a sideways one
+     * lifts ([GestureInjector.stepDrag]), so a pager still turns its page.
+     * The scroll events of the view under the drag's start point are
+     * recorded from the drag's start until [endScrollStep].
+     */
+    internal fun scrollStepDrag(
+        region: HierarchyAttributes.Box,
+        direction: String,
+        distance: Double,
+    ) {
+        val p = SwipeGeometry.points(region, direction, distance)
+        stepPoint = p.fromX to p.fromY
+        val vertical = p.fromX == p.toX
+        val ok =
+            if (vertical) {
+                input.scrollStepDrag(p.fromX, p.fromY, p.toX, p.toY, GestureInjector.STEP_DRAG_MAX_MOVES)
+            } else {
+                input.drag(p.fromX, p.fromY, p.toX, p.toY, GestureInjector.STEP_DRAG_MAX_MOVES)
+            }
+        if (!ok) throw ActionFailedException("Failed to swipe $direction: the device refused the drag")
+    }
+
+    /** Stop recording a step's scroll events. */
+    internal fun endScrollStep() {
+        stepPoint = null
+    }
+
+    /**
+     * Whether the view under the last step drag's start point scrolled at or
+     * after [sinceUptime]; null when scroll events are not being received.
+     */
+    internal fun stepScrolledSince(sinceUptime: Long): Boolean? = if (listening) lastStepScrollAt >= sinceUptime else null
+
+    /** Wait until no accessibility event has arrived for [quietMs], at most [capMs]. */
+    internal fun waitForQuiet(
+        quietMs: Long,
+        capMs: Long,
+    ) {
+        try {
+            instrumentation.uiAutomation.waitForIdle(quietMs, capMs)
+        } catch (_: java.util.concurrent.TimeoutException) {
+            // A screen that never goes quiet: read it anyway.
+        }
+    }
+
+    /**
+     * The scroll container a step drags in when the SDK sent none
+     * ([ScrollContainerPick]): one walk of the shown nodes of every window.
+     * Null when nothing on screen scrolls.
+     */
+    internal fun pickScrollContainer(): HierarchyAttributes.Box? {
+        val automation = instrumentation.uiAutomation
+        val displayWidth = device.displayWidth
+        val displayHeight = device.displayHeight
+        val windows = mutableListOf<HierarchyAttributes.Box>()
+        val candidates = mutableListOf<ScrollContainerPick.Candidate>()
+        val covers = mutableListOf<HierarchyAttributes.Box>()
+        var order = 0
+        for (window in automation.windows) {
+            val root = window.root ?: continue
+            val wr = Rect()
+            window.getBoundsInScreen(wr)
+            val windowBox = HierarchyAttributes.Box(wr.left, wr.top, wr.right, wr.bottom)
+            if (NonAppNodes.excludesWindow(window.type, window.isFocused, window.isActive, windowBox, displayWidth, displayHeight) {
+                    root.packageName
+                }
+            ) {
+                covers += windowBox
+                continue
+            }
+            val index = windows.size
+            windows += windowBox
+
+            // Depth first, in drawing order; each node with the clip and the
+            // orders of its scrolling ancestors.
+            data class Visit(
+                val node: android.view.accessibility.AccessibilityNodeInfo,
+                val clip: HierarchyAttributes.Box?,
+                val ancestors: Set<Int>,
+            )
+            val stack = ArrayDeque<Visit>()
+            stack.addLast(Visit(root, null, emptySet()))
+            while (stack.isNotEmpty()) {
+                val (node, clip, ancestors) = stack.removeLast()
+                val myOrder = order++
+                var childClip = clip
+                var childAncestors = ancestors
+                if (node.isScrollable) {
+                    val r = Rect()
+                    node.getBoundsInScreen(r)
+                    val b = HierarchyAttributes.Box(r.left, r.top, r.right, r.bottom)
+                    val shown = if (clip != null) ScrollContainerPick.intersect(b, clip) else b
+                    if (shown != null) {
+                        candidates += ScrollContainerPick.Candidate(index, shown, myOrder, ancestors)
+                        childClip = shown
+                    }
+                    childAncestors = ancestors + myOrder
+                }
+                for (i in node.childCount - 1 downTo 0) {
+                    val child = node.getChild(i) ?: continue
+                    if (child.isVisibleToUser) stack.addLast(Visit(child, childClip, childAncestors))
+                }
+            }
+        }
+        return ScrollContainerPick.pick(screenBox(), windows, candidates, covers)
+    }
+
+    /** Where the current step's drag started, while one runs. */
+    @Volatile private var stepPoint: Pair<Int, Int>? = null
+
+    /** Arrival (uptime) of the last scroll event from the view under [stepPoint]. */
+    @Volatile private var lastStepScrollAt = 0L
+
+    /** Arrival (uptime) of the last event that may mean the screen changed. */
+    @Volatile var lastChangeAt = 0L
+        private set
+
+    /** Whether the accessibility listener is installed. */
+    @Volatile private var listening = false
 
     /**
      * Arrival time (uptime) of the last TYPE_VIEW_SCROLLED event that may be
@@ -679,14 +850,38 @@ class ActionExecutor(
         // stale values once this is installed).
         try {
             instrumentation.uiAutomation.setOnAccessibilityEventListener(::onAccessibilityEvent)
+            listening = true
         } catch (e: Exception) {
             Log.w(TAG, "Could not listen for scroll events; swipes will not wait for flings to settle", e)
         }
     }
 
     private fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (event.eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            -> {
+                lastChangeAt = SystemClock.uptimeMillis()
+                return
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {}
+            else -> return
+        }
         val now = SystemClock.uptimeMillis()
+        lastChangeAt = now
+        // A scroll step's "it moved" counts only the scroll view under the
+        // finger, not another view that scrolled meanwhile (a carousel).
+        val point = stepPoint
+        if (point != null) {
+            try {
+                val r = Rect()
+                event.source?.getBoundsInScreen(r)
+                if (r.contains(point.first, point.second)) lastStepScrollAt = now
+            } catch (_: Exception) {
+                // The view went away mid-event: not counted.
+            }
+        }
         val hasDeltas = android.os.Build.VERSION.SDK_INT >= 28
         if (!hasDeltas || SwipeSettle.isAlongAxis(event.scrollDeltaX, event.scrollDeltaY, vertical = true)) {
             lastVerticalScrollAt = now
@@ -923,7 +1118,7 @@ class ActionExecutor(
                 }
             // Both presses and the gap between them must finish before the
             // daemon gives up, or the second tap lands in the next step.
-            val gestureMs = (if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS) + 2 * TAP_PRESS_MS
+            val gestureMs = if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS
             val point = planGesturePoint(element, bounds, budget, expected, "double tap", reserveMs = gestureMs)
             doubleTapCoordinates(point.x, point.y, intervalMs)
         } catch (e: StaleObjectException) {
@@ -939,6 +1134,9 @@ class ActionExecutor(
 
     /**
      * Double-tap at specific screen coordinates with tightly controlled timing.
+     * Each tap is released as soon as it presses, as a single tap is: React
+     * Native's double-tap handlers landed 20 of 20 pairs with no hold, the same
+     * as with the 50 ms presses the pairs used to hold.
      */
     fun doubleTapCoordinates(
         x: Int,
@@ -946,9 +1144,9 @@ class ActionExecutor(
         intervalMs: Long = DOUBLE_TAP_INTERVAL_MS,
     ) {
         val interval = if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS
-        if (input.click(x, y, TAP_PRESS_MS)) {
+        if (input.click(x, y)) {
             SystemClock.sleep(interval)
-            if (input.click(x, y, TAP_PRESS_MS)) return
+            if (input.click(x, y)) return
             // First tap already landed — complete the gesture with one more
             // try rather than leaving a lone single tap behind.
             if (input.click(x, y)) return

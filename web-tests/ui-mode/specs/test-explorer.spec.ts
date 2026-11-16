@@ -7,6 +7,7 @@ import {
   twoFileTree,
   twoProjectTree,
 } from "../messages/scenarios.js"
+import { projectNode } from "../messages/tree.js"
 
 test.describe("Test explorer", () => {
   test("renders the tree from a test-tree message", async ({ app, explorer }) => {
@@ -185,6 +186,72 @@ test.describe("Test explorer", () => {
       await expect(explorer.statusFilterCount("Fail")).toHaveText("1")
       await expect(explorer.statusFilterCount("Skip")).toHaveText("1")
     })
+
+    // PILOT-1178. Rows used to flash red on any running → failed change, and a
+    // parent row is recomputed from all its children: running a passing test
+    // beside an earlier failure took the file and describe rows from running to
+    // failed, so they flashed as if the test just run had failed. The flash is
+    // gone; the status icon carries the result.
+    test("no row flashes when a passing test runs beside an earlier failure", async ({ app, explorer, page }) => {
+      const ui = app
+      await explorer.expandAll()
+
+      ui.send({
+        type: "test-status",
+        fullName: "Gestures screen > double tap registers double tap gesture",
+        filePath: GESTURES_FILE,
+        status: "failed",
+        error: "expected true to be false",
+      })
+      await expect(explorer.node("gestures.test.ts")).toHaveAttribute("data-status", "failed")
+
+      const recorded = () =>
+        page.evaluate(() => (window as unknown as { __animations: { name: string; onRow: boolean }[] }).__animations)
+
+      // Record every CSS animation that starts from here on. `animationstart`
+      // bubbles, so one capture listener sees rows and their descendants alike.
+      await page.evaluate(() => {
+        const w = window as unknown as { __animations: { name: string; onRow: boolean }[] }
+        w.__animations = []
+        document.addEventListener(
+          "animationstart",
+          (e) => {
+            const target = e.target as Element
+            w.__animations.push({ name: e.animationName, onRow: target.getAttribute("role") === "treeitem" })
+          },
+          true,
+        )
+      })
+
+      const fullName = "Gestures screen > long press registers long press"
+      // The message sequence the UI server sends for a single-test run.
+      ui.send({ type: "run-start", fileCount: 1, filePath: GESTURES_FILE, testFilter: fullName })
+      ui.send({ type: "file-status", filePath: GESTURES_FILE, status: "running" })
+      ui.send({ type: "test-start", fullName, filePath: GESTURES_FILE })
+      await expect(explorer.node("long press registers long press")).toHaveAttribute("data-status", "running")
+      await expect(explorer.node("gestures.test.ts")).toHaveAttribute("data-status", "running")
+      // Control: the running spinner's `spin` reaches the recorder, so an empty
+      // list below means no row animated, not that nothing was recorded.
+      await expect.poll(async () => (await recorded()).map((a) => a.name)).toContain("spin")
+
+      ui.send({ type: "test-status", fullName, filePath: GESTURES_FILE, status: "passed", duration: 10 })
+      ui.send({ type: "file-status", filePath: GESTURES_FILE, status: "done" })
+      ui.send({ type: "run-end", status: "passed", duration: 10, passed: 1, failed: 0, skipped: 0 })
+
+      await expect(explorer.node("long press registers long press")).toHaveAttribute("data-status", "passed")
+      // The earlier failure still decides the parents' status...
+      await expect(explorer.node("gestures.test.ts")).toHaveAttribute("data-status", "failed")
+      await expect(explorer.node("Gestures screen")).toHaveAttribute("data-status", "failed")
+
+      // ...but no row animated on the way there.
+      // `animationstart` is dispatched on the frame after the class change, so
+      // let two frames pass before reading what the recorder saw.
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      )
+      const rowAnimations = (await recorded()).filter((a) => a.onRow)
+      expect(rowAnimations).toEqual([])
+    })
   })
 
   test.describe("projects", () => {
@@ -239,45 +306,26 @@ test.describe("Test explorer", () => {
     await expect(explorer.nodesOfType("file")).toHaveCount(1)
   })
 
-  test.describe("Declared isolation", () => {
-    test("shows a badge only for nodes that declare a reset policy or saved state", async ({ ui, explorer }) => {
-      const tree = singleFileTree()
-      const file = tree[0]
-      // The suite opts into per-test restarts; one test restores saved state.
-      const suite = file.children!.find((n) => n.type === "suite")!
-      suite.use = { appReset: "restart", appResetScope: "test" }
-      const stateTest = suite.children![0]
-      stateTest.use = { appReset: "restart", appResetScope: "test", appState: "./tapsmith-results/auth.tar.gz" }
+  test("shows no reset-policy chip on any row, even where use declares one", async ({ ui, explorer }) => {
+    // A declared reset policy is configuration, not run state: the tree does
+    // not badge it on any row (the trace's Metadata tab shows the isolation a
+    // test actually ran under). The devices badge, which reads the same
+    // `use`, still shows where it is declared.
+    const files = singleFileTree()
+    const file = files[0]
+    file.use = { appReset: "clear" }
+    const suite = file.children!.find((n) => n.type === "suite")!
+    suite.use = { appReset: "restart", appResetScope: "test" }
+    suite.children![0].use = { appReset: "restart", appResetScope: "test", appState: "./tapsmith-results/auth.tar.gz" }
+    suite.children!.find((n) => n.name === "swipe registers swipe")!.use = { appResetScope: "file" }
+    ui.seed(idleSeed([projectNode("pair", files, { use: { devices: 2, deviceNames: ["alice", "bob"], appReset: "warm", appState: "" } })]))
+    await ui.open()
+    await explorer.expandAllButton.click()
 
-      ui.seed(idleSeed(tree))
-      await ui.open()
-      await explorer.expandAllButton.click()
-
-      await expect(explorer.isolationFor("Gestures screen")).toHaveText("restart / test")
-      await expect(explorer.isolationFor("double tap registers double tap gesture")).toHaveText("state / test")
-      await expect(explorer.isolationFor("double tap registers double tap gesture")).toHaveAttribute("title", /Restores saved app state/)
-      // The file itself declares nothing — no badge, the tree stays quiet by default.
-      await expect(explorer.isolationFor("gestures.test.ts")).toHaveCount(0)
-      await expect(explorer.isolationFor("smoke")).toHaveCount(0)
-    })
-
-    test("a scope declared on its own gets a badge too", async ({ ui, explorer }) => {
-      // The common form: `test.use({ appResetScope: "test" })` keeps the
-      // configured mode (auto) and only asks for a reset before every test.
-      const tree = singleFileTree()
-      const suite = tree[0].children!.find((n) => n.type === "suite")!
-      suite.use = { appResetScope: "test" }
-      for (const child of suite.children!) child.use = { appResetScope: "test" }
-
-      ui.seed(idleSeed(tree))
-      await ui.open()
-      await explorer.expandAllButton.click()
-
-      await expect(explorer.isolationFor("Gestures screen")).toHaveText("per test")
-      await expect(explorer.isolationFor("Gestures screen")).toHaveAttribute("title", /Reset before every test/)
-      await expect(explorer.isolationFor("swipe registers swipe")).toHaveText("per test")
-      // Undeclared nodes still get nothing.
-      await expect(explorer.isolationFor("smoke")).toHaveCount(0)
-    })
+    await expect(explorer.devicesFor("[pair]")).toHaveText(/alice · bob/)
+    for (const name of ["[pair]", "gestures.test.ts", "Gestures screen", "double tap registers double tap gesture", "swipe registers swipe"]) {
+      await expect(explorer.node(name)).toBeVisible()
+      await expect(explorer.node(name)).not.toContainText(/clear|restart|warm|state|per test|per file/)
+    }
   })
 })

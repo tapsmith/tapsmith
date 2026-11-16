@@ -7,18 +7,16 @@
  * (placeholder "Your name") and the label-less "Nickname" field.
  */
 import { beforeEach, describe, expect, test } from "tapsmith"
-import { openScreen } from "../utils/app-reset.js"
 import { TextMatchingScreen } from "../screens/text-matching.screen.js"
 
 describe("getByRole name falls back to the placeholder (PILOT-834)", () => {
   // Tests type into the fields, so each needs a fresh app state.
-  test.use({ appResetScope: "test" })
+  test.use({ appResetScope: "test", appResetRoute: "/text-matching" })
 
   let screen: TextMatchingScreen
 
   beforeEach(async ({ device }) => {
     screen = new TextMatchingScreen(device)
-    await openScreen(device, "/text-matching")
   })
 
   test("a field with no label is found, and typed into, by its placeholder name", async ({ device }) => {

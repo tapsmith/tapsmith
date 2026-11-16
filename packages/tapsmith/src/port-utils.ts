@@ -6,7 +6,8 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createServer } from 'node:net';
+import { lookup } from 'node:dns/promises';
+import * as net from 'node:net';
 
 /**
  * Pick a free ephemeral TCP port by binding `0` on loopback, reading the
@@ -15,7 +16,7 @@ import { createServer } from 'node:net';
  */
 export async function pickFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    const server = createServer();
+    const server = net.createServer();
     server.unref();
     server.on('error', reject);
     server.listen(0, '127.0.0.1', () => {
@@ -29,6 +30,54 @@ export async function pickFreePort(): Promise<number> {
       }
     });
   });
+}
+
+/**
+ * Whether every address `host:port` resolves to refuses a TCP connection:
+ * nothing listens there, so there is no daemon to wait for. A gRPC readiness
+ * wait cannot say that — it retries until its deadline, a full second spent
+ * on every start without a daemon.
+ *
+ * Only a refusal from every address counts: `localhost` can resolve to `::1`
+ * before `127.0.0.1`, and the daemon listens on `127.0.0.1` alone. Anything
+ * else — a connection, no answer within `timeoutMs`, an address that does not
+ * resolve within it, a port out of range — is `false`, and the caller asks
+ * gRPC as before.
+ */
+export async function connectionRefused(address: string, timeoutMs = 500): Promise<boolean> {
+  const colon = address.lastIndexOf(':');
+  const port = Number(address.slice(colon + 1));
+  const host = address.slice(0, colon).replace(/^\[(.*)\]$/, '$1');
+  if (colon <= 0 || !Number.isInteger(port) || port <= 0 || port > 65535) return false;
+  let addresses: string[];
+  let lookupTimer: NodeJS.Timeout | undefined;
+  try {
+    // A slow resolver must not hold the start up past the connect budget.
+    const resolved = await Promise.race([
+      lookup(host, { all: true }),
+      new Promise<never>((_, reject) => {
+        lookupTimer = setTimeout(() => reject(new Error('lookup timed out')), timeoutMs);
+      }),
+    ]);
+    addresses = resolved.map((a) => a.address);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(lookupTimer);
+  }
+  if (addresses.length === 0) return false;
+  const refused = await Promise.all(addresses.map((ip) => new Promise<boolean>((resolve) => {
+    const socket = net.connect({ host: ip, port });
+    const done = (result: boolean): void => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    socket.once('connect', () => done(false));
+    socket.once('error', (err: NodeJS.ErrnoException) => done(err.code === 'ECONNREFUSED'));
+  })));
+  return refused.every(Boolean);
 }
 
 const DIM = '\x1b[2m';

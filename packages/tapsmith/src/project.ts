@@ -186,6 +186,7 @@ const USE_KEY_SCOPE = {
   devices: 'run',
   appReset: 'run',
   appResetScope: 'run',
+  appResetRoute: 'run',
   appResetColdEvery: 'run',
   baseURL: 'run',
   extraHTTPHeaders: 'run',

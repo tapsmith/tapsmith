@@ -43,6 +43,8 @@ let config: TapsmithConfig | undefined;
 let sessions: DeviceSession[] = [];
 let rootGrep: RegExp[] | undefined;
 let rootGrepInvert: RegExp[] | undefined;
+/** `InitMessage.networkApisInRun`, for every file this worker runs. */
+let networkApisInRun = false;
 
 function send(msg: WorkerToMainMessage): void {
   if (process.send) {
@@ -77,8 +79,10 @@ async function handleInit(msg: InitMessage): Promise<void> {
     })),
   ];
 
+  networkApisInRun = msg.networkApisInRun;
   sessions = await openDeviceGroup(specs, config, {
     claimSession: currentSession(),
+    startNetworkProxy: msg.networkApisInRun && { multiDevice: specs.length > 1 },
     label: `Worker ${workerId}`,
     forceInstall: msg.forceInstall,
     launchPhase: 'worker startup launch',
@@ -231,6 +235,7 @@ async function runFileWithRecovery(
         // same app build, so its hooks are the group's hooks.
         resetCapabilities: sessions[0].capabilities,
         runMode: 'test-parallel',
+        networkApisInRun,
         // On retry (attempt 2), bust the ESM import cache so the file's
         // test registrations re-execute. Without this, import() returns the
         // cached module and no tests are registered for the retry.

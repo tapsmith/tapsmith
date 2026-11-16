@@ -71,7 +71,7 @@ export {
 } from './network.js';
 
 // Config
-export { defineConfig, loadConfig, type TapsmithConfig, type ProjectConfig, type ScreenshotMode, type TraceMode, type TraceConfig, type AppResetMode, type AppResetScope, type EmulatorLaunchOptions } from './config.js';
+export { defineConfig, loadConfig, type TapsmithConfig, type ProjectConfig, type ScreenshotMode, type TraceMode, type TraceConfig, type AppResetMode, type AppResetScope, type EmulatorLaunchOptions, type ReducedMotion } from './config.js';
 
 // Reporters
 export {

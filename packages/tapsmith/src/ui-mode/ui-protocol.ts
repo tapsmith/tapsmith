@@ -188,10 +188,6 @@ export interface RunStartMessage {
 
 export interface RunEndMessage {
   type: 'run-end'
-  /** Milliseconds from run start to the first traced action of the first test. */
-  timeToFirstActionMs?: number
-  /** How the first file's isolation was satisfied. */
-  preflight?: { origin: 'prepared' | 'inline' | 'skipped' | 'unknown' }
   /** 'stopped' = the user stopped the run before it finished. */
   status: 'passed' | 'failed' | 'stopped'
   duration: number
@@ -494,6 +490,8 @@ export interface McpToolCallMessage {
   error?: string
   durationMs?: number
   timestamp: number
+  /** Serial of the device the call acted on, when it resolved one. */
+  device?: string
 }
 
 export interface RunStateMessage {
@@ -664,6 +662,18 @@ export interface SuggestLocatorsCommand {
   /** Child indices from the hierarchy's roots to the picked node. */
   path: number[]
   /** The asking tab: its newer pick on the same device stops this one's check. */
+  clientId?: string
+  workerId?: number
+  deviceIndex?: number
+}
+
+/**
+ * Stop the asking tab's live locator work on a device: a test
+ * started on it. Its pick check stops between candidates and its waiting
+ * evaluation is never run; neither is answered.
+ */
+export interface CancelLiveLocatorsCommand {
+  type: 'cancel-live-locators'
   clientId?: string
   workerId?: number
   deviceIndex?: number
@@ -847,6 +857,7 @@ export type ClientMessage =
   | RequestHierarchyCommand
   | EvaluateLocatorCommand
   | SuggestLocatorsCommand
+  | CancelLiveLocatorsCommand
   | RequestSourceCommand
   | MirrorTapCommand
   | MirrorLongPressCommand
@@ -986,6 +997,8 @@ export interface UIWorkerInitMessage {
    * Required, like `InitMessage.forceInstall`.
    */
   forceInstall: boolean
+  /** See `InitMessage.networkApisInRun`. */
+  networkApisInRun: boolean
   /**
    * The rest of the device group (`devices[1..]`) for a `use.devices`
    * project, each on a daemon the server spawned for it. Omitted for
@@ -1011,6 +1024,12 @@ export interface UIWorkerRunFileMessage {
   grep: import('../worker-protocol.js').SerializedGrepFilters
   /** The device already satisfies this file's policy (background preparation). */
   preparedFor?: import('../app-reset.js').PreparedState
+  /**
+   * Whether the session's test files use the network APIs as they are now —
+   * scanned again for each run, since the user edits tests between runs.
+   * Required, like `InitMessage.networkApisInRun`.
+   */
+  networkApisInRun: boolean
 }
 
 /** Server → UI worker: reset the app in the background to `policy`. */
@@ -1026,6 +1045,16 @@ export interface UIWorkerPrepareMessage {
 export interface UIWorkerCancelPrepareMessage {
   type: 'cancel-prepare'
   prepareId: string
+}
+
+/**
+ * Server → UI worker: something outside the worker touched its devices (a
+ * mirror gesture, a UI-mode MCP tool), so whatever a launch or preparation
+ * left on them is gone. The worker drops its prepared records; the next
+ * preparation or run resets for real instead of crediting a stale one.
+ */
+export interface UIWorkerInvalidatePreparedMessage {
+  type: 'invalidate-prepared'
 }
 
 /** Server → UI worker: shut down gracefully. */
@@ -1045,6 +1074,7 @@ export type UIWorkerMessage =
   | UIWorkerAbortMessage
   | UIWorkerPrepareMessage
   | UIWorkerCancelPrepareMessage
+  | UIWorkerInvalidatePreparedMessage
 
 /** UI worker → server: worker is ready. */
 export interface UIWorkerReadyMessage {

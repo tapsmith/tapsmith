@@ -280,4 +280,35 @@ export class LatestOnlyRunner<R> {
       }
     });
   }
+
+  /**
+   * Forgets the request waiting behind `key`'s running one: it is never run
+   * and never answered. The running one finishes (its device call cannot be
+   * taken back) and is answered as usual.
+   */
+  dropWaiting(key: string): void {
+    this._waiting.delete(key);
+  }
+}
+
+/**
+ * The latest live pick per device and tab (`worker:device:client`), by a
+ * generation count: a newer pick, or a cancel, supersedes the one in flight,
+ * whose check stops between candidates and whose answer is never sent.
+ */
+export class PickGenerations {
+  private readonly _latest = new Map<string, number>();
+
+  /** Starts a pick; the returned function says whether it has been superseded. */
+  start(key: string): () => boolean {
+    const generation = (this._latest.get(key) ?? 0) + 1;
+    this._latest.set(key, generation);
+    return () => this._latest.get(key) !== generation;
+  }
+
+  /** Supersedes the pick in flight for `key`, if any. */
+  cancel(key: string): void {
+    const current = this._latest.get(key);
+    if (current !== undefined) this._latest.set(key, current + 1);
+  }
 }

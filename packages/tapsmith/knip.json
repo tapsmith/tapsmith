@@ -9,6 +9,6 @@
     "src/index.ts",
     "scripts/fetch-bezels.mjs"
   ],
-  "ignore": ["scripts/clean-install-checks.d.mts", "scripts/npm-dist-tag.d.mts"],
+  "ignore": ["scripts/clean-install-checks.d.mts", "scripts/docs-bundle.d.mts", "scripts/npm-dist-tag.d.mts"],
   "ignoreExportsUsedInFile": true
 }

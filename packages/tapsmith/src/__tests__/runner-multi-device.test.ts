@@ -91,6 +91,7 @@ function makeDevice(name: string) {
       hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>',
       errorMessage: '',
     })),
+    waitForAppReady: vi.fn(async () => ({ requestId: '1', ready: true, supported: true })),
   };
   const sessionContext: SessionPreflightContext = {
     label: name,
@@ -98,6 +99,7 @@ function makeDevice(name: string) {
     device: device as unknown as SessionPreflightContext['device'],
     client: client as unknown as SessionPreflightContext['client'],
     notices: [],
+    relaunches: { count: 0 },
   };
   const runDevice: RunDevice = {
     name,
@@ -114,7 +116,7 @@ function makeOpts(group: ReturnType<typeof makeDevice>[], config: TapsmithConfig
     config,
     devices: group.map((g) => g.runDevice),
     resetCapabilities: {},
-    runMode: 'test',
+    runMode: 'test', networkApisInRun: false,
     _applied: {},
     _prepared: new Map(),
     ...extra,

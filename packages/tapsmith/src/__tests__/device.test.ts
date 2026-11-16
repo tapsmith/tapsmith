@@ -8,7 +8,7 @@ import { WebViewHandle } from '../webview-handle.js';
 import { isTestEndedError, runInAttemptContext } from '../attempt-fence.js';
 import { selectorToProto } from '../selectors.js';
 import type { TapsmithGrpcClient, ActionResponse } from '../grpc-client.js';
-import { TraceCollector } from '../trace/trace-collector.js';
+import { setActiveTraceCollector, TraceCollector } from '../trace/trace-collector.js';
 import type { ConsoleTraceEvent } from '../trace/types.js';
 import { onActionProgress, type ActionProgressEvent } from '../action-progress.js';
 
@@ -682,7 +682,24 @@ describe('Device.setDevice()', () => {
       true,
       ['example.test'],
       ['pinned.example.test'],
+      undefined,
     );
+  });
+
+  // PILOT-971: the daemon turns the Android animation scales off for the
+  // session (and restores them after) when the config says `reduce`; with
+  // the option unset it is told nothing, so it changes nothing.
+  it.each([
+    ['reduce', true],
+    ['no-preference', false],
+    [undefined, undefined],
+  ] as const)('sends reducedMotion %s to the daemon as %s', async (reducedMotion, expected) => {
+    const setDevice = vi.fn(async () => successResponse());
+    const device = new Device(makeMockClient({ setDevice }), { reducedMotion });
+
+    await device.setDevice('emulator-5554');
+
+    expect(setDevice).toHaveBeenCalledWith('emulator-5554', false, [], [], expected);
   });
 });
 
@@ -813,6 +830,7 @@ describe('Device.route()', () => {
       expect(isTestEndedError(err)).toBe(true);
       expect(stream.writes.filter((m) => typeof m === 'object' && m !== null && 'registerRoute' in m)).toEqual([]);
       expect(device._takeRouteRegistrations()).toBe(0);
+      expect(device._takeRouteRegistrationLog()).toEqual([]);
     });
 
     it('starts capture on demand for device.on() too', async () => {
@@ -862,6 +880,37 @@ describe('Device.route()', () => {
     expect(device._takeRouteRegistrations()).toBe(0);
   });
 
+  // PILOT-1196: the runner compares each route's registration time with the
+  // captured requests' start times.
+  it('logs each successful registration with its pattern, time and matcher, and resets when taken', async () => {
+    const stream = new FakeRouteStream();
+    const client = makeMockClient({
+      networkRouteStream: vi.fn(
+        () => stream as unknown as ReturnType<TapsmithGrpcClient['networkRouteStream']>,
+      ),
+    });
+    const device = new Device(client);
+    const before = Date.now();
+
+    await device.route('**/todos*', async () => undefined);
+    await device.route(/\/users\/\d+$/, async () => undefined);
+    await device.route((url) => url.hostname === 'api.example.com', async () => undefined);
+    const after = Date.now();
+
+    const log = device._takeRouteRegistrationLog();
+    expect(log.map((r) => r.pattern)).toEqual(['**/todos*', '/\\/users\\/\\d+$/', '<predicate>']);
+    for (const r of log) {
+      expect(r.registeredAtMs).toBeGreaterThanOrEqual(before);
+      expect(r.registeredAtMs).toBeLessThanOrEqual(after);
+    }
+    expect(log[0]!.matches('https://api.example.com/todos?_limit=10')).toBe(true);
+    expect(log[0]!.matches('https://api.example.com/posts')).toBe(false);
+    expect(log[1]!.matches('https://api.example.com/users/7')).toBe(true);
+    expect(log[2]!.matches('https://api.example.com/x')).toBe(true);
+    expect(log[2]!.matches('https://other.example.com/x')).toBe(false);
+    expect(device._takeRouteRegistrationLog()).toEqual([]);
+  });
+
   it('does not count a registration that failed', async () => {
     const client = makeMockClient({
       startNetworkCapture: vi.fn(async () => ({
@@ -876,6 +925,7 @@ describe('Device.route()', () => {
 
     await expect(device.route('**/posts*', async () => undefined)).rejects.toThrow();
     expect(device._takeRouteRegistrations()).toBe(0);
+    expect(device._takeRouteRegistrationLog()).toEqual([]);
   });
 
   it('passes keepRunning through when stopping network capture', async () => {
@@ -1284,7 +1334,7 @@ describe('Device.startAgent()', () => {
     const client = makeMockClient({ startAgent });
     const device = new Device(client);
     await device.startAgent('com.example.app');
-    expect(startAgent).toHaveBeenCalledWith('com.example.app', undefined, undefined, undefined, undefined, false);
+    expect(startAgent).toHaveBeenCalledWith('com.example.app', undefined, undefined, undefined, undefined, false, false);
   });
 
   it('passes APK paths through', async () => {
@@ -1292,7 +1342,22 @@ describe('Device.startAgent()', () => {
     const client = makeMockClient({ startAgent });
     const device = new Device(client);
     await device.startAgent('com.example.app', '/path/agent.apk', '/path/test.apk');
-    expect(startAgent).toHaveBeenCalledWith('com.example.app', '/path/agent.apk', '/path/test.apk', undefined, undefined, false);
+    expect(startAgent).toHaveBeenCalledWith('com.example.app', '/path/agent.apk', '/path/test.apk', undefined, undefined, false, false);
+  });
+
+  it("prints the warning a successful start carries, once per process (PILOT-1073)", async () => {
+    const warning = 'reducedMotion could not be applied on simulator SIM-1073: simctl did not answer';
+    const startAgent = vi.fn(async () => ({ ...successResponse(), errorMessage: warning }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const device = new Device(makeMockClient({ startAgent }));
+      await device.startAgent('com.example.app');
+      await device.startAgent('com.example.app');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(`[tapsmith] ${warning}`);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('throws on failure', async () => {
@@ -1301,6 +1366,18 @@ describe('Device.startAgent()', () => {
     });
     const device = new Device(client);
     await expect(device.startAgent('com.example.app')).rejects.toThrow('Agent not installed');
+  });
+
+  it('asks for the wipe-first launch and reports whether the agent launched the app afresh', async () => {
+    const startAgent = vi.fn(async () => ({ ...successResponse(), appLaunchedFresh: true }));
+    const device = new Device(makeMockClient({ startAgent }));
+    await expect(device._startAgent({ targetPackage: 'com.example.app', clearAppDataFirst: true }))
+      .resolves.toEqual({ appLaunchedFresh: true });
+    expect(startAgent).toHaveBeenCalledWith('com.example.app', undefined, undefined, undefined, undefined, false, true);
+    // A daemon that predates the answer leaves it unset: not fresh.
+    startAgent.mockResolvedValueOnce(successResponse() as never);
+    await expect(device._startAgent({ targetPackage: 'com.example.app', clearAppDataFirst: true }))
+      .resolves.toEqual({ appLaunchedFresh: false });
   });
 });
 
@@ -1446,7 +1523,7 @@ describe('Device.resetApp()', () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
       modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: false,
-      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [],
+      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app', appResetColdEvery: 0 });
@@ -1460,7 +1537,7 @@ describe('Device.resetApp()', () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
       modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: false,
-      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [],
+      reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app', appResetColdEvery: 10 });
@@ -1484,6 +1561,7 @@ describe('Device.resetApp()', () => {
         { name: 'warm-hooks', durationMs: 3000, ok: false, detail: 'epoch did not advance within 3000ms' },
         { name: 'restart', durationMs: 900, ok: true, detail: '' },
       ],
+      targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app' });
@@ -1499,7 +1577,7 @@ describe('Device.resetApp()', () => {
     expect(result).toEqual({
       modeRequested: 'warm', modeUsed: 'restart', fellBack: true, coldLaunch: true,
       reason: 'warm reset via in-app hooks failed (epoch did not advance within 3000ms)',
-      durationMs: 1234, hooksDetected: true, epochBefore: 3, epochAfter: 0,
+      durationMs: 1234, hooksDetected: true, epochBefore: 3, epochAfter: 0, targetReached: false,
       steps: [
         { name: 'warm-hooks', durationMs: 3000, ok: false, detail: 'epoch did not advance within 3000ms' },
         { name: 'restart', durationMs: 900, ok: true },
@@ -1507,11 +1585,36 @@ describe('Device.resetApp()', () => {
     });
   });
 
+  it('reports a warm reset that landed on its target, and names the route in the trace detail', async () => {
+    const resetApp = vi.fn(async () => ({
+      requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
+      modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: false,
+      reason: '', durationMs: 1500, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: true,
+    }));
+    const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
+    const device = new Device(client, { package: 'com.example.app' });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-reset-trace-'));
+    const collector = makeTraceCollector(tempDir);
+    setActiveTraceCollector(collector);
+    try {
+      const result = await device.resetApp({ target: '/settings' });
+
+      expect(result.targetReached).toBe(true);
+      expect(collector.events).toContainEqual(expect.objectContaining({
+        action: 'resetApp',
+        detail: expect.stringContaining('(epoch 1→2) → /settings'),
+      }));
+    } finally {
+      setActiveTraceCollector(null);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('throws with the daemon error when the ladder is exhausted', async () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: false, errorType: 'RESET_FAILED', errorMessage: 'clear failed (pm clear did not report success)',
       screenshot: Buffer.alloc(0), modeRequested: 'APP_RESET_MODE_CLEAR', modeUsed: 'APP_RESET_MODE_CLEAR',
-      fellBack: false, coldLaunch: false, reason: '', durationMs: 10, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [],
+      fellBack: false, coldLaunch: false, reason: '', durationMs: 10, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app' });
@@ -1519,11 +1622,37 @@ describe('Device.resetApp()', () => {
     await expect(device.resetApp({ mode: 'clear', fallback: false })).rejects.toThrow('clear failed');
   });
 
+  it('records a failed reset its caller recovers from as a handled step, and still throws', async () => {
+    const resetApp = vi.fn(async () => ({
+      requestId: '1', success: false, errorType: 'RESET_FAILED', errorMessage: 'in-app reset reported an error: no onReload',
+      screenshot: Buffer.alloc(0), modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM',
+      fellBack: false, coldLaunch: false, reason: '', durationMs: 10, hooksDetected: true, epochBefore: 1, epochAfter: 2, steps: [], targetReached: false,
+    }));
+    const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
+    const device = new Device(client, { package: 'com.example.app' });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-reset-recoverable-'));
+    const collector = makeTraceCollector(tempDir);
+    setActiveTraceCollector(collector);
+    try {
+      await expect(device._resetApp('com.example.app', { mode: 'warm', fallback: false, keepAppData: true, recoverable: true }))
+        .rejects.toThrow('no onReload');
+      expect(resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ keepAppData: true, allowFallback: false }));
+      expect(collector.events).toContainEqual(expect.objectContaining({
+        action: 'resetApp',
+        success: true,
+        detail: expect.stringContaining('failed: in-app reset reported an error: no onReload'),
+      }));
+    } finally {
+      setActiveTraceCollector(null);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('retry attempts force a cold delivery', async () => {
     const resetApp = vi.fn(async () => ({
       requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
       modeRequested: 'APP_RESET_MODE_WARM', modeUsed: 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch: true,
-      reason: 'cold relaunch: retry attempt', durationMs: 5000, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [],
+      reason: 'cold relaunch: retry attempt', durationMs: 5000, hooksDetected: false, epochBefore: 0, epochAfter: 0, steps: [], targetReached: false,
     }));
     const client = makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>);
     const device = new Device(client, { package: 'com.example.app' });

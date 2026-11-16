@@ -59,7 +59,7 @@ iOS alike.
 | ⚡ **Fast, isolated tests** | The app is reset to a clean state for every test file. React Native apps can [reset in-process in under a second](docs/warm-reset.md), and `saveAppState` lets you log in once and reuse the session. |
 | 📱 **Many devices at once** | Parallel workers across emulators and simulators that Tapsmith boots for you, CI sharding with merged reports, and [multi-device tests](docs/multi-device.md) where Alice messages Bob. |
 | 🧩 **Hybrid apps** | Switch into a WebView and drive it with CSS selectors and web roles. |
-| 🤖 **Built for AI agents** | A built-in [MCP server](docs/mcp-server.md), plus `--json` output for every setup command, so a coding agent can set up and run your suite on its own. |
+| 🤖 **Built for AI agents** | A built-in [MCP server](docs/mcp-server.md), a [plugin for Claude Code, Cursor and Codex](docs/mcp-server.md#install-the-plugin), the docs inside the npm package, and `--json` output for every setup command, so a coding agent can set up and run your suite on its own. |
 | 📦 **One npm install** | The daemon, the device agents and the trace viewer all ship in the package. There's no Appium server to start and no drivers to keep in step with Xcode. |
 
 <p align="center">
@@ -168,7 +168,7 @@ All three ship prebuilt in the npm package.
 
 ## Documentation
 
-The full docs live at **[tapsmith.dev](https://tapsmith.dev)**. The same pages are in [`docs/`](docs/):
+The full docs live at **[tapsmith.dev](https://tapsmith.dev)**. The same pages are in [`docs/`](docs/), and ship in the npm package as `node_modules/tapsmith/docs/`, so a coding agent reads the docs of the installed version, offline:
 
 **Start here.** [Getting started](docs/getting-started.md) · [Writing tests](docs/writing-tests.md) · [Locators](docs/locators.md) · [Debugging](docs/debugging.md)
 

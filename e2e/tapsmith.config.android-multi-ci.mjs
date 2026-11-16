@@ -13,13 +13,16 @@ export default defineConfig({
   activity: "dev.tapsmith.testapp.MainActivity",
   package: "dev.tapsmith.testapp",
   timeout: 15_000,
+  // The workflow already turns the emulator's animations off; this exercises
+  // Tapsmith's own setting and restore on every run (PILOT-971).
+  reducedMotion: "reduce",
   // Two retries (Playwright's CI convention): emulator-load one-offs can
   // outlast a single retry on oversubscribed runners.
   retries: 2,
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
   workers: 1,
-  trace: { mode: "retain-on-failure", daemonLogs: true },
+  trace: { mode: "retain-on-failure-and-retries", daemonLogs: true },
   video: "on-first-retry",
   avd: "Tapsmith_Phone_API_36",
   agentApk: "../agent/app/build/outputs/apk/debug/app-debug.apk",

@@ -116,6 +116,24 @@ export function nonExecutableFiles(files, names) {
   return problems;
 }
 
+// ─── Bundled docs ───
+
+/**
+ * Problems with the docs pages in `npm pack --json` files: each of `pages`
+ * (the repo's docs/*.md) missing from the tarball's docs/, and anything else
+ * there. The package ships the pages for coding agents to read offline, and
+ * leaves the images out (they are most of the docs' size).
+ */
+export function bundledDocsProblems(files, pages) {
+  const shipped = new Set(files.map((f) => f.path).filter((p) => p.startsWith('docs/')));
+  const problems = pages.filter((page) => !shipped.has(`docs/${page}`)).map((page) => `docs/${page} (not in the tarball)`);
+  const expected = new Set(pages.map((page) => `docs/${page}`));
+  for (const p of [...shipped].sort()) {
+    if (!expected.has(p)) problems.push(`${p} (not a docs page)`);
+  }
+  return problems;
+}
+
 // ─── Platform fields pnpm infers from a name (PILOT-709) ───
 
 // pnpm 11+ gives an optional dependency that leaves `os`, `cpu` or `libc`

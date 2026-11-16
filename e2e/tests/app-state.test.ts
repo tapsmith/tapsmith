@@ -1,4 +1,4 @@
-import { describe, test, expect } from "tapsmith"
+import { describe, test, expect } from "../fixtures.js"
 
 // ─── Authenticated tests ───
 // This file runs as part of the "authenticated" project, which has
@@ -36,5 +36,53 @@ describe("without auth", () => {
 
     // appState: '' clears app data, so the profile gate should redirect to login
     await expect(device.getByText("Sign In", { exact: true })).toBeVisible()
+  })
+})
+
+// ─── Restored state kept between tests ───
+// The test app's hooks count AsyncStorage writes and reload the session from
+// storage (`track` + `onReload`), so after the first restore a reset keeps the
+// restored data warm while no test has written, and restores the archive
+// again after one has. The profile shows how many resets kept the data in
+// this app process: 0 after any cold launch, including a restore.
+// Runs after "without auth", whose clear relaunches the app, so the first
+// test here always starts from a cold restore.
+
+describe("restored state kept between tests", () => {
+  test.use({ appResetScope: "test" })
+
+  let reloadsAfterRestore: number | undefined
+  let keptAttempts = 0
+
+  test("a test that only reads the restored state", async ({ device, profileScreen }) => {
+    await device.openDeepLink("tapsmithtest:///profile")
+    await expect(profileScreen.status).toHaveText("Authenticated")
+    reloadsAfterRestore = Number(await profileScreen.reloadCount.getText())
+  })
+
+  test("the next test keeps the restored data with a warm reset", async ({ device, profileScreen }) => {
+    keptAttempts++
+    await device.openDeepLink("tapsmithtest:///profile")
+    await expect(profileScreen.status).toHaveText("Authenticated")
+    // A retry restores the archive cold by design: only the first attempt
+    // follows a test that wrote nothing.
+    if (keptAttempts === 1 && reloadsAfterRestore !== undefined) {
+      await expect(profileScreen.reloadCount).toHaveText(String(reloadsAfterRestore + 1))
+    }
+  })
+
+  test("a test that writes: logging out removes the stored session", async ({ device, profileScreen, loginScreen }) => {
+    await device.openDeepLink("tapsmithtest:///profile")
+    await expect(profileScreen.status).toHaveText("Authenticated")
+    await profileScreen.logOutButton.tap()
+    await expect(loginScreen.heading).toBeVisible()
+  })
+
+  test("after a write the next test gets the pristine archive, restored cold", async ({ device, profileScreen }) => {
+    await device.openDeepLink("tapsmithtest:///profile")
+    // A warm reset here would have kept the logged-out storage and redirected
+    // to the login screen.
+    await expect(profileScreen.status).toHaveText("Authenticated")
+    await expect(profileScreen.reloadCount).toHaveText("0")
   })
 })

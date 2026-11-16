@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldRecord, shouldRetain, recordsOnlyOnRetry } from '../trace/trace-mode.js';
+import { shouldRecord, shouldRetain, recordsOnlyOnRetry, retryOnlyModeWarning } from '../trace/trace-mode.js';
 import { resolveTraceConfig } from '../trace/types.js';
 
 describe('shouldRecord', () => {
@@ -122,5 +122,34 @@ describe('recordsOnlyOnRetry', () => {
 describe('resolveTraceConfig falsy modes', () => {
   it.each([[''], [{ mode: '' }], [{ mode: false }], [{ mode: null }], [false]])('%j resolves to off', (input) => {
     expect(resolveTraceConfig(input as never).mode).toBe('off');
+  });
+});
+
+// PILOT-240's startup warning, which must agree with UI mode never retrying
+// and recording a retry-only trace mode as 'on' (PILOT-1175).
+describe('retryOnlyModeWarning', () => {
+  it('warns for a retry-only mode with retries 0', () => {
+    expect(retryOnlyModeWarning('trace', 'on-first-retry', 0, false, ''))
+      .toBe("Warning: trace mode 'on-first-retry' only records retry attempts, but retries is 0 — no trace will ever be recorded. Set retries to 1 or more to get traces.");
+    expect(retryOnlyModeWarning('video', 'on-all-retries', 0, false, ' in project "android"'))
+      .toContain('but retries is 0 in project "android" — no video will ever be recorded');
+  });
+
+  it('stays quiet with retries, or for a mode that records first attempts', () => {
+    expect(retryOnlyModeWarning('trace', 'on-first-retry', 1, false, '')).toBeUndefined();
+    expect(retryOnlyModeWarning('video', 'retain-on-failure', 0, false, '')).toBeUndefined();
+    expect(retryOnlyModeWarning('trace', 'off', 0, true, '')).toBeUndefined();
+  });
+
+  it('never warns for a trace mode in UI mode, which records every test under it', () => {
+    expect(retryOnlyModeWarning('trace', 'on-first-retry', 0, true, '')).toBeUndefined();
+    expect(retryOnlyModeWarning('trace', 'on-all-retries', 2, true, '')).toBeUndefined();
+  });
+
+  it('warns for a retry-only video mode in UI mode whatever retries is, since UI mode never retries', () => {
+    for (const retries of [0, 2]) {
+      expect(retryOnlyModeWarning('video', 'on-first-retry', retries, true, ''))
+        .toBe("Warning: video mode 'on-first-retry' only records retry attempts, and UI mode never retries a failed test — no video will be recorded in UI mode.");
+    }
   });
 });

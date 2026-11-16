@@ -16,6 +16,8 @@ export function renderAgentsSection(): string {
 
 This project uses [Tapsmith](https://github.com/tapsmith/tapsmith) for mobile E2E tests (Playwright-style API).
 
+The docs for the installed Tapsmith version ship in the package: read \`node_modules/tapsmith/docs/<page>.md\` (start with \`api-reference.md\`, \`writing-tests.md\` and \`locators.md\`) rather than guessing the API or relying on docs for another version.
+
 ### Running and debugging
 
 - Run all tests: \`npx tapsmith test\`
@@ -31,12 +33,19 @@ This project uses [Tapsmith](https://github.com/tapsmith/tapsmith) for mobile E2
 
 ### MCP workflow
 
-Prefer the UI-backed MCP server over the standalone headless server. If the user already has \`npx tapsmith test --ui\` running, ask them for the MCP URL shown in the UI and register it as \`tapsmith-ui\`:
+The Tapsmith plugin for Claude Code, Codex and Cursor registers one MCP server, \`tapsmith\` (run from this project's Tapsmith install), and adds a skill for writing and debugging tests; \`node_modules/tapsmith/docs/mcp-server.md\` says how to install it. That server works in the user's running \`npx tapsmith test --ui\` session when there is one, so they can watch, and headless otherwise; \`tapsmith_session_info\` says which. With the plugin installed, nothing below needs registering.
+
+Without the plugin, register by hand the server the plugin uses, under the name \`tapsmith\`. It works in the user's UI session whenever one is running and headless otherwise, so no URL is needed:
+
+- Claude Code: \`claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\`
+- Codex: \`codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui\`
+
+Two single-mode registrations cover the cases it does not. To work in a UI session of another project or machine, ask the user for the MCP URL that UI shows and register it as \`tapsmith-ui\`:
 
 - Claude Code: \`claude mcp add tapsmith-ui --transport http http://localhost:<port>/mcp\`
 - Codex: \`codex mcp add tapsmith-ui --url http://localhost:<port>/mcp\`
 
-The UI MCP session shares the browser test runner, device, test tree, results, traces, and mutual exclusion. Use the headless stdio server only when no UI session is available or you specifically need an isolated agent-owned session:
+To keep an agent headless, on an isolated agent-owned session whatever UI sessions are running, register the plain stdio server as \`tapsmith-headless\`:
 
 - Claude Code: \`claude mcp add tapsmith-headless -- npx tapsmith mcp-server\`
 - Codex: \`codex mcp add tapsmith-headless -- npx tapsmith mcp-server\`
@@ -64,7 +73,7 @@ Without MCP, ask the user to pick the element in UI mode (\`npx tapsmith test --
 - Group related behavior with \`describe()\`. Keep each test focused on one user-visible behavior, and use hooks only to put the app into a known starting state.
 - Prefer screen objects for reused screens. A screen object should take \`Device\`, expose locators as getters, and provide composite multi-step actions such as \`login()\` or \`openSettings()\`. Avoid one-line wrappers around \`.tap()\`; tests can tap exposed locators directly.
 - Keep assertions in tests, not screen objects. Screen objects provide locators and intentful actions; specs decide what must be true.
-- Tests should be independent and parallel-safe. Tapsmith resets the app for you once per test file by default; a scope that needs a fresh app before every test opts in with \`test.use({ appResetScope: 'test' })\`. When the app mounts \`@tapsmith/react-native\`, each reset is a warm, acknowledged in-app reset instead of a data wipe and cold launch (recommend adding it to React Native apps). Declare a policy with \`test.use({ appReset: 'clear' | 'restart' | 'warm' | 'none', appResetScope: 'file' | 'test' })\` instead of writing \`restartApp()\` / \`launchApp({ clearData: true })\` in a \`beforeEach\`; \`device.resetApp({ target })\` runs the same reset mid-test. Prefer deep links, API setup, setup projects, or saved app state over clicking through unrelated setup UI. Generate unique names/emails/IDs for data created during tests.
+- Tests should be independent and parallel-safe. Tapsmith resets the app for you once per test file by default; a scope that needs a fresh app before every test opts in with \`test.use({ appResetScope: 'test' })\`. When the app mounts \`@tapsmith/react-native\`, each reset is a warm, acknowledged in-app reset instead of a data wipe and cold launch (recommend adding it to React Native apps). Declare a policy with \`test.use({ appReset: 'clear' | 'restart' | 'warm' | 'none', appResetScope: 'file' | 'test' })\` instead of writing \`restartApp()\` / \`launchApp({ clearData: true })\` in a \`beforeEach\`, and \`test.use({ appResetScope: 'test', appResetRoute: '/screen' })\` instead of a \`beforeEach\` that only opens each test's starting screen (the reset then lands there in one delivery; with the default file scope the route is only opened once per file); \`device.resetApp({ target })\` runs the same reset mid-test. Prefer deep links, API setup, setup projects, or saved app state over clicking through unrelated setup UI. Generate unique names/emails/IDs for data created during tests.
 - Network routes clean up after themselves: a \`device.route()\` registered in a test, \`beforeEach\` or \`afterEach\` is removed after that test, and one registered in \`beforeAll\` stays for every test of its \`describe\` (or file) until that scope ends. Register a mock every test of a scope shares in \`beforeAll\`, and one a single test needs in that test.
 
 ### Projects and authenticated state

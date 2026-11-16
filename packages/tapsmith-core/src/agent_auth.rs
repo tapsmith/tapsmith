@@ -317,6 +317,44 @@ where
     check_auth_reply(&line, token, &daemon_nonce)
 }
 
+/// For tests that stand up a mock agent: the agent's side of the
+/// handshake, as both real agents do it. Sends a challenge, checks the
+/// daemon's proof against this user's token and acks with the agent's own
+/// proof. Returns whether the daemon was accepted.
+#[cfg(test)]
+pub(crate) async fn mock_agent_handshake<R, W>(reader: &mut R, writer: &mut W) -> bool
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let token = match agent_token() {
+        Ok(token) => token,
+        Err(_) => return false,
+    };
+    let challenge = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let hello = format!("{{\"id\":\"auth\",\"challenge\":\"{challenge}\"}}\n");
+    if writer.write_all(hello.as_bytes()).await.is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    if reader.read_line(&mut line).await.is_err() {
+        return false;
+    }
+    let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
+    if v["method"] != "auth" || v["params"]["proof"] != proof(token, "daemon", challenge).as_str() {
+        return false;
+    }
+    let nonce = v["params"]["nonce"].as_str().unwrap_or_default();
+    let ack = serde_json::json!({
+        "id": "auth",
+        "result": {"authenticated": true, "proof": proof(token, "agent", nonce)}
+    });
+    writer
+        .write_all(format!("{ack}\n").as_bytes())
+        .await
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

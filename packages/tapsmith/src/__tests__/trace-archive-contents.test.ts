@@ -265,7 +265,7 @@ describe('generated trace archive', () => {
       // Required by design (see RunOptions) — nothing here declares a reset
       // policy, so an empty capability set is the honest value.
       resetCapabilities: {},
-    runMode: 'test',
+    runMode: 'test', networkApisInRun: false,
       ...extra,
     };
   }
