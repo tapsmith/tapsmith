@@ -1143,10 +1143,31 @@ impl DeviceBackend for AndroidBackend<'_> {
 
         // Launch the agent instrumentation
         agent_comms::clear_stream_cache(&self.svc.agent_stream).await;
-        // Launch in background on device, keeping the runner's output
-        // on the device for the failure diagnostics below.
-        let bg_cmd = agent_launch_command(&req.target_package, ANDROID_AGENT_LOG_PATH);
-        if let Err(e) = adb::shell(&serial, &bg_cmd).await {
+        // The agent refuses every connection that does not open with this
+        // token (PILOT-969).
+        let token = match crate::agent_auth::agent_token() {
+            Ok(token) => token,
+            Err(e) => {
+                return Err(proto::ActionResponse {
+                    request_id,
+                    success: false,
+                    error_type: "AGENT_START_FAILED".to_string(),
+                    error_message: format!("{e:#}"),
+                    screenshot: Vec::new(),
+                    app_launched_fresh: false,
+                });
+            }
+        };
+        // The token reaches the device shell on adb's stdin, never on a
+        // command line `ps` would show on the host. Launch in background on
+        // device, keeping the runner's output on the device for the failure
+        // diagnostics below.
+        let bg_cmd = agent_launch_command(
+            &req.target_package,
+            &format!("\"${TOKEN_SHELL_VAR}\""),
+            ANDROID_AGENT_LOG_PATH,
+        );
+        if let Err(e) = adb::shell_with_secret(&serial, TOKEN_SHELL_VAR, token, &bg_cmd).await {
             error!(error = %e, "Failed to start agent instrumentation");
             return Err(proto::ActionResponse {
                 request_id,
@@ -1479,6 +1500,9 @@ async fn os_service_redirect(serial: &str, proxy: &NetworkProxy) -> Option<adb::
     })
 }
 
+/// The device shell variable the agent token is read into.
+const TOKEN_SHELL_VAR: &str = "TAPSMITH_AGENT_TOKEN";
+
 /// Where `unlock` starts, from the screen's wakefulness and the keyguard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UnlockStart {
@@ -1586,5 +1610,16 @@ mod tests {
         assert_eq!(events[0].owner, "");
         assert!(!events[0].owned_by_target);
         assert_eq!(events[0].timestamp_ms, 0);
+    }
+
+    #[test]
+    fn launch_command_hands_the_agent_its_token_without_spelling_it_out() {
+        // As launch_agent builds it: the token is a shell variable read from
+        // adb's stdin, so it is never on a host command line.
+        let cmd = agent_launch_command("", &format!("\"${TOKEN_SHELL_VAR}\""), "/l");
+        assert!(
+            cmd.contains("am instrument -w -e token \"$TAPSMITH_AGENT_TOKEN\" "),
+            "{cmd}"
+        );
     }
 }

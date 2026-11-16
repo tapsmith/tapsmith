@@ -260,6 +260,12 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 "$OUT/navigation-transition-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/AgentAuthTests/main.swift \
+  TapsmithAgent/AgentAuth.swift \
+  -o "$OUT/agent-auth-tests"
+"$OUT/agent-auth-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/SnapshotRetryTests/main.swift \
   TapsmithAgent/SnapshotRetry.swift \
   -o "$OUT/snapshot-retry-tests"

@@ -23,6 +23,11 @@ import java.util.concurrent.atomic.AtomicReference
  * of leaving it to run on.
  */
 class CommandConnectionTest {
+    private companion object {
+        val TOKEN = "ab".repeat(32)
+        val DAEMON_NONCE = "d".repeat(64)
+    }
+
     // The pool SocketServer serves connections on.
     private val executor = newConnectionExecutor()
     private val logs = CopyOnWriteArrayList<String>()
@@ -34,6 +39,7 @@ class CommandConnectionTest {
 
     /** A connection under test: what the daemon writes, and what it reads back. */
     private inner class Wire(
+        authenticate: Boolean = true,
         handle: (String) -> String,
     ) {
         private val toAgent = PipedOutputStream()
@@ -43,7 +49,8 @@ class CommandConnectionTest {
         private val served = CountDownLatch(1)
 
         init {
-            val connection = CommandConnection(agentIn, agentOut, executor, handle) { logs.add(it) }
+            val connection =
+                CommandConnection(agentIn, agentOut, executor, AgentAuth(TOKEN), handle, log = { logs.add(it) })
             executor.submit {
                 try {
                     connection.serve()
@@ -51,6 +58,21 @@ class CommandConnectionTest {
                     served.countDown()
                 }
             }
+            if (authenticate) {
+                authenticateAs(TOKEN)
+            }
+        }
+
+        /** Read the challenge and answer it as a daemon holding [token]; returns the agent's reply. */
+        fun answerChallenge(token: String): JSONObject {
+            val challenge = JSONObject(readLine()!!).getString("challenge")
+            send(authLine(AgentAuth.proof(token, "daemon", challenge)))
+            return JSONObject(readLine()!!)
+        }
+
+        fun authenticateAs(token: String) {
+            val ack = answerChallenge(token).getJSONObject("result")
+            assertEquals(AgentAuth.proof(token, "agent", DAEMON_NONCE), ack.getString("proof"))
         }
 
         fun send(line: String) {
@@ -67,6 +89,69 @@ class CommandConnectionTest {
         fun close() = toAgent.close()
 
         fun awaitServed(): Boolean = served.await(5, TimeUnit.SECONDS)
+    }
+
+    private fun authLine(proof: String) = """{"id":"auth","method":"auth","params":{"nonce":"$DAEMON_NONCE","proof":"$proof"}}"""
+
+    // ─── Authentication (PILOT-969) ───
+
+    @Test
+    fun `a connection that answers the challenge is served, and the auth line never reaches the handler or the log`() {
+        val handled = CopyOnWriteArrayList<String>()
+        val wire =
+            Wire { line ->
+                handled.add(line)
+                """{"id":"${JSONObject(line).getString("id")}","result":{}}"""
+            }
+        wire.send(request("1"))
+        assertEquals("1", idOf(wire.readLine()))
+        assertEquals(listOf(request("1")), handled)
+        assertFalse(logs.any { it.contains(TOKEN) || it.contains("proof") })
+    }
+
+    @Test
+    fun `a wrong token is refused and the connection ends without running anything`() {
+        val handled = AtomicInteger()
+        val wire = Wire(authenticate = false) { handled.incrementAndGet().let { "{}" } }
+        val refusal = wire.answerChallenge("cd".repeat(32))
+        wire.send(request("1"))
+        assertEquals("UNAUTHORIZED", refusal.getJSONObject("error").getString("type"))
+        // serve() returning is the connection ending: SocketServer closes the socket.
+        assertTrue(wire.awaitServed())
+        assertEquals(0, handled.get())
+    }
+
+    @Test
+    fun `a command sent before authenticating is refused, not run`() {
+        val handled = AtomicInteger()
+        val wire = Wire(authenticate = false) { handled.incrementAndGet().let { "{}" } }
+        JSONObject(wire.readLine()!!).getString("challenge")
+        wire.send(request("1", method = "getClipboard"))
+        val refusal = JSONObject(wire.readLine()!!)
+        assertEquals("auth", refusal.getString("id"))
+        assertEquals("UNAUTHORIZED", refusal.getJSONObject("error").getString("type"))
+        assertTrue(wire.awaitServed())
+        assertEquals(0, handled.get())
+    }
+
+    @Test
+    fun `blank lines before the auth line are skipped`() {
+        val wire = Wire(authenticate = false) { """{"id":"${JSONObject(it).getString("id")}","result":{}}""" }
+        val challenge = JSONObject(wire.readLine()!!).getString("challenge")
+        wire.send("")
+        wire.send(authLine(AgentAuth.proof(TOKEN, "daemon", challenge)))
+        assertEquals(true, JSONObject(wire.readLine()!!).getJSONObject("result").getBoolean("authenticated"))
+        wire.send(request("1"))
+        assertEquals("1", idOf(wire.readLine()))
+    }
+
+    @Test
+    fun `a connection closed before authenticating ends quietly`() {
+        val wire = Wire(authenticate = false) { "{}" }
+        JSONObject(wire.readLine()!!).getString("challenge")
+        wire.close()
+        assertTrue(wire.awaitServed())
+        assertFalse(wire.hasOutput())
     }
 
     private fun request(

@@ -8794,7 +8794,14 @@ mod tests {
                 let respond = respond.clone();
                 tokio::spawn(async move {
                     let (read_half, mut write_half) = stream.into_split();
-                    let mut lines = BufReader::new(read_half).lines();
+                    let mut reader = BufReader::new(read_half);
+                    // The daemon refuses an agent that does not
+                    // authenticate (PILOT-969).
+                    if !crate::agent_auth::mock_agent_handshake(&mut reader, &mut write_half).await
+                    {
+                        return;
+                    }
+                    let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
                         let req: Value = serde_json::from_str(&line).unwrap();
                         let method = req["method"].as_str().unwrap_or("").to_string();

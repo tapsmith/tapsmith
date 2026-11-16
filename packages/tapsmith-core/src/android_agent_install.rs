@@ -108,7 +108,10 @@ pub fn needs_install(
 /// session (no install killed it, now that unchanged APKs are not
 /// reinstalled) would answer the first handshake ping in that window, and
 /// StartAgent would report an agent that is about to die.
-pub fn agent_launch_command(target_package: &str, log_path: &str) -> String {
+///
+/// `token` is the shell expression that expands to the agent token, which
+/// the agent requires of every connection.
+pub fn agent_launch_command(target_package: &str, token: &str, log_path: &str) -> String {
     let target = if target_package.is_empty() {
         String::new()
     } else {
@@ -116,7 +119,9 @@ pub fn agent_launch_command(target_package: &str, log_path: &str) -> String {
     };
     format!(
         "am force-stop {AGENT_PACKAGE}; \
-         nohup am instrument -w {target}{AGENT_PACKAGE}/.TapsmithAgent > {log_path} 2>&1 &"
+         nohup am instrument -w -e {} {token} {target}{AGENT_PACKAGE}/.TapsmithAgent \
+         > {log_path} 2>&1 &",
+        crate::agent_auth::ANDROID_TOKEN_ARG
     )
 }
 
@@ -250,13 +255,14 @@ mod tests {
     #[test]
     fn launch_command_stops_a_running_agent_before_instrumenting() {
         assert_eq!(
-            agent_launch_command("com.example.app", "/data/local/tmp/agent.log"),
-            "am force-stop dev.tapsmith.agent; nohup am instrument -w -e targetPackage \
-             com.example.app dev.tapsmith.agent/.TapsmithAgent > /data/local/tmp/agent.log 2>&1 &"
+            agent_launch_command("com.example.app", "abc123", "/data/local/tmp/agent.log"),
+            "am force-stop dev.tapsmith.agent; nohup am instrument -w -e token abc123 \
+             -e targetPackage com.example.app dev.tapsmith.agent/.TapsmithAgent \
+             > /data/local/tmp/agent.log 2>&1 &"
         );
         assert_eq!(
-            agent_launch_command("", "/l"),
-            "am force-stop dev.tapsmith.agent; nohup am instrument -w \
+            agent_launch_command("", "abc123", "/l"),
+            "am force-stop dev.tapsmith.agent; nohup am instrument -w -e token abc123 \
              dev.tapsmith.agent/.TapsmithAgent > /l 2>&1 &"
         );
     }

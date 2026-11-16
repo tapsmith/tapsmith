@@ -33,6 +33,7 @@
 		8000000000000000000000A1 /* CellFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8000000000000000000000A2 /* CellFrames.swift */; };
 		8950000000000000000000B1 /* CellAccessories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8950000000000000000000B2 /* CellAccessories.swift */; };
 		8950000000000000000000B3 /* DescendantText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8950000000000000000000B4 /* DescendantText.swift */; };
+		A1C3E5F7092B4D6F8A0C2E41 /* AgentAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D4F6A8103C5E7A9B1D3F52 /* AgentAuth.swift */; };
 		9780000000000000000000A1 /* AccessibilityTimeout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9780000000000000000000A2 /* AccessibilityTimeout.swift */; };
 		9780000000000000000000A3 /* XCTestIssueRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9780000000000000000000A4 /* XCTestIssueRelay.swift */; };
 		9850000000000000000000A1 /* NavigationTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9850000000000000000000A2 /* NavigationTransition.swift */; };
@@ -84,6 +85,7 @@
 		8000000000000000000000A2 /* CellFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellFrames.swift; sourceTree = "<group>"; };
 		8950000000000000000000B2 /* CellAccessories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellAccessories.swift; sourceTree = "<group>"; };
 		8950000000000000000000B4 /* DescendantText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DescendantText.swift; sourceTree = "<group>"; };
+		B2D4F6A8103C5E7A9B1D3F52 /* AgentAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAuth.swift; sourceTree = "<group>"; };
 		9780000000000000000000A2 /* AccessibilityTimeout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTimeout.swift; sourceTree = "<group>"; };
 		9780000000000000000000A4 /* XCTestIssueRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XCTestIssueRelay.swift; sourceTree = "<group>"; };
 		9850000000000000000000A2 /* NavigationTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationTransition.swift; sourceTree = "<group>"; };
@@ -159,6 +161,7 @@
 				9520000000000000000000B2 /* RowAnchor.swift */,
 				B1D2E3F4B5C6478899AA1012 /* TypingCheck.swift */,
 				7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */,
+				B2D4F6A8103C5E7A9B1D3F52 /* AgentAuth.swift */,
 				9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */,
 				9740000000000000000000A2 /* TapTiming.swift */,
 				9960000000000000000000A2 /* HidTouch.swift */,
@@ -312,6 +315,7 @@
 				9520000000000000000000B1 /* RowAnchor.swift in Sources */,
 				A1D2E3F4B5C6478899AA1012 /* TypingCheck.swift in Sources */,
 				5C29D8A1B7E44F0A9D3E6B21 /* TypingFocus.swift in Sources */,
+				A1C3E5F7092B4D6F8A0C2E41 /* AgentAuth.swift in Sources */,
 				3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */,
 				9740000000000000000000A1 /* TapTiming.swift in Sources */,
 				9960000000000000000000A1 /* HidTouch.swift in Sources */,

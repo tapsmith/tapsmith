@@ -1,4 +1,5 @@
 mod adb;
+mod agent_auth;
 mod agent_comms;
 mod android_agent_install;
 mod android_animation_scales;
