@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,16 +64,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // into the macOS @tapsmith/core-* packages. CoreSimulator/SimulatorKit are
     // dlopen'd by the helper at runtime, so only public frameworks are linked.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        // OUT_DIR = target/<profile>/build/<crate>-<hash>/out (with an extra
-        // <triple> segment under --target). ancestors() counts from the path
-        // itself (nth(0) = out), so nth(3) is the profile dir where the daemon
-        // binary lands — correct for both native and --target builds.
+        // OUT_DIR sits under the profile dir's `build/` folder, at a depth
+        // that depends on the Cargo version:
+        //   Cargo < 1.100: target/<profile>/build/<crate>-<hash>/out
+        //   Cargo ≥ 1.100: target/<profile>/build/<crate>/<hash>/out
+        // (with an extra <triple> segment before <profile> under --target).
+        // The profile dir, where the daemon binary lands, is the parent of
+        // the nearest `build` ancestor in both layouts.
         let out_dir = std::env::var("OUT_DIR")?;
-        let profile_dir = PathBuf::from(&out_dir)
-            .ancestors()
-            .nth(3)
-            .ok_or("could not derive profile dir from OUT_DIR")?
-            .to_path_buf();
+        let profile_dir = profile_dir_from_out_dir(Path::new(&out_dir))
+            .ok_or_else(|| format!("could not derive profile dir from OUT_DIR={out_dir}"))?;
         let helper_out = profile_dir.join("tapsmith-ios-hid");
         let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
             Ok("x86_64") => "x86_64",
@@ -97,4 +97,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// The profile dir (`target/[<triple>/]<profile>`) that holds a build script's
+/// `OUT_DIR`: the parent of the nearest ancestor named `build`.
+fn profile_dir_from_out_dir(out_dir: &Path) -> Option<PathBuf> {
+    out_dir
+        .ancestors()
+        .skip(1)
+        .find(|p| p.file_name().is_some_and(|n| n == "build"))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
 }
