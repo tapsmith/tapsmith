@@ -76,7 +76,7 @@ import { deviceGroupSize, deviceGroupNames } from '../config.js';
 import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js';
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
-import { DeviceReadiness, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
+import { DeviceReadiness, holdReason, mcpToolWorkers, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
@@ -698,10 +698,22 @@ export async function startUIServer(
     }
   }
 
+  /**
+   * Something outside the workers touched these devices (a mirror gesture, an
+   * MCP tool). The server's readiness claim goes stale, and so must each
+   * worker's own prepared records — the run consumes those, and a preparation
+   * skips any device still holding one (PILOT-1195). Sent in every readiness
+   * state: a touch during a run outdates the records just the same. A worker
+   * still starting is not in `uiWorkers` yet, so only an MCP tool (the mirror
+   * has no client for it) can touch its devices unseen.
+   */
   function invalidateWorkers(reason: StaleReason, workerIds?: number[]): void {
     for (const w of uiWorkers) {
       if (w.retired) continue;
       if (workerIds && !workerIds.includes(w.id)) continue;
+      try {
+        w.process.send({ type: 'invalidate-prepared' } satisfies UIWorkerMessage);
+      } catch { /* IPC closed */ }
       readinessEvent(w, { type: 'invalidate', reason });
     }
   }
@@ -724,12 +736,13 @@ export async function startUIServer(
   }
 
   /** Route an MCP device interaction to the worker(s) it touched. */
-  function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined): void {
+  function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined, device: string | undefined, status: 'completed' | 'error'): void {
     if (!MUTATING_MCP_TOOLS.has(tool)) return;
-    const projectName = typeof args?.project === 'string' ? args.project : undefined;
-    const bucket = projectName ? ctx.bucketByProject?.get(projectName) : undefined;
-    const targets = bucket ? uiWorkers.filter((w) => w.bucketSignature === bucket).map((w) => w.id) : undefined;
-    invalidateWorkers('mcp-tool', targets);
+    const live = uiWorkers.filter((w) => !w.retired).map((w) => ({
+      id: w.id,
+      devices: workerDevicesInfo(w).map((d) => ({ serial: d.deviceSerial, name: d.name })),
+    }));
+    invalidateWorkers('mcp-tool', mcpToolWorkers(device, args, live, status));
   }
 
   let screenPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1470,7 +1483,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
     if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
     broadcast(mcpMsg);
-    if (event.status !== 'started') invalidateForMcpTool(event.tool, event.args);
+    if (event.status !== 'started') invalidateForMcpTool(event.tool, event.args, event.device, event.status);
   });
 
   // ─── Test Discovery ───
@@ -2182,6 +2195,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
      * passes it; a respawn passes false (it must not wipe the app mid-session).
      */
     forceInstall: boolean,
+    /**
+     * The hold the replaced worker was in (a respawn that reused the device
+     * as it was): resumed instead of preparing, so a code reload does not
+     * reset a device someone drove to a screen.
+     */
+    hold?: StaleReason,
   ): Promise<UIWorkerHandle> {
     // The rest of this worker's device group (`use.devices`), each on a
     // daemon of its own — adopted from the CLI when it opened them beside
@@ -2473,7 +2492,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     });
     attachReadiness(worker);
     broadcastWorkerStatus(worker, 'idle');
-    readinessEvent(worker, { type: 'worker-ready', initialPolicy: worker.initialPolicy });
+    readinessEvent(worker, { type: 'worker-ready', initialPolicy: worker.initialPolicy, hold });
     return worker;
   }
 
@@ -3561,6 +3580,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // without this flag).
     worker.respawning = true;
     worker.retired = true;
+    const hold = holdReason(worker.readiness?.state);
     readinessEvent(worker, { type: 'worker-retired' });
     try {
       await terminateWorkerProcess(worker);
@@ -3586,6 +3606,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       const newWorker = await initializeOneWorker(
         worker.id, worker.deviceSerial, daemonPort, agentPort, daemonBin, undefined, undefined, undefined, adopt,
         false, false,
+        // Only an adopting respawn leaves the device as it was; a worker that
+        // starts its own daemon relaunches the app, which ends any hold.
+        adopt ? hold : undefined,
       );
       // Preserve the friendly display name from before respawn.
       newWorker.displayName = worker.displayName;
@@ -3650,9 +3673,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   async function recycleStaleWorkers(reason: string): Promise<void> {
     // A worker mid-background-prepare is deliberately skipped: killing it now
     // wastes the preparation for nothing — it stays codeStale and
-    // ensureWorkersReady recycles it before the next run anyway.
+    // ensureWorkersReady recycles it before the next run anyway. So is a held
+    // one: a respawn that cannot adopt relaunches the app, and the device is
+    // held for someone driving it (an agent writing the screen object it just
+    // explored, say).
     const stale = uiWorkers.filter(
-      (w) => w.codeStale && !w.retired && !w.busy && w.readiness?.state.kind !== 'preparing',
+      (w) => w.codeStale && !w.retired && !w.busy && w.readiness?.state.kind !== 'preparing'
+        && !holdReason(w.readiness?.state),
     );
     await Promise.allSettled(stale.map((w) => recycleWorker(w, reason)));
   }
@@ -3678,6 +3705,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           }
         })());
       } else if (worker.codeStale && !worker.busy) {
+        // Held workers too: dispatch never re-checks `codeStale`, so a worker
+        // skipped here could run this run's files on old code. An adopting
+        // respawn keeps the hold; one with its own daemon relaunches the app.
         work.push(recycleWorker(worker, 'source files changed'));
       }
     }
@@ -5366,7 +5396,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
           if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
           broadcast(mcpMsg);
-          if (mcpMsg.status !== 'started') invalidateForMcpTool(mcpMsg.tool, mcpMsg.args);
+          if (mcpMsg.status !== 'started') invalidateForMcpTool(mcpMsg.tool, mcpMsg.args, typeof mcpMsg.device === 'string' ? mcpMsg.device : undefined, mcpMsg.status);
         } catch { /* ignore malformed */ }
         res.writeHead(200);
         res.end('OK');

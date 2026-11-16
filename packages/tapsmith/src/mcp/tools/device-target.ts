@@ -1,6 +1,7 @@
 import { resolveDeviceTarget, type RequestedProject } from '../connection.js';
 import type { TapsmithGrpcClient } from '../../grpc-client.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
+import { noteToolDevice } from '../events.js';
 
 /**
  * How a device tool says which device it means.
@@ -84,7 +85,9 @@ export async function deviceTargetFor(
     : undefined;
 
   try {
-    return await resolveDeviceTarget({ device, project });
+    const target = await resolveDeviceTarget({ device, project });
+    noteToolDevice(target.device);
+    return target;
   } catch (err) {
     throw withTargetFailures(withGroupNames(err, request.device, dispatcher), [request.device, device], dispatcher);
   }

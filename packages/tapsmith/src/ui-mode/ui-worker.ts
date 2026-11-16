@@ -601,6 +601,14 @@ process.on('message', (msg: UIWorkerMessage) => {
     case 'cancel-prepare':
       if (currentPrepare?.prepareId === msg.prepareId) currentPrepare.abort.abort();
       break;
+    case 'invalidate-prepared':
+      // Queued, not immediate: a preparation already on the device (or
+      // queued behind a run, where `cancel-prepare` cannot reach it) records
+      // itself when it finishes, and that record predates the touch too.
+      enqueue(async () => {
+        for (const s of sessions) s.prepared = undefined;
+      });
+      break;
     case 'abort':
       currentAbortController?.abort();
       break;

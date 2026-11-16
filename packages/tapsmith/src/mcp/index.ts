@@ -25,6 +25,7 @@ import { BRIDGED_ENV, mcpActivityFilePath, uiPortFilePath } from './port-file.js
 import {
   McpEventEmitter,
   nextCallId,
+  runWithToolDevice,
   summarizeResult,
   truncateResultText,
   type McpClientInfo,
@@ -203,8 +204,10 @@ async function callToolWithEvents(
     timestamp: start,
   });
 
+  // The device the tool resolves, for UI mode's invalidation (PILOT-1195).
+  const target: { device?: string } = {};
   try {
-    const result = await callback() as CallToolResult;
+    const result = await runWithToolDevice(target, callback) as CallToolResult;
     const elapsed = Date.now() - start;
     const resultText = (result.content ?? [])
       .filter((c: { type: string }) => c.type === 'text')
@@ -227,6 +230,7 @@ async function callToolWithEvents(
       error: errorText,
       durationMs: elapsed,
       timestamp: start,
+      device: target.device,
     });
 
     return result;
@@ -239,6 +243,7 @@ async function callToolWithEvents(
       error: err instanceof Error ? err.message : String(err),
       durationMs: Date.now() - start,
       timestamp: start,
+      device: target.device,
     });
     throw err;
   }

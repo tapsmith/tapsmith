@@ -3,6 +3,7 @@ import {
   MCP_EVENT_RESULT_TEXT_LIMIT,
   McpEventEmitter,
   nextCallId,
+  noteToolDevice,
   summarizeResult,
   truncateResultText,
   type McpClientInfo,
@@ -158,6 +159,47 @@ describe('MCP tool call event wrapping', () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe('MCP tool call device', () => {
+  // UI mode invalidates the worker whose device a tool touched (PILOT-1195);
+  // the event has to say which device that was, since `args` often names none.
+  it('carries the device the tool resolved, per call', async () => {
+    const events = new McpEventEmitter();
+    const toolEvents: McpToolCallEvent[] = [];
+    events.onToolCall(event => toolEvents.push(event));
+    const server = createMcpServer({ events, dispatcher: makeDispatcher() });
+    server.tool('probe_device', 'test', async () => {
+      await Promise.resolve();
+      noteToolDevice('emulator-5556');
+      return { content: [{ type: 'text' as const, text: 'ok' }] };
+    });
+    server.tool('probe_throw', 'test', async () => {
+      noteToolDevice('SIM-1');
+      throw new Error('boom');
+    });
+    try {
+      const callTool = (server.server as unknown as {
+        _requestHandlers: Map<string, (request: unknown, extra: unknown) => Promise<CallToolResult>>
+      })._requestHandlers.get('tools/call')!;
+      await callTool({ method: 'tools/call', params: { name: 'probe_device', arguments: {} } }, {});
+      await callTool({ method: 'tools/call', params: { name: 'tapsmith_session_info', arguments: {} } }, {});
+      await callTool({ method: 'tools/call', params: { name: 'probe_throw', arguments: {} } }, {}).catch(() => {});
+      const done = toolEvents.filter((e) => e.status !== 'started');
+      expect(done.map((e) => [e.tool, e.device])).toEqual([
+        ['probe_device', 'emulator-5556'],
+        ['tapsmith_session_info', undefined],
+        ['probe_throw', 'SIM-1'],
+      ]);
+      expect(toolEvents.filter((e) => e.status === 'started').every((e) => e.device === undefined)).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('is a no-op outside a tool call', () => {
+    expect(() => noteToolDevice('emulator-5554')).not.toThrow();
   });
 });
 
