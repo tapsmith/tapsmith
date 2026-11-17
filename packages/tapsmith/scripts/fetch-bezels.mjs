@@ -20,6 +20,14 @@
  * script only to regenerate frames; then paste the printed metadata into
  * src/ui-mode/assets/bezels/frames.ts.
  *
+ * Licence: bezel.fit's terms (https://bezel.fit/terms, last updated
+ * 2026-05-07, checked 2026-11-17) say "You keep all rights to the screenshots
+ * you upload and to the framed PNGs the API returns" and that the service is
+ * "free for personal and commercial use"; the frames "depict third-party
+ * hardware", and using them within each manufacturer's trademark guidelines
+ * is the user's responsibility. No attribution is required. Re-check the
+ * terms before regenerating. (Also recorded in frames.ts.)
+ *
  * Requirements: ImageMagick (`magick`) on PATH. Node 18+ (global fetch).
  * Usage: node scripts/fetch-bezels.mjs
  */
