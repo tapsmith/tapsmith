@@ -1049,6 +1049,11 @@ message StartNetworkCaptureResponse {
   // false. The runner records it per device in the trace metadata, so a trace
   // captured through the host-wide system proxy says so.
   NetworkCaptureRoute route = 5;
+  // True when the device does not trust Tapsmith's CA (an iOS simulator whose
+  // CA install failed, an Android emulator without adb root), so the proxy
+  // passes HTTPS through to its servers uncaptured: routes and network
+  // waiters can see only plain HTTP. error_message carries the warning.
+  bool https_passthrough = 6;
 }
 
 // How a device's traffic is routed into the capture proxy.

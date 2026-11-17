@@ -421,9 +421,9 @@ async function runFileWithRecovery(
         testFilter: selection.testFilter,
         fullNames: selection.fullNames,
         ...deserializeGrepFilters(selection.grep),
-        onNetworkEntries: (entries, networkCaptureEnabled, networkCaptureRoute) => {
+        onNetworkEntries: (entries, networkCaptureEnabled, networkCaptureRoute, networkHttpsPassthrough) => {
           for (const { entries: safe, bodies } of encodeBodies(entries)) {
-            send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled, networkCaptureRoute: networkCaptureRoute ?? null });
+            send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled, networkCaptureRoute: networkCaptureRoute ?? null, networkHttpsPassthrough: networkHttpsPassthrough === true });
           }
         },
       });

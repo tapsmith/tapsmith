@@ -80,6 +80,9 @@ async function buildTraceDeviceInfo(
   if (rd.device && networkCapturing?.has(rd.device) && rd.device._networkCaptureRoute) {
     info.networkCaptureRoute = rd.device._networkCaptureRoute;
   }
+  if (rd.device && networkCapturing?.has(rd.device) && rd.device._networkHttpsPassthrough) {
+    info.networkHttpsPassthrough = true;
+  }
   if (rd.device?._fetchDeviceInfo) {
     try {
       const cached = await rd.device._fetchDeviceInfo(serial);
@@ -398,7 +401,8 @@ async function startSessionNetworkCapture(opts: RunOptions): Promise<void> {
 /**
  * Warn that a failed test's routes never fired although the proxy was running, when
  * the capture shows why (PILOT-775): the device passed HTTPS through
- * uncaptured (a Google Play emulator image cannot trust Tapsmith's CA; a
+ * uncaptured (a Google Play emulator image cannot trust Tapsmith's CA, nor
+ * an iOS simulator whose CA install failed; a
  * configured or certificate-rejecting host is tunneled), or the proxy only
  * came up with the test's first route, or with its file in a session whose
  * app was already running, after the app may have opened the
@@ -445,8 +449,10 @@ function _warnUnfiredRoutes(
       (reasons.passthroughHosts.length > 5 ? `, and ${reasons.passthroughHosts.length - 5} more` : '');
     possible.push(
       `HTTPS to ${hosts} passed through the network proxy uncaptured, where routes cannot see it ` +
-        "(the device cannot trust Tapsmith's CA — a Google Play emulator image has no adb root, so use a " +
-        "Google APIs image —, the host is in trace.networkPassthroughHosts, or the app rejected Tapsmith's certificate)",
+        "(the device does not trust Tapsmith's CA — a Google Play emulator image has no adb root, so use a " +
+        'Google APIs image; on an iOS simulator, installing the CA failed, as the "Network capture warning" ' +
+        "printed when capture started says —, the host is in trace.networkPassthroughHosts, or the app rejected " +
+        "Tapsmith's certificate)",
     );
   }
   if (reasons.proxyStartedLate === 'after-launch') {
@@ -1476,7 +1482,13 @@ export interface RunOptions {
    * reached the proxy — `ios-system-proxy` (host-wide, may include other apps'
    * traffic) whenever any device used it.
    */
-  onNetworkEntries?: (entries: NetworkEntry[], networkCaptureEnabled?: boolean, networkCaptureRoute?: NetworkCaptureRoute) => void;
+  onNetworkEntries?: (
+    entries: NetworkEntry[],
+    networkCaptureEnabled?: boolean,
+    networkCaptureRoute?: NetworkCaptureRoute,
+    /** A routed device did not trust Tapsmith's CA, so its HTTPS passed through uncaptured (PILOT-1183). */
+    networkHttpsPassthrough?: boolean,
+  ) => void;
   /**
    * Append a unique query parameter to the dynamic import URL so Node.js
    * treats it as a new module. Required by persistent processes (UI workers)
@@ -2797,6 +2809,9 @@ async function runSuiteContext(
         if ([...routed].some((d) => d._networkCaptureRoute === 'ios-system-proxy')) return 'ios-system-proxy';
         return primary && routed.has(primary) ? primary._networkCaptureRoute : undefined;
       };
+      // Same device set as the packaged metadata's `networkHttpsPassthrough`.
+      const httpsPassthrough = (): boolean =>
+        [...routedDevices()].some((d) => d._networkHttpsPassthrough);
 
       // Devices where this test registered routes and none of them fired
       // (true when the proxy came up on demand during the test), and the
@@ -3045,7 +3060,7 @@ async function runSuiteContext(
             opts.reporter?.onTestStart?.(fullName, opts.testFilePath, { project: opts.projectName });
           }
 
-          opts.onNetworkEntries?.([], traceConfig.network, captureRoute());
+          opts.onNetworkEntries?.([], traceConfig.network, captureRoute(), httpsPassthrough());
           if (traceCollector && opts.onNetworkEntries) {
             const liveCollector = traceCollector;
             const unsupported = new Set<Device>();
@@ -3069,7 +3084,7 @@ async function runSuiteContext(
                 networkSnapshotEntries(),
                 liveCollector.events, requestContext.getNetworkEntries(),
               );
-            }, (entries) => opts.onNetworkEntries?.(entries, traceConfig.network, captureRoute()), opts.abortSignal);
+            }, (entries) => opts.onNetworkEntries?.(entries, traceConfig.network, captureRoute(), httpsPassthrough()), opts.abortSignal);
           }
 
           // Replay beforeAll events into this test's trace so they appear in
@@ -3541,7 +3556,7 @@ async function runSuiteContext(
 
         // Notify UI mode with the full set of network entries (device + API)
         if (networkEntries && opts.onNetworkEntries) {
-          opts.onNetworkEntries(networkEntries, traceConfig.network, captureRoute());
+          opts.onNetworkEntries(networkEntries, traceConfig.network, captureRoute(), httpsPassthrough());
         }
         if (collector) {
           const retain = shouldRetain(traceConfig.mode, status !== 'failed', attempt);

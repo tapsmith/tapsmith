@@ -1122,6 +1122,42 @@ test.describe("Network tab", () => {
         await expect(network.hostWideNotice).toHaveCount(0)
       })
     }
+
+    // PILOT-1183: a device that did not trust Tapsmith's CA had its HTTPS
+    // tunneled uncaptured; the tab must say why HTTPS rows have no content.
+    const untrusted = (networkHttpsPassthrough?: boolean) => ({
+      device: {
+        ...iosSim("ios-network-extension").device,
+        ...(networkHttpsPassthrough !== undefined ? { networkHttpsPassthrough } : {}),
+      },
+    })
+
+    test("says HTTPS was passed through when the device did not trust the CA", async ({ viewer, detailTabs, network }) => {
+      await openWithNetwork(viewer, { metadata: untrusted(true) })
+      await detailTabs.select("Network")
+
+      await expect(network.httpsPassthroughNotice).toContainText("did not trust Tapsmith's CA")
+      await expect(network.httpsPassthroughNotice).toContainText("Plain HTTP")
+      await expect(network.rows).toHaveCount(4)
+    })
+
+    test("says HTTPS was passed through on an empty capture too", async ({ viewer, detailTabs, network }) => {
+      await viewer.open({ network: [], metadata: untrusted(true) })
+      await detailTabs.select("Network")
+
+      await expect(detailTabs.noContent).toContainText("No network requests captured")
+      await expect(network.httpsPassthroughNotice).toBeVisible()
+    })
+
+    for (const flag of [false, undefined] as const) {
+      test(`shows no passthrough notice when the CA was trusted (${flag ?? "unrecorded"})`, async ({ viewer, detailTabs, network }) => {
+        await openWithNetwork(viewer, { metadata: untrusted(flag) })
+        await detailTabs.select("Network")
+
+        await expect(network.rows).toHaveCount(4)
+        await expect(network.httpsPassthroughNotice).toHaveCount(0)
+      })
+    }
   })
 })
 

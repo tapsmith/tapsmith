@@ -1260,6 +1260,8 @@ describe('runner execution', () => {
           expect(warnings[0]).toContain('HTTPS to api.example.com passed through the network proxy uncaptured');
           expect(warnings[0]).not.toContain('plain.example.com');
           expect(warnings[0]).toContain('Google Play emulator image');
+          // PILOT-1183: an iOS simulator whose CA install failed tunnels too.
+          expect(warnings[0]).toContain('on an iOS simulator, installing the CA failed');
         } finally {
           warn.mockRestore();
         }

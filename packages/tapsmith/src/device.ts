@@ -269,6 +269,13 @@ export class Device {
    * is not running or the daemon predates route reporting.
    */
   _networkCaptureRoute: NetworkCaptureRoute | undefined;
+  /**
+   * @internal — The last successful capture start passed this device's HTTPS
+   * through uncaptured: the device does not trust Tapsmith's CA (an iOS
+   * simulator whose CA install failed, an Android Play image). Recorded in
+   * trace metadata and named by network waiters that time out (PILOT-1183).
+   */
+  _networkHttpsPassthrough = false;
   /** Set by the runner on retry attempts — see _setForceColdDeepLinks. */
   private _forceColdDeepLinks = false;
 
@@ -1173,6 +1180,7 @@ export class Device {
     // Kept across the stop that ends the test: the trace metadata is written
     // after capture has been drained.
     this._networkCaptureRoute = res.success ? res.route : undefined;
+    this._networkHttpsPassthrough = res.success && res.httpsPassthrough === true;
     if (res.success) {
       this._networkCaptureActive = true;
       this._networkCaptureEverStarted = true;
@@ -1654,10 +1662,20 @@ export class Device {
 
   /**
    * Why a network waiter may have timed out, when that is down to capture
-   * rather than the app: nothing was capturing, or the proxy only
-   * came up with this wait, after the app may have opened its connections.
+   * rather than the app: nothing was capturing, the proxy only came up
+   * with this wait, after the app may have opened its connections, or the
+   * device's HTTPS passes through uncaptured (PILOT-1183).
    */
   private _networkWaiterHint(proxyWasRunning: boolean): string {
+    const passthrough = this._networkHttpsPassthrough
+      ? '. HTTPS on this device is passed through the network proxy uncaptured because the device does not ' +
+        'trust Tapsmith\'s CA (see the "Network capture warning" printed when capture started), so ' +
+        'waitForRequest() and waitForResponse() can see only plain-HTTP requests'
+      : '';
+    return this._networkCaptureHint(proxyWasRunning) + passthrough;
+  }
+
+  private _networkCaptureHint(proxyWasRunning: boolean): string {
     if (!this._networkProxyRunning) {
       return '. No network capture was running on this device, so no request could be seen: ' +
         'waitForRequest() and waitForResponse() see traffic only through Tapsmith\'s network proxy, ' +

@@ -15,6 +15,11 @@ export class NetworkPane {
     return this.page.getByRole("note").filter({ hasText: "macOS system proxy" })
   }
 
+  /** The warning shown when the device did not trust Tapsmith's CA, so HTTPS was tunneled uncaptured. */
+  get httpsPassthroughNotice() {
+    return this.page.getByRole("note").filter({ hasText: "HTTPS was passed through" })
+  }
+
   get table() {
     return this.page.getByRole("table")
   }

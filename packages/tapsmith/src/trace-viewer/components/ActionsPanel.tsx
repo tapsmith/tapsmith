@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Check, X, Type, Clock, Play, ExternalLink, MoveHorizontal, ArrowUpDown, CircleDot, ChevronDown, Hand, Pointer, Eye, Keyboard, RotateCcw, Target, Globe, Send, AlertTriangle } from 'lucide-preact';
-import type { AnyTraceEvent, ActionTraceEvent, AssertionTraceEvent, GroupTraceEvent, NetworkCaptureRoute, TraceMetadata } from '../../trace/types.js';
+import type { AnyTraceEvent, ActionTraceEvent, AssertionTraceEvent, GroupTraceEvent, NetworkCaptureRoute, TraceDeviceInfo, TraceMetadata } from '../../trace/types.js';
 import type { InFlightAction } from '../types.js';
 import { deviceTagStyle } from './device-frames.js';
 import { parseSelectorParts, selectorPartsCode, selectorValueCode } from './selector-parts.js';
@@ -170,6 +170,15 @@ const NETWORK_ROUTE_LABELS: Record<NetworkCaptureRoute, string> = {
 
 function networkRouteLabel(route: NetworkCaptureRoute | undefined): string | undefined {
   return route ? NETWORK_ROUTE_LABELS[route] ?? route : undefined;
+}
+
+/** How a device's traffic was captured, and whether its HTTPS passed through uncaptured (PILOT-1183). */
+function networkCaptureLabel(device: TraceDeviceInfo): string | undefined {
+  const parts = [
+    networkRouteLabel(device.networkCaptureRoute),
+    device.networkHttpsPassthrough ? 'HTTPS passed through uncaptured (CA not trusted)' : undefined,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
 function formatDuration(ms: number): string {
@@ -433,7 +442,7 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
               ? groupDevices.map((d) => <>
                   <span class="metadata-label">Device {d.name}</span>
                   <span class="metadata-value" data-testid="metadata-device">
-                    {[d.model, d.serial, d.osVersion, d.isEmulator ? 'emulator' : 'physical', networkRouteLabel(d.networkCaptureRoute)].filter(Boolean).join(' · ')}
+                    {[d.model, d.serial, d.osVersion, d.isEmulator ? 'emulator' : 'physical', networkCaptureLabel(d)].filter(Boolean).join(' · ')}
                   </span>
                 </>)
               : <>
@@ -449,9 +458,9 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
                 </>}
                 <span class="metadata-label">Physical</span>
                 <span class="metadata-value">{metadata.device.isEmulator ? 'No' : 'Yes'}</span>
-                {metadata.device.networkCaptureRoute && <>
+                {networkCaptureLabel(metadata.device) && <>
                   <span class="metadata-label">Network capture</span>
-                  <span class="metadata-value" data-testid="metadata-network-route">{networkRouteLabel(metadata.device.networkCaptureRoute)}</span>
+                  <span class="metadata-value" data-testid="metadata-network-route">{networkCaptureLabel(metadata.device)}</span>
                 </>}
               </>}
             <span class="metadata-label">Actions</span>
