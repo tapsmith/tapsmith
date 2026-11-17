@@ -53,6 +53,8 @@ tapsmith ios setup-device
 
 On every subsequent run, Tapsmith checks whether the dev cert is still trusted *before* launching the test suite. If trust has rolled (free account expiry, cert rotation), you get an immediate, actionable error with the Settings path — no more 60-second mid-test hangs.
 
+A runner left on the phone by an older build, a profile that has since expired, or another team fails that check in the same way, and Settings has nothing to trust for it. So before reporting a trust problem, Tapsmith uninstalls that runner, installs the one from your current build and checks again. The run then carries on, or, if the device refuses the new runner too, the error says what to fix: trust the developer in Settings, rebuild because the build's profile has expired, or the reason the install failed.
+
 ## Running tests
 
 Tapsmith auto-detects both the UDID and the xctestrun for physical devices, so a minimal config is just `platform: 'ios'` + `app` + `package`:
@@ -169,6 +171,8 @@ Run `tapsmith ios setup-device` first — it surfaces most setup issues with act
 **"Developer Mode off" in `tapsmith ios setup-device`** — Settings → Privacy & Security → Developer Mode → On, then confirm after the device restarts.
 
 **"Unable to install TapsmithAgentUITests-Runner"** — the developer profile isn't trusted on the device. Settings → General → VPN & Device Management → trust it.
+
+**"The device does not trust the developer that signed the Tapsmith runner"** — Tapsmith has just installed the runner from your current build and the device still refuses it. Settings → General → VPN & Device Management → tap the Apple Development entry for your Apple ID → **Trust**. If you see *"The provisioning profile of the local agent build expired"* instead, run `tapsmith ios build-agent` again.
 
 **"iproxy not found"** — `brew install libimobiledevice`.
 

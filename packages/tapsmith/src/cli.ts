@@ -26,6 +26,7 @@ import {
   openDeviceGroup,
   openDeviceSession,
   recoverDeviceSessions,
+  resolveAgentArtifacts,
   resolveDaemonBin,
   startDaemon,
   type DeviceSession,
@@ -678,22 +679,37 @@ async function setupSequentialDeviceClaimed(
     // already installed (i.e. second-and-subsequent runs on the device)
     // — on a fresh device the probe returns 'runner-not-installed' and
     // we proceed silently so xcodebuild can install it via the normal
-    // path and trigger the iOS trust prompt.
-    const { probeCertTrust } = await import('./ios-trust-probe.js');
-    const trust = await probeCertTrust(deviceSerial);
-    if (trust.state === 'untrusted') {
-      progress?.fail('primary-device', 'developer certificate is not trusted');
+    // path and trigger the iOS trust prompt. A runner that is refused may
+    // be a stale one from an older build, profile or team: it is replaced
+    // with the local build and probed again before the run fails.
+    const { checkRunnerTrust, describeRunnerTrustFailure } = await import('./ios-trust-probe.js');
+    const trust = await checkRunnerTrust(
+      deviceSerial,
+      async () => {
+        // requireXctestrun throws the "build the agent" error when there is no build.
+        const { iosXctestrunPath } = await resolveAgentArtifacts(cfg, deviceSerial, undefined, { requireXctestrun: true });
+        if (!iosXctestrunPath) throw new Error(`No iOS agent build found for ${deviceSerial}. Run \`tapsmith ios build-agent\` first.`);
+        return iosXctestrunPath;
+      },
+      undefined,
+      (message) => {
+        if (progress) progress.update('primary-device', { state: 'running', detail: message });
+        else console.log(dim(`${message[0].toUpperCase()}${message.slice(1)}…`));
+      },
+    );
+    const failure = describeRunnerTrustFailure(trust);
+    if (failure) {
+      progress?.fail('primary-device', failure.error);
       console.error();
-      console.error('\x1b[31m✗ Tapsmith runner is installed but the developer certificate is not trusted.\x1b[0m');
+      console.error(`\x1b[31m✗ ${failure.lines[0]}\x1b[0m`);
+      for (const line of failure.lines.slice(1)) console.error(`  ${line}`);
       console.error();
-      console.error('  On the phone, open \x1b[1mSettings → General → VPN & Device Management\x1b[0m,');
-      console.error('  find \x1b[1mApple Development: <your name>\x1b[0m, and tap \x1b[1mTrust\x1b[0m.');
-      console.error();
-      console.error(dim('  Free Apple Developer accounts re-roll the profile every 7 days,'));
-      console.error(dim('  so this step recurs weekly. Re-run `tapsmith ios build-agent`'));
-      console.error(dim('  before trusting so the profile on the phone matches.'));
-      console.error();
-      throw new Error('iOS developer certificate not trusted on device');
+      throw new Error(failure.error);
+    }
+    if (trust.outcome === 'ok' && trust.replaced) {
+      const note = 'Replaced a Tapsmith runner on the device that could not launch with the local build.';
+      if (progress) progress.note(note);
+      else console.log(dim(note));
     }
     // Host-IP drift when tracing is enabled. A stale sidecar means the
     // mobileconfig points at the Mac's old LAN IP and the device will
