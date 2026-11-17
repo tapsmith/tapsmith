@@ -120,8 +120,9 @@ fn untrusted_warning(udid: &str, attempts: usize, cause: &str) -> String {
          HTTPS is passed through to its servers uncaptured, so the app's HTTPS requests still \
          work, but they appear in the trace only as passthrough entries, and device.route(), \
          waitForRequest() and waitForResponse() cannot see them; plain HTTP is still captured. \
-         This usually means CoreSimulator is overloaded or wedged: run the tests again, and if \
-         it keeps happening, shut the simulator down (`xcrun simctl shutdown {udid}`) or \
+         This lasts until Tapsmith exits. It usually means CoreSimulator is overloaded or \
+         wedged: run the tests again (quit UI mode, watch or the MCP server and start it \
+         again, since they keep this session), and if it keeps happening, shut the simulator down (`xcrun simctl shutdown {udid}`) or \
          restart CoreSimulator (`killall -9 com.apple.CoreSimulator.CoreSimulatorService`, \
          which stops every running simulator) before the next run"
     )
@@ -247,6 +248,10 @@ mod tests {
         );
         assert!(
             warning.contains(&format!("xcrun simctl shutdown {UDID}")),
+            "{warning}"
+        );
+        assert!(
+            warning.contains("quit UI mode, watch or the MCP server"),
             "{warning}"
         );
     }

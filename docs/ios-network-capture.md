@@ -171,7 +171,7 @@ What that means for the run:
 - `device.route()`, `waitForRequest()` and `waitForResponse()` cannot see HTTPS. A network wait that times out says why, and so does the warning for a test whose routes never fired.
 - Plain HTTP is still captured, mocked and waited on as usual.
 
-To recover, run the tests again. If it keeps happening, shut the simulator down (`xcrun simctl shutdown <udid>`) or restart CoreSimulator (`killall -9 com.apple.CoreSimulator.CoreSimulatorService`, which stops every running simulator) before the next run.
+Passthrough lasts until Tapsmith exits. To recover, run the tests again. UI mode, watch mode and the MCP server keep one session (and print the warning once), so quit and restart them. If it keeps happening, shut the simulator down (`xcrun simctl shutdown <udid>`) or restart CoreSimulator (`killall -9 com.apple.CoreSimulator.CoreSimulatorService`, which stops every running simulator) before the next run.
 
 ### My host's web browser traffic went through Tapsmith's proxy
 
