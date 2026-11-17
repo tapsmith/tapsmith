@@ -53,8 +53,11 @@ export function TimelineFilmstrip({ events, screenshots, metadata, selectedIndex
   // A frame with no screenshot shows a placeholder the shape of the
   // screenshots around it (a tablet or a landscape phone is not 9:19.5): the
   // first thumbnail's shape once one loads, the device's recorded screen
-  // size before that.
-  const [thumbAspect, setThumbAspect] = useState<number | undefined>(undefined);
+  // size before that. Kept per test: UI mode reuses this component as the
+  // viewed test changes, and the next test may be another device's.
+  const testKey = `${metadata.testFile ?? ''}|${metadata.testName ?? ''}|${metadata.startTime}`;
+  const [loadedThumb, setLoadedThumb] = useState<{ key: string; aspect: number } | undefined>(undefined);
+  const thumbAspect = loadedThumb?.key === testKey ? loadedThumb.aspect : undefined;
   const res = metadata.device.screenResolution;
   const placeholderAspect = thumbAspect
     ?? (res && res.width > 0 && res.height > 0 ? res.width / res.height : undefined);
@@ -179,7 +182,7 @@ export function TimelineFilmstrip({ events, screenshots, metadata, selectedIndex
             onClick={() => onSelect(i)}
             onLoad={thumbAspect === undefined ? (e) => {
               const img = e.currentTarget as HTMLImageElement;
-              if (img.naturalWidth > 0 && img.naturalHeight > 0) setThumbAspect(img.naturalWidth / img.naturalHeight);
+              if (img.naturalWidth > 0 && img.naturalHeight > 0) setLoadedThumb({ key: testKey, aspect: img.naturalWidth / img.naturalHeight });
             } : undefined}
           />
         ) : (

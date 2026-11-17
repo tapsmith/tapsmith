@@ -12,6 +12,8 @@ import { solidPng } from "../../png.js"
 
 const DOUBLE_TAP = "Gestures screen > double tap registers double tap gesture"
 const TEST_NAME = "double tap registers double tap gesture"
+const LONG_PRESS = "Gestures screen > long press registers long press"
+const LONG_PRESS_NAME = "long press registers long press"
 
 test.describe("Run lifecycle", () => {
   test.describe("Isolation metadata", () => {
@@ -429,6 +431,35 @@ test.describe("Run lifecycle", () => {
       await expect(filmstrip.frames).toHaveCount(2)
       // Completed events land 100ms apart in the builder.
       await expect(filmstrip.labels).toHaveText(["0ms", "100ms"])
+    })
+
+    test("sizes each test's placeholders from that test's own screenshots", async ({ app, explorer, filmstrip }) => {
+      const ui = app
+      const landscape = solidPng(400, 180).toString("base64")
+      const portrait = solidPng(180, 400).toString("base64")
+      // Two tests: one with landscape screenshots, one with portrait ones,
+      // each starting with a step that has no screenshot (a placeholder).
+      for (const [name, shot] of [[DOUBLE_TAP, landscape], [LONG_PRESS, portrait]] as const) {
+        ui.send({ type: "test-start", fullName: name, filePath: GESTURES_FILE })
+        ui.send(...action({ testFullName: name, actionIndex: 0, action: "appReset" }))
+        ui.send(...action({ testFullName: name, actionIndex: 1, action: "tap", screenshotBefore: shot }))
+        ui.send({ type: "test-status", fullName: name, filePath: GESTURES_FILE, status: "passed", duration: 300 })
+      }
+      await explorer.expandAll()
+
+      const placeholderMatchesThumb = async () => {
+        const p = await filmstrip.placeholders.first().boundingBox()
+        const t = await filmstrip.frames.nth(1).locator("img").boundingBox()
+        return !!p && !!t && Math.abs(p.width / p.height - t.width / t.height) < 0.1
+      }
+      await explorer.clickNode(TEST_NAME)
+      await expect(filmstrip.placeholders).toHaveCount(1)
+      await expect.poll(placeholderMatchesThumb).toBe(true)
+      // The strip is reused for the next test: its placeholder must not keep
+      // the landscape shape.
+      await explorer.clickNode(LONG_PRESS_NAME)
+      await expect(filmstrip.placeholders).toHaveCount(1)
+      await expect.poll(placeholderMatchesThumb).toBe(true)
     })
   })
 
