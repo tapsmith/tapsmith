@@ -476,10 +476,11 @@ struct KeyboardDismissPlanner {
     /// the screen's background (React Native's ImageBackground, PILOT-1177),
     /// labeled or not (SwiftUI labels an asset image with its name). A
     /// tappable image is wrapped in a button or labeled view, which still
-    /// blocks. The test-hooks marker takes no touches.
+    /// blocks. The test-hooks marker takes no touches, and neither does
+    /// iOS 27's container-sized toolbar host (its items still block).
     private func isPlain(_ i: Int) -> Bool {
         let node = nodes[i]
-        if analyzer.isTapsmithHooksMarker(node) { return true }
+        if analyzer.isTapsmithHooksMarker(node) || analyzer.isBarHost(i) { return true }
         switch node.elementType {
         case .application, .window:
             return true

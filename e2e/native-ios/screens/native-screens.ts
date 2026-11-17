@@ -225,3 +225,11 @@ export class UIKitGesturesScreen {
   get longPressTarget() { return this.device.getByRole("button", { name: "Long press me" }) }
   get pinchTarget() { return this.device.getByRole("button", { name: "Pinch me" }) }
 }
+
+export class NativeToolbarScreen {
+  constructor(private device: Device) {}
+
+  /** A bottom-toolbar item, or a list row (both buttons). */
+  button(name: string) { return this.device.getByRole("button", { name, exact: true }) }
+  lastAction(name: string) { return this.device.getByText(`Last action: ${name}`, { exact: true }) }
+}

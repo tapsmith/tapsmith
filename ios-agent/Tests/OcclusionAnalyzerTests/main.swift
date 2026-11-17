@@ -270,6 +270,145 @@ checkPoint("a sheet's header button over the presenter's nav bar is not clipped"
            analyzer(sheetRows).analyze(button("Cancel", R(16, 72, 80, 40)), isHittable: true),
            CGPoint(x: 56, y: 92))
 
+// ─── iOS 27 full-window toolbar host (PILOT-1207) ───
+
+// Recorded from an iPhone 17 Pro / iOS 27.2 simulator: every app window gets a
+// last child `Toolbar` ("Toolbar"/"Toolbar") the size of the window, with one
+// empty `.other` in it, painted after all content.
+let ios27Form: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .navigationBar, "", "Login Form", R(0, 62, 402, 106)),
+    (4, .button, "Native Screens", "BackButton", R(16, 62, 44, 44)),
+    (3, .other, "", "", screen),
+    (4, .collectionView, "", "", screen),
+    (5, .cell, "", "", R(20, 172, 362, 44)),
+    (6, .textField, "", "", R(36, 183, 330, 22)),
+]
+let ios27Placeholder: [Row] = [
+    (3, .toolbar, "Toolbar", "Toolbar", screen),
+    (4, .other, "", "", screen),
+]
+let email = OcclusionAnalyzer.Target(frame: R(36, 183, 330, 22), elementType: .textField, label: "", identifier: "")
+for hittable in [true, false] {
+    check("iOS 27's empty full-window toolbar does not cover a text field (hittable: \(hittable))",
+          analyzer(ios27Form + ios27Placeholder).analyze(email, isHittable: hittable),
+          .clear(point: CGPoint(x: 201, y: 194), visible: R(36, 183, 330, 22)))
+}
+
+// A real bottom toolbar on iOS 27: the same full-window host, now holding the
+// items as floating capsules near the bottom. The host's frame is not the
+// bar; the items are what is drawn over the content.
+let ios27BottomBar: [Row] = [
+    (3, .toolbar, "Toolbar", "Toolbar", screen),
+    (4, .other, "", "", screen),
+    (5, .other, "", "", R(0, 62, 402, 812)),
+    (6, .other, "", "", R(28, 798, 91, 48)),
+    (7, .button, "Archive", "", R(33, 804, 81, 36)),
+    (6, .other, "", "", R(267, 798, 107, 48)),
+    (7, .button, "Compose", "", R(272, 804, 97, 36)),
+]
+let rowUnderArchive = OcclusionAnalyzer.Target(frame: R(16, 796, 120, 52), elementType: .cell, label: "", identifier: "")
+let bottomBarScreen = ios27Form + [(5, .cell, "", "", R(16, 796, 120, 52))] + ios27BottomBar
+check("iOS 27: a row under a bottom-toolbar item is covered by the item, not by the host",
+      analyzer(bottomBarScreen).analyze(rowUnderArchive, isHittable: false),
+      .covered(by: "button \"Archive\""))
+check("iOS 27: a text field above a bottom toolbar is not covered by its host",
+      analyzer(ios27Form + ios27BottomBar).analyze(email, isHittable: true),
+      .clear(point: CGPoint(x: 201, y: 194), visible: R(36, 183, 330, 22)))
+checkPoint("iOS 27: a bottom-toolbar item is touched where it is",
+           analyzer(ios27Form + ios27BottomBar).analyze(button("Compose", R(272, 804, 97, 36)), isHittable: true),
+           CGPoint(x: 320.5, y: 822))
+// A bar of bar size still covers what is under it, on any runtime.
+check("a row fully under a bar-sized bottom toolbar is covered by it",
+      analyzer(ios27Form + [(5, .cell, "", "", R(16, 800, 370, 40)), (3, .toolbar, "", "", R(0, 790, 402, 84))])
+          .analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      .covered(by: "toolbar"))
+// The host spans its own window, which need not be the screen (an iPad
+// split view, a Stage Manager window).
+let halfWindow = R(0, 0, 201, 874)
+check("a toolbar spanning its window narrower than the screen is a host too",
+      analyzer([
+          (0, .application, "App", "", screen),
+          (1, .window, "", "", halfWindow),
+          (2, .other, "", "", halfWindow),
+          (3, .textField, "", "", R(20, 183, 160, 22)),
+          (2, .toolbar, "Toolbar", "Toolbar", halfWindow),
+      ]).analyze(.init(frame: R(20, 183, 160, 22), elementType: .textField, label: "", identifier: ""), isHittable: true),
+      .clear(point: CGPoint(x: 100, y: 194), visible: R(20, 183, 160, 22)))
+
+// A sheet on iOS 27 gets its own host, the size of the sheet's container
+// (below the status bar), laid over the sheet's nav bar and content.
+let ios27Sheet: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .other, "", "", R(0, 62, 402, 812)),
+    (4, .navigationBar, "", "Sheet", R(0, 78, 402, 106)),
+    (5, .other, "", "", R(316, 82, 66, 36)),
+    (6, .button, "Done", "", R(316, 82, 66, 36)),
+    (5, .staticText, "Sheet", "", R(16, 135, 93, 41)),
+    (4, .other, "", "", R(0, 62, 402, 812)),
+    (5, .staticText, "Sheet content", "", R(147, 501, 107, 21)),
+    (4, .toolbar, "Toolbar", "Toolbar", R(0, 62, 402, 812)),
+    (5, .other, "", "", R(0, 62, 402, 812)),
+]
+for hittable in [true, false] {
+    checkPoint("iOS 27: a sheet's own toolbar host does not cover its Done button (hittable: \(hittable))",
+               analyzer(ios27Sheet).analyze(button("Done", R(316, 82, 66, 36)), isHittable: hittable),
+               CGPoint(x: 349, y: 100))
+}
+// A real bar wrapped in a view of its own size (a UIViewRepresentable host)
+// fills its container too, but is laid over nothing in it: still a bar.
+check("a bar alone in a wrapper of its own size still covers what is under it",
+      analyzer(ios27Form + [
+          (5, .cell, "", "", R(16, 800, 370, 40)),
+          (3, .other, "", "", R(0, 790, 402, 84)),
+          (4, .toolbar, "", "", R(0, 790, 402, 84)),
+      ]).analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      .covered(by: "toolbar"))
+
+// ... and so does one in a bar-sized wrapper with something smaller laid out
+// before it (a badge before a custom React Native tab bar): it is not laid
+// over content that fills the wrapper, so it is not a host.
+checkPoint("a bar in a bar-sized wrapper after a sibling still clips a row half under it",
+           analyzer(ios27Form + [
+               (5, .cell, "", "", R(16, 770, 370, 60)),
+               (3, .other, "", "", R(0, 790, 402, 84)),
+               (4, .staticText, "3", "", R(300, 792, 16, 16)),
+               (4, .tabBar, "", "", R(0, 790, 402, 84)),
+               (5, .button, "Home", "", R(20, 795, 80, 50)),
+           ]).analyze(.init(frame: R(16, 770, 370, 60), elementType: .cell, label: "", identifier: ""), isHittable: true),
+           CGPoint(x: 201, y: 780))
+
+// A sheet at a small detent (or an iPad popover) gets the same host, however
+// short: a host is told by what it is laid over, not by its size.
+let shortSheet: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .other, "", "", R(0, 624, 402, 250)),
+    (4, .navigationBar, "", "Sheet", R(0, 640, 402, 54)),
+    (4, .other, "", "", R(0, 624, 402, 250)),
+    (5, .button, "Save", "", R(150, 760, 102, 44)),
+    (4, .toolbar, "Toolbar", "Toolbar", R(0, 624, 402, 250)),
+    (5, .other, "", "", R(0, 624, 402, 250)),
+]
+checkPoint("iOS 27: a short sheet's toolbar host does not cover its button",
+           analyzer(shortSheet).analyze(button("Save", R(150, 760, 102, 44)), isHittable: true),
+           CGPoint(x: 201, y: 782))
+// A full-height bar whose earlier sibling is smaller than the container
+// (a side rail after a badge) is still a bar.
+check("a bar filling a tall wrapper after a smaller sibling still covers what is under it",
+      analyzer(ios27Form + [
+          (5, .cell, "", "", R(16, 300, 40, 40)),
+          (3, .other, "", "", R(0, 0, 80, 874)),
+          (4, .staticText, "3", "", R(60, 300, 16, 16)),
+          (4, .toolbar, "", "", R(0, 0, 80, 874)),
+      ]).analyze(.init(frame: R(16, 300, 40, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      .covered(by: "toolbar"))
+
 // ─── Scroll viewports ───
 
 // A row scrolled half out of its scroll view, under a JS header (an unlabeled
