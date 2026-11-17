@@ -468,6 +468,34 @@ until it times out.
 If your tests do not need network capture, disable it in your tapsmith config
 (`trace: { network: false }`).
 
+A loaded runner can stall CoreSimulator while Tapsmith installs its CA certificate in the
+simulator. Tapsmith retries the install; if it still fails, it passes HTTPS through uncaptured for
+the rest of the session and warns that routes and network waits can't see HTTPS. See
+[When the CA certificate can't be installed](./ios-network-capture.md#when-the-ca-certificate-cant-be-installed).
+
+#### The first HTTPS request stalls on a fresh simulator
+
+On each boot, a simulator downloads an update to `trustd`'s certificate-pinning data from Apple's
+MobileAsset servers. When the update lands, 8 to 15 minutes after boot depending on Apple's servers,
+`trustd` stops answering certificate checks for about 2 minutes while it applies it. Every HTTPS
+request in that window waits, so the first network assertion that falls in it times out with the
+request still pending (an in-flight row in the trace's Network tab), and a retry usually passes.
+It happens with or without network capture, and only once per boot.
+
+Tapsmith's own iOS workflows avoid it by making Apple's catalog hosts unreachable before booting
+the simulator. The simulator resolves names through the host, so `/etc/hosts` covers it:
+
+```yaml
+- name: Block the simulator's MobileAsset catalog hosts
+  run: |
+    printf '0.0.0.0 mesu.apple.com\n0.0.0.0 gdmf.apple.com\n' | sudo tee -a /etc/hosts
+    sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+```
+
+We recommend this step on GitHub-hosted macOS runners and other runners that are thrown away after
+the job. Don't add it to a developer Mac or a long-lived self-hosted runner: the same hosts serve the
+Mac's own software updates and asset downloads.
+
 See [iOS network capture](./ios-network-capture.md) for the full first-run walkthrough and troubleshooting.
 
 ## General CI Tips
