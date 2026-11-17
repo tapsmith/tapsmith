@@ -112,31 +112,59 @@ await device.getByRole("image").pinchOut({ scale: 2 })
 await device.getByLabel("Reorder").dragTo(device.getByText("Pinned"))`,
 }
 
+// Columns: Tapsmith, Appium, Maestro, Detox, e2e (e2e.com, tester-army/e2e).
+// e2e is scored on its mobile engine (@e2e-dev/mobile on agent-device), not
+// its Playwright web engine: browser.route, session save/restore and the
+// like are web-only there. Checked against its docs and source, Nov 2026.
+const comparisonColumns = ['Appium', 'Maestro', 'Detox', 'e2e']
+
 const comparisonRows = [
-  ['Playwright-style TypeScript API', 'Y', 'N', 'N', 'P'],
-  ['Reusable helpers, loops & fixtures', 'Y', 'Y', 'P', 'Y'],
-  ['iOS + Android single suite', 'Y', 'Y', 'Y', 'Y'],
+  // e2e: screen.getByRole/getByTestId, locator.filter and Playwright's
+  // expect matchers on devices (docs/mobile.mdx, reference/expect.mdx).
+  ['Playwright-style TypeScript API', 'Y', 'N', 'N', 'P', 'Y'],
+  ['Reusable helpers, loops & fixtures', 'Y', 'Y', 'P', 'Y', 'Y'],
+  ['iOS + Android single suite', 'Y', 'Y', 'Y', 'Y', 'Y'],
   // Appium: a server plus a driver per platform, each on its own release
   // train, plus capabilities to keep in step with Xcode / Android. Maestro's
   // single CLI install is genuinely easy. Detox needs native project
-  // integration, applesimutils and a Jest/runner config per app.
-  ['One npm install, no server or drivers', 'Y', 'N', 'Y', 'P'],
-  ['Auto-waiting on every action', 'Y', 'N', 'Y', 'Y'],
-  ['Rich assertions with auto-retry', 'Y', 'N', 'P', 'P'],
-  ['Network mocking in the test API (no mock server)', 'Y', 'P', 'N', 'N'],
+  // integration, applesimutils and a Jest/runner config per app. e2e:
+  // `npx e2e init`; agent-device is an npm dependency of @e2e-dev/mobile and
+  // starts its own daemon.
+  ['One npm install, no server or drivers', 'Y', 'N', 'Y', 'P', 'Y'],
+  ['Auto-waiting on every action', 'Y', 'N', 'Y', 'Y', 'Y'],
+  ['Rich assertions with auto-retry', 'Y', 'N', 'P', 'P', 'Y'],
+  // e2e: browser.route is in the web engine's `browser` fixture only; the
+  // mobile `device` fixture has setNetwork/setAirplaneMode (Android), no
+  // request interception.
+  ['Network mocking in the test API (no mock server)', 'Y', 'P', 'N', 'N', 'N'],
   // Appium: file push/pull primitives exist, but no container snapshot, no
   // Keystore-preserving restore and no runner integration. Maestro and Detox
   // only clear state (clearState / launchApp({ delete }), resetAppState).
-  ['Save & restore app state (log in once)', 'Y', 'P', 'N', 'N'],
-  ['Trace viewer', 'Y', 'N', 'N', 'P'],
-  ['CI sharding with merged reports', 'Y', 'N', 'P', 'P'],
+  // e2e: mobile.mdx "What differs from the web" says session save/restore is
+  // not available on devices ("sign in per test or seed the app").
+  ['Save & restore app state (log in once)', 'Y', 'P', 'N', 'N', 'N'],
+  // e2e: a markdown trace.md per failed test plus an optional single-file
+  // HTML report (steps, screenshots, video); no zip and no viewer
+  // (migrate/playwright.mdx).
+  ['Trace viewer', 'Y', 'N', 'N', 'P', 'P'],
+  // e2e: --shard exists, but "e2e can't merge shard reports yet" (ci.mdx).
+  ['CI sharding with merged reports', 'Y', 'N', 'P', 'P', 'P'],
   // Appium: two driver sessions in one test is a documented pattern, but the
   // test orchestrates them itself and nothing joins the two devices' traces.
   // Maestro (issue #2957) and Detox (issue #393) have no way to drive two
-  // devices from one flow/test.
-  ['Multi-device tests (two devices, one test)', 'Y', 'P', 'N', 'N'],
-  ['Interactive UI mode', 'Y', 'N', 'Y', 'N'],
-  ['MCP for AI agents (locators, traces)', 'Y', 'P', 'P', 'N'],
+  // devices from one flow/test. e2e: several targets run the same test once
+  // per device; one test never drives two.
+  ['Multi-device tests (two devices, one test)', 'Y', 'P', 'N', 'N', 'N'],
+  // e2e: terminal --step / --watch only, no UI.
+  ['Interactive UI mode', 'Y', 'N', 'Y', 'N', 'N'],
+  // e2e: `e2e mcp` live device sessions, `e2e explore`, a coding-agent skill.
+  ['MCP for AI agents (locators, traces)', 'Y', 'P', 'P', 'N', 'Y'],
+  // Steps written as plain-English goals that an LLM carries out at run time.
+  // Maestro: assertWithAI / extractTextWithAI (assertions only, experimental,
+  // optional by default). Detox: Pilot (pilot.perform / autoPilot). e2e:
+  // agent.act / agent.assert, with cached replay and self-healing. Tapsmith
+  // tests are deterministic code; its AI support is the MCP server above.
+  ['Natural-language test steps (LLM-driven)', 'N', 'N', 'P', 'Y', 'Y'],
 ]
 
 const threeThings = [
@@ -404,9 +432,11 @@ const threeThings = [
               <div class="tp-table-head">
                 <div class="tp-table-cell tp-table-feature">Feature</div>
                 <div class="tp-table-cell tp-table-col tp-table-us">Tapsmith</div>
-                <div class="tp-table-cell tp-table-col">Appium</div>
-                <div class="tp-table-cell tp-table-col">Maestro</div>
-                <div class="tp-table-cell tp-table-col">Detox</div>
+                {
+                  comparisonColumns.map((name) => (
+                    <div class="tp-table-cell tp-table-col">{name}</div>
+                  ))
+                }
               </div>
               {
                 comparisonRows.map((row, idx) => (
@@ -428,21 +458,13 @@ const threeThings = [
                         {row[1] === 'Y' ? '✓' : row[1] === 'P' ? '◐' : '—'}
                       </span>
                     </div>
-                    <div class="tp-table-cell tp-table-col" data-mark={row[2]}>
-                      <span class:list={['tp-mark', `tp-mark-${row[2].toLowerCase()}`]}>
-                        {row[2] === 'Y' ? '✓' : row[2] === 'P' ? '◐' : '—'}
-                      </span>
-                    </div>
-                    <div class="tp-table-cell tp-table-col" data-mark={row[3]}>
-                      <span class:list={['tp-mark', `tp-mark-${row[3].toLowerCase()}`]}>
-                        {row[3] === 'Y' ? '✓' : row[3] === 'P' ? '◐' : '—'}
-                      </span>
-                    </div>
-                    <div class="tp-table-cell tp-table-col" data-mark={row[4]}>
-                      <span class:list={['tp-mark', `tp-mark-${row[4].toLowerCase()}`]}>
-                        {row[4] === 'Y' ? '✓' : row[4] === 'P' ? '◐' : '—'}
-                      </span>
-                    </div>
+                    {row.slice(2).map((mark) => (
+                      <div class="tp-table-cell tp-table-col" data-mark={mark}>
+                        <span class:list={['tp-mark', `tp-mark-${mark.toLowerCase()}`]}>
+                          {mark === 'Y' ? '✓' : mark === 'P' ? '◐' : '—'}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 ))
               }
@@ -450,7 +472,7 @@ const threeThings = [
           </div>
           <p class="tp-table-legend">
             ✓ supported &nbsp;&nbsp; ◐ partial / via plugin &nbsp;&nbsp; — not available
-            &nbsp;&nbsp; last verified Sep 2026
+            &nbsp;&nbsp; last verified Sep 2026 (e2e: Nov 2026)
           </p>
         </div>
       </section>
@@ -1302,11 +1324,11 @@ const threeThings = [
         border-radius: var(--tp-radius-md);
         background: var(--tp-surface);
         overflow: hidden;
-        min-width: 700px;
+        min-width: 820px;
       }
       .tp-table-head {
         display: grid;
-        grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+        grid-template-columns: 2fr repeat(5, 1fr);
         background: var(--tp-bg-2);
         border-bottom: 1px solid var(--tp-border);
       }
@@ -1331,7 +1353,7 @@ const threeThings = [
       }
       .tp-table-row {
         display: grid;
-        grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+        grid-template-columns: 2fr repeat(5, 1fr);
         border-bottom: 1px solid var(--tp-border-2);
       }
       .tp-table-row-last {
@@ -1785,7 +1807,7 @@ const threeThings = [
           padding: 0 24px;
         }
         .tp-table {
-          min-width: 580px;
+          min-width: 660px;
         }
         .tp-table-head .tp-table-feature,
         .tp-table-head .tp-table-col {
