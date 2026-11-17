@@ -53,3 +53,43 @@ export function replaySpec(lines, finalCheck) {
     "",
   ].join("\n")
 }
+
+/**
+ * What a `tapsmith_run_code` response says about each statement: the test
+ * lines of those that passed, the one that failed (if any) and its error,
+ * and which were not run. A response this cannot read is a problem.
+ *
+ * @param {object | undefined} response the JSON-RPC response to `tools/call`
+ * @returns {{ total: number, lines: string[], failed: { index: number, message: string } | null, notRun: string | null, isError: boolean } | { problem: string }}
+ */
+export function runCodeResultOf(response) {
+  if (!response) return { problem: "no response from the MCP server" }
+  if (response.error) return { problem: `protocol error: ${JSON.stringify(response.error)}` }
+  const text = resultText(response)
+  const rows = text.split("\n")
+  const lines = []
+  let total = 0
+  let failed = null
+  let notRun = null
+  for (let i = 0; i < rows.length; i++) {
+    const passed = /^Statement (\d+) of (\d+) \(line \d+\): OK$/.exec(rows[i])
+    const failure = /^Statement (\d+) of (\d+) \(line \d+\) failed: ([\s\S]*)$/.exec(rows[i])
+    const skipped = /^Not run: (.*)$/.exec(rows[i])
+    if (passed) {
+      total = Number(passed[2])
+      const line = /^Test line( \(position-dependent\))?: (.*)$/.exec(rows[i + 1] ?? "")
+      if (!line || line[2].startsWith("none")) {
+        return { problem: `statement ${passed[1]} passed without a verified test line: ${(rows[i + 1] ?? "").slice(0, 300)}` }
+      }
+      lines.push(line[2])
+      i++
+    } else if (failure) {
+      total = Number(failure[2])
+      failed = { index: Number(failure[1]), message: [failure[3], ...rows.slice(i + 1).filter((r) => !r.startsWith("Not run: "))].join("\n") }
+    } else if (skipped) {
+      notRun = skipped[1]
+    }
+  }
+  if (total === 0) return { problem: `not a run_code result: ${text.slice(0, 300)}` }
+  return { total, lines, failed, notRun, isError: response.result?.isError === true }
+}
