@@ -688,8 +688,9 @@ class ActionExecutor {
 
     // MARK: - Key Press
 
-    /// Send a key press event.
-    func pressKey(_ key: String) throws {
+    /// Send a key press event. `readScreen` reads the app's tree for the back
+    /// key, `deadline` is when the daemon stops waiting for the command.
+    func pressKey(_ key: String, readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
         switch key.lowercased() {
         case "home":
             XCUIDevice.shared.press(.home)
@@ -709,7 +710,7 @@ class ActionExecutor {
         case "space":
             typeTextWithoutFocus(" ")
         case "back":
-            try pressBack()
+            try pressBack(readScreen: readScreen, deadline: deadline)
         default:
             // Try typing the key as a character
             if key.count == 1 {
@@ -723,32 +724,45 @@ class ActionExecutor {
     }
 
     /// iOS has no hardware back button: tap the navigation stack's own back
-    /// button (`BackButton` picks it from one snapshot), with event synthesis
-    /// (no quiescence wait). A screen without one refuses — never another bar
-    /// button in its place (PILOT-1225).
-    private func pressBack() throws {
-        let snapshot: XCUIElementSnapshot
-        do {
-            snapshot = try app.snapshot()
-        } catch {
-            throw AgentError.actionFailed("Could not read the screen to find its back button: \(error.localizedDescription)")
-        }
-        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
-        switch BackButton.resolve(in: analyzer) {
-        case .tap(let point, let ancestorTypes):
-            tapCoordinates(
-                x: Int(point.x.rounded()),
-                y: Int(point.y.rounded()),
-                hold: TapTiming.hold(for: .button, within: ancestorTypes)
-            )
-        case .covered(let by):
-            throw AgentError.actionFailed("The back button is covered by \(by). Dismiss it first.")
-        case .none:
-            throw AgentError.actionFailed(
-                "No back button found. iOS does not have a hardware back button: BACK taps the "
-                    + "navigation bar's back button, and this screen has none (a stack's first screen, "
-                    + "a sheet or a dialog). Tap the control that closes it instead."
-            )
+    /// button (`BackButton` picks it from the tree), with event synthesis (no
+    /// quiescence wait). A screen without one refuses — never another bar
+    /// button in its place (PILOT-1225). `readScreen` waits out a push or pop
+    /// in progress; a screen with no back button (or a covered one) is read
+    /// again for a moment before refusing, as a push just tapped may not have
+    /// begun.
+    private func pressBack(readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
+        let started = Date()
+        while true {
+            let snapshot: XCUIElementSnapshot
+            do {
+                snapshot = try readScreen()
+            } catch {
+                throw AgentError.actionFailed("Could not read the screen to find its back button: \(error.localizedDescription)")
+            }
+            let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+            let resolution = BackButton.resolve(in: analyzer)
+            if case .tap(let point, let ancestorTypes) = resolution {
+                tapCoordinates(
+                    x: Int(point.x.rounded()),
+                    y: Int(point.y.rounded()),
+                    hold: TapTiming.hold(for: .button, within: ancestorTypes)
+                )
+                return
+            }
+            if BackButton.shouldReadAgain(started: started, now: Date(), deadline: deadline) {
+                Thread.sleep(forTimeInterval: BackButton.pollSeconds)
+                continue
+            }
+            switch resolution {
+            case .covered(let by):
+                throw AgentError.actionFailed("The back button is covered by \(by). Dismiss it first.")
+            default:
+                throw AgentError.actionFailed(
+                    "No back button found. iOS does not have a hardware back button: BACK taps the "
+                        + "navigation bar's back button, and this screen has none (a stack's first screen, "
+                        + "a sheet or a dialog). Tap the control that closes it instead."
+                )
+            }
         }
     }
 

@@ -194,12 +194,15 @@ let offScreen: [Row] = [
 ]
 check("an off-screen back button is no back button", resolve(offScreen), .none)
 
-// An alert over a pushed screen: the back button is there but covered.
+// An alert over a pushed screen: the back button is there but covered. The
+// alert's frame is its box, nowhere near the back button: a touch there lands
+// on its dimming view.
 var underAlert = pushedScreen(withHost: false)
 underAlert += [
     (1, .window, "", "", screen),
-    (2, .alert, "Delete file?", "", R(0, 0, 402, 874)),
-    (3, .button, "Delete", "", R(60, 480, 140, 44)),
+    (2, .other, "", "", screen),
+    (3, .alert, "Delete file?", "", R(40, 330, 322, 200)),
+    (4, .button, "Delete", "", R(60, 480, 140, 44)),
 ]
 switch resolve(underAlert) {
 case .covered(let by):
@@ -208,6 +211,56 @@ default:
     failures += 1
     print("FAIL a back button under an alert: got \(resolve(underAlert)), want covered")
 }
+
+// An action sheet (`.sheet`) at the bottom of the screen covers it too.
+var underActionSheet = pushedScreen(withHost: false)
+underActionSheet += [
+    (1, .window, "", "", screen),
+    (2, .sheet, "Share photo", "", R(8, 600, 386, 240)),
+    (3, .button, "Copy Link", "", R(8, 660, 386, 56)),
+]
+if case .covered = resolve(underActionSheet) {
+    print("ok   a back button under an action sheet is covered")
+} else {
+    failures += 1
+    print("FAIL a back button under an action sheet: got \(resolve(underActionSheet)), want covered")
+}
+
+// A control in a later window over the back button (a presented
+// controller's own window) covers it; one elsewhere in that window does not.
+var underWindowControl = pushedScreen(withHost: false)
+underWindowControl += [
+    (1, .window, "", "", screen),
+    (2, .button, "Debug", "", R(0, 50, 120, 70)),
+]
+if case .covered(let by) = resolve(underWindowControl) {
+    check("a control in a later window over the back button covers it", by.contains("Debug"), true)
+} else {
+    failures += 1
+    print("FAIL a later window's control over the back button: got \(resolve(underWindowControl)), want covered")
+}
+var besideWindowControl = pushedScreen(withHost: false)
+besideWindowControl += [
+    (1, .window, "", "", screen),
+    (2, .button, "Debug", "", R(300, 760, 80, 80)),
+]
+check("a control in a later window away from the back button does not cover it",
+      tapPoint(resolve(besideWindowControl)), CGPoint(x: 38, y: 84))
+
+// An in-app browser: the stack's system back button in the navigation bar,
+// and the web view's own "Back" in a bottom toolbar, painted after it.
+let browser: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .navigationBar, "", "Help", R(0, 62, 402, 54)),
+    (3, .button, "Settings", "BackButton", R(16, 62, 44, 44)),
+    (2, .webView, "", "", R(0, 116, 402, 672)),
+    (2, .toolbar, "Toolbar", "Toolbar", R(0, 788, 402, 86)),
+    (3, .button, "Back", "", R(20, 800, 44, 44)),
+    (3, .button, "Forward", "", R(80, 800, 44, 44)),
+]
+check("the system back button wins over a toolbar button labelled Back",
+      tapPoint(resolve(browser)), CGPoint(x: 38, y: 84))
 
 // Two stacks (a full-screen cover's stack painted over the screen's): the
 // one painted last.
@@ -218,6 +271,16 @@ twoStacks += [
     (3, .button, "UIKit Root", "BackButton", R(16, 62, 80, 44)),
 ]
 check("two stacks: the back button painted last", tapPoint(resolve(twoStacks)), CGPoint(x: 56, y: 84))
+
+// Reading again before refusing: for a second, and never past the
+// daemon's deadline.
+let t0 = Date(timeIntervalSinceReferenceDate: 0)
+check("reads again just after the first read",
+      BackButton.shouldReadAgain(started: t0, now: t0.addingTimeInterval(0.2), deadline: nil), true)
+check("stops after a second",
+      BackButton.shouldReadAgain(started: t0, now: t0.addingTimeInterval(0.95), deadline: nil), false)
+check("stops before the daemon's deadline",
+      BackButton.shouldReadAgain(started: t0, now: t0.addingTimeInterval(0.2), deadline: t0.addingTimeInterval(0.4)), false)
 
 if failures > 0 {
     print("\(failures) BackButton test(s) failed")

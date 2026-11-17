@@ -2572,7 +2572,11 @@ class CommandHandler {
 
         case "pressKey":
             let key = params["key"] as? String ?? ""
-            try actionExecutor.pressKey(key)
+            try actionExecutor.pressKey(
+                key,
+                readScreen: { try snapshotFinder.settledSnapshot() },
+                deadline: snapshotFinder.commandDeadline
+            )
             return ["success": true]
 
         // ─── Drag and Drop ───

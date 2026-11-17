@@ -160,6 +160,21 @@ class SnapshotElementFinder {
         return try findElements(selector, in: &snapshotDict, register: true)
     }
 
+    /// A validated snapshot (`takeSnapshot`) read again until a navigation
+    /// transition in it is over, as `findElements` waits for one: for the
+    /// back key, which picks its target from the tree (PILOT-1225).
+    func settledSnapshot() throws -> XCUIElementSnapshot {
+        try NavigationTransition.settle(
+            first: try takeSnapshot(),
+            signature: { NavigationTransition.signature(of: self.convertKeys($0.dictionaryRepresentation)) },
+            known: &outlastedTransition,
+            readDeadline: commandDeadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            next: { try takeSnapshot() }
+        )
+    }
+
     private func takeMatchableDict() throws -> [String: Any] {
         matchableDict(of: try takeSnapshot())
     }
