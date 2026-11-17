@@ -59,6 +59,10 @@ class SnapshotElementFinder {
         /// Toggle and its knob (NonAppElements.isSwitchPart, PILOT-790) — so
         /// a tap on it is delivered to the knob.
         var holdsSwitchPart = false
+        /// Whether the element is iOS 27's empty toolbar host
+        /// (BarHost.markEmptyHosts, PILOT-1219), so a live re-read still
+        /// reports no role for it.
+        var isEmptyBarHost = false
     }
 
     /// Maximum number of cached elements before eviction. Prevents unbounded
@@ -202,6 +206,8 @@ class SnapshotElementFinder {
         // A table row's accessory indicator is enabled as its row, and no
         // part of the row's text (PILOT-895).
         CellAccessories.normalizeIndicators(in: &snapshotDict)
+        // iOS 27's empty toolbar host has no role (PILOT-1219).
+        BarHost.markEmptyHosts(in: &snapshotDict)
         return snapshotDict
     }
 
@@ -234,12 +240,15 @@ class SnapshotElementFinder {
         // textfield query returns and the match set leaves out (PILOT-697).
         let treeHasReadOnlyTextView = register && selector.roleOnlyTextField
             && SnapshotElementFinder.containsReadOnlyTextView(snapshotDict)
+        // Whether the tree holds iOS 27's empty toolbar host, which a live
+        // toolbar query returns and the match set leaves out (PILOT-1219).
+        let treeHasEmptyBarHost = register && selector.roleOnlyToolbar && BarHost.containsEmptyHost(snapshotDict)
         // Whether the tree holds a collection view, which can load a cell
         // with a row's anchor later (RowBinding.plan).
         let treeHasLazyList = register && RowAnchor.containsLazyList(snapshotDict)
         var queryNodes: [QueryNode] = []
         if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel
-            || selector.roleOnlySwitch || treeHasReadOnlyTextView) {
+            || selector.roleOnlySwitch || treeHasReadOnlyTextView || treeHasEmptyBarHost) {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
         }
         var liveFocusedTextInputFetched = false
@@ -382,7 +391,10 @@ class SnapshotElementFinder {
             // trait bit rather than a dedicated element type.
             let traits = SnapshotElementFinder.extractTraits(from: nodeDict)
             let inTabBar = nodeDict[SnapshotElementFinder.inTabBarKey] as? Bool ?? false
-            let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
+            let isEmptyBarHost = nodeDict[BarHost.emptyHostKey] as? Bool ?? false
+            let role = RoleMapping.resolveRole(
+                for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost
+            )
             let isEnabled = nodeDict["enabled"] as? Bool ?? true
             let value = nodeDict["value"] as? String
             let isSelected = nodeDict["selected"] as? Bool ?? false
@@ -397,7 +409,8 @@ class SnapshotElementFinder {
                 boundsCache[elementId] = frame
                 identityCache[elementId] = CachedIdentity(
                     elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar,
-                    holdsSwitchPart: NonAppElements.isSwitch(elType) && Self.holdsSwitch(nodeDict)
+                    holdsSwitchPart: NonAppElements.isSwitch(elType) && Self.holdsSwitch(nodeDict),
+                    isEmptyBarHost: isEmptyBarHost
                 )
                 // Every minted id takes part in eviction, with or without a live
                 // query — ids that get none (placeholder, className, …) would
@@ -416,6 +429,7 @@ class SnapshotElementFinder {
                     labelIndex: labelBindings[matchIndex].index,
                     labelIndexUnique: labelBindings[matchIndex].unique, snapshotNode: nodeDict,
                     treeHasSwitchPart: treeHasSwitchPart, treeHasReadOnlyTextView: treeHasReadOnlyTextView,
+                    treeHasEmptyBarHost: treeHasEmptyBarHost,
                     treeHasLazyList: treeHasLazyList
                 )
             }
@@ -1770,7 +1784,8 @@ class SnapshotElementFinder {
                 value: value,
                 hasNameFilter: selector.hasNameFilter,
                 inTabBar: inTabBar,
-                inAlert: inAlert
+                inAlert: inAlert,
+                isEmptyBarHost: node[BarHost.emptyHostKey] as? Bool ?? false
             ) {
                 return false
             }
@@ -1962,6 +1977,7 @@ class SnapshotElementFinder {
         snapshotNode: [String: Any]? = nil,
         treeHasSwitchPart: Bool = false,
         treeHasReadOnlyTextView: Bool = false,
+        treeHasEmptyBarHost: Bool = false,
         treeHasLazyList: Bool = false
     ) {
         // Build a query that matches this element
@@ -2201,6 +2217,21 @@ class SnapshotElementFinder {
                 } else {
                     element = nil
                 }
+            } else if selector.roleOnlyToolbar, treeHasEmptyBarHost {
+                // A live toolbar query also returns iOS 27's empty toolbar
+                // hosts, which the match set leaves out, and a host holding
+                // a toolbar's items carries the same label and identifier
+                // ("Toolbar") as they do, so neither an index into the type
+                // query nor one among the matches with that identifier can
+                // be trusted: find the toolbar by its own label (and
+                // identifier), at its index among every toolbar of the tree
+                // with them — an empty label too, as the query is scoped to
+                // the toolbar type (labelQuery) (PILOT-1219).
+                if let labelIndex {
+                    element = byOwnLabel(nodeLabel, at: labelIndex)
+                } else {
+                    element = nil
+                }
             } else if selector.roleOnlySwitch, treeHasSwitchPart {
                 // An unnamed switch beside SwiftUI Toggles: nothing but a
                 // position in that query could find it again, so cache
@@ -2357,7 +2388,8 @@ class SnapshotElementFinder {
             elementId: elementId,
             bounds: bounds,
             viewportRatio: viewportRatio,
-            inTabBar: getIdentity(elementId)?.inTabBar ?? false
+            inTabBar: getIdentity(elementId)?.inTabBar ?? false,
+            isEmptyBarHost: getIdentity(elementId)?.isEmptyBarHost ?? false
         )
     }
 

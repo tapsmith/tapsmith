@@ -63,6 +63,12 @@ enum BarHost {
         dict["children"] = children
     }
 
+    /// Whether `dict` or a descendant is marked as an empty host.
+    static func containsEmptyHost(_ dict: [String: Any]) -> Bool {
+        if dict[emptyHostKey] as? Bool == true { return true }
+        return (dict["children"] as? [[String: Any]] ?? []).contains { containsEmptyHost($0) }
+    }
+
     /// Whether a descendant of `dict` is anything but an unlabelled generic
     /// view: a button, text, image, or a view with a label, identifier or
     /// value — an item a host holds.

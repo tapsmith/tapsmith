@@ -167,6 +167,9 @@ let wrappedBar = marked(node(.application, screen, [node(.window, screen, [
 check("an empty toolbar alone in a wrapper of its own size is a bar",
       tagged(children(children(children(children(wrappedBar)[0])[0])[1])[0]), false)
 
+check("containsEmptyHost finds an empty host deep in the tree", BarHost.containsEmptyHost(emptyScreen), true)
+check("containsEmptyHost finds none where the host holds items", BarHost.containsEmptyHost(withItems), false)
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)

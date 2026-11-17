@@ -309,8 +309,10 @@ class ElementFinder {
             // This query-based finder (xpath, parentId and the wait engine's
             // fast path) never knows an element's ancestors, so it can't tell
             // a tab bar's button from any other; the snapshot finder can
-            // (PILOT-514).
-            inTabBar: false
+            // (PILOT-514), or iOS 27's empty toolbar host from a toolbar
+            // (PILOT-1219).
+            inTabBar: false,
+            isEmptyBarHost: false
         )
     }
 

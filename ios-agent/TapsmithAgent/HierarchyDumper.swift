@@ -54,6 +54,9 @@ class HierarchyDumper {
         CellFrames.placeDetachedNodes(in: &dict)
         // The enabled state locators see (PILOT-895).
         CellAccessories.normalizeIndicators(in: &dict)
+        // The roles locators see: iOS 27's empty toolbar host has none
+        // (PILOT-1219), so the trace viewer and MCP don't take it for a toolbar.
+        BarHost.markEmptyHosts(in: &dict)
         var keyboardTop: CGFloat?
         dumpNode(dict, depth: 1, inTabBar: false, insideNonApp: false, keyboardTop: &keyboardTop, into: &xml)
         xml += "</hierarchy>\n"
@@ -99,7 +102,10 @@ class HierarchyDumper {
 
         // Resolve role from traits (heading, link, alert, etc.) and element type.
         let traits = SnapshotElementFinder.extractTraits(from: node)
-        let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
+        let role = RoleMapping.resolveRole(
+            for: elType, traits: traits, inTabBar: inTabBar,
+            isEmptyBarHost: node[BarHost.emptyHostKey] as? Bool ?? false
+        )
 
         xml += "\(indent)<\(typeName)"
         xml += " label=\"\(label)\""
