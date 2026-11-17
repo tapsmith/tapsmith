@@ -204,8 +204,16 @@ describe('svgFrame (accept check)', () => {
   });
 
   it('gives compact iPhones square screen corners (no status-bar clipping)', () => {
-    const mask = decodeURIComponent(svgFrame('compact', 'ios', 750 / 1334).mask);
-    expect(mask).not.toMatch(/ a/);
+    // Arc commands follow a number directly ("h930a35"), so read each path's
+    // `d` for an a/A command; a rounded phone mask is the control.
+    const arcs = (kind: 'compact' | 'phone') => {
+      const mask = decodeURIComponent(svgFrame(kind, 'ios', 750 / 1334).mask);
+      const paths = [...mask.matchAll(/\bd="([^"]*)"/g)].map((m) => m[1]);
+      expect(paths.length).toBeGreaterThan(0);
+      return paths.some((d) => /[aA]/.test(d));
+    };
+    expect(arcs('phone')).toBe(true);
+    expect(arcs('compact')).toBe(false);
   });
 });
 
