@@ -381,9 +381,10 @@ export const MUTATING_MCP_TOOLS: ReadonlySet<string> = new Set([
 /**
  * Mutating MCP calls in flight. While any is, background preparation waits
  * (the readiness env's `recentlyInteracted`), and a starting call cancels the
- * preparations already resetting a device it may touch: a reset in the middle
- * of a call would leave its later steps (tapsmith_run_code runs several
- * statements) acting on a different app state than its earlier ones.
+ * preparations already resetting a device it may touch (a non-holding
+ * `manual` invalidation, so they prepare again once the calls end): a reset
+ * in the middle of a call would leave its later steps (tapsmith_run_code runs
+ * several statements) acting on a different app state than its earlier ones.
  */
 export class McpCallsInFlight {
   private readonly ids = new Set<string>();

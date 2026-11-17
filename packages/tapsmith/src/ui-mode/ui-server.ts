@@ -749,12 +749,19 @@ export async function startUIServer(
     }));
   }
 
-  /** A mutating MCP call is starting: stop resetting any device it may act on. */
+  /**
+   * A mutating MCP call is starting: stop resetting any device it may act on.
+   * The cancel does not hold the device (the call may never touch it, or be
+   * refused before it does): it prepares again once every call has ended,
+   * and the call's own completion holds what it actually touched.
+   */
   function cancelPreparationsForMcpCall(args: Record<string, unknown> | undefined): void {
-    const preparing = uiWorkers.filter((w) => !w.retired && w.readiness?.state.kind === 'preparing').map((w) => w.id);
+    const preparing = uiWorkers.filter((w) => !w.retired && w.readiness?.state.kind === 'preparing');
     if (preparing.length === 0) return;
-    const cancel = McpCallsInFlight.preparationsToCancel(args, mcpTargetWorkers(), preparing);
-    if (cancel.length > 0) invalidateWorkers('mcp-tool', cancel);
+    const cancel = McpCallsInFlight.preparationsToCancel(args, mcpTargetWorkers(), preparing.map((w) => w.id));
+    for (const w of preparing) {
+      if (cancel.includes(w.id)) readinessEvent(w, { type: 'invalidate', reason: 'manual' });
+    }
   }
 
   let screenPollTimer: ReturnType<typeof setTimeout> | null = null;

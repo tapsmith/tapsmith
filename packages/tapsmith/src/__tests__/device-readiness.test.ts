@@ -520,6 +520,21 @@ describe('McpCallsInFlight', () => {
     expect(McpCallsInFlight.preparationsToCancel({}, workers, [])).toEqual([]);
   });
 
+  it('a preparation cancelled by a starting call is not held: it prepares again once the call ends', () => {
+    const calls = new McpCallsInFlight();
+    const r = new DeviceReadiness(0, makeEnv({ recentlyInteracted: () => calls.active }));
+    r.handle({ type: 'worker-ready' });
+    expect(r.state.kind).toBe('preparing');
+    calls.start('a', 'tapsmith_tap');
+    const cmds = r.handle({ type: 'invalidate', reason: 'manual' });
+    expect(types(cmds)).toContain('send-cancel-prepare');
+    expect(holdReason(r.state)).toBeUndefined();
+    expect(timer(cmds)).toBeDefined();
+    expect(sendPrepare(r.handle({ type: 'grace-elapsed', timerId: 'readiness-0' }))).toBeUndefined();
+    calls.end('a');
+    expect(sendPrepare(r.handle({ type: 'grace-elapsed', timerId: 'readiness-0' }))).toBeDefined();
+  });
+
   it('holds back a preparation while a call is in flight, and lets it go after', () => {
     const calls = new McpCallsInFlight();
     const r = new DeviceReadiness(0, makeEnv({ recentlyInteracted: () => calls.active }));
