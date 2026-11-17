@@ -4351,6 +4351,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                         success: true,
                         data,
                         error_message: String::new(),
+                        orientation: String::new(),
                     })),
                     Err(e) => {
                         error!("Failed to decode element screenshot base64: {e}");
@@ -4359,6 +4360,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                             success: false,
                             data: Vec::new(),
                             error_message: format!("Failed to decode screenshot data: {e}"),
+                            orientation: String::new(),
                         }))
                     }
                 }
@@ -4370,12 +4372,14 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_message: resp
                     .error
                     .unwrap_or_else(|| "Screenshot failed".to_string()),
+                orientation: String::new(),
             })),
             Err(status) => Ok(Response::new(proto::ScreenshotResponse {
                 request_id,
                 success: false,
                 data: Vec::new(),
                 error_message: status.message().to_string(),
+                orientation: String::new(),
             })),
         }
     }

@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import ImageIO
 
 /// Routes incoming JSON commands to the appropriate handler.
 ///
@@ -758,7 +759,10 @@ class CommandHandler {
     /// nil when no part of `frame` is on screen.
     private static func screenshotPNG(of frame: CGRect) -> Data? {
         let image = XCUIScreen.main.screenshot().image
-        guard let cgImage = image.cgImage else { return nil }
+        guard let native = image.cgImage else { return nil }
+        // `frame` is in the app's interface space, which is the upright
+        // image's: crop that, not the native portrait pixels.
+        let cgImage = UprightScreenshot.upright(native, orientation: Self.cgOrientation(image.imageOrientation)) ?? native
         let scale = image.scale
         let pixels = CGRect(
             x: frame.minX * scale, y: frame.minY * scale,
@@ -766,7 +770,37 @@ class CommandHandler {
         ).integral.intersection(CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
         guard !pixels.isNull, pixels.width > 0, pixels.height > 0,
               let cropped = cgImage.cropping(to: pixels) else { return nil }
-        return UIImage(cgImage: cropped, scale: scale, orientation: image.imageOrientation).pngData()
+        return UprightScreenshot.png(cropped)
+    }
+
+    /// `screenshot` as PNG, upright (`UprightScreenshot`), and the device's
+    /// turn as it records it (nil for one no device turn makes). An upright
+    /// screenshot is sent as XCTest encoded it.
+    static func uprightPNG(_ screenshot: XCUIScreenshot) -> (png: Data, turn: String?) {
+        let image = screenshot.image
+        let orientation = cgOrientation(image.imageOrientation)
+        if let native = image.cgImage,
+           let upright = UprightScreenshot.upright(native, orientation: orientation),
+           let png = UprightScreenshot.png(upright) {
+            return (png, UprightScreenshot.turn(of: orientation))
+        }
+        // Upright already, or the redraw failed: as XCTest encoded it, and a
+        // turn only if the pixels really are upright.
+        return (screenshot.pngRepresentation, orientation == .up ? UprightScreenshot.turn(of: .up) : nil)
+    }
+
+    private static func cgOrientation(_ orientation: UIImage.Orientation) -> CGImagePropertyOrientation {
+        switch orientation {
+        case .up: return .up
+        case .down: return .down
+        case .left: return .left
+        case .right: return .right
+        case .upMirrored: return .upMirrored
+        case .downMirrored: return .downMirrored
+        case .leftMirrored: return .leftMirrored
+        case .rightMirrored: return .rightMirrored
+        @unknown default: return .up
+        }
     }
 
     /// Get the XCUIElement for an element ID, checking both caches.
@@ -2695,16 +2729,18 @@ class CommandHandler {
         // ─── Screenshots ───
 
         case "screenshot":
-            let screenshot = XCUIScreen.main.screenshot()
-            let pngData = screenshot.pngRepresentation
-            let base64 = pngData.base64EncodedString()
-            return ["data": base64, "format": "png"]
+            // Upright, with the turn the UI-mode mirror maps its touches by:
+            // coordinate touches land in the native portrait space (PILOT-1235).
+            let (pngData, turn) = Self.uprightPNG(XCUIScreen.main.screenshot())
+            var result: [String: Any] = ["data": pngData.base64EncodedString(), "format": "png"]
+            if let turn { result["orientation"] = turn }
+            return result
 
         case "elementScreenshot":
             let element = try resolveElement(params)
             let pngData: Data
             if let xcElem = try? getXCUIElement(element.elementId) {
-                pngData = xcElem.screenshot().pngRepresentation
+                pngData = Self.uprightPNG(xcElem.screenshot()).png
             } else if let frame = snapshotFinder.getBounds(element.elementId) {
                 // Found with no live element by design (a row's accessory
                 // indicator, PILOT-895, or a getByLabel match): the screen
@@ -2748,9 +2784,7 @@ class CommandHandler {
             }
 
             if wantScreenshot {
-                let screenshot = XCUIScreen.main.screenshot()
-                let pngData = screenshot.pngRepresentation
-                result["screenshotData"] = pngData.base64EncodedString()
+                result["screenshotData"] = Self.uprightPNG(XCUIScreen.main.screenshot()).png.base64EncodedString()
             }
             if wantHierarchy {
                 if let snapshot = snapshot {

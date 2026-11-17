@@ -109,8 +109,16 @@ export interface EvaluateSelectorsResponse {
 export interface ScreenshotResponse {
   requestId: string;
   success: boolean;
+  /** PNG, upright as the screen shows it. */
   data: Buffer;
   errorMessage: string;
+  /**
+   * iOS: how the device was turned ("portrait", "landscapeLeft",
+   * "landscapeRight", "portraitUpsideDown"); empty when unknown or on
+   * Android. iOS coordinate touches take native portrait points, so a point
+   * on the upright image is turned back with this (ui-mode/mirror-touch-point.ts).
+   */
+  orientation?: string;
 }
 
 export interface UiHierarchyResponse {
