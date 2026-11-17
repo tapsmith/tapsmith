@@ -53,7 +53,12 @@ function parseMetadata(metadataJson: string | undefined): TraceMetadata {
 }
 
 /** The line the runner puts between the error a test stopped on and the soft or unhandled errors it appends. */
-export const ADDITIONALLY = '\n\n--- Additionally ---\n';
+const ADDITIONALLY = '\n\n--- Additionally ---\n';
+
+/** The error a test stopped on, without the soft or unhandled errors the runner appends after it. */
+export function primaryError(error: string): string {
+  return error.split(ADDITIONALLY)[0];
+}
 
 /** Groups whose steps run after the test's own: a failure there is not the test's. */
 const AFTER_HOOK_GROUPS = new Set(['afterEach Hooks', 'afterAll Hooks']);
@@ -109,7 +114,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
       // Take last N meaningful events (actions + assertions, skip group markers)
       const meaningful = events.filter((e) => e.type === 'action' || e.type === 'assertion');
       const tail = meaningful.slice(-maxSteps);
-      failureHierarchyXml = failedStepHierarchy(events, files, String(meta.error ?? '').split(ADDITIONALLY)[0]);
+      failureHierarchyXml = failedStepHierarchy(events, files, primaryError(String(meta.error ?? '')));
 
       for (const event of tail) {
         const status = event.error ? 'FAIL' : 'OK';

@@ -7,7 +7,7 @@ import { traceFormatProblem } from '../../trace/trace-format.js';
 import {
   clipText, MCP_IMAGE_BUDGET_BYTES, MCP_TEXT_BUDGET_BYTES, serializedTextBytes, truncateMiddle,
 } from '../response-limits.js';
-import { ADDITIONALLY } from './trace-utils.js';
+import { primaryError } from './trace-utils.js';
 
 /**
  * One step value (an error, an expected or actual value) as shown. Errors can
@@ -56,7 +56,6 @@ export function registerReadTraceTool(server: McpServer): void {
 
 /** How many failed steps the result header names before eliding the middle. */
 const MAX_LISTED_FAILED_STEPS = 10;
-/** The runner's separator before soft-assertion and unhandled errors it appends to a test's error. */
 
 /** Step labels joined for the result header, the middle elided past the cap. */
 function listSteps(labels: string[]): string {
@@ -150,7 +149,7 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
       // error, and list the rest without guessing why they failed. The
       // runner appends soft and unhandled errors after an "--- Additionally
       // ---" line; the error the test stopped on comes first.
-      const primary = String(meta.error ?? '').split(ADDITIONALLY)[0];
+      const primary = primaryError(String(meta.error ?? ''));
       const causing = primary
         ? [...failed].reverse().find(({ e }) => e.error && primary.includes(String(e.error)))
         : undefined;

@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { ProjectInfo, TestDispatcher, TestFailureDetail, TestResultEntry, TestTreeEntry } from '../test-dispatcher.js';
-import { readTraceSummary } from './trace-utils.js';
+import { primaryError, readTraceSummary } from './trace-utils.js';
 import { getAllDaemonAddresses } from '../connection.js';
 import { matchesTestFilter } from '../../test-filter.js';
 import { getSessionResultsStore } from '../session-results.js';
@@ -72,10 +72,13 @@ const LISTED_MISSED_LOCATORS = 3;
 
 /**
  * The locator a native locator miss names (its first sentence), or
- * undefined when `error` is not one (locator-miss-hint.ts: every native miss
- * ends with {@link LOCATOR_PICKER_HINT}).
+ * undefined when the error the test stopped on is not one
+ * (locator-miss-hint.ts: every native miss ends with
+ * {@link LOCATOR_PICKER_HINT}). Soft and unhandled errors the runner appends
+ * after it are not the failure, and are left out.
  */
-export function missedLocatorOf(error: string): string | undefined {
+export function missedLocatorOf(fullError: string): string | undefined {
+  const error = primaryError(fullError);
   if (!error.includes(LOCATOR_PICKER_HINT)) return undefined;
   // Quoted values are read as whole tokens, so a ")" or ". " inside one
   // does not end the locator early.
@@ -90,7 +93,7 @@ export function missedLocatorOf(error: string): string | undefined {
  * (locator-miss-hint.ts); the locator is the one its first sentence names.
  */
 export function locatorMissStep(failures: TestFailureDetail[], testsRan = failures.length): string | undefined {
-  const misses = failures.filter((f) => f.error.includes(LOCATOR_PICKER_HINT));
+  const misses = failures.filter((f) => primaryError(f.error).includes(LOCATOR_PICKER_HINT));
   if (misses.length === 0) return undefined;
   const locators = [...new Set(misses.flatMap((f) => {
     const locator = missedLocatorOf(f.error);

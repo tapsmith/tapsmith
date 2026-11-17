@@ -177,6 +177,20 @@ describe('tapsmith_run_tests result handling', () => {
     expect(missedLocatorOf('Expected element getByText("Sign Inn") to be visible, but it was not.')).toBeUndefined();
   });
 
+  it('takes no locator miss from the soft errors appended after the error the test stopped on (PILOT-1241)', async () => {
+    const error = 'Expected element getByText("Bar") to have text "x", but got "y"\n\n--- Additionally ---\n'
+      + `1 soft assertion(s) failed:\nExpected element getByText("Foo") to be visible, but it was not. ${LOCATOR_PICKER_HINT}`;
+    expect(missedLocatorOf(error)).toBeUndefined();
+    const result: TestRunResult = {
+      status: 'failed', passed: 1, failed: 1, skipped: 0, duration: 100,
+      failures: [{ fullName: 'a', filePath: FILE, error }],
+    };
+    expect(text(await callRunTests(makeDispatcher({ runFiles: async () => result }), { files: [FILE] }))).not.toContain('matched nothing');
+    // A miss the test stopped on is still read, whatever follows it.
+    expect(missedLocatorOf(`Expected element getByText("Foo") to be visible, but it was not. ${LOCATOR_PICKER_HINT}\n\n--- Additionally ---\nboom`))
+      .toBe('getByText("Foo")');
+  });
+
   it('adds no locator step to failures that are not locator misses', async () => {
     const result: TestRunResult = {
       status: 'failed', passed: 0, failed: 1, skipped: 0, duration: 100,
