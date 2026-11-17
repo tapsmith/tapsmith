@@ -1255,13 +1255,18 @@ export class TapsmithGrpcClient {
     errorMessage: string;
     /** How traffic reaches the proxy; undefined on failure or from an older daemon. */
     route?: NetworkCaptureRoute;
+    /**
+     * The device does not trust Tapsmith's CA, so HTTPS passes through the
+     * proxy uncaptured. False from an older daemon.
+     */
+    httpsPassthrough?: boolean;
   }> {
-    const res = await this.call<{ success: boolean; proxyPort: number; errorMessage: string; route?: string }>('startNetworkCapture', {
+    const res = await this.call<{ success: boolean; proxyPort: number; errorMessage: string; route?: string; httpsPassthrough?: boolean }>('startNetworkCapture', {
       requestId: requestId(),
       requireIsolation: options?.requireIsolation ?? false,
       httpPorts: options?.httpPorts ?? [],
     });
-    return { ...res, route: networkCaptureRouteFromProto(res.route) };
+    return { ...res, route: networkCaptureRouteFromProto(res.route), httpsPassthrough: res.httpsPassthrough === true };
   }
 
   async stopNetworkCapture(options?: { keepRunning?: boolean }): Promise<{

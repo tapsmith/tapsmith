@@ -84,6 +84,26 @@ test("a retry whose capture has no route clears the previous attempt's host-wide
   await expect(network.hostWideNotice).toHaveCount(0)
 })
 
+// PILOT-1183: a device that did not trust Tapsmith's CA has its HTTPS passed
+// through uncaptured; the live Network tab says so, and a retry that trusted
+// the CA clears it.
+test("says HTTPS is passed through while the test runs, and a retry that trusts the CA clears it", async ({ app, detailTabs, page, explorer }) => {
+  app.send({ type: "run-start", fileCount: 1 })
+  app.send({ type: "test-start", fullName: FULL_NAME, filePath: GESTURES_FILE })
+  const entries = [networkEntry({ index: 0, url: "https://api.acme.dev/items" })]
+  app.send({ type: "network", testFullName: FULL_NAME, networkCaptureEnabled: true, networkHttpsPassthrough: true, entries })
+  await explorer.expandAll()
+  await explorer.clickNode("double tap registers double tap gesture")
+  await detailTabs.select("Network")
+  const network = new NetworkPane(page)
+  await expect(network.httpsPassthroughNotice).toContainText("did not trust Tapsmith's CA")
+  // An update from an older worker (no field) keeps it.
+  app.send({ type: "network", testFullName: FULL_NAME, networkCaptureEnabled: true, entries })
+  await expect(network.httpsPassthroughNotice).toHaveCount(1)
+  app.send({ type: "network", testFullName: FULL_NAME, networkCaptureEnabled: true, networkHttpsPassthrough: false, entries })
+  await expect(network.httpsPassthroughNotice).toHaveCount(0)
+})
+
 for (const enabled of [true, false, undefined]) {
   test(`empty network hint requires explicit disabled capture (${enabled})`, async ({ app, detailTabs, page, explorer }) => {
     app.send({ type: "run-start", fileCount: 1 })

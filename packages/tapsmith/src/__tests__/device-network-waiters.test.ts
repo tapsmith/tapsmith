@@ -14,7 +14,7 @@ function makeDevice(opts: {
   /** A proxy already up from an earlier test (a trace or on-demand start). */
   proxyRunning?: boolean
   /** The daemon's answer to an on-demand start, when the runner armed one. */
-  onDemand?: { success: boolean; errorMessage?: string }
+  onDemand?: { success: boolean; errorMessage?: string; httpsPassthrough?: boolean }
 } = { proxyRunning: true }): {
   device: Device
   emitRequest: (url: string) => void
@@ -35,6 +35,7 @@ function makeDevice(opts: {
       success: opts.onDemand?.success ?? false,
       proxyPort: 1,
       errorMessage: opts.onDemand?.errorMessage ?? '',
+      httpsPassthrough: opts.onDemand?.httpsPassthrough ?? false,
     })),
   };
   const device = new Device(client as unknown as TapsmithGrpcClient, { timeout: 30_000 });
@@ -157,6 +158,47 @@ describe('Device network waiters and on-demand capture (PILOT-775)', () => {
     expect(device._takeProxyStartedOnDemand()).toBe(true);
     expect(device._takeProxyStartedOnDemand()).toBe(false);
     expect(err.message).toMatch(/^waitForResponse timed out after 500ms\. The network proxy started on demand with this wait/);
+  });
+
+  // PILOT-1183: a device that does not trust Tapsmith's CA has its HTTPS
+  // passed through uncaptured, so a wait for an HTTPS request can only time
+  // out; it says why instead of looking like the app never sent it.
+  it('says HTTPS is passed through uncaptured when the device does not trust the CA', async () => {
+    vi.useFakeTimers();
+    const { device } = makeDevice({ proxyRunning: false, onDemand: { success: true, httpsPassthrough: true } });
+    const settled = device.waitForResponse('**/posts', { timeout: 500 }).then(() => new Error('resolved'), (e: unknown) => e as Error);
+
+    await vi.advanceTimersByTimeAsync(500);
+    const err = await settled;
+
+    expect(err.message).toMatch(/^waitForResponse timed out after 500ms\. /);
+    expect(err.message).toContain(
+      "HTTPS on this device is passed through the network proxy uncaptured because the device does not trust Tapsmith's CA",
+    );
+    expect(err.message).toContain('"Network capture warning"');
+  });
+
+  it('keeps saying HTTPS is passed through on a later wait of the same capture', async () => {
+    vi.useFakeTimers();
+    const { device } = makeDevice({ proxyRunning: false, onDemand: { success: true, httpsPassthrough: true } });
+    const first = device.waitForRequest('**/a', { timeout: 100 }).catch((e: unknown) => e as Error);
+    await vi.advanceTimersByTimeAsync(100);
+    await first;
+    const settled = device.waitForRequest('**/b', { timeout: 100 }).then(() => new Error('resolved'), (e: unknown) => e as Error);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const err = await settled;
+
+    expect(err.message).toMatch(/^waitForRequest timed out after 100ms\. HTTPS on this device is passed through/);
+  });
+
+  it('says nothing about passthrough when the device trusts the CA', async () => {
+    vi.useFakeTimers();
+    const { device } = makeDevice({ proxyRunning: false, onDemand: { success: true, httpsPassthrough: false } });
+    const settled = device.waitForResponse('**/posts', { timeout: 500 }).then(() => new Error('resolved'), (e: unknown) => e as Error);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect((await settled).message).not.toContain('passed through');
   });
 
   it('resolves a wait whose request arrives after an on-demand start', async () => {

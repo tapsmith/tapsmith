@@ -302,6 +302,14 @@ export interface TraceDeviceInfo {
    * requests to localhost are missing. Absent in older traces.
    */
   networkCaptureRoute?: NetworkCaptureRoute
+  /**
+   * `true` when this device did not trust Tapsmith's CA (an iOS simulator
+   * whose CA install failed, an Android Play image), so its HTTPS passed
+   * through the proxy uncaptured: HTTPS appears only as `passthrough` entries
+   * and routes and network waits could not see it. Absent otherwise and in
+   * older traces.
+   */
+  networkHttpsPassthrough?: boolean
 }
 
 /**

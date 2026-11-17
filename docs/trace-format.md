@@ -118,6 +118,7 @@ A **device** has these fields:
   - `screenResolution`: `{ width, height }`
   - `packageName`
   - `devicePixelRatio`: element bounds are in logical points and screenshots are in pixels
+  - `networkHttpsPassthrough`: `true` when the device did not trust Tapsmith's CA, so its HTTPS passed through the network proxy uncaptured. Those connections appear in `network.json` only as `passthrough` entries, and routes and network waits could not see them
 
 ## `trace.json` events
 

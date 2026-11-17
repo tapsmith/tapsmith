@@ -1783,10 +1783,10 @@ impl DeviceBackend for IosBackend<'_> {
         &self,
         request_id: String,
         serial: String,
-        _mitm_ca: &Arc<MitmAuthority>,
+        mitm_ca: &Arc<MitmAuthority>,
         ca_pem_path: &str,
         warnings: &mut Vec<String>,
-        _tunnel_all_tls: &mut Option<String>,
+        tunnel_all_tls: &mut Option<String>,
     ) -> Result<(), CaptureStop> {
         if !self.svc.is_active_ios_physical().await {
             // Simulator path — install CA into the simulator's trust store
@@ -1803,20 +1803,39 @@ impl DeviceBackend for IosBackend<'_> {
             if already_installed {
                 debug!(%serial, "MITM CA already installed on simulator this session");
             } else {
-                match ios::device::install_ca_cert(&serial, ca_pem_path).await {
-                    Ok(()) => {
+                // Retried, then checked against the trust store; a CA not
+                // known to be trusted tunnels TLS instead of breaking every
+                // HTTPS request the app sends (PILOT-1183).
+                let sha256 = mitm_ca.ca_cert_sha256_hex();
+                let trust = ios::sim_ca_trust::ensure_trusted(
+                    &serial,
+                    |timeout| ios::device::install_ca_cert(&serial, ca_pem_path, timeout),
+                    || ios::sim_ca_trust::trust_store_has(&serial, &sha256),
+                )
+                .await;
+                match trust {
+                    ios::sim_ca_trust::SimCaTrust::Installed => {
                         self.svc
                             .ios_ca_cert_installed
                             .write()
                             .await
                             .insert(serial.clone());
                     }
-                    Err(e) => {
-                        let msg = format!(
-                                "Failed to install CA cert on simulator: {e} — HTTPS traffic will not be captured"
-                            );
-                        error!("{msg}");
-                        warnings.push(msg);
+                    ios::sim_ca_trust::SimCaTrust::AlreadyTrusted { install_error } => {
+                        info!(
+                            %serial,
+                            "CA install failed ({install_error}), but the simulator's trust store already holds the Tapsmith CA; HTTPS stays captured"
+                        );
+                        self.svc
+                            .ios_ca_cert_installed
+                            .write()
+                            .await
+                            .insert(serial.clone());
+                    }
+                    ios::sim_ca_trust::SimCaTrust::Untrusted { warning } => {
+                        error!("{warning}");
+                        *tunnel_all_tls = Some(warning.clone());
+                        warnings.push(warning);
                     }
                 }
             }

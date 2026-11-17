@@ -19,12 +19,25 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/OcclusionAnalyzerTests/main.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/BarHost.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/occlusion-analyzer-tests"
 "$OUT/occlusion-analyzer-tests"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/BarHostTests/main.swift \
+  TapsmithAgent/BarHost.swift \
+  TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/CellFrames.swift \
+  TapsmithAgent/NonAppElements.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/bar-host-tests"
+"$OUT/bar-host-tests"
 
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
@@ -44,6 +57,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/KeyboardDismissPlannerTests/main.swift \
   TapsmithAgent/KeyboardDismissPlanner.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/BarHost.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \

@@ -5097,6 +5097,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             // a UI worker); the runner dedupes. That includes still tunneling
             // all TLS because the device cannot trust the CA.
             let tunnel_warning = existing.tunnel_all_tls_warning().await;
+            let https_passthrough = tunnel_warning.is_some();
             let first_start = self.proxy_start_warnings.read().await.clone();
             repeat_start_warnings(&mut warnings, &first_start, tunnel_warning);
             // Clone out of the read guard before awaiting — holding a
@@ -5157,6 +5158,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 proxy_port: u32::from(existing_port),
                 error_message: join_capture_warnings(&warnings),
                 route: route.into(),
+                https_passthrough,
             }));
         }
 
@@ -5212,6 +5214,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             matches!(dm.active_device(), Some(d) if d.platform == Platform::Android && d.is_emulator)
         };
         proxy.set_android_emulator(android_emulator).await;
+        let https_passthrough = tunnel_all_tls.is_some();
         proxy.set_tunnel_all_tls(tunnel_all_tls).await;
         let host_port = proxy.port();
 
@@ -5280,6 +5283,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             proxy_port: host_port as u32,
             error_message: join_capture_warnings(&warnings),
             route: route.into(),
+            https_passthrough,
         }))
     }
 

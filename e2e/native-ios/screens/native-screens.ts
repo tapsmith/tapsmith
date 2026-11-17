@@ -231,6 +231,8 @@ export class NativeToolbarScreen {
 
   /** A bottom-toolbar item, or a list row (both buttons). */
   button(name: string) { return this.device.getByRole("button", { name, exact: true }) }
+  /** Every toolbar on screen, by role alone (PILOT-1219). */
+  get toolbars() { return this.device.getByRole("toolbar") }
   lastAction(name: string) { return this.device.getByText(`Last action: ${name}`, { exact: true }) }
 }
 
