@@ -12,8 +12,8 @@ name: E2E Provisioning
 #   - Android: no emulator running; Tapsmith launches two -read-only instances
 #     of the AVD for two workers, then a rerun must reuse them.
 #   - iOS: no simulator booted; Tapsmith boots the configured one — a fresh
-#     simulator the job creates with two keyboard languages, whose first
-#     type() must not be lost to the keyboard's intro sheets (PILOT-1226).
+#     simulator the job creates with two keyboard languages, on which
+#     Tapsmith must mark the keyboard's first-use intros as shown (PILOT-1226).
 #   - Android bare state (weekly): no AVD, no cached system image —
 #     `tapsmith create-avd --install-tools` bootstraps, then the same run.
 #
@@ -39,7 +39,6 @@ on:
       - "e2e/utils/provisioning-checks.mjs"
       - "e2e/tapsmith.config.android-provisioning-ci.mjs"
       - "e2e/tapsmith.config.ios-provisioning-ci.mjs"
-      - "e2e/tests/first-keyboard.provisioning.ts"
       - "packages/tapsmith/src/emulator.ts"
       - "packages/tapsmith/src/ios-simulator.ts"
       - "packages/tapsmith/src/create-avd.ts"
@@ -732,11 +731,11 @@ jobs:
           sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
 
       # A brand-new simulator, not one from the runner image: on its first
-      # keyboard, iOS shows its first-use intro sheets (swipe typing; with two
-      # keyboard languages, the multilingual one), which swallow every key
-      # typed until dismissed unless Tapsmith marks them as shown (PILOT-1226).
-      # Setting the keyboards needs one boot; the simulator is shut down again
-      # before the run, and no keyboard has appeared on it yet.
+      # keyboard, iOS shows a first-use intro sheet (swipe typing; with two
+      # keyboard languages, the multilingual one) that swallows every key typed
+      # until it is dismissed, unless Tapsmith has marked the intros as shown
+      # (PILOT-1226; checked after the run). Setting the keyboards needs one
+      # boot; the simulator is shut down again before the run.
       - name: Select Xcode and create a fresh simulator with two keyboard languages
         run: |
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -821,6 +820,21 @@ jobs:
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-provisioning.log
         run: npx tapsmith test -c tapsmith.config.ios-provisioning-ci.mjs
+
+      # The sheet does not appear in the test app (it was seen in Settings),
+      # so the run alone cannot show a lost keystroke; this shows that
+      # Tapsmith wrote the keys on a simulator that never had them.
+      - name: Check Tapsmith marked the keyboard intros as shown
+        if: always() && steps.before.outcome == 'success'
+        run: |
+          UDID=$(xcrun simctl list devices | grep -F "$TAPSMITH_IOS_SIMULATOR (" | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}' | head -1)
+          for key in DidShowContinuousPathIntroduction KeyboardDidShowProductivityTutorial; do
+            value=$(xcrun simctl spawn "$UDID" defaults read com.apple.keyboard.preferences "$key" 2>&1) || true
+            if [ "$value" != "1" ]; then
+              echo "::error::$key is '$value' in com.apple.keyboard.preferences on $TAPSMITH_IOS_SIMULATOR ($UDID), expected 1: Tapsmith did not mark the keyboard intros as shown"
+              exit 1
+            fi
+          done
 
       - name: Check Tapsmith booted the simulator and left nothing behind
         if: always() && steps.before.outcome == 'success'

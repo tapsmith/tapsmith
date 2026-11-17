@@ -30,12 +30,5 @@ export default defineConfig({
   workers: 1,
   simulator: process.env.TAPSMITH_IOS_SIMULATOR || "iPhone 16",
   iosXctestrun: process.env.TAPSMITH_IOS_XCTESTRUN || undefined,
-  // first-keyboard.provisioning.ts runs first: the first type() on the fresh
-  // simulator the workflow creates, with two keyboard languages (PILOT-1226).
-  testMatch: [
-    "**/first-keyboard.provisioning.ts",
-    "**/home.test.ts",
-    "**/toggles.test.ts",
-    "**/list.test.ts",
-  ],
+  testMatch: ["**/home.test.ts", "**/toggles.test.ts", "**/list.test.ts"],
 })
