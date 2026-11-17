@@ -122,7 +122,7 @@ class Report {
   }
 }
 
-function checkMetadata(archive, r) {
+function checkMetadata(archive, r, { network }) {
   const m = archive.metadata
   r.check(m.version === FORMAT_VERSION, `metadata.version should be ${FORMAT_VERSION}, got ${m.version}`)
   r.check(m.testStatus === "passed", `metadata.testStatus should be "passed", got "${m.testStatus}"`)
@@ -154,7 +154,7 @@ function checkMetadata(archive, r) {
 
   // Without these the checks below would pass on an archive that recorded
   // nothing at all.
-  for (const channel of ["screenshots", "snapshots", "network"]) {
+  for (const channel of network ? ["screenshots", "snapshots", "network"] : ["screenshots", "snapshots"]) {
     r.check(
       m.traceConfig?.[channel] === true,
       `trace.${channel} was not enabled — the run did not record what these checks verify`,
@@ -317,7 +317,14 @@ function checkScreenshots(archive, r) {
     sizes.add(`${size.width}x${size.height}`)
     digests.add(Buffer.from(archive.files[member]).toString("base64"))
   }
-  r.check(sizes.size <= 1, `screenshots disagree on screen size: ${[...sizes].join(", ")}`)
+  // One screen size, or that size and its transpose: a test that turns the
+  // device captures both (screenshots are upright, as the screen shows them).
+  const [first, second, ...more] = [...sizes]
+  const transposed = (a, b) => a.split("x").reverse().join("x") === b
+  r.check(
+    more.length === 0 && (second === undefined || transposed(first, second)),
+    `screenshots disagree on screen size: ${[...sizes].join(", ")}`,
+  )
   // The driven test navigates, taps, and renders a response, so the captures
   // cannot all be the same frame — that would mean stale or cached captures.
   r.check(
@@ -331,13 +338,17 @@ function checkScreenshots(archive, r) {
   // Element bounds are recorded in logical points and screenshots in pixels,
   // so a box must fit inside the frame at any device pixel ratio. A degenerate
   // or out-of-frame box means the two coordinate spaces disagree.
-  const [frame] = [...sizes]
-  if (!frame) return
-  const [frameWidth, frameHeight] = frame.split("x").map(Number)
+  const [firstFrame] = [...sizes]
+  if (!firstFrame) return
   let checkedBoxes = 0
   for (const step of archive.steps) {
     const b = step.bounds
     if (!b) continue
+    // The step's own capture when it has one: on a turned screen the boxes
+    // are turned too.
+    const own = pngSize(archive.files[screenshotMember(step.actionIndex)] ?? new Uint8Array())
+    const frame = own ? `${own.width}x${own.height}` : firstFrame
+    const [frameWidth, frameHeight] = frame.split("x").map(Number)
     checkedBoxes++
     r.check(
       b.right > b.left && b.bottom > b.top,
@@ -357,12 +368,65 @@ function checkScreenshots(archive, r) {
         `frame: [${b.left},${b.top}][${b.right},${b.bottom}]`,
     )
   }
-  r.note(`${checkedBoxes} element boxes checked against the ${frame} frame`)
+  r.note(`${checkedBoxes} element boxes checked against their frames`)
 }
 
 /** A query row whose frame is taken before it waits or scrolls to its target. */
 function capturesBeforeItWaits(action) {
   return action === "find" || action === "scrollIntoView" || /^waitFor\(/.test(action ?? "")
+}
+
+/**
+ * The screen a hierarchy dump records: its first element's box, when that is
+ * the whole screen (it starts at the origin). iOS dumps start with the
+ * application element; an Android dump's first node is its window's root,
+ * which for a dialog sits inside the screen and says nothing about its shape.
+ */
+function dumpScreen(xml) {
+  const m = /bounds="\[(-?[\d.]+),(-?[\d.]+)\]\[(-?[\d.]+),(-?[\d.]+)\]"/.exec(xml)
+  if (!m) return null
+  const [left, top, right, bottom] = m.slice(1).map(Number)
+  if (left !== 0 || top !== 0 || right <= 0 || bottom <= 0) return null
+  return { width: right, height: bottom }
+}
+
+const shape = (size) => (size.width > size.height ? "landscape" : "portrait")
+
+/**
+ * Each screenshot is upright, as the screen shows it: its shape is the shape
+ * of the screen the hierarchy dump captured with it records (PILOT-1235 —
+ * iOS once stored a turned screen's pixels in native portrait, so landscape
+ * frames came out sideways). With `expectLandscape` the run must also have
+ * captured a landscape screen, vouched for by its dump, so a test meant to
+ * turn the device cannot pass this having never turned it.
+ */
+function checkTurns(archive, r, expectLandscape) {
+  const members = Object.keys(archive.files).filter((f) => f.startsWith("screenshots/")).sort()
+  let judged = 0
+  let landscape = 0
+  for (const member of members) {
+    const size = pngSize(archive.files[member])
+    const dumpMember = member.replace(/^screenshots\//, "hierarchy/").replace(/\.png$/, ".xml")
+    const dump = archive.files[dumpMember]
+    if (!size || !dump || size.width === size.height) continue
+    const screen = dumpScreen(new TextDecoder().decode(dump))
+    if (!screen || screen.width === screen.height) continue
+    judged++
+    const agrees = r.check(
+      shape(size) === shape(screen),
+      `${member} is ${size.width}x${size.height} (${shape(size)}), but its hierarchy dump records a ` +
+        `${screen.width}x${screen.height} (${shape(screen)}) screen — the capture is turned against the UI`,
+    )
+    if (agrees && shape(size) === "landscape") landscape++
+  }
+  if (expectLandscape) {
+    r.check(
+      landscape > 0,
+      "no screenshot is wider than tall beside a landscape hierarchy dump — the driven test was meant " +
+        "to capture a landscape screen",
+    )
+  }
+  r.note(`${judged} screenshot(s) checked for orientation against their dumps, ${landscape} landscape`)
 }
 
 function checkHierarchies(archive, r) {
@@ -634,16 +698,21 @@ function checkFormat(archive, r) {
  * @param options.expectedHost Hostname the driven test calls. The network
  *   checks are pinned to it so they cannot pass on unrelated traffic; pass
  *   `null` only when the caller genuinely does not know.
+ * @param options.network `false` skips the network checks, for a driven test
+ *   that makes no requests.
+ * @param options.expectLandscape Require a landscape capture (the driven test
+ *   turns the device).
  * @returns `{ failures, notes }` — `failures` empty means the archive holds
  *   everything a real-device trace should.
  */
-export function checkArchive(archive, { expectedHost = null } = {}) {
+export function checkArchive(archive, { expectedHost = null, network = true, expectLandscape = false } = {}) {
   const r = new Report()
-  checkMetadata(archive, r)
+  checkMetadata(archive, r, { network })
   checkFormat(archive, r)
   checkEventStream(archive, r)
   checkScreenshots(archive, r)
+  checkTurns(archive, r, expectLandscape)
   checkHierarchies(archive, r)
-  checkNetwork(archive, r, expectedHost)
+  if (network) checkNetwork(archive, r, expectedHost)
   return { failures: r.failures, notes: r.notes }
 }

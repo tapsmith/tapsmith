@@ -309,7 +309,7 @@ await device.inputText("hello world");
 
 ### `device.takeScreenshot(): Promise<ScreenshotResponse>`
 
-Capture a screenshot of the current device screen. Returns an object with `success`, `data` (PNG bytes), and `errorMessage` fields.
+Capture a screenshot of the current device screen. Returns an object with `success`, `data` (PNG bytes), and `errorMessage` fields. The image is upright, as the screen shows it: on a device turned to landscape it is wider than tall. On iOS, `orientation` says how the device was turned (`"portrait"`, `"landscapeLeft"`, `"landscapeRight"` or `"portraitUpsideDown"`); it is empty on Android.
 
 ```typescript
 const screenshot = await device.takeScreenshot();

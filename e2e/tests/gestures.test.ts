@@ -33,6 +33,39 @@ describe("Gestures screen", () => {
     await expect(gesturesScreen.lastGesture).toContainText("Double tap")
   })
 
+  // ─── Landscape ───
+
+  // verify-trace-archive.mjs drives this test with tracing on and checks its
+  // landscape captures against their hierarchy dumps.
+  test("a landscape screen is captured upright", async ({ device, gesturesScreen }) => {
+    const portrait = await gesturesScreen.firstTapArea.boundingBox()
+    try {
+      // Inside the try: if turning fails part-way, the device may still have
+      // turned, and the tests after this one must start in portrait.
+      await device.setOrientation("landscape")
+      await expect(gesturesScreen.firstTapArea).toBeVisible()
+      const landscape = await gesturesScreen.firstTapArea.boundingBox()
+      // Some simulator runtimes turn the device but not the app: then there
+      // is no landscape screen to capture.
+      test.skip(
+        !portrait || !landscape || landscape.width <= portrait.width + 50,
+        "the app's UI did not rotate on this device",
+      )
+      // Upright, as the screen shows it: wider than tall. iOS once sent a
+      // turned screen's pixels in native portrait (PILOT-1235).
+      const shot = Buffer.from((await device.takeScreenshot()).data)
+      const width = shot.readUInt32BE(16)
+      const height = shot.readUInt32BE(20)
+      expect(width).toBeGreaterThan(height)
+      // The screen keeps its count across tests: count on from where it is.
+      const before = Number((await gesturesScreen.tapCount.getText()).replace(/\D/g, ""))
+      await gesturesScreen.firstTapArea.tap()
+      await expect(gesturesScreen.tapCount).toHaveText(`Tap count: ${before + 1}`)
+    } finally {
+      await device.setOrientation("portrait")
+    }
+  })
+
   // ─── Long Press ───
 
   test("long press changes state", async ({ gesturesScreen }) => {
