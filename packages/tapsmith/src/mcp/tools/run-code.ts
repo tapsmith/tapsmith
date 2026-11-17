@@ -14,10 +14,10 @@ import {
 } from '../statement-eval.js';
 
 /**
- * tapsmith_run_code (PILOT-1240): test statements, as a test body writes
+ * tapsmith_run_code: test statements, as a test body writes
  * them, run in order on the live device. They are parsed against a fixed
  * grammar (statement-eval.ts), never evaluated; each passing one answers with
- * the test line that repeats it (PILOT-1239).
+ * the test line that repeats it.
  */
 
 const DESCRIPTION = 'Run test statements on the device, as a test body writes them, and see which pass: '

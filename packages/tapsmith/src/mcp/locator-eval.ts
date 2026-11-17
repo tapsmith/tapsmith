@@ -274,7 +274,7 @@ export interface Context {
 /**
  * The root a receiver names: `device` / `webview`, and the spellings the
  * docs, the trace's action list and screen objects use for them (`page.`,
- * `this.device.`, `this.page.`, `this.webview.`; PILOT-717).
+ * `this.device.`, `this.page.`, `this.webview.`).
  */
 export function rootOf(node: Expr | Node): 'device' | 'webview' | undefined {
   const n = node as Expr;
