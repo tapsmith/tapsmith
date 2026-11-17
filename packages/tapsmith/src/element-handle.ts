@@ -202,7 +202,7 @@ interface ElementHandleOptions {
    * refusal, a stale id), so the caller knows which element was finally
    * acted on. A throw stops the action before it touches anything. Only the
    * MCP action tools set it (`_onResolved`), to report the test line that
-   * repeats the action (PILOT-1239).
+   * repeats the action.
    */
   onResolved?: (element: ElementInfo, again: boolean) => Promise<void>;
 }

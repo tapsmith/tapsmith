@@ -1,5 +1,5 @@
 /**
- * Checking the locator of an action tool's test line (PILOT-1239).
+ * Checking the locator of an action tool's test line.
  *
  * The check is the action's own resolution, on the screen the action starts
  * from. A tap or type waits for its element through the device agent — the

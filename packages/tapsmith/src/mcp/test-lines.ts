@@ -1,5 +1,5 @@
 /**
- * The test lines MCP action tools answer with (PILOT-1239).
+ * The test lines MCP action tools answer with.
  *
  * Each successful action returns the SDK line that repeats it — `await
  * device.getByRole("button", { name: "Sign in" }).tap();` — for the agent to
