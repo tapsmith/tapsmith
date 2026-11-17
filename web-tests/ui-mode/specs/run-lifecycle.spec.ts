@@ -461,6 +461,39 @@ test.describe("Run lifecycle", () => {
       await expect(filmstrip.placeholders).toHaveCount(1)
       await expect.poll(placeholderMatchesThumb).toBe(true)
     })
+
+    test("re-sizes a test's placeholders when it re-runs with screenshots of another shape", async ({ app, explorer, filmstrip }) => {
+      const ui = app
+      const placeholderMatchesThumb = async () => {
+        const p = await filmstrip.placeholders.first().boundingBox()
+        const t = await filmstrip.frames.nth(1).locator("img").boundingBox()
+        return !!p && !!t && Math.abs(p.width / p.height - t.width / t.height) < 0.1
+      }
+      await explorer.expandAll()
+      await explorer.clickNode(TEST_NAME)
+      // The same test twice, the device turned between runs: UI mode keeps
+      // the strip and the test's identity, so only the run tells them apart.
+      for (const shot of [solidPng(400, 180), solidPng(180, 400)]) {
+        ui.send({ type: "test-start", fullName: DOUBLE_TAP, filePath: GESTURES_FILE })
+        ui.send(...action({ testFullName: DOUBLE_TAP, actionIndex: 0, action: "appReset" }))
+        ui.send(...action({ testFullName: DOUBLE_TAP, actionIndex: 1, action: "tap", screenshotBefore: shot.toString("base64") }))
+        ui.send({ type: "test-status", fullName: DOUBLE_TAP, filePath: GESTURES_FILE, status: "passed", duration: 300 })
+        await expect(filmstrip.placeholders).toHaveCount(1)
+        await expect.poll(placeholderMatchesThumb).toBe(true)
+      }
+    })
+
+    test("frames the single device's screenshots by its model when the serial does not name it", async ({ app, explorer, page }) => {
+      const ui = app
+      const screenshot = new ScreenshotPane(page)
+      ui.send({ type: "device-info", serial: "emulator-5554", isEmulator: true, model: "Pixel 9 Pro Fold", platform: "android", screenWidth: 1080, screenHeight: 2424 })
+      await explorer.expandAll()
+      ui.send({ type: "test-start", fullName: DOUBLE_TAP, filePath: GESTURES_FILE })
+      ui.send(...action({ testFullName: DOUBLE_TAP, actionIndex: 0, action: "tap", screenshotBefore: solidPng(1080, 2424).toString("base64") }))
+      ui.send({ type: "test-status", fullName: DOUBLE_TAP, filePath: GESTURES_FILE, status: "passed", duration: 300 })
+      await explorer.clickNode(TEST_NAME)
+      await expect(screenshot.bezel).toHaveAttribute("data-frame", "foldable-outer")
+    })
   })
 
   test.describe("run-end housekeeping", () => {

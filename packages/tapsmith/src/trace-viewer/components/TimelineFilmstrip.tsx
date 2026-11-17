@@ -37,6 +37,11 @@ interface Props {
   onRunContainer?: () => void
 }
 
+function hasValue(map: Map<string, string>, value: string): boolean {
+  for (const v of map.values()) if (v === value) return true;
+  return false;
+}
+
 function formatRelativeTime(ms: number): string {
   const sign = ms < 0 ? '-' : '';
   const abs = Math.abs(ms);
@@ -53,11 +58,15 @@ export function TimelineFilmstrip({ events, screenshots, metadata, selectedIndex
   // A frame with no screenshot shows a placeholder the shape of the
   // screenshots around it (a tablet or a landscape phone is not 9:19.5): the
   // first thumbnail's shape once one loads, the device's recorded screen
-  // size before that. Kept per test: UI mode reuses this component as the
-  // viewed test changes, and the next test may be another device's.
-  const testKey = `${metadata.testFile ?? ''}|${metadata.testName ?? ''}|${metadata.startTime}`;
-  const [loadedThumb, setLoadedThumb] = useState<{ key: string; aspect: number } | undefined>(undefined);
-  const thumbAspect = loadedThumb?.key === testKey ? loadedThumb.aspect : undefined;
+  // size before that. Kept per test and per run: UI mode reuses this
+  // component as the viewed test changes (the next test, or the same test in
+  // another project, may be another device's) and when a test re-runs (the
+  // device may have turned). UI mode's startTime is 0, so the run is told
+  // apart by the measured thumbnail still being among the screenshots: a
+  // re-run's screenshots are new URLs, and streaming ones keep the old.
+  const testKey = `${metadata.project ?? ''}|${metadata.testFile ?? ''}|${metadata.testName ?? ''}|${metadata.startTime}`;
+  const [loadedThumb, setLoadedThumb] = useState<{ key: string; src: string; aspect: number } | undefined>(undefined);
+  const thumbAspect = loadedThumb?.key === testKey && hasValue(screenshots, loadedThumb.src) ? loadedThumb.aspect : undefined;
   const res = metadata.device.screenResolution;
   const placeholderAspect = thumbAspect
     ?? (res && res.width > 0 && res.height > 0 ? res.width / res.height : undefined);
@@ -182,7 +191,7 @@ export function TimelineFilmstrip({ events, screenshots, metadata, selectedIndex
             onClick={() => onSelect(i)}
             onLoad={thumbAspect === undefined ? (e) => {
               const img = e.currentTarget as HTMLImageElement;
-              if (img.naturalWidth > 0 && img.naturalHeight > 0) setLoadedThumb({ key: testKey, aspect: img.naturalWidth / img.naturalHeight });
+              if (img.naturalWidth > 0 && img.naturalHeight > 0) setLoadedThumb({ key: testKey, src: url, aspect: img.naturalWidth / img.naturalHeight });
             } : undefined}
           />
         ) : (

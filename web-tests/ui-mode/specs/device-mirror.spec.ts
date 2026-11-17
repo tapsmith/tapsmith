@@ -227,6 +227,19 @@ test.describe("Device mirror", () => {
     expect(buttons.x).toBeLessThan(0.5)
   })
 
+  test("draws no notch on a turned SE-class phone's CSS bezel if the frame image fails", async ({ app, device }) => {
+    const ui = app
+    ui.sendFrame(screenFrame(1334, 750, 1))
+    await expect(device.bezel).toHaveAttribute("data-frame", "compact")
+    await device.failFrameImage()
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expect(device.bezel).toHaveClass(/dm-skin-landscape/)
+    // Like the upright fallback: an older phone shape has no island or
+    // punch-hole to draw over the screen's left edge.
+    expect(await device.bezelCutoutShown()).toBe(false)
+    await expectCanvasFillsBezel(device)
+  })
+
   test("refits the CSS bezel when the device changes skin at the same screen shape", async ({ app, device, page }) => {
     const ui = app
     // Android and iOS skins pad the canvas differently, so a same-shaped frame

@@ -103,6 +103,7 @@ function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [deviceSerial, setDeviceSerial] = useState('');
+  const [deviceModel, setDeviceModel] = useState<string | undefined>(undefined);
   const [deviceDpr, setDeviceDpr] = useState<number | undefined>();
   const [devicePlatform, setDevicePlatform] = useState<'android' | 'ios' | undefined>();
   const [deviceIsEmulator, setDeviceIsEmulator] = useState(false);
@@ -1231,6 +1232,7 @@ function App() {
         break;
       case 'device-info': {
         setDeviceSerial(msg.serial);
+        setDeviceModel(msg.model);
         setDeviceIsEmulator(msg.isEmulator);
         if (msg.devicePixelRatio != null) setDeviceDpr(msg.devicePixelRatio);
         const platform = msg.platform ?? inferDevicePlatform(msg.serial, msg.model);
@@ -2101,7 +2103,11 @@ function App() {
               onRunTest={handleRunSelectedTest}
               isTestPending={isTestPending}
               platform={viewedTestPlatform}
-              deviceHints={[viewedTestWorker?.displayName, viewedTestWorker?.deviceSerial ?? testDeviceSerial]}
+              deviceHints={viewedTestWorker
+                ? [viewedTestWorker.displayName, viewedTestWorker.deviceSerial]
+                // Single-device fallback: the model ("Pixel 9 Pro Fold") is
+                // what names a foldable or tablet when the serial does not.
+                : [testDeviceSerial ? deviceModel : undefined, testDeviceSerial]}
             />
           </div>
         </div>

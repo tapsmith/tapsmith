@@ -115,11 +115,13 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
   const classes = ['dm-frame'];
   if (platform) classes.push(`dm-skin-${platform}`, `dm-skin-${formFactor}`);
   // Only reached if the frame image failed to load. Landscape moves the
-  // skin's camera and buttons to the short edges; an upright phone that is
-  // not a modern photo-frame shape (SE class, odd shapes) has no notch to
-  // draw, and the skin's island / punch-hole would sit over screen content.
+  // skin's camera and buttons to the short edges. A phone that is not a
+  // modern photo-frame shape (SE class, odd shapes), upright or turned, has
+  // no notch to draw: the skin's island / punch-hole would sit over screen
+  // content.
   if (platform && bezel.landscape) classes.push('dm-skin-landscape');
-  else if (platform && formFactor === 'phone' && contentAspect !== undefined && bezel.frame?.kind !== 'photo') {
+  if (platform && formFactor === 'phone' && contentAspect !== undefined
+    && bezel.frame?.kind !== 'photo' && bezel.frame?.kind !== 'photo-landscape') {
     classes.push('dm-skin-bare');
   }
   const style: Record<string, string> = {};
