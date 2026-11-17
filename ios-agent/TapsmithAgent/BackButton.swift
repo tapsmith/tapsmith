@@ -10,10 +10,10 @@ import XCTest
 /// a child of the navigation bar up to iOS 26, and on iOS 26/27 iPhones;
 /// iOS 27 can instead lay it out in the window's floating `Toolbar` host
 /// (seen on the iPhone Duo, trailing rather than leading), outside the
-/// navigation bar. A button labelled exactly "Back" in a bar counts too, but
-/// only when there is no system back button: an app's own back button, or
-/// UIKit's when the previous title is too long — not an in-app browser's
-/// Back in a bottom toolbar beside the stack's real one.
+/// navigation bar. A bar button labelled as a back button counts too
+/// (`isBackLabel`), but only when there is no system back button: an app's
+/// own back button (React Navigation's custom header one) — not an in-app
+/// browser's Back in a bottom toolbar beside the stack's real one.
 enum BackButton {
     static let identifier = "BackButton"
     static let label = "Back"
@@ -47,8 +47,15 @@ enum BackButton {
 
     /// How node `i` is a back button, if it is one: a button inside a
     /// navigation bar or a toolbar, identified as the system one (`.system`)
-    /// or only labelled "Back" (`.labelled`).
+    /// or only labelled as one (`.labelled`).
     enum Match { case system, labelled }
+
+    /// Whether a bar button's label says it goes back: "Back", or React
+    /// Navigation's `HeaderBackButton` in a custom `headerLeft` ("Go back",
+    /// or "<previous title>, back"), which hides the system one.
+    static func isBackLabel(_ text: String) -> Bool {
+        text == label || text == "Go back" || text.hasSuffix(", back")
+    }
 
     static func match(_ i: Int, in analyzer: OcclusionAnalyzer) -> Match? {
         let node = analyzer.nodes[i]
@@ -56,7 +63,7 @@ enum BackButton {
         let match: Match
         if node.identifier == identifier {
             match = .system
-        } else if node.label == label {
+        } else if isBackLabel(node.label) {
             match = .labelled
         } else {
             return nil

@@ -737,7 +737,8 @@ class ActionExecutor {
             do {
                 snapshot = try readScreen()
             } catch {
-                throw AgentError.actionFailed("Could not read the screen to find its back button: \(error.localizedDescription)")
+                let cause = (error as? AgentError)?.message ?? error.localizedDescription
+                throw AgentError.actionFailed("Could not read the screen to find its back button: \(cause)")
             }
             let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
             let resolution = BackButton.resolve(in: analyzer)

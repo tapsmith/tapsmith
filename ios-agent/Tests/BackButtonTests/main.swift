@@ -162,6 +162,21 @@ let labelledBack: [Row] = [
 ]
 check("a bar button labelled Back counts", tapPoint(resolve(labelledBack)), CGPoint(x: 38, y: 84))
 
+// React Navigation's HeaderBackButton in a custom headerLeft: the system back
+// button is hidden, and the custom one is labelled "Go back", or
+// "<previous title>, back" when it shows a label. Edit beside it is still not
+// a back button.
+for name in ["Go back", "Home, back"] {
+    let custom: [Row] = [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .navigationBar, "", "Detail", R(0, 62, 402, 54)),
+        (3, .button, name, "", R(8, 66, 60, 36)),
+        (3, .button, "Edit", "", R(330, 66, 54, 36)),
+    ]
+    check("React Navigation's custom back button \"\(name)\" counts", tapPoint(resolve(custom)), CGPoint(x: 38, y: 84))
+}
+
 // Not in a bar: a "Back" button in the content, a BackButton in a tab bar.
 let notInBar: [Row] = [
     (0, .application, "App", "", screen),
