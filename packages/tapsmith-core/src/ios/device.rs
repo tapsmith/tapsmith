@@ -1131,7 +1131,10 @@ const KEYBOARD_PREFERENCES_DOMAIN: &str = "com.apple.keyboard.preferences";
 /// sliding your finger…"), or, with two keyboard languages, the multilingual
 /// one ("Type English and Polish") — and every key typed until it is
 /// dismissed is lost. The names are the TextInput preference keys present in
-/// both the 26.5 and 27.2 runtimes; an unknown key is ignored by iOS.
+/// both the 26.5 and 27.2 runtimes; an unknown key is ignored by iOS. Only the
+/// swipe-typing intro has been seen and confirmed suppressed (26.5 and 27.2,
+/// English and Polish keyboards); the multilingual sheet did not appear in
+/// that setup, so its keys (`Multilingual*Tip`) are the runtime's names, unverified.
 const KEYBOARD_INTRO_KEYS: [&str; 8] = [
     "DidShowContinuousPathIntroduction",
     "DidShowGestureKeyboardIntroduction",
