@@ -2034,7 +2034,9 @@ class CommandHandler {
             let x = (params["x"] as? NSNumber)?.intValue ?? -1
             let y = (params["y"] as? NSNumber)?.intValue ?? -1
             if x >= 0 && y >= 0 {
-                // What is at the point is unknown: held as for a control.
+                // What is at the point is unknown: held across a frame
+                // (`TapTiming.frameSpanningHold`), shorter than a known
+                // control's hold.
                 actionExecutor.tapCoordinates(x: x, y: y, hold: TapTiming.hold(for: nil))
                 snapshotFinder.recordFocusedTextInputHint(at: CGPoint(x: CGFloat(x), y: CGFloat(y)))
                 // It may have landed on a text field.
