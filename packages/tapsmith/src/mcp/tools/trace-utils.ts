@@ -23,19 +23,6 @@ export interface TraceEvent {
   /** A group marker's name (`afterEach Hooks`, …). */
   name?: string
   hasHierarchyBefore?: boolean
-  hasHierarchyAfter?: boolean
-}
-
-export interface FailedStep {
-  kind: 'action' | 'assertion'
-  /**
-   * The screen (hierarchy XML) the trace captured for the step, if any: for
-   * a failed action, when it failed; for an assertion, when it started
-   * (assertions take no capture when they fail).
-   */
-  hierarchyXml?: string
-  /** Whether any action or assertion (a hook's included) follows it in the trace. */
-  stepsAfter: boolean
 }
 
 export interface TraceSummary {
@@ -43,10 +30,13 @@ export interface TraceSummary {
   deviceLogs: string[]
   failureScreenshot?: Buffer
   /**
-   * The test's failed step: its last failed action or assertion outside the
-   * `afterEach`/`afterAll` hooks. Absent when the trace has none.
+   * The screen (hierarchy XML) the trace captured at the test's failed step:
+   * its last failed action or assertion outside the `afterEach`/`afterAll`
+   * hooks. Steps are captured when they start (an assertion or an action
+   * that waits takes no capture when it fails), so the app may have moved on
+   * while the step waited. Absent when the trace has no such capture.
    */
-  failedStep?: FailedStep
+  failureHierarchyXml?: string
   /** Whether the trace was recorded on a device group (`use.devices`). */
   multiDevice: boolean
 }
@@ -65,38 +55,18 @@ function isMultiDeviceTrace(metadataJson: string | undefined): boolean {
 /** Groups whose steps run after the test's own: a failure there is not the test's. */
 const AFTER_HOOK_GROUPS = new Set(['afterEach Hooks', 'afterAll Hooks']);
 
-/** The test's failed step (see {@link TraceSummary.failedStep}). */
-function failedStepOf(events: TraceEvent[], files: Record<string, Uint8Array>): FailedStep | undefined {
+/** The screen captured at the test's failed step (see {@link TraceSummary.failureHierarchyXml}). */
+function failedStepHierarchy(events: TraceEvent[], files: Record<string, Uint8Array>): string | undefined {
   const open: string[] = [];
   let failed: TraceEvent | undefined;
-  let stepsAfter = false;
   for (const e of events) {
     if (e.type === 'group-start') open.push(e.name ?? '');
     else if (e.type === 'group-end') open.pop();
-    else if (e.type === 'action' || e.type === 'assertion') {
-      if (e.error && !open.some((g) => AFTER_HOOK_GROUPS.has(g))) {
-        failed = e;
-        stepsAfter = false;
-      } else if (failed) {
-        stepsAfter = true;
-      }
-    }
+    else if ((e.type === 'action' || e.type === 'assertion') && e.error && !open.some((g) => AFTER_HOOK_GROUPS.has(g))) failed = e;
   }
-  if (!failed) return undefined;
-  let hierarchyXml: string | undefined;
-  if (failed.actionIndex !== undefined) {
-    const positions: ('before' | 'after')[] = [];
-    if (failed.hasHierarchyAfter) positions.push('after');
-    if (failed.hasHierarchyBefore) positions.push('before');
-    for (const position of positions) {
-      const file = files[hierarchyArchivePath(failed.actionIndex, position)];
-      if (file) {
-        hierarchyXml = new TextDecoder().decode(file);
-        break;
-      }
-    }
-  }
-  return { kind: failed.type === 'assertion' ? 'assertion' : 'action', hierarchyXml, stepsAfter };
+  if (failed?.actionIndex === undefined || !failed.hasHierarchyBefore) return undefined;
+  const file = files[hierarchyArchivePath(failed.actionIndex, 'before')];
+  return file ? new TextDecoder().decode(file) : undefined;
 }
 
 export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary | undefined {
@@ -108,7 +78,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
 
     const steps: string[] = [];
     const deviceLogs: string[] = [];
-    let failedStep: FailedStep | undefined;
+    let failureHierarchyXml: string | undefined;
 
     // A trace recorded on a device group names the device on every step and
     // log line (`bob: tap`), the way tapsmith_read_trace does — a two-user
@@ -126,7 +96,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
       // Take last N meaningful events (actions + assertions, skip group markers)
       const meaningful = events.filter((e) => e.type === 'action' || e.type === 'assertion');
       const tail = meaningful.slice(-maxSteps);
-      failedStep = failedStepOf(events, files);
+      failureHierarchyXml = failedStepHierarchy(events, files);
 
       for (const event of tail) {
         const status = event.error ? 'FAIL' : 'OK';
@@ -172,7 +142,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
       failureScreenshot = Buffer.from(files[last]);
     }
 
-    return { steps, deviceLogs, failureScreenshot, failedStep, multiDevice };
+    return { steps, deviceLogs, failureScreenshot, failureHierarchyXml, multiDevice };
   } catch {
     return undefined;
   }

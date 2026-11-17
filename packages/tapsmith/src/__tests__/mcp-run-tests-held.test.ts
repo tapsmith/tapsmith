@@ -115,13 +115,13 @@ describe('tapsmith_run_tests on a failed run of one test', () => {
     expect(deviceTargetFor).toHaveBeenCalledWith({ device: 'emulator-5554', project: 'android' }, expect.anything());
   });
 
-  it('says the device moved when its screen differs from the failure\'s (a hook or fixture teardown navigated)', async () => {
+  it('claims nothing when the screen differs from the failure\'s, and does not say to run just that test again', async () => {
     liveScreen = HOME;
     const t = await callRunTests(makeDispatcher(oneFailure(trace([failedStep, { type: 'action', action: 'pressKey', duration: 5 }]))), { files: [FILE] });
     expect(t).not.toContain('DEVICE HELD');
-    expect(t).toContain('The device\'s screen differs from the one the trace captured where "Login > signs in" failed');
-    // The usual step stays.
-    expect(t).toContain('Read the failure\'s trace');
+    expect(t).toContain('The device\'s screen differs from the one the failure\'s trace captured');
+    expect(t).toContain('NEXT STEP: the locator matched nothing. Once tapsmith_snapshot shows the screen the test failed on');
+    expect(t).not.toContain('run just that test');
   });
 
   it('a failMissing-shaped miss (toHaveText on nothing) gets the closest list and next step', async () => {
@@ -150,11 +150,14 @@ describe('tapsmith_run_tests on a failed run of one test', () => {
     expect(t).toContain('FAIL: Login > signs in');
     expect(t).not.toContain('DEVICE HELD');
     expect(t).toContain('Read the failure\'s trace');
+    // It already was one test: no advice to run it alone.
+    expect(t).not.toContain('run just that test');
   });
 
-  it('claims nothing without a trace', async () => {
+  it('claims nothing without a trace, and does not say to run the one test it just ran', async () => {
     const t = await callRunTests(makeDispatcher(oneFailure(undefined)), { files: [FILE] });
     expect(t).not.toContain('DEVICE HELD');
+    expect(t).not.toContain('run just that test');
     expect(deviceTargetFor).not.toHaveBeenCalled();
   });
 });

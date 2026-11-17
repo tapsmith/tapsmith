@@ -65,23 +65,22 @@ describe('readTraceSummary()', () => {
       const zip = path.join(os.tmpdir(), `test-trace-h-${Date.now()}-${Math.random()}.zip`);
       fs.writeFileSync(zip, zipSync(files));
       try {
-        return readTraceSummary(zip)!.failedStep;
+        return readTraceSummary(zip)!.failureHierarchyXml;
       } finally {
         fs.unlinkSync(zip);
       }
     };
-    const login = { kind: 'assertion', hierarchyXml: '<hierarchy>login</hierarchy>' };
-    expect(read([{ type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' }])).toEqual({ ...login, stepsAfter: false });
-    // A hook's failed step after the test's is not the failure; it is a step after it.
+    const login = '<hierarchy>login</hierarchy>';
+    expect(read([{ type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' }])).toBe(login);
+    // A hook's failed step after the test's is not the failure.
     expect(read([
       { type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' },
       { type: 'group-start', name: 'afterEach Hooks' }, hookStep, { type: 'group-end', name: 'afterEach Hooks' },
-    ])).toEqual({ ...login, stepsAfter: true });
+    ])).toBe(login);
     // A failure in a beforeEach hook is the test's failure.
-    expect(read([{ type: 'group-start', name: 'beforeEach Hooks' }, failedStep, { type: 'group-end', name: 'beforeEach Hooks' }])).toEqual({ ...login, stepsAfter: false });
+    expect(read([{ type: 'group-start', name: 'beforeEach Hooks' }, failedStep, { type: 'group-end', name: 'beforeEach Hooks' }])).toBe(login);
     expect(read([{ type: 'action', action: 'tap', actionIndex: 1, hasHierarchyBefore: true }])).toBeUndefined();
-    expect(read([{ ...failedStep, hasHierarchyBefore: false }])).toEqual({ kind: 'assertion', hierarchyXml: undefined, stepsAfter: false });
-    expect(read([{ ...hookStep, actionIndex: 1 }])).toEqual({ kind: 'action', hierarchyXml: '<hierarchy>login</hierarchy>', stepsAfter: false });
+    expect(read([{ ...failedStep, hasHierarchyBefore: false }])).toBeUndefined();
   });
 
   it('skips group-start events', () => {

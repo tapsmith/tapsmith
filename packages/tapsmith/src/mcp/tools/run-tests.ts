@@ -89,7 +89,7 @@ export function missedLocatorOf(error: string): string | undefined {
  * or undefined. A native miss is told by the sentence every one ends with
  * (locator-miss-hint.ts); the locator is the one its first sentence names.
  */
-export function locatorMissStep(failures: TestFailureDetail[]): string | undefined {
+export function locatorMissStep(failures: TestFailureDetail[], testsRan = failures.length): string | undefined {
   const misses = failures.filter((f) => f.error.includes(LOCATOR_PICKER_HINT));
   if (misses.length === 0) return undefined;
   const locators = [...new Set(misses.flatMap((f) => {
@@ -101,9 +101,12 @@ export function locatorMissStep(failures: TestFailureDetail[]): string | undefin
   const which = misses.length === 1 ? '1 failure is a locator that matched nothing' : `${misses.length} failures are locators that matched nothing`;
   return `NEXT STEP: ${which}${shown ? `: ${shown}${more}` : ''}. ` +
     'Read the failure\'s trace (tapsmith_read_trace) to see the screen it was on, find a locator that matches with ' +
-    'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1. ' +
-    'To try locators on the screen where it failed, run just that test (`test` set to its name): when a run of one test fails, ' +
-    'the device stays on the screen where it failed.';
+    'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1.' +
+    // A run of one test already left the device where it failed (PILOT-1241).
+    (testsRan > 1
+      ? ' To try locators on the screen where it failed, run just that test (`test` set to its name): when a run of one test fails, '
+        + 'the device stays on the screen where it failed.'
+      : '');
 }
 
 /**
@@ -276,7 +279,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
           // trace (PILOT-1241).
           if (screen && screen.lines.length > 0) lines.push('', ...screen.lines);
           if (screen?.hasNextStep) return;
-          const step = locatorMissStep(failures);
+          const step = locatorMissStep(failures, result.passed + result.failed);
           if (step) lines.push('', step);
         };
         // Warnings on any result of this run (e.g. the app under test showed

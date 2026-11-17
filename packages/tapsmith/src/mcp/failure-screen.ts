@@ -6,16 +6,16 @@
  * that failed, the device is normally still on the screen where it failed.
  * What can move it is the test's own code after the failure (an `afterEach`
  * or `afterAll` hook, a fixture's teardown) or a later test of the run, and
- * the failure's trace does not record all of those. So the claim is checked
- * against the device itself: its screen now is compared with the one the
- * trace captured at the failed step. A failed assertion is the exception:
- * its capture is from when it started waiting, and the screen may have
- * changed while it waited, so when that capture does not match, nothing in
- * the trace after the assertion is the evidence instead. When the device is
- * held, this module tells the agent so, and lists the elements on that
- * screen closest to the locator that matched nothing, so the agent can try a
- * fix against the live app (tapsmith_test_locator) instead of navigating
- * back there itself.
+ * the failure's trace does not record all of those. So "held" is only said
+ * when the device itself shows it: its screen now matches the one the trace
+ * captured at the failed step. Nothing else is taken as evidence. When they
+ * differ (the step was captured when it started, and the app may have moved
+ * on while it waited; or something moved it later; or this is not the device
+ * that ran the test), the result says only that, and the agent checks the
+ * screen with tapsmith_snapshot. Either way, for a locator that matched
+ * nothing, it lists the elements on the device's screen closest to it, so
+ * the agent can try a fix against the live app (tapsmith_test_locator)
+ * instead of navigating back there itself.
  *
  * It only reads: nothing here holds the device or skips a reset. The next
  * run resets the app as usual.
@@ -48,23 +48,18 @@ const IOS_CHUNK_SIZE = 500;
 const SHOWN_TEXT_CHARS = 60;
 const SHOWN_LOCATOR_CHARS = 300;
 
-/** A failed run of one test, and what its trace says about the failed step. */
+/** A failed run of one test, and the screen its trace captured at the failed step, if any. */
 export interface FailureCandidate {
   failure: TestFailureDetail
-  /** The screen the trace captured at the failed step (see `FailedStep.hierarchyXml`). */
+  /** See `TraceSummary.failureHierarchyXml`. */
   failureHierarchyXml?: string
-  /**
-   * The failed step is an assertion and nothing follows it in the trace: the
-   * device is held even when the screen changed while the assertion waited.
-   */
-  nothingAfterAssertion: boolean
 }
 
 /**
  * The failure whose screen the device may still show, or undefined when
- * that cannot be checked: more than one test ran (which failure it would
- * show is unclear), the failure has no trace, its trace has neither a screen
- * at the failed step nor a failed assertion to go by, or a device group ran it.
+ * there is none to speak of: more than one test ran (a later one may have
+ * moved the screen, and which failure it would show is unclear), the failure
+ * has no trace, or a device group ran it.
  */
 export function failureCandidateOf(
   result: Pick<TestRunResult, 'status' | 'passed' | 'failed' | 'failures'>,
@@ -75,11 +70,8 @@ export function failureCandidateOf(
   const failure = result.failures?.length === 1 ? result.failures[0] : undefined;
   if (!failure?.tracePath) return undefined;
   const summary = readTrace(failure.tracePath);
-  const step = summary?.failedStep;
-  if (!step || summary.multiDevice) return undefined;
-  const nothingAfterAssertion = step.kind === 'assertion' && !step.stepsAfter;
-  if (!step.hierarchyXml && !nothingAfterAssertion) return undefined;
-  return { failure, failureHierarchyXml: step.hierarchyXml, nothingAfterAssertion };
+  if (!summary || summary.multiDevice) return undefined;
+  return { failure, failureHierarchyXml: summary.failureHierarchyXml };
 }
 
 /**
@@ -255,10 +247,10 @@ export interface FailureScreenReport {
 }
 
 /**
- * The lines `tapsmith_run_tests` adds for a failed run of one test: that the
- * device is still on the screen where it failed (checked against the trace),
- * the closest elements there for a locator miss, and the next step; or that
- * the device has moved since. Nothing when the device cannot be read. Never
+ * The lines `tapsmith_run_tests` adds for a failed run of one test: whether
+ * the device's screen is the one the trace captured where it failed, and for
+ * a locator miss the closest elements on the device's screen and the next
+ * step. Nothing when the device cannot be read or shows nothing. Never
  * throws.
  */
 export async function failureScreenReport(opts: FailureScreenOptions): Promise<FailureScreenReport> {
@@ -269,28 +261,25 @@ export async function failureScreenReport(opts: FailureScreenOptions): Promise<F
   try {
     client = await opts.client();
     const live = await client.getUiHierarchy();
-    if (live.errorMessage) return { lines: [], hasNextStep: false };
+    if (live.errorMessage || screenEntries(live.hierarchyXml).size === 0) return { lines: [], hasNextStep: false };
     liveXml = live.hierarchyXml;
   } catch {
     return { lines: [], hasNextStep: false };
   }
-  const matches = candidate.failureHierarchyXml !== undefined && sameScreen(candidate.failureHierarchyXml, liveXml);
-  if (!matches && !candidate.nothingAfterAssertion) {
-    return {
-      lines: [
-        `The device's screen differs from the one the trace captured where "${name}" failed, so it may have moved since `
-        + '(an afterEach or afterAll hook, a fixture\'s teardown), or the test ran on another device. '
-        + 'The failure\'s trace (tapsmith_read_trace) shows the failure screen.',
-      ],
-      hasNextStep: false,
-    };
-  }
-  const lines: string[] = [
-    matches
-      ? `DEVICE HELD: the device is still on the screen where "${name}" failed (it was the only test in the run, and the screen matches the one in the failure's trace).`
-      : `DEVICE HELD: the device is still where "${name}" failed: it was the only test in the run, and nothing acted on the device after the failed assertion (the screen changed while the assertion waited).`,
-    'tapsmith_snapshot and tapsmith_test_locator act on that screen now. The next tapsmith_run_tests resets the app as usual.',
-  ];
+  const held = candidate.failureHierarchyXml !== undefined && sameScreen(candidate.failureHierarchyXml, liveXml);
+  const lines: string[] = held
+    ? [
+      `DEVICE HELD: the device is still on the screen where "${name}" failed: its screen matches the one the failure's trace captured at the failed step.`,
+      'tapsmith_snapshot and tapsmith_test_locator act on that screen now. The next tapsmith_run_tests resets the app as usual.',
+    ]
+    : [
+      candidate.failureHierarchyXml === undefined
+        ? `The failure's trace has no screen captured at the step where "${name}" failed, so the device's screen could not be checked against it.`
+        : `The device's screen differs from the one the failure's trace captured when the step where "${name}" failed started. `
+          + 'The app may have moved on while that step waited, something may have moved it after the failure '
+          + '(an afterEach or afterAll hook, a fixture\'s teardown), or another device ran the test.',
+      'Check with tapsmith_snapshot what the device shows now, and tapsmith_read_trace for the failure screen.',
+    ];
   if (!missedLocator) return { lines, hasNextStep: false };
 
   const shown = missedLocator.length > SHOWN_LOCATOR_CHARS ? `${missedLocator.slice(0, SHOWN_LOCATOR_CHARS - 1)}…` : missedLocator;
@@ -300,22 +289,23 @@ export async function failureScreenReport(opts: FailureScreenOptions): Promise<F
   } catch (err) {
     closest = { kind: 'error', message: err instanceof Error ? err.message : String(err) };
   }
-  lines.push('');
+  const where = held ? 'on screen' : 'on the device\'s screen now';
   if (closest.kind === 'matches' && closest.elements.length > 0) {
-    lines.push(`Closest on screen to ${shown}:`);
+    lines.push('', `Closest ${where} to ${shown}:`);
     for (const e of closest.elements) {
       lines.push(e.locator ? `  - ${e.description}: ${e.locator}` : `  - ${e.description} (no checked locator; tapsmith_snapshot lists it)`);
     }
     if (closest.checkError) lines.push(`(The device agent stopped checking locators for these: ${closest.checkError})`);
   } else if (closest.kind === 'matches') {
-    lines.push(`Nothing on screen is close to ${shown}: tapsmith_snapshot shows what is there.`);
+    lines.push('', `Nothing ${where} is close to ${shown}: tapsmith_snapshot shows what is there.`);
   } else if (closest.kind === 'error') {
-    lines.push(`(Could not check the elements closest to ${shown}: ${closest.message})`);
+    lines.push('', `(Could not check the elements closest to ${shown}: ${closest.message})`);
   }
   lines.push('');
-  lines.push(
-    'NEXT STEP: the locator matched nothing on this screen. Check a replacement with tapsmith_test_locator '
-    + '(it must count exactly 1), change the test to use it, then run the test again with tapsmith_run_tests.',
-  );
+  lines.push(held
+    ? 'NEXT STEP: the locator matched nothing on this screen. Check a replacement with tapsmith_test_locator '
+      + '(it must count exactly 1), change the test to use it, then run the test again with tapsmith_run_tests.'
+    : 'NEXT STEP: the locator matched nothing. Once tapsmith_snapshot shows the screen the test failed on, check a '
+      + 'replacement with tapsmith_test_locator (it must count exactly 1), change the test to use it, then run the test again.');
   return { lines, hasNextStep: true };
 }
