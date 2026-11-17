@@ -6,9 +6,8 @@
  * …) take points in the device's native portrait space instead, so on a
  * turned iOS device the point is turned back with the frame's `turn`: the
  * inverse of the agent's upright redraw (`UprightScreenshot`), and for the
- * landscape turns the mapping `HidTouch.nativePoint` uses for test taps
- * (PILOT-1235). Android touches take screen points, and its frames carry no
- * turn.
+ * landscape turns the mapping `HidTouch.nativePoint` uses for test taps.
+ * Android touches take screen points, and its frames carry no turn.
  */
 
 /** How the device was turned when the frame was captured (`ScreenshotResponse.orientation`). */
