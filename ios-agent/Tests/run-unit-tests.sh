@@ -70,6 +70,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/BackButtonTests/main.swift \
   TapsmithAgent/BackButton.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/BarHost.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
