@@ -45,14 +45,15 @@ enum BackButton {
     /// when no other can be touched; one that is off screen is no back
     /// button for this screen.
     ///
-    /// The touch goes to the center of the button's on-screen part, and the
-    /// only covers are interactive elements painted after it (an alert, a
-    /// presented screen's controls). Bars are not covers here, unlike for an
-    /// element tap (`OcclusionAnalyzer.analyze`): the button is part of a
-    /// bar, and on iOS 27 it can sit in the Toolbar host over the navigation
-    /// bar's frame.
+    /// The touch goes to the center of the button's on-screen part. Bars are
+    /// not covers here, unlike for an element tap (`OcclusionAnalyzer`): the
+    /// button is part of a bar, and on iOS 27 it can sit in the Toolbar host
+    /// over the navigation bar's frame. Nor is the screen's own content: the
+    /// iOS 27 host can come first in the tree (the iPhone Duo), so every
+    /// control of the screen is "painted after" the button there. What does
+    /// cover it is something presented over the screen (`cover(of:at:in:)`).
     static func resolve(in analyzer: OcclusionAnalyzer) -> Resolution {
-        var cover: String?
+        var covered: String?
         for i in analyzer.nodes.indices.reversed() where isBackButton(i, in: analyzer) {
             let node = analyzer.nodes[i]
             let visible = node.frame.intersection(analyzer.screen)
@@ -60,15 +61,32 @@ enum BackButton {
                   visible.width >= OcclusionAnalyzer.minVisibleExtent,
                   visible.height >= OcclusionAnalyzer.minVisibleExtent else { continue }
             let point = CGPoint(x: visible.midX, y: visible.midY)
-            let target = OcclusionAnalyzer.Target(
-                frame: node.frame, elementType: node.elementType, label: node.label, identifier: node.identifier
-            )
-            if let by = analyzer.interactiveCover(of: target, at: [point]) {
-                if cover == nil { cover = by }
+            if let by = cover(of: i, at: point, in: analyzer) {
+                if covered == nil { covered = by }
                 continue
             }
             return .tap(point: point, ancestorTypes: analyzer.ancestors(of: i).map { analyzer.nodes[$0].elementType })
         }
-        return cover.map { .covered(by: $0) } ?? .none
+        return covered.map { .covered(by: $0) } ?? .none
+    }
+
+    /// The element types that are presented over a screen wherever they are
+    /// in the tree.
+    static let overlayTypes: Set<XCUIElement.ElementType> = [.alert, .sheet, .dialog, .popover]
+
+    /// What is presented over back button `i` at `point`, described — or nil:
+    /// an alert, sheet, dialog or popover painted after it, or an interactive
+    /// control in a later window (a presented controller's own window).
+    static func cover(of i: Int, at point: CGPoint, in analyzer: OcclusionAnalyzer) -> String? {
+        let nodes = analyzer.nodes
+        for j in nodes[i].subtreeEnd..<nodes.count where nodes[j].frame.contains(point) {
+            let node = nodes[j]
+            let inLaterWindow = node.window != nil && node.window != nodes[i].window
+            if overlayTypes.contains(node.elementType)
+                || (inLaterWindow && OcclusionAnalyzer.interactiveTypes.contains(node.elementType)) {
+                return analyzer.describe(node)
+            }
+        }
+        return nil
     }
 }

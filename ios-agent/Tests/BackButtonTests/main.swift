@@ -127,22 +127,30 @@ let sheet: [Row] = [
 ]
 check("sheet with only Done: no back button", resolve(sheet), .none)
 
-// iOS 27 on the iPhone Duo: the back button is a child of the floating
-// Toolbar host, trailing, and the navigation bar holds only the title.
+// iOS 27 on the iPhone Duo (recorded on its simulator, the fixture's Toggles
+// screen): the back button is a child of the floating Toolbar host, trailing,
+// and the host comes first in the window, before the navigation bar (which
+// holds nothing) and the content.
 let duo = R(0, 0, 466, 678)
 let floatingBack: [Row] = [
-    (0, .application, "Settings", "", duo),
+    (0, .application, "Native", "", duo),
     (1, .window, "", "", duo),
+    (2, .toolbar, "Toolbar", "Toolbar", duo),
+    (3, .button, "", "BackButton", R(399, 179, 38, 38)),
+    (2, .navigationBar, "", "Toggles", R(0, 24, 466, 58)),
     (2, .other, "", "", duo),
-    (3, .navigationBar, "", "General", R(0, 150, 466, 60)),
-    (4, .staticText, "General", "", R(190, 160, 86, 40)),
-    (3, .other, "", "", duo),
-    (4, .cell, "About", "", R(16, 240, 434, 52)),
-    (3, .toolbar, "Toolbar", "Toolbar", duo),
-    (4, .button, "", "BackButton", R(399, 175, 38, 38)),
+    (3, .button, "Small", "", R(40, 299, 107, 32)),
 ]
 check("iOS 27 floating toolbar: taps the back button in the Toolbar host",
-      tapPoint(resolve(floatingBack, screen: duo)), CGPoint(x: 418, y: 194))
+      tapPoint(resolve(floatingBack, screen: duo)), CGPoint(x: 418, y: 198))
+
+// The screen's own controls come after the host in the tree, so a list row
+// under the floating back button is "painted after" it. It is the screen's
+// content, not something presented over it.
+var floatingOverRow = floatingBack
+floatingOverRow.append((3, .cell, "About", "", R(0, 170, 466, 56)))
+check("iOS 27 floating toolbar over a row: still taps the back button",
+      tapPoint(resolve(floatingOverRow, screen: duo)), CGPoint(x: 418, y: 198))
 
 // An app's own back button: no system identifier, labelled "Back".
 let labelledBack: [Row] = [
