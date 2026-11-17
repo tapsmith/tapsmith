@@ -44,6 +44,7 @@
 		A1D2E3F4B5C6478899AA1012 /* TypingCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D2E3F4B5C6478899AA1012 /* TypingCheck.swift */; };
 		5C29D8A1B7E44F0A9D3E6B21 /* TypingFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */; };
 		3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */; };
+		B4C1E2250A7D4F1B9E3C6A12 /* BackButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4C1E2250A7D4F1B9E3C6A13 /* BackButton.swift */; };
 		9740000000000000000000A1 /* TapTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9740000000000000000000A2 /* TapTiming.swift */; };
 		9960000000000000000000A1 /* HidTouch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960000000000000000000A2 /* HidTouch.swift */; };
 		9960000000000000000000A3 /* RotationSettle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960000000000000000000A4 /* RotationSettle.swift */; };
@@ -96,6 +97,7 @@
 		B1D2E3F4B5C6478899AA1012 /* TypingCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingCheck.swift; sourceTree = "<group>"; };
 		7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingFocus.swift; sourceTree = "<group>"; };
 		9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoubleTapRoute.swift; sourceTree = "<group>"; };
+		F4C1E2250A7D4F1B9E3C6A13 /* BackButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackButton.swift; sourceTree = "<group>"; };
 		9740000000000000000000A2 /* TapTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapTiming.swift; sourceTree = "<group>"; };
 		9960000000000000000000A2 /* HidTouch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HidTouch.swift; sourceTree = "<group>"; };
 		9960000000000000000000A4 /* RotationSettle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationSettle.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 				7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */,
 				B2D4F6A8103C5E7A9B1D3F52 /* AgentAuth.swift */,
 				9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */,
+				F4C1E2250A7D4F1B9E3C6A13 /* BackButton.swift */,
 				9740000000000000000000A2 /* TapTiming.swift */,
 				9960000000000000000000A2 /* HidTouch.swift */,
 				9960000000000000000000A4 /* RotationSettle.swift */,
@@ -317,6 +320,7 @@
 				5C29D8A1B7E44F0A9D3E6B21 /* TypingFocus.swift in Sources */,
 				A1C3E5F7092B4D6F8A0C2E41 /* AgentAuth.swift in Sources */,
 				3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */,
+				B4C1E2250A7D4F1B9E3C6A12 /* BackButton.swift in Sources */,
 				9740000000000000000000A1 /* TapTiming.swift in Sources */,
 				9960000000000000000000A1 /* HidTouch.swift in Sources */,
 				9960000000000000000000A3 /* RotationSettle.swift in Sources */,

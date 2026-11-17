@@ -709,19 +709,7 @@ class ActionExecutor {
         case "space":
             typeTextWithoutFocus(" ")
         case "back":
-            // iOS has no hardware back button. Find the navigation back button
-            // via snapshot and tap it using event synthesis (no quiescence wait).
-            let backButton = app.navigationBars.buttons.firstMatch
-            if backButton.exists {
-                let frame = backButton.frame
-                if frame.width > 0 && frame.height > 0 {
-                    tapCoordinates(x: Int(frame.midX), y: Int(frame.midY), hold: TapTiming.hold(for: .button))
-                } else {
-                    throw AgentError.actionFailed("Back button found but has zero frame")
-                }
-            } else {
-                throw AgentError.actionFailed("No back button found. iOS does not have a hardware back button.")
-            }
+            try pressBack()
         default:
             // Try typing the key as a character
             if key.count == 1 {
@@ -731,6 +719,36 @@ class ActionExecutor {
                     "Unknown key: '\(key)'. Use named keys (home, enter, delete, etc.) or single characters."
                 )
             }
+        }
+    }
+
+    /// iOS has no hardware back button: tap the navigation stack's own back
+    /// button (`BackButton` picks it from one snapshot), with event synthesis
+    /// (no quiescence wait). A screen without one refuses — never another bar
+    /// button in its place (PILOT-1225).
+    private func pressBack() throws {
+        let snapshot: XCUIElementSnapshot
+        do {
+            snapshot = try app.snapshot()
+        } catch {
+            throw AgentError.actionFailed("Could not read the screen to find its back button: \(error.localizedDescription)")
+        }
+        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+        switch BackButton.resolve(in: analyzer) {
+        case .tap(let point, let ancestorTypes):
+            tapCoordinates(
+                x: Int(point.x.rounded()),
+                y: Int(point.y.rounded()),
+                hold: TapTiming.hold(for: .button, within: ancestorTypes)
+            )
+        case .covered(let by):
+            throw AgentError.actionFailed("The back button is covered by \(by). Dismiss it first.")
+        case .none:
+            throw AgentError.actionFailed(
+                "No back button found. iOS does not have a hardware back button: BACK taps the "
+                    + "navigation bar's back button, and this screen has none (a stack's first screen, "
+                    + "a sheet or a dialog). Tap the control that closes it instead."
+            )
         }
     }
 
