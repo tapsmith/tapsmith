@@ -207,7 +207,7 @@ async function callToolWithEvents(
   });
 
   // The device the tool resolves, for UI mode's invalidation (PILOT-1195).
-  const target: { device?: string } = {};
+  const target: { tool: string; device?: string } = { tool: toolName };
   try {
     const result = await runWithToolDevice(target, callback) as CallToolResult;
     const elapsed = Date.now() - start;

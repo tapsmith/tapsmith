@@ -160,10 +160,13 @@ export function summarizeResult(tool: string, result: string): string {
   }
 }
 
-const toolCallDevice = new AsyncLocalStorage<{ device?: string }>();
+/** The running tool call: its name, and the device it resolves (see {@link noteToolDevice}). */
+interface ToolCallSlot { tool?: string; device?: string }
+
+const toolCallDevice = new AsyncLocalStorage<ToolCallSlot>();
 
 /** Run a tool callback with a slot for the device it resolves (see {@link noteToolDevice}). */
-export function runWithToolDevice<T>(slot: { device?: string }, fn: () => T): T {
+export function runWithToolDevice<T>(slot: ToolCallSlot, fn: () => T): T {
   return toolCallDevice.run(slot, fn);
 }
 
@@ -171,4 +174,37 @@ export function runWithToolDevice<T>(slot: { device?: string }, fn: () => T): T 
 export function noteToolDevice(serial: string | undefined): void {
   const slot = toolCallDevice.getStore();
   if (slot && serial) slot.device = serial;
+}
+
+/**
+ * The current tool call was refused before it acted on the device it
+ * resolved (an invalid locator or statement): its event names no device, so
+ * UI mode does not treat that device as touched.
+ */
+export function forgetToolDevice(): void {
+  const slot = toolCallDevice.getStore();
+  if (slot) slot.device = undefined;
+}
+
+type ToolActGate = (tool: string, device: string) => Promise<void>;
+let toolActGate: ToolActGate | undefined;
+
+/**
+ * Install what a tool call waits on once it has resolved its device and
+ * before it acts (UI mode: a background preparation still resetting that
+ * device). Returns the uninstaller.
+ */
+export function setToolActGate(gate: ToolActGate): () => void {
+  toolActGate = gate;
+  return () => {
+    if (toolActGate === gate) toolActGate = undefined;
+  };
+}
+
+/** Wait on the installed gate for the current tool call's device, if any. */
+export async function beforeToolActs(): Promise<void> {
+  const slot = toolCallDevice.getStore();
+  const gate = toolActGate;
+  if (!gate || !slot?.tool || !slot.device) return;
+  await gate(slot.tool, slot.device);
 }

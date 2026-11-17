@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceClientFor, deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
+import { forgetToolDevice } from '../events.js';
 import { canonicalLocatorSource, isLocatorError, type EvaluatedLocator } from '../locator-eval.js';
 import { MCP_ACTION_RUN_TIMEOUT_MS, MCP_ACTION_TIMEOUT_MS, sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
 import type { ElementHandle } from '../../element-handle.js';
@@ -75,8 +76,10 @@ async function actOn(
   const sdkDevice = await sdkDeviceFor(client, device);
   let check: (() => LineCheck) | undefined;
   let kind = 'native' as EvaluatedLocator['kind'];
+  let reached = false;
   try {
     await withEvaluatedLocator(sdkDevice, client, locator, async (evaluated) => {
+      reached = true;
       kind = evaluated.kind;
       // The line spells the locator as a test with the `device` fixture does
       // (`page.`, `this.device.` and a bare getter all read as `device.`).
@@ -91,6 +94,9 @@ async function actOn(
       return action.act({ kind: 'native', handle: checking.handle });
     });
   } catch (err) {
+    // Refused before the action began (a locator the builder rejects): the
+    // device was not touched.
+    if (!reached) forgetToolDevice();
     if (isLocatorError(err)) return { content: [{ type: 'text' as const, text: err.message }], isError: true };
     return actionResult(false, actionErrorText(err, locator));
   }

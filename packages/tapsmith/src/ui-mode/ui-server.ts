@@ -20,7 +20,7 @@ import { execFileSync, fork, type ChildProcess } from 'node:child_process';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import type { WebSocket } from 'ws';
 import { createLocalHttpServer, createLocalWebSocketServer } from '../local-server-guard.js';
-import { McpEventEmitter } from '../mcp/events.js';
+import { McpEventEmitter, setToolActGate } from '../mcp/events.js';
 import { McpSessionRouter } from '../mcp/http-session-router.js';
 import { configureMcpConnection, type UiDaemonPorts } from '../mcp/connection.js';
 import { matchRequestedFiles, fileFailureEntry } from '../mcp/headless-dispatcher.js';
@@ -750,19 +750,21 @@ export async function startUIServer(
   }
 
   /**
-   * A mutating MCP call is starting: stop resetting any device it may act on.
-   * The cancel does not hold the device (the call may never touch it, or be
-   * refused before it does): it prepares again once every call has ended,
-   * and the call's own completion holds what it actually touched.
+   * A mutating MCP call has resolved its device: wait until no background
+   * preparation is resetting it (none starts while the call runs). Bounded,
+   * so a worker that never reports back cannot wedge the call.
    */
-  function cancelPreparationsForMcpCall(args: Record<string, unknown> | undefined): void {
-    const preparing = uiWorkers.filter((w) => !w.retired && w.readiness?.state.kind === 'preparing');
-    if (preparing.length === 0) return;
-    const cancel = McpCallsInFlight.preparationsToCancel(args, mcpTargetWorkers(), preparing.map((w) => w.id));
-    for (const w of preparing) {
-      if (cancel.includes(w.id)) readinessEvent(w, { type: 'invalidate', reason: 'manual' });
+  async function waitForPreparationsBeforeMcpAct(tool: string, device: string): Promise<void> {
+    if (!MUTATING_MCP_TOOLS.has(tool)) return;
+    const deadline = Date.now() + MCP_PREPARE_SETTLE_MAX_MS;
+    for (;;) {
+      const preparing = uiWorkers.filter((w) => !w.retired && w.readiness?.state.kind === 'preparing').map((w) => w.id);
+      if (McpCallsInFlight.preparingFor(device, mcpTargetWorkers(), preparing).length === 0) return;
+      if (Date.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
+
 
   let screenPollTimer: ReturnType<typeof setTimeout> | null = null;
   let screenSeq = 0;
@@ -850,6 +852,8 @@ export async function startUIServer(
   const mirrorBursts = new Map<number, { id: string; counts: Map<string, number>; startedAt: number; last: number }>();
   /** Mutating MCP calls running now: background preparation waits for them. */
   const mcpCallsInFlight = new McpCallsInFlight();
+  /** Longest a mutating MCP call waits for a preparation already resetting its device. */
+  const MCP_PREPARE_SETTLE_MAX_MS = 120_000;
   /** Mirror interactions within this window hold background preparation. */
   const READINESS_INTERACTION_HOLD_WINDOW_MS = 3_000;
   /** Workers whose Node process should be recycled before the next run (source changed). */
@@ -1499,12 +1503,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     };
   }
 
+  const removeMcpActGate = setToolActGate(waitForPreparationsBeforeMcpAct);
   mcpEvents.onToolCall((event) => {
     const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
     if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
     broadcast(mcpMsg);
     if (event.status === 'started') {
-      if (mcpCallsInFlight.start(event.id, event.tool)) cancelPreparationsForMcpCall(event.args);
+      mcpCallsInFlight.start(event.id, event.tool);
     } else {
       mcpCallsInFlight.end(event.id);
       invalidateForMcpTool(event.tool, event.args, event.device, event.status);
@@ -5540,6 +5545,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       ctx.device?.close();
       ctx.client?.close();
 
+      removeMcpActGate();
       mcpHttpServer.close();
       mcpRouter.close();
       try { fs.unlinkSync(portFilePath); } catch { /* already gone */ }

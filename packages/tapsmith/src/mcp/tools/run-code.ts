@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import { acting, actionErrorText, MAX_TOOL_TIMEOUT_MS, WEBVIEW_LINE_NOTE } from './device-actions.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
+import { forgetToolDevice } from '../events.js';
 import type { TapsmithGrpcClient } from '../../grpc-client.js';
 import type { Device } from '../../device.js';
 import { MCP_ACTION_TIMEOUT_MS, sdkDeviceFor, sdkDeviceWithTimeout, testRunActive, withLocatorRoots } from '../sdk-device.js';
@@ -79,7 +80,10 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
         try {
           prebuilt.set(statement, await prebuildStatement(statement, sdkDevice));
         } catch (err) {
-          if (isStatementError(err)) return errorResult(`${err.message} Nothing was run.`);
+          if (isStatementError(err)) {
+            forgetToolDevice();
+            return errorResult(`${err.message} Nothing was run.`);
+          }
           throw err;
         }
       }

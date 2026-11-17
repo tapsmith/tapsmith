@@ -513,26 +513,11 @@ describe('McpCallsInFlight', () => {
     expect(calls.active).toBe(true);
   });
 
-  it('a starting call cancels the preparations on the workers it may touch', () => {
-    expect(McpCallsInFlight.preparationsToCancel({ device: 'emulator-5556' }, workers, [0, 1])).toEqual([1]);
-    // A call it cannot place may touch any worker.
-    expect(McpCallsInFlight.preparationsToCancel({}, workers, [0, 1])).toEqual([0, 1]);
-    expect(McpCallsInFlight.preparationsToCancel({}, workers, [])).toEqual([]);
-  });
-
-  it('a preparation cancelled by a starting call is not held: it prepares again once the call ends', () => {
-    const calls = new McpCallsInFlight();
-    const r = new DeviceReadiness(0, makeEnv({ recentlyInteracted: () => calls.active }));
-    r.handle({ type: 'worker-ready' });
-    expect(r.state.kind).toBe('preparing');
-    calls.start('a', 'tapsmith_tap');
-    const cmds = r.handle({ type: 'invalidate', reason: 'manual' });
-    expect(types(cmds)).toContain('send-cancel-prepare');
-    expect(holdReason(r.state)).toBeUndefined();
-    expect(timer(cmds)).toBeDefined();
-    expect(sendPrepare(r.handle({ type: 'grace-elapsed', timerId: 'readiness-0' }))).toBeUndefined();
-    calls.end('a');
-    expect(sendPrepare(r.handle({ type: 'grace-elapsed', timerId: 'readiness-0' }))).toBeDefined();
+  it('a call waits for the preparation on the worker holding its device, or on every one when none is known to', () => {
+    expect(McpCallsInFlight.preparingFor('emulator-5556', workers, [0, 1])).toEqual([1]);
+    expect(McpCallsInFlight.preparingFor('emulator-5556', workers, [0])).toEqual([]);
+    expect(McpCallsInFlight.preparingFor('emulator-9999', workers, [0, 1])).toEqual([0, 1]);
+    expect(McpCallsInFlight.preparingFor('emulator-5554', workers, [])).toEqual([]);
   });
 
   it('holds back a preparation while a call is in flight, and lets it go after', () => {

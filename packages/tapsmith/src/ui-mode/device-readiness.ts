@@ -379,12 +379,13 @@ export const MUTATING_MCP_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Mutating MCP calls in flight. While any is, background preparation waits
- * (the readiness env's `recentlyInteracted`), and a starting call cancels the
- * preparations already resetting a device it may touch (a non-holding
- * `manual` invalidation, so they prepare again once the calls end): a reset
- * in the middle of a call would leave its later steps (tapsmith_run_code runs
- * several statements) acting on a different app state than its earlier ones.
+ * Mutating MCP calls in flight. While any is, no background preparation
+ * starts (the readiness env's `recentlyInteracted`): a reset in the middle of
+ * a call would leave its later steps (tapsmith_run_code runs several
+ * statements) acting on a different app state than its earlier ones. A
+ * preparation already running when a call starts is not cut short (that
+ * would leave the app half reset); the call waits for it once it knows its
+ * device ({@link McpCallsInFlight.preparingFor}).
  */
 export class McpCallsInFlight {
   private readonly ids = new Set<string>();
@@ -405,16 +406,12 @@ export class McpCallsInFlight {
   }
 
   /**
-   * Of the workers now preparing, the ones a starting call may touch: those
-   * its `device` argument names, or every one when it names none (the device
-   * is resolved only once the call runs).
+   * Of the workers now preparing, the ones a call that resolved `device`
+   * must wait for: the worker holding that device, or every one when no
+   * worker is known to hold it.
    */
-  static preparationsToCancel(
-    args: Record<string, unknown> | undefined,
-    workers: McpTargetWorker[],
-    preparing: number[],
-  ): number[] {
-    const targets = mcpToolWorkers(undefined, args, workers);
+  static preparingFor(device: string, workers: McpTargetWorker[], preparing: number[]): number[] {
+    const targets = mcpToolWorkers(device, undefined, workers);
     return preparing.filter((id) => !targets || targets.includes(id));
   }
 }

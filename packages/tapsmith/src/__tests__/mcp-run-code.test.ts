@@ -8,7 +8,7 @@ import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import { beginTestRun, closeMcpWebViews, endTestRun } from '../mcp/sdk-device.js';
 import { Device } from '../device.js';
 import type { WebViewHandle } from '../webview-handle.js';
-import { summarizeResult } from '../mcp/events.js';
+import { McpEventEmitter, setToolActGate, summarizeResult, type McpToolCallEvent } from '../mcp/events.js';
 import { formatToolArgs } from '../ui-mode/components/tool-args.js';
 
 // PILOT-1240: tapsmith_run_code runs test statements on the device through
@@ -110,14 +110,15 @@ function makeDispatcher(): TestDispatcher {
   };
 }
 
-async function runCode(code: string, extra: Record<string, unknown> = {}): Promise<CallToolResult> {
-  const server = createMcpServer({ dispatcher: makeDispatcher() });
+async function runCode(code: string, extra: Record<string, unknown> = {}, events?: McpEventEmitter, tool = 'tapsmith_run_code'): Promise<CallToolResult> {
+  const server = createMcpServer({ dispatcher: makeDispatcher(), events });
   const client = new Client({ name: 'run-code-probe', version: '1.0.0' }, { capabilities: {} });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   try {
     await client.connect(clientTransport);
-    return await client.callTool({ name: 'tapsmith_run_code', arguments: { code, ...extra } }) as CallToolResult;
+    const args = tool === 'tapsmith_run_code' ? { code, ...extra } : extra;
+    return await client.callTool({ name: tool, arguments: args }) as CallToolResult;
   } finally {
     await client.close();
     await server.close();
@@ -349,6 +350,43 @@ describe('tapsmith_run_code', () => {
     const res = await runCode('await expect(device.getByText("Nowhere")).toBeVisible({ timeout: 200 });', { timeout: 60_000 });
     expect(res.isError).toBe(true);
     expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  it('waits on the UI act gate (a preparation still resetting the device) before the first statement acts', async () => {
+    let release!: () => void;
+    const gated: Array<[string, string]> = [];
+    const remove = setToolActGate((tool, device) => {
+      gated.push([tool, device]);
+      return new Promise<void>((resolve) => { release = resolve; });
+    });
+    try {
+      const pending = runCode('await device.getByText("Sign in").tap();', { device: 'emulator-5554' }, new McpEventEmitter());
+      await vi.waitFor(() => expect(gated).toEqual([['tapsmith_run_code', 'emulator-5554']]));
+      expect(daemon.calls).toEqual([]);
+      release();
+      const res = await pending;
+      expect(res.isError).toBeFalsy();
+      expect(daemon.calls).toEqual(['tap']);
+    } finally {
+      remove();
+    }
+  });
+
+  it('a call refused before acting reports no device, so UI mode holds nothing; one that acted reports its device', async () => {
+    // UI mode holds (and drops the prepared state of) the device a mutating
+    // call's completion event names; a refused call touched nothing.
+    const events = new McpEventEmitter();
+    const done: McpToolCallEvent[] = [];
+    events.onToolCall((e) => { if (e.status !== 'started') done.push(e); });
+    const device = { device: 'emulator-5554' };
+    await runCode('await expect(device.getByRole("dialogue")).toBeVisible();', device, events);
+    await runCode('', { ...device, locator: 'device.getByRole("dialogue")' }, events, 'tapsmith_tap');
+    await runCode('await device.getByText("Sign in").tap();', device, events);
+    expect(done.map((e) => [e.tool, e.status, e.device])).toEqual([
+      ['tapsmith_run_code', 'error', undefined],
+      ['tapsmith_tap', 'error', undefined],
+      ['tapsmith_run_code', 'completed', 'emulator-5554'],
+    ]);
   });
 
   it('refuses what the SDK\'s builder refuses before any statement runs, and says where', async () => {
