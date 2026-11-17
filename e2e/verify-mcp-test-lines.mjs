@@ -42,6 +42,8 @@ const HANDSHAKE_TIMEOUT_MS = 60_000
 /** Where the replay's spec and config are written, and removed from afterwards. */
 const GENERATED_DIR = path.join(HERE, "mcp-test-lines-generated")
 const SIGNED_IN = "Login successful!"
+/** How long the final snapshot may wait for the sign-in navigation to land. */
+const SETTLE_TIMEOUT_MS = 15_000
 
 /** The walk: what an agent would send, step by step. */
 const WALK = [
@@ -131,9 +133,16 @@ async function mcpSession(config, calls) {
       HANDSHAKE_TIMEOUT_MS,
     )
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
-    for (const { name, args } of calls) {
+    for (const { name, args, until } of calls) {
       const started = Date.now()
-      const response = await request("tools/call", { name, arguments: args }, CALL_TIMEOUT_MS)
+      let response = await request("tools/call", { name, arguments: args }, CALL_TIMEOUT_MS)
+      // A read the walk expects to change (the screen after a navigating tap):
+      // re-read it, as an agent would, until it shows what is expected or the
+      // settle budget runs out.
+      while (until && !until(resultText(response)) && Date.now() - started < SETTLE_TIMEOUT_MS) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        response = await request("tools/call", { name, arguments: args }, CALL_TIMEOUT_MS)
+      }
       log(`  ${name} ${JSON.stringify(args)} (${((Date.now() - started) / 1000).toFixed(1)}s)`)
       for (const line of resultText(response).split("\n").slice(0, 4)) log(`    | ${line}`)
       results.push({ name, response })
@@ -200,7 +209,7 @@ async function main() {
   const failures = []
 
   log("walking the login flow through the MCP server")
-  const calls = [...WALK, { name: "tapsmith_snapshot", args: {} }].map((c) => ({ ...c, args: { ...c.args, device: opts.device } }))
+  const calls = [...WALK, { name: "tapsmith_snapshot", args: {}, until: (text) => text.includes(SIGNED_IN) }].map((c) => ({ ...c, args: { ...c.args, device: opts.device } }))
   const session = await mcpSession(opts.config, calls)
   if (session.error) failures.push(`the MCP session broke: ${session.error.message}`)
   for (const line of session.nonJson) failures.push(`the MCP server wrote non-JSON-RPC output to stdout: ${line.slice(0, 200)}`)
