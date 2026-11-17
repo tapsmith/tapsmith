@@ -222,6 +222,43 @@ describe('tapsmith_run_code', () => {
     }
   });
 
+  it('stops at the next statement when the client cancels the call', async () => {
+    const server = createMcpServer({ dispatcher: makeDispatcher() });
+    const client = new Client({ name: 'cancel-probe', version: '1.0.0' }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const controller = new AbortController();
+    let finished!: () => void;
+    const pressed = new Promise<void>((resolve) => { finished = resolve; });
+    daemon.swipe.mockImplementation(async () => {
+      daemon.calls.push('swipe');
+      // The user stops the call while the first statement is running.
+      controller.abort();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return ok();
+    });
+    daemon.pressKey.mockImplementation(async () => {
+      daemon.calls.push('pressKey');
+      finished();
+      return ok();
+    });
+    try {
+      const call = client.callTool(
+        { name: 'tapsmith_run_code', arguments: { code: 'await device.swipe("up");\nawait device.pressKey("back");' } },
+        undefined,
+        { signal: controller.signal },
+      );
+      await expect(call).rejects.toThrow();
+      // Give a statement that should not run every chance to.
+      await Promise.race([pressed, new Promise((resolve) => setTimeout(resolve, 300))]);
+      expect(daemon.calls).toEqual(['swipe']);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('runs device calls and answers with them as a test writes them', async () => {
     const res = await runCode('await page.openDeepLink("myapp://settings"); await this.device.tapXY(10, 20)');
     expect(text(res)).toBe([

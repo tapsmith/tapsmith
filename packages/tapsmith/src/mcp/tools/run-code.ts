@@ -57,7 +57,7 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),
     },
-    async ({ code, timeout, device, project }) => {
+    async ({ code, timeout, device, project }, extra) => {
       let statements: Statement[];
       try {
         statements = parseStatements(code);
@@ -88,6 +88,13 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
       const total = statements.length;
       for (const [i, statement] of statements.entries()) {
         const header = `Statement ${statement.index} of ${total} (line ${statement.line})`;
+        // The client cancelled the call (the user stopped it, or it timed
+        // out): nothing more acts on the device. Its answer is discarded, but
+        // the activity feed still shows where it stopped.
+        if (extra.signal.aborted) {
+          report.lines.push(`${header} was not run: the call was cancelled.`, ...notRun(statements.slice(i + 1)));
+          return errorResult(withWebviewNote(report));
+        }
         // A run that started meanwhile now holds the device.
         if (testRunActive()) {
           report.lines.push(`${header} was not run: ${RUN_IN_PROGRESS}`, ...notRun(statements.slice(i + 1)));
