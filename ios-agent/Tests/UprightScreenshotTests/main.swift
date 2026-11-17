@@ -87,6 +87,16 @@ if let up = UprightScreenshot.upright(native, orientation: .down) {
     expect(".down: redrawn", false)
 }
 
+// A screenshot in an extended-range colour space (an 8-bit context refuses
+// those) is still redrawn upright rather than sent sideways.
+if let extended = CGColorSpace(name: CGColorSpace.extendedSRGB),
+   let wide = native.copy(colorSpace: extended) {
+    let up = UprightScreenshot.upright(wide, orientation: .right)
+    expect("an extended-range screenshot is redrawn upright", up?.width == 5 && up?.height == 3)
+} else {
+    expect("an extended-range test image could be made", false)
+}
+
 // An upright screenshot is sent as XCTest encoded it: no redraw.
 expect(".up: nothing to redraw", UprightScreenshot.upright(native, orientation: .up) == nil)
 expect("a mirrored orientation is left as it is", UprightScreenshot.upright(native, orientation: .leftMirrored) == nil)

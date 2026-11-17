@@ -48,15 +48,22 @@ enum UprightScreenshot {
         @unknown default:
             return nil
         }
-        guard let context = CGContext(
-            data: nil,
-            width: Int(size.width),
-            height: Int(size.height),
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: image.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
+        // In the image's own colour space where an 8-bit context takes it;
+        // an extended-range one (a float wide-gamut capture) it refuses, and
+        // device RGB then keeps the redraw rather than sending it sideways.
+        let makeContext = { (space: CGColorSpace) in
+            CGContext(
+                data: nil,
+                width: Int(size.width),
+                height: Int(size.height),
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        }
+        guard let context = image.colorSpace.flatMap(makeContext) ?? makeContext(CGColorSpaceCreateDeviceRGB())
+        else { return nil }
         context.interpolationQuality = .none
         context.concatenate(transform)
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
