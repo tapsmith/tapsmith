@@ -383,7 +383,7 @@ function checkStatement(code: string, node: Program['body'][number], index: numb
     if (/^(getBy|locator$|first$|last$|nth$|filter$|and$|or$)/.test(method)) {
       refuse(callee.property, 'a locator on its own does nothing: end it with an action such as `.tap()`, or assert on it with `expect()`');
     }
-    refuse(callee.property, `\`.${method}()\` is not a ${built.kind === 'webview' ? 'webview ' : ''}action run_code supports `
+    refuse(callee.property, `\`.${method}()\` is not ${built.kind === 'webview' ? 'a webview' : 'an'} action run_code supports `
       + `(supported: ${Object.keys(actions).map((m) => `.${m}()`).join(', ')})`);
   }
   checked(() => buildArgs(call.arguments, spec.params, method, ctx, call));

@@ -163,7 +163,7 @@ describe('tapsmith_run_code', () => {
     const started = Date.now();
     const res = await runCode('await expect(device.getByText("Welcome back")).toBeVisible();', { timeout: 300 });
     expect(res.isError).toBe(true);
-    expect(text(res)).toMatch(/^Statement 1 of 1 \(line 1\) failed: Expected element getByText\("Welcome back"\) to be visible, but it was not\./);
+    expect(text(res)).toMatch(/^Stopped at statement 1 of 1 \(line 1\): it failed\. 0 passed, 0 not run\.\nStatement 1 of 1 \(line 1\) failed: Expected element getByText\("Welcome back"\) to be visible, but it was not\./);
     expect(text(res)).not.toContain('Test line');
     expect(Date.now() - started).toBeLessThan(4_000);
   });
@@ -177,7 +177,7 @@ describe('tapsmith_run_code', () => {
     ].join('\n'), { timeout: 200 });
     expect(res.isError).toBe(true);
     const out = text(res);
-    expect(out).toMatch(/^Statement 1 of 4 \(line 1\): OK\nTest line: await device\.getByRole\("button", \{ name: "Sign in" \}\)\.tap\(\);\n/);
+    expect(out).toMatch(/^Stopped at statement 2 of 4 \(line 2\): it failed\. 1 passed, 2 not run\.\nStatement 1 of 4 \(line 1\): OK\nTest line: await device\.getByRole\("button", \{ name: "Sign in" \}\)\.tap\(\);\n/);
     expect(out).toMatch(/Statement 2 of 4 \(line 2\) failed: /);
     // A miss points the agent at its own tools, with the locator to check.
     expect(out).toContain('tapsmith_test_locator');
@@ -215,7 +215,7 @@ describe('tapsmith_run_code', () => {
     try {
       const res = await runCode('await device.swipe("up");\nawait device.pressKey("back");');
       expect(res.isError).toBe(true);
-      expect(text(res)).toMatch(/^Statement 1 of 2 \(line 1\): OK\nTest line: await device\.swipe\("up"\);\nStatement 2 of 2 \(line 2\) was not run: A test run is in progress/);
+      expect(text(res)).toMatch(/^Stopped at statement 2 of 2 \(line 2\): a test run started\. 1 passed, 1 not run\.\nStatement 1 of 2 \(line 1\): OK\nTest line: await device\.swipe\("up"\);\nStatement 2 of 2 \(line 2\) was not run: A test run is in progress/);
       expect(daemon.calls).toEqual(['swipe']);
     } finally {
       endTestRun();

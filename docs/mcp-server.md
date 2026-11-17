@@ -338,9 +338,10 @@ await expect(device.getByRole("button", { name: "Save" })).toBeEnabled();
 await device.getByText("Row 40").scrollIntoView();
 ```
 
-The statements run in order, on the SDK's own objects, so each behaves as the same line in a test: auto-waiting, strict mode, and the same errors. The first one that fails stops the run, and the result says which statements passed, which failed and why, and which did not run:
+The statements run in order, on the SDK's own objects, so each behaves as the same line in a test: auto-waiting, strict mode, and the same errors. The first one that fails stops the run, and the result says where it stopped, which statements passed, which failed and why, and which did not run:
 
 ```
+Stopped at statement 2 of 3 (line 2): it failed. 1 passed, 1 not run.
 Statement 1 of 3 (line 1): OK
 Test line: await device.getByLabel("Full name").type("Grace Hopper");
 Statement 2 of 3 (line 2) failed: Expected element getByRole("button", { name: "Save" }) to be enabled, but it was not.

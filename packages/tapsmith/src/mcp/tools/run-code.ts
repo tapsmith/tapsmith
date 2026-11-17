@@ -93,12 +93,12 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
         // the activity feed still shows where it stopped.
         if (extra.signal.aborted) {
           report.lines.push(`${header} was not run: the call was cancelled.`, ...notRun(statements.slice(i + 1)));
-          return errorResult(withWebviewNote(report));
+          return errorResult(withWebviewNote(report, stoppedAt(statement, total, i, 'the call was cancelled')));
         }
         // A run that started meanwhile now holds the device.
         if (testRunActive()) {
           report.lines.push(`${header} was not run: ${RUN_IN_PROGRESS}`, ...notRun(statements.slice(i + 1)));
-          return errorResult(report.lines.join('\n'));
+          return errorResult(withWebviewNote(report, stoppedAt(statement, total, i, 'a test run started')));
         }
         try {
           const line = await runStatement(statement, prebuilt.get(statement), sdkDevice, target.client, timeoutMs, report);
@@ -107,7 +107,7 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
           if (isStatementError(err)) report.lines.push(`${header} failed: ${err.message}`);
           else report.lines.push(`${header} failed: ${actionErrorText(err, locatorOf(statement))}`);
           report.lines.push(...notRun(statements.slice(i + 1)));
-          return errorResult(withWebviewNote(report));
+          return errorResult(withWebviewNote(report, stoppedAt(statement, total, i, 'it failed')));
         }
       }
       return { content: [{ type: 'text' as const, text: withWebviewNote(report) }] };
@@ -115,8 +115,19 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
   );
 }
 
-function withWebviewNote(report: Report): string {
-  return report.usedWebview ? [...report.lines, WEBVIEW_LINE_NOTE].join('\n') : report.lines.join('\n');
+/**
+ * The result's text. A run that stopped early leads with where and why, so
+ * its first line (all a terminal feed shows) says what went wrong.
+ */
+function withWebviewNote(report: Report, headline?: string): string {
+  const lines = headline ? [headline, ...report.lines] : report.lines;
+  return report.usedWebview ? [...lines, WEBVIEW_LINE_NOTE].join('\n') : lines.join('\n');
+}
+
+/** The headline of a run that stopped at `statement` (the `passed`-th, 0-based) for `why`. */
+function stoppedAt(statement: Statement, total: number, passed: number, why: string): string {
+  return `Stopped at statement ${statement.index} of ${total} (line ${statement.line}): ${why}. `
+    + `${passed} passed, ${total - passed - (why === 'it failed' ? 1 : 0)} not run.`;
 }
 
 /** The line saying which statements a failure left unrun, if any. */
