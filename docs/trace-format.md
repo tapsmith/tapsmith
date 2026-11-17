@@ -54,7 +54,7 @@ Rules for readers:
 |---|---|---|
 | `metadata.json` | JSON object | Always |
 | `trace.json` | NDJSON, one event per line, in recording order | Always |
-| `screenshots/action-NNN-{before,after}.png` | PNG at the device's native resolution, upright as the screen showed it: on a device turned to landscape it is wider than tall, like the element bounds recorded beside it. (iOS traces from 0.8.0 and earlier store a landscape screen's pixels in the device's portrait layout, with a PNG `eXIf` orientation tag to turn them.) | When the screenshots channel is on |
+| `screenshots/action-NNN-{before,after}.png` | PNG at the device's native resolution, upright as the screen showed it: on a device turned to landscape it is wider than tall, like the element bounds recorded beside it. (Older iOS traces store a landscape screen's pixels in the device's portrait layout, with a PNG `eXIf` orientation tag to turn them; an upright frame carries no such tag.) | When the screenshots channel is on |
 | `hierarchy/action-NNN-{before,after}.xml` | View hierarchy dump. Android emits `<node …>`; iOS emits `XCUIElementType…` elements | When the snapshots channel is on |
 | `sources.json` | JSON object: `{ [path]: fileContents }` | When the sources channel is on and a source was readable (each file is capped at 2 MiB) |
 | `network.json` | NDJSON, one request per line | When at least one request was captured |
