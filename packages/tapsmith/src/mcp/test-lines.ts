@@ -58,11 +58,13 @@ export function locatorCallLine(locator: string, method: string, ...args: string
  */
 export type LineCheck =
   | { status: 'verified'; locator: string; replaced?: string }
-  | { status: 'positional'; locator: string; detail: string }
+  | { status: 'positional'; locator: string; detail: string; comment: string }
   | { status: 'unverified'; reason: string };
 
-/** The comment a position-dependent line carries into the test. */
+/** The comment a position-dependent line carries into the test when the agent found nothing better. */
 export const POSITIONAL_COMMENT = '// position-dependent: no locator matched this element alone';
+/** The comment a position-dependent `webview.` line carries: no alternative is looked for there. */
+export const POSITIONAL_UNCHECKED_COMMENT = '// position-dependent: not checked for a locator that matches this element alone';
 
 /**
  * What an action tool says after `OK` about its test line. `line` builds the
@@ -75,7 +77,7 @@ export function describeLine(check: LineCheck, line: (locator: string) => string
   }
   const statement = line(check.locator);
   if (check.status === 'positional') {
-    return `Test line (position-dependent): ${statement} ${POSITIONAL_COMMENT}\n${check.detail}`;
+    return `Test line (position-dependent): ${statement} ${check.comment}\n${check.detail}`;
   }
   if (check.replaced) {
     return `Test line: ${statement}\n(${check.replaced.trim()} picks its element by position; the device agent matched this locator `

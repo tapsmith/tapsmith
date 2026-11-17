@@ -21,7 +21,7 @@ import type { ElementInfo, TapsmithGrpcClient } from '../grpc-client.js';
 import { parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import { agentValidatedSuggestions, IOS_CHUNK_SIZE, isNodeElement } from './agent-suggestions.js';
 import { semanticNodes } from './hierarchy-formatter.js';
-import type { LineCheck } from './test-lines.js';
+import { POSITIONAL_COMMENT, POSITIONAL_UNCHECKED_COMMENT, type LineCheck } from './test-lines.js';
 
 /** What finding a position-free locator needs from the daemon. */
 export interface AlternativeClient {
@@ -126,6 +126,7 @@ export function checkingLine(
       return {
         status: 'positional',
         locator,
+        comment: POSITIONAL_COMMENT,
         detail: `(The line picks its element by position, so it breaks if elements are added or reordered: ${alternative.none}.)`,
       };
     },
@@ -142,7 +143,8 @@ export function webViewLineCheck(locator: string, positional: boolean): LineChec
     ? {
       status: 'positional',
       locator,
-      detail: '(The line picks its element by position, so it breaks if elements are added or reordered; check a locator that matches it alone with tapsmith_test_locator.)',
+      comment: POSITIONAL_UNCHECKED_COMMENT,
+      detail: '(The line picks its element by position, so it breaks if elements are added or reordered. No locator that matches it alone was looked for in the page: find one with tapsmith_test_locator.)',
     }
     : { status: 'verified', locator };
 }

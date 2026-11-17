@@ -321,6 +321,14 @@ Launch an app on the device.
 | `clear_data` | boolean | No | Clear app data before launching (default: false) |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
+#### `tapsmith_list_devices`
+
+List all connected mobile devices and emulators across all platforms. Returns serial numbers needed for the `device` parameter on other tools.
+
+No parameters.
+
+Returns a JSON array of device objects with `serial`, `model`, `platform` (android/ios), `os_version`, `is_emulator`, `state`, and `usable`. Usable devices come first. A device that is attached but cannot be used — an Android phone whose USB-debugging prompt was never accepted (`unauthorized`), an `offline` device, or one without USB permission on Linux (`no permissions (…)`) — is listed with `usable: false`, adb's state as `state`, and a `fix` with the same advice `tapsmith doctor` and `tapsmith list-devices` give. A device the session was using that has since disconnected (on either platform) is listed last with `usable: false` and `state: "Disconnected"`, or with adb's state and a `fix` when adb still lists it. In UI (HTTP) mode the list covers only the UI session's own devices, so an attached device the session is not using — usable or not — is not listed; use `tapsmith list-devices` for the whole machine.
+
 ### Test lines
 
 Every action tool answers a successful action with `OK` and the test line that repeats it, as you would write it in the test with the `device` fixture. Write each line into the test file as you go:
@@ -348,17 +356,9 @@ A locator that picks its element by position (`.first()`, `.last()`, `.nth(n)`) 
 
 The check takes at most about 5 seconds, on top of the action's own `timeout`. If the action has to find its element again before it lands (the screen moved under it) and the position then picks a different element, the line is reported unverified too.
 
-A `webview.` locator is checked by the page, which is where a test's WebView locators are resolved too. A line that acts on one needs `const webview = await device.webview();` earlier in the test, and the result says so. A positional `webview.` locator is flagged as position-dependent; no alternative is looked for.
+A `webview.` locator is checked by the page, which is where a test's WebView locators are resolved too. A line that acts on one needs `const webview = await device.webview();` earlier in the test, and the result says so. A positional `webview.` locator is flagged as position-dependent, with a comment saying no alternative was looked for: find one with `tapsmith_test_locator`.
 
 A failed action gives no line. Lines use plain `device.` calls: if the test uses screen objects, move the locator into one.
-
-#### `tapsmith_list_devices`
-
-List all connected mobile devices and emulators across all platforms. Returns serial numbers needed for the `device` parameter on other tools.
-
-No parameters.
-
-Returns a JSON array of device objects with `serial`, `model`, `platform` (android/ios), `os_version`, `is_emulator`, `state`, and `usable`. Usable devices come first. A device that is attached but cannot be used — an Android phone whose USB-debugging prompt was never accepted (`unauthorized`), an `offline` device, or one without USB permission on Linux (`no permissions (…)`) — is listed with `usable: false`, adb's state as `state`, and a `fix` with the same advice `tapsmith doctor` and `tapsmith list-devices` give. A device the session was using that has since disconnected (on either platform) is listed last with `usable: false` and `state: "Disconnected"`, or with adb's state and a `fix` when adb still lists it. In UI (HTTP) mode the list covers only the UI session's own devices, so an attached device the session is not using — usable or not — is not listed; use `tapsmith list-devices` for the whole machine.
 
 ### Response size
 

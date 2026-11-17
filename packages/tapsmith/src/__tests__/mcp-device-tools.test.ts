@@ -1089,7 +1089,9 @@ describe('webview.* locators in the action tools', () => {
     const positioned = { ...locator, _nthIndex: 0 };
     page.getByText.mockReturnValue({ ...locator, first: () => positioned } as unknown as typeof locator);
     const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go").first()' });
-    expect(text(res)).toMatch(/^OK\nTest line \(position-dependent\): await webview\.getByText\("Go"\)\.first\(\)\.click\(\);/);
+    // No alternative is looked for in a page, and the comment says so rather
+    // than claiming a check that never ran.
+    expect(text(res)).toMatch(/^OK\nTest line \(position-dependent\): await webview\.getByText\("Go"\)\.first\(\)\.click\(\); \/\/ position-dependent: not checked for a locator that matches this element alone\n/);
     expect(positioned.click).toHaveBeenCalledTimes(1);
   });
 
