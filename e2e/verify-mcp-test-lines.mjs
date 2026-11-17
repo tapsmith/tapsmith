@@ -259,7 +259,11 @@ async function main() {
       const got = runCodeResultOf(session.results[i]?.response)
       if ("problem" in got) failures.push(`step ${i + 1} (${step.name}): ${got.problem}`)
       else if (got.failed || got.isError) failures.push(`step ${i + 1} (${step.name}): statement ${got.failed?.index} failed: ${got.failed?.message}`)
-      else lines.push(...got.lines)
+      // Every statement of the block, one per line, must have answered: a
+      // partial answer would let the replay pass without the missing ones.
+      else if (got.total !== step.args.code.split("\n").length || got.lines.length !== got.total || got.notRun) {
+        failures.push(`step ${i + 1} (${step.name}): ${got.lines.length} of ${got.total} statement(s) answered with a test line (block has ${step.args.code.split("\n").length}); not run: ${got.notRun ?? "none"}`)
+      } else lines.push(...got.lines)
       return
     }
     const got = testLineOf(session.results[i]?.response)

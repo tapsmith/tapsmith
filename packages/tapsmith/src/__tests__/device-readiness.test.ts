@@ -7,6 +7,7 @@ import {
   MAX_PREPARE_ATTEMPTS,
   holdReason,
   mcpToolWorkers,
+  McpCallsInFlight,
   toWireReadiness,
   type Candidate,
   type ReadinessCommand,
@@ -475,5 +476,58 @@ describe('mcpToolWorkers', () => {
     expect(mcpToolWorkers('emulator-9999', {}, workers)).toBeUndefined();
     expect(mcpToolWorkers(undefined, { device: 'gone' }, workers)).toBeUndefined();
     expect(mcpToolWorkers(undefined, undefined, [])).toBeUndefined();
+  });
+});
+
+describe('McpCallsInFlight', () => {
+  // A background preparation resets the app; one that starts while an MCP
+  // call is acting on the device (tapsmith_run_code runs several statements)
+  // would leave the call's later statements acting on a reset app.
+  const workers = [
+    { id: 0, devices: [{ serial: 'emulator-5554' }] },
+    { id: 1, devices: [{ serial: 'emulator-5556' }] },
+  ];
+
+  it('is active from a mutating call\'s start until its end, per call', () => {
+    const calls = new McpCallsInFlight();
+    expect(calls.active).toBe(false);
+    calls.start('a', 'tapsmith_run_code');
+    calls.start('b', 'tapsmith_tap');
+    expect(calls.active).toBe(true);
+    calls.end('a');
+    expect(calls.active).toBe(true);
+    calls.end('b');
+    expect(calls.active).toBe(false);
+  });
+
+  it('ignores read-only tools', () => {
+    const calls = new McpCallsInFlight();
+    expect(calls.start('a', 'tapsmith_snapshot')).toBe(false);
+    expect(calls.active).toBe(false);
+  });
+
+  it('start returns true only for a mutating tool, and an end without a start is harmless', () => {
+    const calls = new McpCallsInFlight();
+    expect(calls.start('a', 'tapsmith_run_code')).toBe(true);
+    calls.end('zzz');
+    expect(calls.active).toBe(true);
+  });
+
+  it('a starting call cancels the preparations on the workers it may touch', () => {
+    expect(McpCallsInFlight.preparationsToCancel({ device: 'emulator-5556' }, workers, [0, 1])).toEqual([1]);
+    // A call it cannot place may touch any worker.
+    expect(McpCallsInFlight.preparationsToCancel({}, workers, [0, 1])).toEqual([0, 1]);
+    expect(McpCallsInFlight.preparationsToCancel({}, workers, [])).toEqual([]);
+  });
+
+  it('holds back a preparation while a call is in flight, and lets it go after', () => {
+    const calls = new McpCallsInFlight();
+    const r = new DeviceReadiness(0, makeEnv({ recentlyInteracted: () => calls.active }));
+    calls.start('a', 'tapsmith_run_code');
+    expect(sendPrepare(r.handle({ type: 'worker-ready' }))).toBeUndefined();
+    expect(sendPrepare(r.handle({ type: 'grace-elapsed', timerId: 'readiness-0' }))).toBeUndefined();
+    expect(r.state.kind).toBe('unprepared');
+    calls.end('a');
+    expect(sendPrepare(r.handle({ type: 'grace-elapsed', timerId: 'readiness-0' }))).toBeDefined();
   });
 });

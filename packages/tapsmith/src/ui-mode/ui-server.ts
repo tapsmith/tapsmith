@@ -76,7 +76,7 @@ import { deviceGroupSize, deviceGroupNames } from '../config.js';
 import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js';
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
-import { DeviceReadiness, holdReason, mcpToolWorkers, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
+import { DeviceReadiness, holdReason, McpCallsInFlight, mcpToolWorkers, MUTATING_MCP_TOOLS, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
@@ -550,7 +550,7 @@ export async function startUIServer(
       speculationEnabled: speculationAllowed,
       nextCandidate: () => candidateFor(worker),
       graceMs: () => preferences.prepareDelayMs,
-      recentlyInteracted: () => Date.now() - lastMirrorInteraction < READINESS_INTERACTION_HOLD_WINDOW_MS,
+      recentlyInteracted: () => mcpCallsInFlight.active || Date.now() - lastMirrorInteraction < READINESS_INTERACTION_HOLD_WINDOW_MS,
     });
     worker.readiness = readiness;
     return readiness;
@@ -739,11 +739,22 @@ export async function startUIServer(
   /** Route an MCP device interaction to the worker(s) it touched. */
   function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined, device: string | undefined, status: 'completed' | 'error'): void {
     if (!MUTATING_MCP_TOOLS.has(tool)) return;
-    const live = uiWorkers.filter((w) => !w.retired).map((w) => ({
+    invalidateWorkers('mcp-tool', mcpToolWorkers(device, args, mcpTargetWorkers(), status));
+  }
+
+  function mcpTargetWorkers() {
+    return uiWorkers.filter((w) => !w.retired).map((w) => ({
       id: w.id,
       devices: workerDevicesInfo(w).map((d) => ({ serial: d.deviceSerial, name: d.name })),
     }));
-    invalidateWorkers('mcp-tool', mcpToolWorkers(device, args, live, status));
+  }
+
+  /** A mutating MCP call is starting: stop resetting any device it may act on. */
+  function cancelPreparationsForMcpCall(args: Record<string, unknown> | undefined): void {
+    const preparing = uiWorkers.filter((w) => !w.retired && w.readiness?.state.kind === 'preparing').map((w) => w.id);
+    if (preparing.length === 0) return;
+    const cancel = McpCallsInFlight.preparationsToCancel(args, mcpTargetWorkers(), preparing);
+    if (cancel.length > 0) invalidateWorkers('mcp-tool', cancel);
   }
 
   let screenPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -830,7 +841,8 @@ export async function startUIServer(
   let lastRunProject: string | undefined;
   /** Coalesced mirror-gesture bursts per worker for the activity feed. */
   const mirrorBursts = new Map<number, { id: string; counts: Map<string, number>; startedAt: number; last: number }>();
-  const MUTATING_MCP_TOOLS = new Set(['tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key', 'tapsmith_launch_app', 'tapsmith_run_code']);
+  /** Mutating MCP calls running now: background preparation waits for them. */
+  const mcpCallsInFlight = new McpCallsInFlight();
   /** Mirror interactions within this window hold background preparation. */
   const READINESS_INTERACTION_HOLD_WINDOW_MS = 3_000;
   /** Workers whose Node process should be recycled before the next run (source changed). */
@@ -1484,7 +1496,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
     if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
     broadcast(mcpMsg);
-    if (event.status !== 'started') invalidateForMcpTool(event.tool, event.args, event.device, event.status);
+    if (event.status === 'started') {
+      if (mcpCallsInFlight.start(event.id, event.tool)) cancelPreparationsForMcpCall(event.args);
+    } else {
+      mcpCallsInFlight.end(event.id);
+      invalidateForMcpTool(event.tool, event.args, event.device, event.status);
+    }
   });
 
   // ─── Test Discovery ───
