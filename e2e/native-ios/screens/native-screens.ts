@@ -235,3 +235,22 @@ export class NativeToolbarScreen {
   get toolbars() { return this.device.getByRole("toolbar") }
   lastAction(name: string) { return this.device.getByText(`Last action: ${name}`, { exact: true }) }
 }
+
+/** Stacks presented full screen from the "Back Key" screen (PILOT-1225). */
+export class NativeBackKeyScreen {
+  constructor(private device: Device) {}
+
+  get openSwiftUIStack() { return this.device.getByRole("button", { name: "Open SwiftUI Stack" }) }
+  get openUIKitStack() { return this.device.getByRole("button", { name: "Open UIKit Stack" }) }
+  /** Each stack's root has a leading Edit button and no back button. */
+  get edit() { return this.device.getByRole("button", { name: "Edit", exact: true }) }
+  get done() { return this.device.getByRole("button", { name: "Done", exact: true }) }
+
+  get swiftUIRoot() { return this.device.getByRole("heading", { name: "SwiftUI Root" }) }
+  get openSwiftUIDetail() { return this.device.getByRole("button", { name: "Open SwiftUI Detail" }) }
+  get swiftUIDetail() { return this.device.getByText("SwiftUI detail content", { exact: true }) }
+
+  get uikitEditing() { return this.device.getByText("Editing: off", { exact: true }) }
+  get openUIKitDetail() { return this.device.getByRole("button", { name: "Open UIKit Detail" }) }
+  get uikitDetail() { return this.device.getByText("UIKit detail content", { exact: true }) }
+}

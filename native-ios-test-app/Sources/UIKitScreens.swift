@@ -329,3 +329,53 @@ final class UIKitGesturesViewController: UIViewController {
         if recognizer.state == .began { status.text = "Status: Long pressed" }
     }
 }
+
+// ─── Back key ───
+
+/// A UINavigationController of its own (PILOT-1225): its root has an Edit
+/// button on the leading side and no back button; the pushed screen has
+/// UIKit's back button.
+struct UIKitBackKeyStack: UIViewControllerRepresentable {
+    let close: () -> Void
+    func makeUIViewController(context: Context) -> UINavigationController {
+        UINavigationController(rootViewController: UIKitBackKeyRootViewController(close: close))
+    }
+    func updateUIViewController(_ controller: UINavigationController, context: Context) {}
+}
+
+final class UIKitBackKeyRootViewController: UIViewController {
+    private let close: () -> Void
+    private let editingStatus = makeLabel("Editing: off")
+
+    init(close: @escaping () -> Void) {
+        self.close = close
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        title = "UIKit Root"
+        navigationItem.leftBarButtonItem = editButtonItem
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "Close", primaryAction: UIAction { [weak self] _ in self?.close() }
+        )
+        let push = UIButton(type: .system)
+        push.setTitle("Open UIKit Detail", for: .normal)
+        push.addAction(UIAction { [weak self] _ in
+            let detail = UIViewController()
+            detail.view.backgroundColor = .systemBackground
+            detail.title = "UIKit Detail"
+            pin(makeLabel("UIKit detail content"), in: detail.view)
+            self?.navigationController?.pushViewController(detail, animated: true)
+        }, for: .touchUpInside)
+        pin(makeStack([editingStatus, push]), in: view)
+    }
+
+    override func setEditing(_ editing: Bool, animated: Bool) {
+        super.setEditing(editing, animated: animated)
+        editingStatus.text = "Editing: \(editing ? "on" : "off")"
+    }
+}

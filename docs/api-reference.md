@@ -263,7 +263,7 @@ import type { DeviceKey, Role, SwipeDirection } from "tapsmith";
 | `SwipeDirection` | `device.swipe()`, `scroll()`, `scrollIntoView({ direction })` | `"up"`, `"down"`, `"left"`, `"right"` |
 | `DeviceKey` | `device.pressKey()` | `BACK`, `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `FORWARD_DELETE`, `ESCAPE` / `ESC`, `MENU`, `SEARCH`, `VOLUME_UP`, `VOLUME_DOWN`, `POWER`, `CAMERA`, `DPAD_UP`, `DPAD_DOWN`, `DPAD_LEFT`, `DPAD_RIGHT`, `DPAD_CENTER`, `SPACE`, `RECENTS` / `APP_SWITCH` |
 
-All names are case-insensitive. `scroll()` and `scrollIntoView()` take the way the view scrolls (`"down"` reveals what is below), while `device.swipe()` takes the way the finger moves (`"up"` reveals what is below). Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK` (which taps the navigation bar's back button), and types any single character.
+All names are case-insensitive. `scroll()` and `scrollIntoView()` take the way the view scrolls (`"down"` reveals what is below), while `device.swipe()` takes the way the finger moves (`"up"` reveals what is below). Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK`, and types any single character. iOS has no back key: `BACK` taps the navigation stack's own back button, and on a screen without one (a stack's first screen, a sheet, a dialog) it throws rather than tap another button in the bar.
 
 ### `device.pressBack(): Promise<void>` *(Android only)*
 

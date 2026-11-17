@@ -65,6 +65,19 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/keyboard-dismiss-planner-tests"
 "$OUT/keyboard-dismiss-planner-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/BackButtonTests/main.swift \
+  TapsmithAgent/BackButton.swift \
+  TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/BarHost.swift \
+  TapsmithAgent/CellFrames.swift \
+  TapsmithAgent/NonAppElements.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/back-button-tests"
+"$OUT/back-button-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/TouchPlanClockTests/main.swift \
   TapsmithAgent/TouchPlanClock.swift \

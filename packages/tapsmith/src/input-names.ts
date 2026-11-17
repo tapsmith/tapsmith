@@ -55,6 +55,7 @@ export const DEVICE_KEYS = [
  * A named device key for `device.pressKey()`. Case-insensitive (`"enter"`
  * works too). Every name works on Android; iOS supports `HOME`, `ENTER` /
  * `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (submits, like
- * `ENTER`), `SPACE` and `BACK` (taps the navigation bar's back button).
+ * `ENTER`), `SPACE` and `BACK` (taps the navigation stack's back button, and
+ * throws on a screen without one).
  */
 export type DeviceKey = typeof DEVICE_KEYS[number];

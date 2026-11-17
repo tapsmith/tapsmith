@@ -688,8 +688,9 @@ class ActionExecutor {
 
     // MARK: - Key Press
 
-    /// Send a key press event.
-    func pressKey(_ key: String) throws {
+    /// Send a key press event. `readScreen` reads the app's tree for the back
+    /// key, `deadline` is when the daemon stops waiting for the command.
+    func pressKey(_ key: String, readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
         switch key.lowercased() {
         case "home":
             XCUIDevice.shared.press(.home)
@@ -709,19 +710,7 @@ class ActionExecutor {
         case "space":
             typeTextWithoutFocus(" ")
         case "back":
-            // iOS has no hardware back button. Find the navigation back button
-            // via snapshot and tap it using event synthesis (no quiescence wait).
-            let backButton = app.navigationBars.buttons.firstMatch
-            if backButton.exists {
-                let frame = backButton.frame
-                if frame.width > 0 && frame.height > 0 {
-                    tapCoordinates(x: Int(frame.midX), y: Int(frame.midY), hold: TapTiming.hold(for: .button))
-                } else {
-                    throw AgentError.actionFailed("Back button found but has zero frame")
-                }
-            } else {
-                throw AgentError.actionFailed("No back button found. iOS does not have a hardware back button.")
-            }
+            try pressBack(readScreen: readScreen, deadline: deadline)
         default:
             // Try typing the key as a character
             if key.count == 1 {
@@ -729,6 +718,50 @@ class ActionExecutor {
             } else {
                 throw AgentError.actionFailed(
                     "Unknown key: '\(key)'. Use named keys (home, enter, delete, etc.) or single characters."
+                )
+            }
+        }
+    }
+
+    /// iOS has no hardware back button: tap the navigation stack's own back
+    /// button (`BackButton` picks it from the tree), with event synthesis (no
+    /// quiescence wait). A screen without one refuses — never another bar
+    /// button in its place (PILOT-1225). `readScreen` waits out a push or pop
+    /// in progress; a screen with no back button (or a covered one) is read
+    /// again for a moment before refusing, as a push just tapped may not have
+    /// begun.
+    private func pressBack(readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
+        let started = Date()
+        while true {
+            let snapshot: XCUIElementSnapshot
+            do {
+                snapshot = try readScreen()
+            } catch {
+                let cause = (error as? AgentError)?.message ?? error.localizedDescription
+                throw AgentError.actionFailed("Could not read the screen to find its back button: \(cause)")
+            }
+            let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+            let resolution = BackButton.resolve(in: analyzer)
+            if case .tap(let point, let ancestorTypes) = resolution {
+                tapCoordinates(
+                    x: Int(point.x.rounded()),
+                    y: Int(point.y.rounded()),
+                    hold: TapTiming.hold(for: .button, within: ancestorTypes)
+                )
+                return
+            }
+            if BackButton.shouldReadAgain(started: started, now: Date(), deadline: deadline) {
+                Thread.sleep(forTimeInterval: BackButton.pollSeconds)
+                continue
+            }
+            switch resolution {
+            case .covered(let by):
+                throw AgentError.actionFailed("The back button is covered by \(by). Dismiss it first.")
+            default:
+                throw AgentError.actionFailed(
+                    "No back button found. iOS does not have a hardware back button: BACK taps the "
+                        + "navigation bar's back button, and this screen has none (a stack's first screen, "
+                        + "a sheet or a dialog). Tap the control that closes it instead."
                 )
             }
         }
