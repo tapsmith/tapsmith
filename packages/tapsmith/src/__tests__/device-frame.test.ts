@@ -164,6 +164,7 @@ describe('svgFrame (accept check)', () => {
   // symmetric where the device is, within a frame box of the right shape.
   const kinds = ['phone', 'compact', 'tablet', 'foldable-outer', 'foldable-inner'] as const;
   const aspects = [0.45, 0.5625, 0.75, 0.87, 1, 1 / 0.87, 1.6, 2.2];
+  const DEFAULT_PORTRAIT = { 'phone': 0.46, 'compact': 0.5625, 'tablet': 0.7, 'foldable-outer': 0.52, 'foldable-inner': 0.86 } as const;
 
   it.each(kinds.flatMap((k) => (['ios', 'android'] as const).flatMap((p) => aspects.map((a) => [k, p, a] as const))))(
     '%s %s at %f',
@@ -208,6 +209,32 @@ describe('svgFrame (accept check)', () => {
         const ids = new Set([...svg.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
         expect(refs.size).toBeGreaterThan(0);
         for (const r of refs) expect(ids.has(r)).toBe(true);
+      }
+    }
+  });
+
+  it('shades buttons and hinge grooves across their width, upright and turned', () => {
+    // Both are tall, thin rects in the upright drawing; a bounding-box
+    // gradient turns with them, so "across" is the x axis either way up.
+    for (const a of [0.5, 2]) {
+      const svg = decodeURIComponent(svgFrame('foldable-outer', 'android', a).src);
+      for (const id of ['b', 'h']) {
+        expect(svg).toContain(`<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="0">`);
+      }
+    }
+  });
+
+  it('keeps every camera lens inside the glass, clear of the metal band', () => {
+    const RIM = 16; // frames.ts: width of the metal band
+    for (const k of kinds) {
+      for (const p of ['ios', 'android'] as const) {
+        const svg = decodeURIComponent(svgFrame(k, p, DEFAULT_PORTRAIT[k]).src);
+        // A lens's outer ring is the circle filled #050506 with a stroke.
+        const rings = [...svg.matchAll(/<circle cx="[^"]+" cy="([^"]+)" r="([^"]+)" fill="#050506" stroke="[^"]+" stroke-width="([^"]+)"/g)];
+        expect(rings.length).toBeGreaterThan(0);
+        for (const [, cy, r, sw] of rings) {
+          expect(Number(cy) - Number(r) - Number(sw) / 2).toBeGreaterThanOrEqual(RIM);
+        }
       }
     }
   });

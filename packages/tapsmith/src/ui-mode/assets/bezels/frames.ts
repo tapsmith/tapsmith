@@ -232,8 +232,10 @@ interface Geometry {
 function defs(turned: boolean): string {
   // Top → bottom as shown; for a turned frame that is right → left upright.
   const lit = turned ? 'x1="1" y1="0" x2="0" y2="0"' : 'x1="0" y1="0" x2="0" y2="1"';
-  // Across a button, at right angles to the edge it sits on.
-  const across = turned ? 'x1="0" y1="1" x2="0" y2="0"' : 'x1="0" y1="0" x2="1" y2="0"';
+  // Across a button or groove: they are tall, thin rects in the upright
+  // drawing, and a bounding-box gradient turns with its element, so this is
+  // the same in both orientations.
+  const across = 'x1="0" y1="0" x2="1" y2="0"';
   return '<defs>'
     // Brushed-metal band: bright top, mid-grey flanks, a lift near the bottom.
     + `<linearGradient id="m" ${lit}><stop offset="0" stop-color="#cfd1d5"/><stop offset=".2" stop-color="#aeb0b4"/><stop offset=".6" stop-color="#9c9ea3"/><stop offset=".9" stop-color="#8c8e93"/><stop offset="1" stop-color="#b3b5b9"/></linearGradient>`
@@ -248,7 +250,7 @@ function defs(turned: boolean): string {
     // Camera lens: deep blue-black glass.
     + '<radialGradient id="l" cx=".4" cy=".4" r=".7"><stop offset="0" stop-color="#3a4a6e"/><stop offset=".5" stop-color="#121826"/><stop offset="1" stop-color="#020203"/></radialGradient>'
     // Hinge groove: dark in the middle, metal at its edges.
-    + `<linearGradient id="h" ${turned ? 'x1="0" y1="0" x2="0" y2="1"' : 'x1="0" y1="0" x2="1" y2="0"'}><stop offset="0" stop-color="#8d8f94"/><stop offset=".3" stop-color="#3b3c40"/><stop offset=".5" stop-color="#1a1a1c"/><stop offset=".7" stop-color="#3b3c40"/><stop offset="1" stop-color="#9fa1a6"/></linearGradient>`
+    + `<linearGradient id="h" ${across}><stop offset="0" stop-color="#8d8f94"/><stop offset=".3" stop-color="#3b3c40"/><stop offset=".5" stop-color="#1a1a1c"/><stop offset=".7" stop-color="#3b3c40"/><stop offset="1" stop-color="#9fa1a6"/></linearGradient>`
     + '</defs>';
 }
 
@@ -348,35 +350,37 @@ export function svgFrame(kind: Exclude<FrameKind, 'photo' | 'photo-landscape'>, 
   const groove = (at: number, width: number, y0: number, y1: number) =>
     `<rect x="${fmt(at - width / 2)}" y="${fmt(y0)}" width="${fmt(width)}" height="${fmt(y1 - y0)}" rx="${fmt(width / 2)}" fill="url(#h)"/>`;
   const cx = pad + bodyW / 2;
+  // Middle of the top bezel's glass, below the metal band.
+  const topMid = RIM + (g.top - RIM) / 2;
   switch (kind) {
     case 'phone':
       if (platform === 'ios') {
-        parts.push(`<rect x="${fmt(cx - 90)}" y="${fmt(g.top / 2 - 16)}" width="180" height="32" rx="16" fill="#000"/>`);
-        parts.push(lens(cx + 60, g.top / 2, 10));
+        parts.push(`<rect x="${fmt(cx - 90)}" y="${fmt(topMid - 16)}" width="180" height="32" rx="16" fill="#000"/>`);
+        parts.push(lens(cx + 60, topMid, 10));
       } else {
-        parts.push(lens(cx, g.top / 2, 15));
+        parts.push(lens(cx, topMid, 15));
       }
       break;
     case 'compact':
-      parts.push(`<rect x="${fmt(cx - 80)}" y="${fmt(g.top / 2 - 8)}" width="160" height="16" rx="8" fill="#1d1e21" stroke="#34353a" stroke-width="2"/>`);
-      parts.push(lens(cx - 150, g.top / 2, 13));
+      parts.push(`<rect x="${fmt(cx - 80)}" y="${fmt(topMid - 8)}" width="160" height="16" rx="8" fill="#1d1e21" stroke="#34353a" stroke-width="2"/>`);
+      parts.push(lens(cx - 150, topMid, 13));
       if (platform === 'ios') {
         const hy = sy + sh + g.bottom / 2;
         parts.push(`<circle cx="${fmt(cx)}" cy="${fmt(hy)}" r="75" fill="#0c0c0e" stroke="url(#c)" stroke-width="4" stroke-opacity=".55"/>`);
       }
       break;
     case 'tablet':
-      parts.push(lens(cx, g.top / 2, 10));
+      parts.push(lens(cx, topMid, 10));
       break;
     case 'foldable-outer':
       // The hinge spine down the left edge; camera centred in the top bezel.
       parts.push(groove(pad + 20, 18, g.bodyRadius * 0.6, bodyH - g.bodyRadius * 0.6));
-      parts.push(lens(sx + sw / 2, g.top / 2, 13));
+      parts.push(lens(sx + sw / 2, topMid, 13));
       break;
     case 'foldable-inner':
       // The fold runs down the middle: grooves across the top and bottom bezels.
       parts.push(groove(cx, 10, 2, g.top - 4), groove(cx, 10, sy + sh + 4, bodyH - 2));
-      parts.push(lens(sx + sw * 0.78, g.top / 2, 10));
+      parts.push(lens(sx + sw * 0.78, topMid, 10));
       break;
   }
 
