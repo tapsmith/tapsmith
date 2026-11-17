@@ -61,6 +61,13 @@ function capturedHostWide(metadata: TraceMetadata | undefined): boolean {
   return devices.some((d) => d.networkCaptureRoute === 'ios-system-proxy');
 }
 
+/** Whether any device's HTTPS passed through uncaptured because it did not trust the CA. */
+function capturedHttpsPassthrough(metadata: TraceMetadata | undefined): boolean {
+  if (!metadata) return false;
+  const devices = [...(metadata.devices ?? []), metadata.device].filter(Boolean);
+  return devices.some((d) => d.networkHttpsPassthrough === true);
+}
+
 /**
  * The Call tab's "Device" line. The group name (`alice`) leads only when the
  * test declared a group: a single-device run still records one (`device-1`)
@@ -230,7 +237,7 @@ export function DetailTabs({ event, events, hierarchies, sources, metadata, netw
         {activeTab === 'hierarchy' && <HierarchyTabWrapper event={event} hierarchies={hierarchies} onNodeSelect={onHierarchyNodeSelect} group={group} screenshotVariant={screenshotVariant} />}
 
         {activeTab === 'locator' && locatorTab}
-        {activeTab === 'network' && <NetworkTab networkCaptureEnabled={metadata?.traceConfig?.network} entries={networkEntries} bodies={networkBodies} deviceNames={deviceNames} hostWideCapture={capturedHostWide(metadata)} />}
+        {activeTab === 'network' && <NetworkTab networkCaptureEnabled={metadata?.traceConfig?.network} entries={networkEntries} bodies={networkBodies} deviceNames={deviceNames} hostWideCapture={capturedHostWide(metadata)} httpsPassthrough={capturedHttpsPassthrough(metadata)} />}
         {activeTab === 'errors' && <ErrorsTab event={event} events={events} testError={testError} sources={sources} metadata={metadata} />}
       </div>
     </div>

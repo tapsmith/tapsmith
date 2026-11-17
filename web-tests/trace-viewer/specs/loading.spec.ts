@@ -56,6 +56,26 @@ test.describe("Loading a trace", () => {
     await expect(actions.networkRoute).toHaveText("macOS system proxy (host-wide)")
   })
 
+  // PILOT-1183
+  test("says in the Metadata tab when HTTPS was passed through uncaptured", async ({ viewer, actions }) => {
+    await viewer.open({
+      metadata: {
+        device: {
+          serial: "8C2F-SIM",
+          platform: "ios",
+          isEmulator: true,
+          networkCaptureRoute: "ios-network-extension",
+          networkHttpsPassthrough: true,
+        },
+      },
+      events: [actionEvent({ actionIndex: 0, action: "tap" })],
+    })
+    await actions.metadataTab.click()
+    await expect(actions.networkRoute).toHaveText(
+      "Network Extension (per-process) · HTTPS passed through uncaptured (CA not trusted)",
+    )
+  })
+
   test("renders one filmstrip frame per traced event", async ({ viewer, filmstrip }) => {
     await viewer.open({
       events: [

@@ -8,6 +8,7 @@ pub mod launch_gate;
 pub mod physical_device_proxy;
 pub mod recording;
 pub mod screenshot;
+pub mod sim_ca_trust;
 #[cfg(target_os = "macos")]
 pub mod simulator_processes;
 #[cfg(target_os = "macos")]

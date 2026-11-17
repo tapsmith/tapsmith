@@ -1864,15 +1864,17 @@ fn parse_securityd_label(listing: &str) -> Option<String> {
 ///
 /// Uses `xcrun simctl keychain` (Xcode 15+) to add a root certificate to the
 /// simulator's trust store. This allows the MITM proxy to intercept HTTPS traffic.
+/// `timeout` bounds the call (at most `SIMCTL_TIMEOUT`): the caller retries
+/// within a budget of its own (`sim_ca_trust::ensure_trusted`).
 #[instrument]
-pub async fn install_ca_cert(udid: &str, ca_pem_path: &str) -> Result<()> {
+pub async fn install_ca_cert(udid: &str, ca_pem_path: &str, timeout: Duration) -> Result<()> {
     // This call talks to the simulator's securityd/trustd — the exact spot a
     // wedged CoreSimulator hangs (a single invocation was observed taking
     // ~10.5 minutes on CI, starving every StartNetworkCapture behind it).
     let output = bounded_output(
         "simctl keychain add-root-cert",
         Command::new("xcrun").args(["simctl", "keychain", udid, "add-root-cert", ca_pem_path]),
-        SIMCTL_TIMEOUT,
+        timeout,
     )
     .await?;
 

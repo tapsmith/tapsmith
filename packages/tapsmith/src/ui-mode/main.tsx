@@ -566,6 +566,7 @@ function App() {
       // Drives the Network tab's host-wide banner and the Metadata tab's
       // route row, as the packaged trace's metadata does.
       ...(currentTrace?.networkCaptureRoute ? { networkCaptureRoute: currentTrace.networkCaptureRoute } : {}),
+      ...(currentTrace?.networkHttpsPassthrough ? { networkHttpsPassthrough: true } : {}),
     },
     traceConfig: { screenshots: true, snapshots: true, sources: true, network: currentTrace?.networkCaptureEnabled ?? true, deviceLogs: false, daemonLogs: false },
     actionCount: liveActionCount,
@@ -579,7 +580,7 @@ function App() {
     appResetScope: viewedIsolation?.appResetScope,
     appState: viewedIsolation?.appState,
     devices: viewedGroupDevices,
-  }), [viewedTestName, viewedTestFile, viewedTestNode, viewedTestProject, isRunning, liveActionCount, screenshots.size, testDeviceSerial, deviceIsEmulator, tapsmithVersion, viewedIsolation, viewedGroupDevices, currentTrace?.networkCaptureEnabled, currentTrace?.networkCaptureRoute]);
+  }), [viewedTestName, viewedTestFile, viewedTestNode, viewedTestProject, isRunning, liveActionCount, screenshots.size, testDeviceSerial, deviceIsEmulator, tapsmithVersion, viewedIsolation, viewedGroupDevices, currentTrace?.networkCaptureEnabled, currentTrace?.networkCaptureRoute, currentTrace?.networkHttpsPassthrough]);
 
   // Prefer a real completed event at this index; fall back to a synthesized
   // one from the in-flight slot so ScreenshotPanel can render the before-
@@ -1215,6 +1216,7 @@ function App() {
             // `null` = this attempt captured no route: clear, so a retry never
             // keeps the previous attempt's. Absent (older workers) = keep.
             networkCaptureRoute: msg.networkCaptureRoute === undefined ? data.networkCaptureRoute : msg.networkCaptureRoute ?? undefined,
+            networkHttpsPassthrough: msg.networkHttpsPassthrough ?? data.networkHttpsPassthrough,
           });
           return next;
         });

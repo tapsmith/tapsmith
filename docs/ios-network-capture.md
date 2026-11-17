@@ -154,6 +154,25 @@ Check the daemon logs — run `tapsmith test` with `RUST_LOG=tapsmith_core=debug
 - **`upstream TLS handshake failed for <host>: UnknownIssuer`** — the upstream server uses a certificate chain not in Tapsmith's webpki roots. This affects some Apple-internal services; it does not affect standard public HTTPS endpoints.
 - **`simulator_processes returned 0 PIDs`** — the simulator isn't booted, or `ps` parsing couldn't find it. Check `xcrun simctl list devices booted`.
 
+### When the CA certificate can't be installed
+
+`xcrun simctl keychain add-root-cert` goes through CoreSimulator, which can stall on a loaded machine (most often a CI runner booting several simulators). Tapsmith tries the install up to three times, for at most about 40 seconds in all. When every attempt fails, it checks the simulator's trust store on disk, since an earlier run (or an attempt that timed out) may already have installed the CA. If the CA is there, capture carries on as usual.
+
+If it isn't, the simulator would reject every certificate the proxy presents, so Tapsmith stops decrypting HTTPS for the rest of the session instead of breaking the app's requests. It passes HTTPS through to the real servers and prints a warning:
+
+```text
+[tapsmith] Network capture warning: Could not install Tapsmith's CA certificate on the simulator (tried 2 times): simctl keychain add-root-cert timed out after 6s (CoreSimulatorService may be wedged). HTTPS is passed through to its servers uncaptured, …
+```
+
+What that means for the run:
+
+- The app's HTTPS requests still work.
+- Each HTTPS connection appears in the trace's Network tab only as a `passthrough` entry, and the tab and the Metadata tab say HTTPS was passed through. The trace's `metadata.json` records `"networkHttpsPassthrough": true` for the device.
+- `device.route()`, `waitForRequest()` and `waitForResponse()` cannot see HTTPS. A network wait that times out says why, and so does the warning for a test whose routes never fired.
+- Plain HTTP is still captured, mocked and waited on as usual.
+
+Passthrough lasts until Tapsmith exits. To recover, run the tests again. UI mode, watch mode and the MCP server keep one session (and print the warning once), so quit and restart them. If it keeps happening, shut the simulator down (`xcrun simctl shutdown <udid>`) or restart CoreSimulator (`killall -9 com.apple.CoreSimulator.CoreSimulatorService`, which stops every running simulator) before the next run.
+
 ### My host's web browser traffic went through Tapsmith's proxy
 
 This should not happen with the Network Extension: it filters by PID, so only the simulator's process tree's traffic is redirected and your browser's PID is not in the filter. Host traffic in a trace means the daemon used the [system-proxy fallback](#when-the-network-extension-is-unavailable); the trace viewer's Network tab says so in a banner, and the trace's `metadata.json` records `"networkCaptureRoute": "ios-system-proxy"` for the device.
