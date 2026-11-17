@@ -7,6 +7,7 @@ import { traceFormatProblem } from '../../trace/trace-format.js';
 import {
   clipText, MCP_IMAGE_BUDGET_BYTES, MCP_TEXT_BUDGET_BYTES, serializedTextBytes, truncateMiddle,
 } from '../response-limits.js';
+import { ADDITIONALLY } from './trace-utils.js';
 
 /**
  * One step value (an error, an expected or actual value) as shown. Errors can
@@ -56,7 +57,6 @@ export function registerReadTraceTool(server: McpServer): void {
 /** How many failed steps the result header names before eliding the middle. */
 const MAX_LISTED_FAILED_STEPS = 10;
 /** The runner's separator before soft-assertion and unhandled errors it appends to a test's error. */
-const ADDITIONALLY = '\n\n--- Additionally ---\n';
 
 /** Step labels joined for the result header, the middle elided past the cap. */
 function listSteps(labels: string[]): string {

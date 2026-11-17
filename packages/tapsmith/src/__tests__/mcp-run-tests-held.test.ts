@@ -64,12 +64,13 @@ async function callRunTests(dispatcher: TestDispatcher, args: Record<string, unk
 }
 
 let dir: string;
-/** A trace whose failed step (action 3) captured `failureScreen`. */
-function trace(events: object[], failureScreen = SCREEN): string {
+/** A trace whose failed step (action 3) captured `failureScreen`; the test's error is that step's. */
+function trace(events: Record<string, unknown>[], failureScreen = SCREEN): string {
+  const error = events.find((e) => e.error)?.error as string | undefined;
   const p = path.join(dir, `trace-${Math.random().toString(36).slice(2)}.zip`);
   fs.writeFileSync(p, zipSync({
     'trace.json': new TextEncoder().encode(events.map((e) => JSON.stringify(e)).join('\n')),
-    'metadata.json': new TextEncoder().encode('{"version":1}'),
+    'metadata.json': new TextEncoder().encode(JSON.stringify({ version: 1, error })),
     'hierarchy/action-003-before.xml': new TextEncoder().encode(failureScreen),
   }));
   return p;

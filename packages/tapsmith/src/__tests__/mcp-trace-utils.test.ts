@@ -48,18 +48,18 @@ describe('readTraceSummary()', () => {
     }
   });
 
-  it('reads the screen at the test\'s failed step, not at a failed step in an after hook (PILOT-1241)', () => {
+  it('reads the screen at the step whose error is the test\'s error (PILOT-1241)', () => {
     const enc = (t: string) => Buffer.from(t);
     const hierarchy = {
       'hierarchy/action-001-before.xml': '<hierarchy>login</hierarchy>',
-      'hierarchy/action-002-before.xml': '<hierarchy>hook</hierarchy>',
+      'hierarchy/action-002-before.xml': '<hierarchy>other</hierarchy>',
     };
     const failedStep = { type: 'assertion', assertion: 'toBeVisible', error: 'not visible', actionIndex: 1, hasHierarchyBefore: true, duration: 50 };
-    const hookStep = { type: 'action', action: 'tap', error: 'gone', actionIndex: 2, hasHierarchyBefore: true, duration: 5 };
-    const read = (events: object[]) => {
+    const otherStep = { type: 'action', action: 'tap', error: 'gone', actionIndex: 2, hasHierarchyBefore: true, duration: 5 };
+    const read = (events: object[], error: string | null = 'not visible') => {
       const files: Record<string, Uint8Array> = {
         'trace.json': new TextEncoder().encode(events.map((e) => JSON.stringify(e)).join('\n')),
-        'metadata.json': new TextEncoder().encode('{"version":1}'),
+        'metadata.json': new TextEncoder().encode(JSON.stringify({ version: 1, ...(error === null ? {} : { error }) })),
       };
       for (const [name, xml] of Object.entries(hierarchy)) files[name] = new Uint8Array(enc(xml));
       const zip = path.join(os.tmpdir(), `test-trace-h-${Date.now()}-${Math.random()}.zip`);
@@ -72,18 +72,23 @@ describe('readTraceSummary()', () => {
     };
     const login = '<hierarchy>login</hierarchy>';
     expect(read([{ type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' }])).toBe(login);
-    // A hook's failed step after the test's is not the failure.
+    // A hook's failed step after the test's is not the failure, even with the same error.
     expect(read([
       { type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' },
-      { type: 'group-start', name: 'afterEach Hooks' }, hookStep, { type: 'group-end', name: 'afterEach Hooks' },
+      { type: 'group-start', name: 'afterEach Hooks' }, { ...otherStep, error: 'not visible' }, { type: 'group-end', name: 'afterEach Hooks' },
     ])).toBe(login);
-    // A fixture's teardown runs in no group, after the test: its failed step is not the test's (numbered after `Test` ends).
+    // A test that timed out: its in-flight step carries the timeout's message, no `Test` group-end is
+    // written, and a fixture's teardown then fails a step in no group. That step is not the failure.
+    const timeout = 'Test timed out after 30000ms';
     expect(read([
-      { type: 'group-start', name: 'Test', actionIndex: 1 }, failedStep, { type: 'group-end', name: 'Test', actionIndex: 2 },
-      hookStep,
-    ])).toBe(login);
-    // A step the test left in flight is recorded after the group ends, numbered inside it.
-    expect(read([{ type: 'group-start', name: 'Test', actionIndex: 1 }, { type: 'group-end', name: 'Test', actionIndex: 2 }, failedStep])).toBe(login);
+      { type: 'group-start', name: 'Test' }, { ...failedStep, error: timeout }, otherStep,
+    ], timeout)).toBe(login);
+    // A failed step the test caught is not the failure; the test's error was thrown outside a traced step.
+    expect(read([{ type: 'group-start', name: 'Test' }, otherStep, { type: 'group-end', name: 'Test' }], 'TypeError: x is undefined')).toBeUndefined();
+    // Soft or unhandled errors appended after the error the test stopped on do not match.
+    expect(read([failedStep, otherStep], 'not visible\n\n--- Additionally ---\ngone')).toBe(login);
+    // No test error recorded: no step is the failure.
+    expect(read([failedStep], null)).toBeUndefined();
     // A failure in a beforeEach hook is the test's failure.
     expect(read([{ type: 'group-start', name: 'beforeEach Hooks' }, failedStep, { type: 'group-end', name: 'beforeEach Hooks' }])).toBe(login);
     expect(read([{ type: 'action', action: 'tap', actionIndex: 1, hasHierarchyBefore: true }])).toBeUndefined();
