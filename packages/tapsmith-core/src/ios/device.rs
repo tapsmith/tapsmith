@@ -1052,8 +1052,9 @@ pub async fn boot_simulator(udid: &str) -> Result<()> {
     Ok(())
 }
 
-/// Apply test-friendly defaults to the simulator (disable password autofill,
-/// keyboard autocorrect, etc.) so system dialogs don't interfere with tests.
+/// Apply test-friendly defaults to the simulator (password autofill off, the
+/// keyboard's first-use intros marked as shown) so system sheets don't
+/// interfere with tests.
 ///
 /// **Caller's responsibility** to skip this for physical devices — invoking
 /// it against a real device's UDID is wasted work (the simctl spawns will
@@ -1061,44 +1062,35 @@ pub async fn boot_simulator(udid: &str) -> Result<()> {
 /// simulators only, alongside the agent's launch.
 pub async fn configure_simulator(udid: &str) {
     let started = std::time::Instant::now();
-    // Disable "Save Password?" dialog which blocks the UI during login tests.
-    // The setting must be written to multiple domains because Apple has moved
-    // the password autofill control across iOS versions and frameworks.
-    const AUTOFILL_DOMAINS: [&str; 4] = [
-        "-g",                 // Global (pre-iOS 26)
-        "com.apple.WebUI",    // WebKit credential UI (iOS 26+)
-        "com.apple.Safari",   // Safari password autofill
-        "com.apple.Password", // Passwords framework (iOS 26+)
-    ];
 
     // Best-effort, but bounded: StartAgent waits for it, and an unbounded
     // `simctl spawn` against a wedged CoreSimulator was observed stalling
-    // agent start past its whole 240s client deadline. The domains are
-    // written concurrently so the worst case is one bound rather than four,
+    // agent start past its whole 240s client deadline. The writes run
+    // concurrently so the worst case is one bound rather than one per write,
     // and a write that fails or times out gets a second pass: under
     // CoreSimulator pressure these writes hit their bound and were silently
     // dropped, autofill stayed on, and the Keychain "Save Password?" sheet
     // then covered the first sign-in of the run (both failing iOS shard-5
     // runs of Sep 2026 show the timed-out writes in the daemon log).
-    let mut pending: Vec<&'static str> = AUTOFILL_DOMAINS.to_vec();
+    let mut pending = simulator_default_writes();
     let mut passes = 0;
-    for pass in 1..=AUTOFILL_WRITE_PASSES {
+    for pass in 1..=SIMULATOR_DEFAULTS_PASSES {
         passes = pass;
         let handles: Vec<_> = pending
             .drain(..)
-            .map(|domain| {
+            .map(|write| {
                 let udid = udid.to_string();
-                tokio::spawn(async move { (domain, write_autofill_default(&udid, domain).await) })
+                tokio::spawn(async move { (write, write.apply(&udid).await) })
             })
             .collect();
         for handle in handles {
             match handle.await {
                 Ok((_, Ok(()))) => {}
-                Ok((domain, Err(e))) => {
-                    warn!(udid, domain, pass, error = %e, "disabling password autofill failed");
-                    pending.push(domain);
+                Ok((write, Err(e))) => {
+                    warn!(udid, write = ?write, pass, error = %e, "writing a simulator default failed");
+                    pending.push(write);
                 }
-                Err(e) => warn!(udid, pass, error = %e, "autofill defaults task panicked"),
+                Err(e) => warn!(udid, pass, error = %e, "simulator defaults task panicked"),
             }
         }
         if pending.is_empty() {
@@ -1107,12 +1099,9 @@ pub async fn configure_simulator(udid: &str) {
     }
     if pending.is_empty() {
         debug!(udid, "Configured simulator defaults for testing");
-    } else {
-        warn!(
-            udid,
-            domains = ?pending,
-            "password autofill could not be disabled; the Keychain \"Save Password?\" sheet may appear after a sign-in"
-        );
+    }
+    for write in &pending {
+        warn!(udid, write = ?write, "{}", write.failure_consequence());
     }
     crate::timing::timing_log!(
         "kind=boot name=configure_simulator dur_ms={} ok={} passes={passes} failed={}",
@@ -1122,32 +1111,127 @@ pub async fn configure_simulator(udid: &str) {
     );
 }
 
-/// Bound for one `simctl spawn defaults write`. Generous enough to survive
+/// Domains the "Save Password?" setting is written to. Apple has moved the
+/// password autofill control across iOS versions and frameworks.
+const AUTOFILL_DOMAINS: [&str; 4] = [
+    "-g",                 // Global (pre-iOS 26)
+    "com.apple.WebUI",    // WebKit credential UI (iOS 26+)
+    "com.apple.Safari",   // Safari password autofill
+    "com.apple.Password", // Passwords framework (iOS 26+)
+];
+
+/// Where the keyboard records which of its first-use intros it has shown
+/// (verified on the iOS 26.5 and 27.2 simulators: showing the swipe-typing
+/// intro writes `DidShowContinuousPathIntroduction` here).
+const KEYBOARD_PREFERENCES_DOMAIN: &str = "com.apple.keyboard.preferences";
+
+/// The keyboard's first-use intros, marked as already shown (PILOT-1226).
+/// The first time a fresh simulator shows its keyboard, iOS can cover it with
+/// one of these sheets — the swipe-typing intro ("Speed up your typing by
+/// sliding your finger…"), or, with two keyboard languages, the multilingual
+/// one ("Type English and Polish") — and every key typed until it is
+/// dismissed is lost. The names are the TextInput preference keys present in
+/// both the 26.5 and 27.2 runtimes; an unknown key is ignored by iOS. Only the
+/// swipe-typing intro has been seen and confirmed suppressed (26.5 and 27.2,
+/// English and Polish keyboards); the multilingual sheet did not appear in
+/// that setup, so its keys (`Multilingual*Tip`) are the runtime's names, unverified.
+const KEYBOARD_INTRO_KEYS: [&str; 8] = [
+    "DidShowContinuousPathIntroduction",
+    "DidShowGestureKeyboardIntroduction",
+    "UIKeyboardDidShowInternationalInfoIntroduction",
+    "KeyboardDidShowProductivityTutorial",
+    "DidShowInlineCompletionEducationTip",
+    "KeyboardDidShowGenmojiTip",
+    "MultilingualKeyboardTip",
+    "MultilingualSettingTip",
+];
+
+/// One test-friendly default [`configure_simulator`] writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SimulatorDefault {
+    /// `AutoFillPasswords = NO` in this domain.
+    DisableAutofill(&'static str),
+    /// Every [`KEYBOARD_INTRO_KEYS`] entry set in
+    /// [`KEYBOARD_PREFERENCES_DOMAIN`], in one spawn.
+    KeyboardIntrosShown,
+}
+
+fn simulator_default_writes() -> Vec<SimulatorDefault> {
+    AUTOFILL_DOMAINS
+        .iter()
+        .map(|domain| SimulatorDefault::DisableAutofill(domain))
+        .chain(std::iter::once(SimulatorDefault::KeyboardIntrosShown))
+        .collect()
+}
+
+impl SimulatorDefault {
+    async fn apply(self, udid: &str) -> Result<()> {
+        match self {
+            Self::DisableAutofill(domain) => {
+                simctl_defaults(udid, &["write", domain, "AutoFillPasswords", "-bool", "NO"]).await
+            }
+            Self::KeyboardIntrosShown => {
+                // `defaults import` merges the file's keys into the domain
+                // (verified on 26.5 and 27.2), so the user's own keyboard
+                // settings stay, and eight keys cost one simctl spawn instead
+                // of eight. The simulator reads the host path directly.
+                let mut file = tempfile::Builder::new()
+                    .prefix("tapsmith-keyboard-intros-")
+                    .suffix(".plist")
+                    .tempfile()
+                    .context("creating the keyboard preferences file")?;
+                std::io::Write::write_all(&mut file, &keyboard_intros_plist()?)
+                    .context("writing the keyboard preferences file")?;
+                let path = file.path().to_string_lossy().into_owned();
+                simctl_defaults(udid, &["import", KEYBOARD_PREFERENCES_DOMAIN, &path]).await
+            }
+        }
+    }
+
+    fn failure_consequence(self) -> &'static str {
+        match self {
+            Self::DisableAutofill(_) => {
+                "password autofill could not be disabled; the Keychain \"Save Password?\" sheet may appear after a sign-in"
+            }
+            Self::KeyboardIntrosShown => {
+                "the keyboard's first-use intros could not be marked as shown; an intro sheet may cover the keyboard the first time it appears and swallow what is typed"
+            }
+        }
+    }
+}
+
+/// [`KEYBOARD_INTRO_KEYS`] as an XML plist dictionary, every key `true`.
+fn keyboard_intros_plist() -> Result<Vec<u8>> {
+    let dict: plist::Dictionary = KEYBOARD_INTRO_KEYS
+        .iter()
+        .map(|key| (key.to_string(), plist::Value::Boolean(true)))
+        .collect();
+    let mut bytes = Vec::new();
+    plist::Value::Dictionary(dict)
+        .to_writer_xml(&mut bytes)
+        .context("serialising the keyboard preferences")?;
+    Ok(bytes)
+}
+
+/// Bound for one `simctl spawn defaults …`. Generous enough to survive
 /// the 10-12s stalls seen on loaded CI runners, still far inside StartAgent's
 /// client deadline even across both passes.
-const AUTOFILL_DEFAULTS_TIMEOUT: Duration = Duration::from_secs(20);
-const AUTOFILL_WRITE_PASSES: u32 = 2;
+const SIMULATOR_DEFAULTS_TIMEOUT: Duration = Duration::from_secs(20);
+const SIMULATOR_DEFAULTS_PASSES: u32 = 2;
 
-async fn write_autofill_default(udid: &str, domain: &str) -> Result<()> {
+async fn simctl_defaults(udid: &str, args: &[&str]) -> Result<()> {
     let output = bounded_output(
-        "simctl spawn defaults write",
-        Command::new("xcrun").args([
-            "simctl",
-            "spawn",
-            udid,
-            "defaults",
-            "write",
-            domain,
-            "AutoFillPasswords",
-            "-bool",
-            "NO",
-        ]),
-        AUTOFILL_DEFAULTS_TIMEOUT,
+        "simctl spawn defaults",
+        Command::new("xcrun")
+            .args(["simctl", "spawn", udid, "defaults"])
+            .args(args),
+        SIMULATOR_DEFAULTS_TIMEOUT,
     )
     .await?;
     if !output.status.success() {
         return Err(anyhow!(
-            "defaults write exited with {}: {}",
+            "defaults {} exited with {}: {}",
+            args.first().copied().unwrap_or_default(),
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
@@ -1915,6 +1999,33 @@ pub async fn clear_app_data(udid: &str, bundle_id: &str, app_path: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_intros_plist_marks_every_intro_as_shown() {
+        let bytes = keyboard_intros_plist().expect("plist serialises");
+        let value = plist::Value::from_reader_xml(bytes.as_slice()).expect("valid XML plist");
+        let dict = value.as_dictionary().expect("top level is a dictionary");
+        assert_eq!(dict.len(), KEYBOARD_INTRO_KEYS.len());
+        for key in KEYBOARD_INTRO_KEYS {
+            assert_eq!(
+                dict.get(key).and_then(plist::Value::as_boolean),
+                Some(true),
+                "{key}"
+            );
+        }
+        // The swipe-typing intro is the one seen blocking type() on a fresh
+        // 26.5 simulator: iOS records it under this key once shown.
+        assert!(KEYBOARD_INTRO_KEYS.contains(&"DidShowContinuousPathIntroduction"));
+    }
+
+    #[test]
+    fn simulator_defaults_cover_autofill_and_keyboard_intros() {
+        let writes = simulator_default_writes();
+        for domain in AUTOFILL_DOMAINS {
+            assert!(writes.contains(&SimulatorDefault::DisableAutofill(domain)));
+        }
+        assert!(writes.contains(&SimulatorDefault::KeyboardIntrosShown));
+    }
 
     #[test]
     fn simctl_terminate_result_says_whether_the_app_is_stopped() {

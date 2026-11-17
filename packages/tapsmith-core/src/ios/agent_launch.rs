@@ -129,7 +129,8 @@ struct StartMode {
     apply_simulator_defaults: bool,
 }
 
-/// The simulator's test-friendly defaults (password autofill off), written
+/// The simulator's test-friendly defaults (password autofill off, keyboard
+/// intros marked as shown), written
 /// while the agent starts instead of before it (PILOT-1134): on a just-booted
 /// CI simulator the `simctl spawn defaults write` calls took 13–16 s, all of
 /// it in front of the xcodebuild spawn. The app under test must still never
