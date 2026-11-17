@@ -61,7 +61,8 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
   // width at (container height × frame aspect); for the CSS bezel, the canvas
   // width at the room left inside the skin's padding. clientHeight reflects
   // the real rendered height regardless of CSS definiteness, so this works
-  // where container-query height does not.
+  // where container-query height does not. The skin (platform, form factor)
+  // sets that padding, so a skin change at the same shape refits too.
   useLayoutEffect(() => {
     const el = ref.current;
     const parent = el?.parentElement;
@@ -84,7 +85,7 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
     const ro = new ResizeObserver(measure);
     ro.observe(parent);
     return () => ro.disconnect();
-  }, [heightBound, frameAspect, cssFitAspect]);
+  }, [heightBound, frameAspect, cssFitAspect, platform, formFactor]);
 
   if (frame) {
     const style: Record<string, string> = { '--dm-fa': String(frame.frameAspect) };

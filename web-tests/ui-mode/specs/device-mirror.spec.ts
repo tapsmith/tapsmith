@@ -199,6 +199,30 @@ test.describe("Device mirror", () => {
     })
   }
 
+  test("refits the CSS bezel when the device changes skin at the same screen shape", async ({ app, device, page }) => {
+    const ui = app
+    // Android and iOS skins pad the canvas differently, so a same-shaped frame
+    // on the other platform needs a different canvas width to fit the pane.
+    await page.setViewportSize({ width: 1600, height: 500 })
+    ui.sendFrame(screenFrame(750, 1334, 1))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expect(device.bezel).toHaveClass(/dm-skin-android/)
+    await expectCanvasFillsBezel(device)
+
+    ui.send({ type: "device-info", serial: "SIM-1", isEmulator: true, platform: "ios", screenWidth: 750, screenHeight: 1334 })
+    await expect(device.bezel).toHaveClass(/dm-skin-ios/)
+    // The canvas is refitted inside the iOS skin's padding: its box keeps the
+    // frame's exact shape instead of being squashed by its max-height (a stale
+    // Android-padding width), which would skew the tap mapping.
+    await expect.poll(() => device.bezel.evaluate((el) => {
+      const cs = getComputedStyle(el)
+      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+      const r = el.querySelector("canvas")!.getBoundingClientRect()
+      return Math.abs(r.width / r.height - 750 / 1334) < 0.002 && r.height + padY <= el.parentElement!.clientHeight + 0.5
+    })).toBe(true)
+    await expectCanvasFillsBezel(device)
+  })
+
   test("shows a placeholder while no device is connected", async ({ app, device }) => {
     const ui = app
     ui.drop()
