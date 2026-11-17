@@ -222,12 +222,45 @@ interface Geometry {
   screenRadius: number
 }
 
-const BODY = '#1c1c1e';
-const EDGE = '#3a3a3c';
-const DETAIL = '#0b0b0c';
-const DETAIL_EDGE = '#2c2c2e';
-const BUTTON = '#2c2c2e';
-const HINGE = '#3a3a3c';
+/**
+ * Materials, as SVG gradients. Each frame is its own document (an <img>
+ * data: URI), so these ids cannot collide with another frame's or the page's.
+ * Light comes from the top of the frame as it is shown; `lit()` gives a
+ * gradient's direction in the upright drawing (a turned frame is lit from its
+ * upright right side, which ends up on top).
+ */
+function defs(turned: boolean): string {
+  // Top → bottom as shown; for a turned frame that is right → left upright.
+  const lit = turned ? 'x1="1" y1="0" x2="0" y2="0"' : 'x1="0" y1="0" x2="0" y2="1"';
+  // Across a button, at right angles to the edge it sits on.
+  const across = turned ? 'x1="0" y1="1" x2="0" y2="0"' : 'x1="0" y1="0" x2="1" y2="0"';
+  return '<defs>'
+    // Brushed-metal band: bright top, mid-grey flanks, a lift near the bottom.
+    + `<linearGradient id="m" ${lit}><stop offset="0" stop-color="#cfd1d5"/><stop offset=".2" stop-color="#aeb0b4"/><stop offset=".6" stop-color="#9c9ea3"/><stop offset=".9" stop-color="#8c8e93"/><stop offset="1" stop-color="#b3b5b9"/></linearGradient>`
+    // Chamfer on the outer edge: a bright catch-light on top, darker below.
+    + `<linearGradient id="c" ${lit}><stop offset="0" stop-color="#fafafb"/><stop offset=".5" stop-color="#c9cbcf"/><stop offset="1" stop-color="#6d6f74"/></linearGradient>`
+    // Black glass around the screen, a touch lighter at the top.
+    + `<linearGradient id="g" ${lit}><stop offset="0" stop-color="#1a1b1e"/><stop offset=".3" stop-color="#0b0b0d"/><stop offset="1" stop-color="#050506"/></linearGradient>`
+    // Specular sheen across the glass, from the top-left as shown.
+    + `<linearGradient id="s" ${turned ? 'x1="1" y1="0" x2=".5" y2=".6"' : 'x1="0" y1="0" x2=".6" y2=".5"'}><stop offset="0" stop-color="#fff" stop-opacity=".16"/><stop offset=".45" stop-color="#fff" stop-opacity=".03"/><stop offset=".46" stop-color="#fff" stop-opacity="0"/></linearGradient>`
+    // Raised buttons: lit face, shaded sides.
+    + `<linearGradient id="b" ${across}><stop offset="0" stop-color="#7c7e83"/><stop offset=".45" stop-color="#e2e3e6"/><stop offset="1" stop-color="#8a8c91"/></linearGradient>`
+    // Camera lens: deep blue-black glass.
+    + '<radialGradient id="l" cx=".4" cy=".4" r=".7"><stop offset="0" stop-color="#3a4a6e"/><stop offset=".5" stop-color="#121826"/><stop offset="1" stop-color="#020203"/></radialGradient>'
+    // Hinge groove: dark in the middle, metal at its edges.
+    + `<linearGradient id="h" ${turned ? 'x1="0" y1="0" x2="0" y2="1"' : 'x1="0" y1="0" x2="1" y2="0"'}><stop offset="0" stop-color="#8d8f94"/><stop offset=".3" stop-color="#3b3c40"/><stop offset=".5" stop-color="#1a1a1c"/><stop offset=".7" stop-color="#3b3c40"/><stop offset="1" stop-color="#9fa1a6"/></linearGradient>`
+    + '</defs>';
+}
+
+/** Width of the metal band around the edge, in screen units (short side 1000). */
+const RIM = 16;
+
+/** A camera lens: dark ring, glass, and a small catch-light. */
+function lens(cx: number, cy: number, r: number): string {
+  return `<circle cx="${fmt(cx)}" cy="${fmt(cy)}" r="${fmt(r)}" fill="#050506" stroke="#2b2c30" stroke-width="${fmt(r * 0.22)}"/>`
+    + `<circle cx="${fmt(cx)}" cy="${fmt(cy)}" r="${fmt(r * 0.6)}" fill="url(#l)"/>`
+    + `<circle cx="${fmt(cx - r * 0.22)}" cy="${fmt(cy - r * 0.22)}" r="${fmt(r * 0.16)}" fill="#fff" fill-opacity=".55"/>`;
+}
 
 const GEOMETRY: Record<Exclude<FrameKind, 'photo' | 'photo-landscape'>, Geometry> = {
   'phone': { top: 70, bottom: 70, left: 40, right: 40, bodyRadius: 150, screenRadius: 105 },
@@ -288,51 +321,62 @@ export function svgFrame(kind: Exclude<FrameKind, 'photo' | 'photo-landscape'>, 
   const sx = pad + g.left;
   const sy = g.top;
 
-  const parts: string[] = [];
+  const parts: string[] = [defs(turned)];
   // Side buttons (behind the body, poking out on the right; volume on the left for iOS).
   if (buttons) {
     const btn = (x: number, y: number, len: number) =>
-      `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(pad + 6)}" height="${fmt(len)}" rx="5" fill="${BUTTON}"/>`;
-    parts.push(btn(w - pad - 6, sy + sh * 0.2, sh * 0.09));
+      `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(pad + 8)}" height="${fmt(len)}" rx="5" fill="url(#b)" stroke="#5f6166" stroke-width="1.5"/>`;
+    parts.push(btn(w - pad - 8, sy + sh * 0.2, sh * 0.09));
     if (platform === 'ios') {
       parts.push(btn(0, sy + sh * 0.16, sh * 0.05), btn(0, sy + sh * 0.23, sh * 0.05));
     } else {
-      parts.push(btn(w - pad - 6, sy + sh * 0.32, sh * 0.12));
+      parts.push(btn(w - pad - 8, sy + sh * 0.32, sh * 0.12));
     }
   }
-  // The body, with the screen cut out.
-  parts.push(
-    `<path fill-rule="evenodd" fill="${BODY}" stroke="${EDGE}" stroke-width="3" d="${roundRect(pad + 1.5, 1.5, bodyW - 3, bodyH - 3, g.bodyRadius)}${roundRect(sx, sy, sw, sh, g.screenRadius)}"/>`,
-  );
-  const dot = (cx: number, cy: number, r: number) =>
-    `<circle cx="${fmt(cx)}" cy="${fmt(cy)}" r="${fmt(r)}" fill="${DETAIL}" stroke="${DETAIL_EDGE}" stroke-width="2"/>`;
+  const screenPath = roundRect(sx, sy, sw, sh, g.screenRadius);
+  // The metal band (with a chamfer catching the light on its outer edge).
+  parts.push(`<path fill-rule="evenodd" fill="url(#m)" stroke="url(#c)" stroke-width="3" d="${roundRect(pad + 1.5, 1.5, bodyW - 3, bodyH - 3, g.bodyRadius)}${screenPath}"/>`);
+  // The black glass face inside it, with the screen cut out, a dark inner
+  // edge where it meets the metal, and a soft sheen from the top-left.
+  const face = roundRect(pad + RIM, RIM, bodyW - 2 * RIM, bodyH - 2 * RIM, g.bodyRadius - RIM) + screenPath;
+  parts.push(`<path fill-rule="evenodd" fill="url(#g)" stroke="#000" stroke-width="2.5" d="${face}"/>`);
+  parts.push(`<path fill-rule="evenodd" fill="url(#s)" d="${face}"/>`);
+  // A thin shadow ring just outside the screen (never over it: the frame is drawn above the content).
+  const ring = 4;
+  parts.push(`<path fill-rule="evenodd" fill="#000" fill-opacity=".7" d="${roundRect(sx - ring, sy - ring, sw + 2 * ring, sh + 2 * ring, g.screenRadius ? g.screenRadius + ring : 0)}${screenPath}"/>`);
+  // A hinge groove across the band and glass, `width` wide, centred on x = `at`, from y0 to y1.
+  const groove = (at: number, width: number, y0: number, y1: number) =>
+    `<rect x="${fmt(at - width / 2)}" y="${fmt(y0)}" width="${fmt(width)}" height="${fmt(y1 - y0)}" rx="${fmt(width / 2)}" fill="url(#h)"/>`;
   const cx = pad + bodyW / 2;
   switch (kind) {
     case 'phone':
-      parts.push(platform === 'ios'
-        ? `<rect x="${fmt(cx - 90)}" y="${fmt(g.top / 2 - 15)}" width="180" height="30" rx="15" fill="${DETAIL}"/>`
-        : dot(cx, g.top / 2, 14));
+      if (platform === 'ios') {
+        parts.push(`<rect x="${fmt(cx - 90)}" y="${fmt(g.top / 2 - 16)}" width="180" height="32" rx="16" fill="#000"/>`);
+        parts.push(lens(cx + 60, g.top / 2, 10));
+      } else {
+        parts.push(lens(cx, g.top / 2, 15));
+      }
       break;
     case 'compact':
-      parts.push(`<rect x="${fmt(cx - 80)}" y="${fmt(g.top / 2 - 8)}" width="160" height="16" rx="8" fill="${DETAIL}" stroke="${DETAIL_EDGE}" stroke-width="2"/>`);
-      parts.push(dot(cx - 150, g.top / 2, 13));
+      parts.push(`<rect x="${fmt(cx - 80)}" y="${fmt(g.top / 2 - 8)}" width="160" height="16" rx="8" fill="#1d1e21" stroke="#34353a" stroke-width="2"/>`);
+      parts.push(lens(cx - 150, g.top / 2, 13));
       if (platform === 'ios') {
-        parts.push(`<circle cx="${fmt(cx)}" cy="${fmt(sy + sh + g.bottom / 2)}" r="75" fill="none" stroke="${EDGE}" stroke-width="5"/>`);
+        const hy = sy + sh + g.bottom / 2;
+        parts.push(`<circle cx="${fmt(cx)}" cy="${fmt(hy)}" r="75" fill="#0c0c0e" stroke="url(#c)" stroke-width="4" stroke-opacity=".55"/>`);
       }
       break;
     case 'tablet':
-      parts.push(dot(cx, g.top / 2, 9));
+      parts.push(lens(cx, g.top / 2, 10));
       break;
     case 'foldable-outer':
       // The hinge spine down the left edge; camera centred in the top bezel.
-      parts.push(`<rect x="${fmt(pad + 12)}" y="${fmt(g.bodyRadius * 0.6)}" width="16" height="${fmt(bodyH - g.bodyRadius * 1.2)}" rx="8" fill="${HINGE}"/>`);
-      parts.push(dot(sx + sw / 2, g.top / 2, 12));
+      parts.push(groove(pad + 20, 18, g.bodyRadius * 0.6, bodyH - g.bodyRadius * 0.6));
+      parts.push(lens(sx + sw / 2, g.top / 2, 13));
       break;
     case 'foldable-inner':
-      // The fold runs down the middle: hinge marks in the top and bottom bezels.
-      parts.push(`<rect x="${fmt(cx - 3)}" y="4" width="6" height="${fmt(g.top - 10)}" rx="3" fill="${HINGE}"/>`);
-      parts.push(`<rect x="${fmt(cx - 3)}" y="${fmt(sy + sh + 6)}" width="6" height="${fmt(g.bottom - 10)}" rx="3" fill="${HINGE}"/>`);
-      parts.push(dot(sx + sw * 0.78, g.top / 2, 9));
+      // The fold runs down the middle: grooves across the top and bottom bezels.
+      parts.push(groove(cx, 10, 2, g.top - 4), groove(cx, 10, sy + sh + 4, bodyH - 2));
+      parts.push(lens(sx + sw * 0.78, g.top / 2, 10));
       break;
   }
 

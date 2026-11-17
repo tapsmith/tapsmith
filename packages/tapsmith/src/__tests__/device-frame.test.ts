@@ -198,6 +198,26 @@ describe('svgFrame (accept check)', () => {
     },
   );
 
+  it('defines every gradient a frame paints with inside that frame', () => {
+    // Each frame is its own <img> document, so its ids are local to it; a
+    // reference with no definition would paint nothing (a see-through body).
+    for (const k of kinds) {
+      for (const a of [0.5, 2]) {
+        const svg = decodeURIComponent(svgFrame(k, 'ios', a).src);
+        const refs = new Set([...svg.matchAll(/url\(#([^)]+)\)/g)].map((m) => m[1]));
+        const ids = new Set([...svg.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+        expect(refs.size).toBeGreaterThan(0);
+        for (const r of refs) expect(ids.has(r)).toBe(true);
+      }
+    }
+  });
+
+  it('keeps the mask a single plain screen shape', () => {
+    const mask = decodeURIComponent(svgFrame('phone', 'android', 0.5).mask);
+    expect(mask.match(/<path/g)).toHaveLength(1);
+    expect(mask).not.toContain('url(');
+  });
+
   it('caches frames by kind, platform and shape', () => {
     expect(svgFrame('tablet', 'ios', 0.75)).toBe(svgFrame('tablet', 'ios', 0.7501));
     expect(svgFrame('tablet', 'ios', 0.75)).not.toBe(svgFrame('tablet', 'android', 0.75));
