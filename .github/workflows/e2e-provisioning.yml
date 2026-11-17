@@ -830,7 +830,7 @@ jobs:
           for key in DidShowContinuousPathIntroduction KeyboardDidShowProductivityTutorial; do
             value=$(xcrun simctl spawn "$UDID" defaults read com.apple.keyboard.preferences "$key" 2>&1) || true
             if [ "$value" != "1" ]; then
-              echo "::error::$key is '$value' in com.apple.keyboard.preferences on $TAPSMITH_IOS_SIMULATOR ($UDID), expected 1: Tapsmith did not mark the keyboard intros as shown"
+              echo "::error::$key is '$value' in com.apple.keyboard.preferences on $TAPSMITH_IOS_SIMULATOR ($UDID), expected 1: Tapsmith did not mark the keyboard intros as shown (or the run failed before it booted the simulator)"
               exit 1
             fi
           done
