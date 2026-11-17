@@ -6,70 +6,86 @@ import {
   closestNodes,
   closestOnScreen,
   describeNode,
-  failureScreenLines,
-  heldFailureOf,
+  failureCandidateOf,
+  failureScreenReport,
   locatorNeedles,
+  sameScreen,
   similarity,
-  type HeldFailure,
+  type FailureCandidate,
 } from '../mcp/failure-screen.js';
 import type { TraceSummary } from '../mcp/tools/trace-utils.js';
 import type { TestRunResult } from '../mcp/test-dispatcher.js';
 
-// PILOT-1241: after a run of one test that failed, the device is still on the
-// screen where it failed; tapsmith_run_tests says so and lists what on that
-// screen is closest to the locator that matched nothing.
+// PILOT-1241: after a run of one test that failed, the device is normally
+// still on the screen where it failed; tapsmith_run_tests checks that against
+// the failure's trace, says so, and lists what on that screen is closest to
+// the locator that matched nothing.
 
 const FILE = '/proj/e2e/login.test.ts';
 const failure = { fullName: 'Login > signs in', filePath: FILE, error: 'boom', tracePath: '/t/trace.zip' };
+const FAILURE_XML = '<hierarchy><node class="android.widget.TextView" text="Sign In"/></hierarchy>';
 
 function summary(over: Partial<TraceSummary> = {}): TraceSummary {
-  return { steps: [], deviceLogs: [], endsOnFailedStep: true, multiDevice: false, ...over };
+  return { steps: [], deviceLogs: [], failureHierarchyXml: FAILURE_XML, multiDevice: false, ...over };
 }
-
-const miss = (r: TestRunResult, read: (p: string) => TraceSummary | undefined) => heldFailureOf(r, read, () => true);
-const notMiss = (r: TestRunResult, read: (p: string) => TraceSummary | undefined) => heldFailureOf(r, read, () => false);
 
 function run(over: Partial<TestRunResult> = {}): TestRunResult {
   return { status: 'failed', passed: 0, failed: 1, skipped: 0, duration: 10, failures: [failure], ...over };
 }
 
-describe('heldFailureOf', () => {
-  it('holds the one failure of a one-test run whose trace ends on the failed step', () => {
-    expect(miss(run(), () => summary())).toEqual({ failure, confidence: 'confirmed' });
+describe('failureCandidateOf', () => {
+  it('takes the one failure of a one-test run, with the screen its trace captured at the failed step', () => {
+    expect(failureCandidateOf(run(), () => summary())).toEqual({ failure, failureHierarchyXml: FAILURE_XML });
   });
 
-  it('skipped tests beside it do not matter: they never touched the device', () => {
-    expect(miss(run({ skipped: 4 }), () => summary())?.confidence).toBe('confirmed');
+  it('skipped tests beside it do not matter here: the screen check catches one that moved the device', () => {
+    expect(failureCandidateOf(run({ skipped: 4 }), () => summary())).toBeDefined();
   });
 
-  it('claims nothing when another test ran too (it may have moved the screen)', () => {
-    expect(miss(run({ passed: 1 }), () => summary())).toBeUndefined();
+  it('takes nothing when another test ran too (which failure the screen shows is unclear)', () => {
+    expect(failureCandidateOf(run({ passed: 1 }), () => summary())).toBeUndefined();
     const two = run({ failed: 2, failures: [failure, { ...failure, fullName: 'Login > other' }] });
-    expect(miss(two, () => summary())).toBeUndefined();
+    expect(failureCandidateOf(two, () => summary())).toBeUndefined();
   });
 
-  it('claims nothing when a step ran on the device after the failed one (an afterEach/afterAll hook)', () => {
-    expect(miss(run(), () => summary({ endsOnFailedStep: false }))).toBeUndefined();
+  it('takes nothing without a screen to check against: no trace, or none at the failed step', () => {
+    expect(failureCandidateOf(run({ failures: [{ ...failure, tracePath: undefined }] }), () => summary())).toBeUndefined();
+    expect(failureCandidateOf(run(), () => undefined)).toBeUndefined();
+    expect(failureCandidateOf(run(), () => summary({ failureHierarchyXml: undefined }))).toBeUndefined();
   });
 
-  it('claims nothing for a device group: which device shows what is unclear', () => {
-    expect(miss(run(), () => summary({ multiDevice: true }))).toBeUndefined();
+  it('takes nothing for a device group: which device shows what is unclear', () => {
+    expect(failureCandidateOf(run(), () => summary({ multiDevice: true }))).toBeUndefined();
   });
 
-  it('claims nothing for a stopped run', () => {
-    expect(miss(run({ status: 'stopped' }), () => summary())).toBeUndefined();
+  it('takes nothing for a stopped run, or when the failure count and the failure list disagree', () => {
+    expect(failureCandidateOf(run({ status: 'stopped' }), () => summary())).toBeUndefined();
+    expect(failureCandidateOf(run({ failures: [] }), () => summary())).toBeUndefined();
+  });
+});
+
+const screenOf = (...texts: string[]) =>
+  `<hierarchy><node class="android.widget.FrameLayout">${texts.map((t) => `<node class="android.widget.TextView" text="${t}"/>`).join('')}</node></hierarchy>`;
+
+describe('sameScreen', () => {
+  const login = ['Sign In', 'Email', 'Password', 'Sign in', 'Forgot password?'];
+
+  it('is the same screen when it shows the same things', () => {
+    expect(sameScreen(screenOf(...login), screenOf(...login))).toBe(true);
   });
 
-  it('without a trace to read, holds only a locator miss, unchecked', () => {
-    const noTrace = { ...failure, tracePath: undefined };
-    expect(miss(run({ failures: [noTrace] }), () => summary())).toEqual({ failure: noTrace, confidence: 'unchecked' });
-    expect(miss(run(), () => undefined)?.confidence).toBe('unchecked');
-    // Any other failure may never have reached the device (a file that did not load).
-    expect(notMiss(run({ failures: [noTrace] }), () => summary())).toBeUndefined();
+  it('tolerates one thing changing on a screen of several (a clock, a typed field)', () => {
+    expect(sameScreen(screenOf(...login), screenOf(...login.slice(0, 4), 'Forgot password'))).toBe(true);
   });
 
-  it('claims nothing when the failure count and the failure list disagree', () => {
-    expect(miss(run({ failures: [] }), () => summary())).toBeUndefined();
+  it('is another screen when most of it differs', () => {
+    expect(sameScreen(screenOf(...login), screenOf('Test Screens', 'Login Form', 'List', 'Toggles'))).toBe(false);
+    expect(sameScreen(screenOf(...login), screenOf('Sign In', 'Email'))).toBe(false);
+  });
+
+  it('never judges a screen with nothing to compare the same', () => {
+    expect(sameScreen('<hierarchy/>', '<hierarchy/>')).toBe(false);
+    expect(sameScreen(screenOf(...login), '<hierarchy/>')).toBe(false);
   });
 });
 
@@ -167,7 +183,7 @@ function device(over: { hierarchyError?: string } = {}) {
 
 describe('closestOnScreen', () => {
   it('lists the closest elements with a locator the agent resolved to each alone', async () => {
-    const result = await closestOnScreen(device(), 'getByText("Sign Inn", { exact: true })');
+    const result = await closestOnScreen(device(), ANDROID_SCREEN, 'getByText("Sign Inn", { exact: true })');
     expect(result.kind).toBe('matches');
     if (result.kind !== 'matches') return;
     expect(result.elements[0]).toEqual({ description: 'heading "Sign In"', locator: 'device.getByRole("heading", { name: "Sign In" })' });
@@ -195,8 +211,7 @@ describe('closestOnScreen', () => {
         return { elements: [], errorMessage: '' };
       }),
     }));
-    const getUiHierarchy = async () => ({ requestId: 'r', hierarchyXml: NESTED, errorMessage: '' });
-    const result = await closestOnScreen({ evaluateSelectors, getUiHierarchy }, 'getByText("Sign Inn")');
+    const result = await closestOnScreen({ evaluateSelectors }, NESTED, 'getByText("Sign Inn")');
     if (result.kind !== 'matches') throw new Error(result.kind);
     expect(result.elements.map((e) => e.locator)).toEqual([
       'device.getByRole("heading", { name: "Sign In" })',
@@ -204,58 +219,69 @@ describe('closestOnScreen', () => {
     ]);
   });
 
-  it('does not read the screen for a locator with no words', async () => {
+  it('asks the agent nothing for a locator with no words', async () => {
     const d = device();
-    expect(await closestOnScreen(d, 'getByRole("button")')).toEqual({ kind: 'no-words' });
-    expect(d.getUiHierarchy).not.toHaveBeenCalled();
-  });
-
-  it('reports a screen it cannot read', async () => {
-    expect(await closestOnScreen(device({ hierarchyError: 'agent gone' }), 'getByText("x")')).toEqual({ kind: 'error', message: 'agent gone' });
+    expect(await closestOnScreen(d, ANDROID_SCREEN, 'getByRole("button")')).toEqual({ kind: 'no-words' });
+    expect(d.evaluateSelectors).not.toHaveBeenCalled();
   });
 });
 
-describe('failureScreenLines', () => {
-  const held: HeldFailure = { failure, confidence: 'confirmed' };
+describe('failureScreenReport', () => {
+  const candidate: FailureCandidate = { failure, failureHierarchyXml: ANDROID_SCREEN };
+  const text = (r: { lines: string[] }) => r.lines.join('\n');
 
   it('says the device is held, lists the closest elements and the next step', async () => {
-    const lines = (await failureScreenLines({ held, missedLocator: 'getByText("Sign Inn", { exact: true })', client: async () => device() })).join('\n');
-    expect(lines).toContain('DEVICE HELD: the device is still on the screen where "Login > signs in" failed');
-    expect(lines).toContain('The next tapsmith_run_tests resets the app as usual.');
-    expect(lines).toContain('Closest on screen to getByText("Sign Inn", { exact: true }):\n  - heading "Sign In": device.getByRole("heading", { name: "Sign In" })');
-    expect(lines).toContain('  - button "Sign in" (no locator finds it alone; tapsmith_snapshot lists it)');
-    expect(lines).toContain('NEXT STEP: the locator matched nothing on this screen. Check a replacement with tapsmith_test_locator');
+    const report = await failureScreenReport({ candidate, missedLocator: 'getByText("Sign Inn", { exact: true })', client: async () => device() });
+    const t = text(report);
+    expect(report.hasNextStep).toBe(true);
+    expect(t).toContain('DEVICE HELD: the device is still on the screen where "Login > signs in" failed');
+    expect(t).toContain('The next tapsmith_run_tests resets the app as usual.');
+    expect(t).toContain('Closest on screen to getByText("Sign Inn", { exact: true }):\n  - heading "Sign In": device.getByRole("heading", { name: "Sign In" })');
+    expect(t).toContain('  - button "Sign in" (no locator finds it alone; tapsmith_snapshot lists it)');
+    expect(t).toContain('NEXT STEP: the locator matched nothing on this screen. Check a replacement with tapsmith_test_locator');
   });
 
-  it('hedges when there was no trace to check', async () => {
-    const lines = (await failureScreenLines({ held: { failure, confidence: 'unchecked' }, client: async () => device() })).join('\n');
-    expect(lines).toContain('the device was left where "Login > signs in" failed');
-    expect(lines).toContain('afterEach or afterAll hook');
+  it('says the device moved, and claims nothing, when its screen differs from the failure\'s (an afterEach or afterAll hook, a fixture teardown)', async () => {
+    const moved = { ...candidate, failureHierarchyXml: screenOf('Test Screens', 'Login Form', 'List', 'Toggles') };
+    const d = device();
+    const report = await failureScreenReport({ candidate: moved, missedLocator: 'getByText("Sign Inn")', client: async () => d });
+    expect(report.hasNextStep).toBe(false);
+    expect(text(report)).not.toContain('DEVICE HELD');
+    expect(text(report)).toContain('The device\'s screen no longer matches the one where "Login > signs in" failed');
+    expect(d.evaluateSelectors).not.toHaveBeenCalled();
   });
 
   it('only says the device is held for a failure that is not a locator miss', async () => {
-    const client = vi.fn(async () => device());
-    const lines = await failureScreenLines({ held, client });
-    expect(lines).toHaveLength(2);
-    expect(client).not.toHaveBeenCalled();
+    const d = device();
+    const report = await failureScreenReport({ candidate, client: async () => d });
+    expect(report.lines).toHaveLength(2);
+    expect(report.hasNextStep).toBe(false);
+    expect(d.evaluateSelectors).not.toHaveBeenCalled();
   });
 
   it('says when nothing on screen is close', async () => {
-    const lines = (await failureScreenLines({ held, missedLocator: 'getByText("Checkout")', client: async () => device() })).join('\n');
-    expect(lines).toContain('Nothing on screen is close to getByText("Checkout"): tapsmith_snapshot shows what is there.');
+    const report = await failureScreenReport({ candidate, missedLocator: 'getByText("Checkout")', client: async () => device() });
+    expect(text(report)).toContain('Nothing on screen is close to getByText("Checkout"): tapsmith_snapshot shows what is there.');
   });
 
-  it('keeps the held line when the device cannot be found, and never throws', async () => {
-    const lines = (await failureScreenLines({
-      held, missedLocator: 'getByText("Sign Inn")', client: async () => { throw new Error('ambiguous device'); },
-    })).join('\n');
-    expect(lines).toContain('DEVICE HELD');
-    expect(lines).toContain('(Could not read the screen for the elements closest to getByText("Sign Inn"): ambiguous device)');
+  it('says nothing when the device cannot be found or read, and never throws', async () => {
+    const lost = await failureScreenReport({ candidate, missedLocator: 'getByText("Sign Inn")', client: async () => { throw new Error('ambiguous device'); } });
+    expect(lost).toEqual({ lines: [], hasNextStep: false });
+    const unreadable = await failureScreenReport({ candidate, missedLocator: 'getByText("Sign Inn")', client: async () => device({ hierarchyError: 'agent gone' }) });
+    expect(unreadable).toEqual({ lines: [], hasNextStep: false });
+  });
+
+  it('keeps the held lines when checking the closest elements fails', async () => {
+    const d = device();
+    d.evaluateSelectors.mockRejectedValue(new Error('agent gone'));
+    const t = text(await failureScreenReport({ candidate, missedLocator: 'getByText("Sign Inn")', client: async () => d }));
+    expect(t).toContain('DEVICE HELD');
+    expect(t).toContain('Closest on screen to getByText("Sign Inn"):\n  - heading "Sign In" (no locator finds it alone');
   });
 
   it('lists no elements for a locator with no words, but still gives the next step', async () => {
-    const lines = (await failureScreenLines({ held, missedLocator: 'getByRole("button")', client: async () => device() })).join('\n');
-    expect(lines).not.toContain('Closest on screen');
-    expect(lines).toContain('NEXT STEP');
+    const report = await failureScreenReport({ candidate, missedLocator: 'getByRole("button")', client: async () => device() });
+    expect(text(report)).not.toContain('Closest on screen');
+    expect(report.hasNextStep).toBe(true);
   });
 });

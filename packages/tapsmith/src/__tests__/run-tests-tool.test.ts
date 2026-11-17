@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { zipSync } from 'fflate';
 import { MCP_RESPONSE_MAX_BYTES } from '../mcp/response-limits.js';
 import { createMcpServer } from '../mcp/index.js';
-import { locatorMissStep, stdioTestArgs } from '../mcp/tools/run-tests.js';
+import { locatorMissStep, missedLocatorOf, stdioTestArgs } from '../mcp/tools/run-tests.js';
 import { LOCATOR_PICKER_HINT } from '../locator-miss-hint.js';
 import { runCli, type CliHandlers, type TestCommandArgs } from '../cli-program.js';
 import type { TestDispatcher, TestFailureDetail, TestRunResult, TestTreeEntry } from '../mcp/test-dispatcher.js';
@@ -162,6 +162,19 @@ describe('tapsmith_run_tests result handling', () => {
       { fullName: 'a', filePath: FILE, error: `Element not found: getByText("Sign in (beta). Next"). ${LOCATOR_PICKER_HINT}` },
     ]);
     expect(step).toContain('1 failure is a locator that matched nothing: getByText("Sign in (beta). Next").');
+  });
+
+  it('reads the locator of every native miss shape (PILOT-1241)', () => {
+    const shapes = [
+      `Element getByText("Sign Inn") was not found after waiting 5000ms. ${LOCATOR_PICKER_HINT}`,
+      `Element getByText("Sign Inn") did not reach state "visible" after 50ms. ${LOCATOR_PICKER_HINT}`,
+      `Expected element getByText("Sign Inn") to be visible, but it was not. ${LOCATOR_PICKER_HINT}`,
+      `Expected element getByText("Sign Inn") to have text "Sign In", but no element matched. ${LOCATOR_PICKER_HINT}`,
+      `Expected element getByText("Sign Inn") NOT to be checked, but no element matched. ${LOCATOR_PICKER_HINT}`,
+      `Expected element getByText("Sign Inn") to be enabled, but no element matched. Nothing matches it, but on screen now this locator matches: getByText("Sign In") (1 match). ${LOCATOR_PICKER_HINT}`,
+    ];
+    for (const error of shapes) expect(missedLocatorOf(error), error).toBe('getByText("Sign Inn")');
+    expect(missedLocatorOf('Expected element getByText("Sign Inn") to be visible, but it was not.')).toBeUndefined();
   });
 
   it('adds no locator step to failures that are not locator misses', async () => {

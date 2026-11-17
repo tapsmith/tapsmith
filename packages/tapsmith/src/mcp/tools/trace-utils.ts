@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import { unzipSync } from 'fflate';
+import { hierarchyArchivePath } from '../../trace/trace-collector.js';
 
 export interface TraceEvent {
   type: string
@@ -17,6 +18,12 @@ export interface TraceEvent {
   source?: string
   /** Group member that produced the event, on a multi-device trace. */
   deviceId?: string
+  /** Index of an action or assertion; names its hierarchy files. */
+  actionIndex?: number
+  /** A group marker's name (`afterEach Hooks`, …). */
+  name?: string
+  hasHierarchyBefore?: boolean
+  hasHierarchyAfter?: boolean
 }
 
 export interface TraceSummary {
@@ -24,11 +31,11 @@ export interface TraceSummary {
   deviceLogs: string[]
   failureScreenshot?: Buffer
   /**
-   * Whether the trace's last action or assertion is a failed one: nothing
-   * acted on the device after the step that failed (an `afterEach` or
-   * `afterAll` hook that drives the device records steps after it).
+   * The screen (hierarchy XML) at the test's failed step: its last failed
+   * action or assertion outside the `afterEach`/`afterAll` hooks, as
+   * captured after it, else before it. Absent when the trace has none.
    */
-  endsOnFailedStep: boolean
+  failureHierarchyXml?: string
   /** Whether the trace was recorded on a device group (`use.devices`). */
   multiDevice: boolean
 }
@@ -44,6 +51,29 @@ function isMultiDeviceTrace(metadataJson: string | undefined): boolean {
   }
 }
 
+/** Groups whose steps run after the test's own: a failure there is not the test's. */
+const AFTER_HOOK_GROUPS = new Set(['afterEach Hooks', 'afterAll Hooks']);
+
+/** The hierarchy captured at the test's last failed step (see {@link TraceSummary.failureHierarchyXml}). */
+function failedStepHierarchy(events: TraceEvent[], files: Record<string, Uint8Array>): string | undefined {
+  const open: string[] = [];
+  let failed: TraceEvent | undefined;
+  for (const e of events) {
+    if (e.type === 'group-start') open.push(e.name ?? '');
+    else if (e.type === 'group-end') open.pop();
+    else if ((e.type === 'action' || e.type === 'assertion') && e.error && !open.some((g) => AFTER_HOOK_GROUPS.has(g))) failed = e;
+  }
+  if (failed?.actionIndex === undefined) return undefined;
+  const positions: ('before' | 'after')[] = [];
+  if (failed.hasHierarchyAfter) positions.push('after');
+  if (failed.hasHierarchyBefore) positions.push('before');
+  for (const position of positions) {
+    const file = files[hierarchyArchivePath(failed.actionIndex, position)];
+    if (file) return new TextDecoder().decode(file);
+  }
+  return undefined;
+}
+
 export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary | undefined {
   try {
     if (!fs.existsSync(tracePath)) return undefined;
@@ -53,7 +83,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
 
     const steps: string[] = [];
     const deviceLogs: string[] = [];
-    let endsOnFailedStep = false;
+    let failureHierarchyXml: string | undefined;
 
     // A trace recorded on a device group names the device on every step and
     // log line (`bob: tap`), the way tapsmith_read_trace does — a two-user
@@ -71,7 +101,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
       // Take last N meaningful events (actions + assertions, skip group markers)
       const meaningful = events.filter((e) => e.type === 'action' || e.type === 'assertion');
       const tail = meaningful.slice(-maxSteps);
-      endsOnFailedStep = Boolean(meaningful.at(-1)?.error);
+      failureHierarchyXml = failedStepHierarchy(events, files);
 
       for (const event of tail) {
         const status = event.error ? 'FAIL' : 'OK';
@@ -117,7 +147,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
       failureScreenshot = Buffer.from(files[last]);
     }
 
-    return { steps, deviceLogs, failureScreenshot, endsOnFailedStep, multiDevice };
+    return { steps, deviceLogs, failureScreenshot, failureHierarchyXml, multiDevice };
   } catch {
     return undefined;
   }

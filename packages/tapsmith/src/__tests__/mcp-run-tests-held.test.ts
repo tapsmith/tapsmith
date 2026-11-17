@@ -8,8 +8,9 @@ import { LOCATOR_PICKER_HINT } from '../locator-miss-hint.js';
 import type { TestDispatcher, TestRunResult } from '../mcp/test-dispatcher.js';
 
 // PILOT-1241: tapsmith_run_tests says when the device is still on the screen
-// where a run of one test failed, and lists what there is closest to the
-// locator that matched nothing.
+// where a run of one test failed (its screen matches the one the failure's
+// trace captured), and lists what there is closest to the locator that
+// matched nothing.
 
 const deviceTargetFor = vi.hoisted(() => vi.fn());
 vi.mock('../mcp/tools/device-target.js', async (importOriginal) => ({
@@ -22,7 +23,13 @@ const { createMcpServer } = await import('../mcp/index.js');
 const FILE = '/proj/e2e/login.test.ts';
 const SCREEN = `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
 <node class="android.widget.TextView" text="Sign In" tapsmith-role="heading" bounds="[63,273][1017,373]"/>
+<node class="android.widget.EditText" text="Email" bounds="[63,400][1017,500]"/>
 </node></hierarchy>`;
+const HOME = `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
+<node class="android.widget.TextView" text="Test Screens" bounds="[63,273][1017,373]"/>
+<node class="android.widget.TextView" text="Login Form" bounds="[63,400][1017,500]"/>
+</node></hierarchy>`;
+let liveScreen = SCREEN;
 
 function makeDispatcher(result: TestRunResult): TestDispatcher {
   return {
@@ -57,17 +64,19 @@ async function callRunTests(dispatcher: TestDispatcher, args: Record<string, unk
 }
 
 let dir: string;
-function trace(events: object[]): string {
+/** A trace whose failed step (action 3) captured `failureScreen`. */
+function trace(events: object[], failureScreen = SCREEN): string {
   const p = path.join(dir, `trace-${Math.random().toString(36).slice(2)}.zip`);
   fs.writeFileSync(p, zipSync({
     'trace.json': new TextEncoder().encode(events.map((e) => JSON.stringify(e)).join('\n')),
     'metadata.json': new TextEncoder().encode('{"version":1}'),
+    'hierarchy/action-003-before.xml': new TextEncoder().encode(failureScreen),
   }));
   return p;
 }
 
 const missError = `Expected element getByText("Sign Inn", { exact: true }) to be visible, but it was not. ${LOCATOR_PICKER_HINT}`;
-const failedStep = { type: 'assertion', assertion: 'toBeVisible', error: 'not visible', duration: 3000 };
+const failedStep = { type: 'assertion', assertion: 'toBeVisible', error: 'not visible', duration: 3000, actionIndex: 3, hasHierarchyBefore: true };
 
 function oneFailure(tracePath: string | undefined, error = missError): TestRunResult {
   return {
@@ -79,9 +88,10 @@ function oneFailure(tracePath: string | undefined, error = missError): TestRunRe
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'held-'));
   deviceTargetFor.mockReset();
+  liveScreen = SCREEN;
   deviceTargetFor.mockResolvedValue({
     client: {
-      getUiHierarchy: async () => ({ hierarchyXml: SCREEN, errorMessage: '' }),
+      getUiHierarchy: async () => ({ hierarchyXml: liveScreen, errorMessage: '' }),
       evaluateSelectors: async (selectors: { kind: { type: string; value: unknown } }[]) => ({
         requestId: 'r', errorMessage: '',
         results: selectors.map(() => ({
@@ -105,11 +115,20 @@ describe('tapsmith_run_tests on a failed run of one test', () => {
     expect(deviceTargetFor).toHaveBeenCalledWith({ device: 'emulator-5554', project: 'android' }, expect.anything());
   });
 
-  it('claims nothing when a hook acted on the device after the failed step', async () => {
+  it('says the device moved when its screen differs from the failure\'s (a hook or fixture teardown navigated)', async () => {
+    liveScreen = HOME;
     const t = await callRunTests(makeDispatcher(oneFailure(trace([failedStep, { type: 'action', action: 'pressKey', duration: 5 }]))), { files: [FILE] });
     expect(t).not.toContain('DEVICE HELD');
+    expect(t).toContain('The device\'s screen no longer matches the one where "Login > signs in" failed');
+    // The usual step stays.
     expect(t).toContain('Read the failure\'s trace');
-    expect(deviceTargetFor).not.toHaveBeenCalled();
+  });
+
+  it('a failMissing-shaped miss (toHaveText on nothing) gets the closest list and next step', async () => {
+    const error = `Expected element getByText("Sign Inn") to have text "Sign In", but no element matched. ${LOCATOR_PICKER_HINT}`;
+    const t = await callRunTests(makeDispatcher(oneFailure(trace([failedStep]), error)), { files: [FILE] });
+    expect(t).toContain('Closest on screen to getByText("Sign Inn"):');
+    expect(t).toContain('NEXT STEP: the locator matched nothing on this screen.');
   });
 
   it('claims nothing for a run of several tests, and says how to get the screen held', async () => {
@@ -123,14 +142,19 @@ describe('tapsmith_run_tests on a failed run of one test', () => {
     const t = await callRunTests(makeDispatcher(oneFailure(trace([failedStep]), 'expected "a" to be "b"')), { files: [FILE] });
     expect(t).toContain('DEVICE HELD');
     expect(t).not.toContain('NEXT STEP');
-    expect(deviceTargetFor).not.toHaveBeenCalled();
   });
 
-  it('keeps the failure report when the device cannot be read', async () => {
+  it('claims nothing, and keeps the usual step, when the device cannot be found', async () => {
     deviceTargetFor.mockRejectedValue(new Error('Several devices run project "android"'));
     const t = await callRunTests(makeDispatcher(oneFailure(trace([failedStep]))), { files: [FILE] });
     expect(t).toContain('FAIL: Login > signs in');
-    expect(t).toContain('DEVICE HELD');
-    expect(t).toContain('(Could not read the screen for the elements closest to getByText("Sign Inn", { exact: true }): Several devices run project "android")');
+    expect(t).not.toContain('DEVICE HELD');
+    expect(t).toContain('Read the failure\'s trace');
+  });
+
+  it('claims nothing without a trace', async () => {
+    const t = await callRunTests(makeDispatcher(oneFailure(undefined)), { files: [FILE] });
+    expect(t).not.toContain('DEVICE HELD');
+    expect(deviceTargetFor).not.toHaveBeenCalled();
   });
 });

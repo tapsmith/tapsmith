@@ -11,7 +11,7 @@ import { getSessionResultsStore } from '../session-results.js';
 import { beginTestRun, endTestRun } from '../sdk-device.js';
 import { clipText, MCP_IMAGE_BUDGET_BYTES, serializedTextBytes } from '../response-limits.js';
 import { LOCATOR_PICKER_HINT } from '../../locator-miss-hint.js';
-import { failureScreenLines, heldFailureOf } from '../failure-screen.js';
+import { failureCandidateOf, failureScreenReport, type FailureScreenReport } from '../failure-screen.js';
 import { deviceTargetFor } from './device-target.js';
 
 /**
@@ -79,7 +79,7 @@ export function missedLocatorOf(error: string): string | undefined {
   if (!error.includes(LOCATOR_PICKER_HINT)) return undefined;
   // Quoted values are read as whole tokens, so a ")" or ". " inside one
   // does not end the locator early.
-  const m = /^(?:Expected element|Element(?: not found:)?) ((?:"(?:[^"\\\n]|\\.)*"|[^"\n])+?\))(?: was not found| did not reach state| to (?:be visible|exist|have count)|\. |$)/m
+  const m = /^(?:Expected element|Element(?: not found:)?) ((?:"(?:[^"\\\n]|\\.)*"|[^"\n])+?\))(?: was not found| did not reach state| (?:NOT )?to |\. |$)/m
     .exec(error);
   return m ? m[1] : undefined;
 }
@@ -197,7 +197,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
         // Render per-failure details (steps, device logs, trace path) and
         // collect any failure screenshots. Shared by the stopped-with-failures
         // and failed branches.
-        const appendFailureDetails = (lines: string[], heldLines?: string[]): void => {
+        const appendFailureDetails = (lines: string[], screen?: FailureScreenReport): void => {
           if (!result.failures || result.failures.length === 0) return;
           const failures = result.failures;
           let detailed = 0;
@@ -270,13 +270,12 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             );
             lines.push(parts.join(' '));
           }
-          // A run of one test that failed left the device on its screen:
-          // say so, with what is closest to a missed locator there, in place
-          // of the step that sends the agent to the trace (PILOT-1241).
-          if (heldLines) {
-            lines.push('', ...heldLines);
-            return;
-          }
+          // A run of one test that failed: whether the device is still on
+          // the screen where it failed, with what is closest to a missed
+          // locator there, in place of the step that sends the agent to the
+          // trace (PILOT-1241).
+          if (screen && screen.lines.length > 0) lines.push('', ...screen.lines);
+          if (screen?.hasNextStep) return;
           const step = locatorMissStep(failures);
           if (step) lines.push('', step);
         };
@@ -335,15 +334,15 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
               ? `Tests failed: ${result.passed} passed, ${result.failed} failed, ${result.skipped} skipped (${result.duration}ms)`
               : buildNoTestsExecutedMessage(dispatcher, files, result.passed, result.skipped, result.duration),
           ];
-          const held = heldFailureOf(result, readTraceSummary, (error) => missedLocatorOf(error) !== undefined);
-          const heldLines = held
-            ? await failureScreenLines({
-              held,
-              missedLocator: missedLocatorOf(held.failure.error),
-              client: async () => (await deviceTargetFor({ device: device || undefined, project: held.failure.projectName ?? project }, dispatcher)).client,
+          const candidate = failureCandidateOf(result, readTraceSummary);
+          const screen = candidate
+            ? await failureScreenReport({
+              candidate,
+              missedLocator: missedLocatorOf(candidate.failure.error),
+              client: async () => (await deviceTargetFor({ device: device || undefined, project: candidate.failure.projectName ?? project }, dispatcher)).client,
             })
             : undefined;
-          appendFailureDetails(lines, heldLines);
+          appendFailureDetails(lines, screen);
           // A session with no config has no app to launch, so every run here
           // fails for a reason that has nothing to do with the tests.
           const configWarning = dispatcher.getSessionInfo().configWarning;

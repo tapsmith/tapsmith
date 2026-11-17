@@ -48,22 +48,38 @@ describe('readTraceSummary()', () => {
     }
   });
 
-  it('says whether the trace ends on the failed step (PILOT-1241)', () => {
-    const failed = { type: 'assertion', assertion: 'toBeVisible', error: 'not visible', duration: 50 };
-    const cases: [object[], boolean][] = [
-      [[{ type: 'action', action: 'tap', duration: 10 }, failed, { type: 'group-start', title: 'afterEach Hooks' }], true],
-      // An afterEach/afterAll hook drove the device after the failure.
-      [[failed, { type: 'group-start', title: 'afterEach Hooks' }, { type: 'action', action: 'pressKey', duration: 10 }], false],
-      [[{ type: 'action', action: 'tap', duration: 10 }], false],
-    ];
-    for (const [events, expected] of cases) {
-      const zip = createTraceZip(events);
+  it('reads the screen at the test\'s failed step, not at a failed step in an after hook (PILOT-1241)', () => {
+    const enc = (t: string) => Buffer.from(t);
+    const hierarchy = {
+      'hierarchy/action-001-before.xml': '<hierarchy>login</hierarchy>',
+      'hierarchy/action-002-before.xml': '<hierarchy>hook</hierarchy>',
+    };
+    const failedStep = { type: 'assertion', assertion: 'toBeVisible', error: 'not visible', actionIndex: 1, hasHierarchyBefore: true, duration: 50 };
+    const hookStep = { type: 'action', action: 'tap', error: 'gone', actionIndex: 2, hasHierarchyBefore: true, duration: 5 };
+    const read = (events: object[]) => {
+      const files: Record<string, Uint8Array> = {
+        'trace.json': new TextEncoder().encode(events.map((e) => JSON.stringify(e)).join('\n')),
+        'metadata.json': new TextEncoder().encode('{"version":1}'),
+      };
+      for (const [name, xml] of Object.entries(hierarchy)) files[name] = new Uint8Array(enc(xml));
+      const zip = path.join(os.tmpdir(), `test-trace-h-${Date.now()}-${Math.random()}.zip`);
+      fs.writeFileSync(zip, zipSync(files));
       try {
-        expect(readTraceSummary(zip)!.endsOnFailedStep).toBe(expected);
+        return readTraceSummary(zip)!.failureHierarchyXml;
       } finally {
         fs.unlinkSync(zip);
       }
-    }
+    };
+    expect(read([{ type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' }])).toBe('<hierarchy>login</hierarchy>');
+    // A hook's failed step after the test's is not the failure screen.
+    expect(read([
+      { type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' },
+      { type: 'group-start', name: 'afterEach Hooks' }, hookStep, { type: 'group-end', name: 'afterEach Hooks' },
+    ])).toBe('<hierarchy>login</hierarchy>');
+    // A failure in a beforeEach hook is the test's failure.
+    expect(read([{ type: 'group-start', name: 'beforeEach Hooks' }, failedStep, { type: 'group-end', name: 'beforeEach Hooks' }])).toBe('<hierarchy>login</hierarchy>');
+    expect(read([{ type: 'action', action: 'tap', actionIndex: 1, hasHierarchyBefore: true }])).toBeUndefined();
+    expect(read([{ ...failedStep, hasHierarchyBefore: false }])).toBeUndefined();
   });
 
   it('skips group-start events', () => {

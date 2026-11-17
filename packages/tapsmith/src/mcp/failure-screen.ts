@@ -3,10 +3,15 @@
  *
  * The runner resets the app before a file or test, never after one, and
  * nothing else touches the screen once a run ends: after a run of one test
- * that failed, the device is still on the screen where it failed. This module
- * tells an agent so, and lists the elements on that screen closest to the
- * locator that matched nothing, so the agent can try a fix against the live
- * app (tapsmith_test_locator) instead of navigating back there itself.
+ * that failed, the device is normally still on the screen where it failed.
+ * What can move it is the test's own code after the failure (an `afterEach`
+ * or `afterAll` hook, a fixture's teardown) or a later test of the run, and
+ * the failure's trace does not record all of those. So the claim is checked
+ * against the device itself: its screen now is compared with the one the
+ * trace captured at the failed step. When they match, this module tells the
+ * agent so, and lists the elements on that screen closest to the locator
+ * that matched nothing, so the agent can try a fix against the live app
+ * (tapsmith_test_locator) instead of navigating back there itself.
  *
  * It only reads: nothing here holds the device or skips a reset. The next
  * run resets the app as usual.
@@ -27,46 +32,65 @@ const MAX_CLOSEST = 3;
 const CANDIDATES_PER_LISTED = 2;
 /** The least similarity (0–1) an element needs to be listed as close. */
 const MIN_SIMILARITY = 0.5;
+/**
+ * The share of what the two screens show that must be the same for them to
+ * be one screen. Below 1 for what changes on a screen by itself (a clock, a
+ * counter, a field the test typed into); two different screens of an app
+ * share far less than this.
+ */
+const SAME_SCREEN_OVERLAP = 0.8;
 /** Selectors per agent call on iOS, where each call costs one capture (as tapsmith_snapshot). */
 const IOS_CHUNK_SIZE = 500;
 const SHOWN_TEXT_CHARS = 60;
+const SHOWN_LOCATOR_CHARS = 300;
 
-/** How sure the result can be that the device is still on the failure screen. */
-export type HeldConfidence =
-  /** The trace shows nothing acted on the device after the failed step. */
-  | 'confirmed'
-  /**
-   * No trace to check, but the failure is a locator miss, so the test did
-   * reach the device: only its own hooks could have moved it since.
-   */
-  | 'unchecked';
-
-export interface HeldFailure {
+/** A failed run of one test, and the screen its trace captured at the failed step. */
+export interface FailureCandidate {
   failure: TestFailureDetail
-  confidence: HeldConfidence
+  failureHierarchyXml: string
 }
 
 /**
- * The failure the device is still showing, or undefined when that cannot be
- * said: more than one test ran (a later one moved the screen, or which
- * failure it shows is unclear), a step ran on the device after the failed one
- * (an `afterEach` or `afterAll` hook), or a device group ran it. Without a
- * trace to check, only a locator miss is held (`unchecked`): any other
- * failure may never have reached the device (a file that did not load).
+ * The failure whose screen the device may still show, or undefined when
+ * there is no screen to check it against: more than one test ran (which
+ * failure it would show is unclear), the failure has no trace or its trace
+ * no hierarchy at the failed step, or a device group ran it.
  */
-export function heldFailureOf(
+export function failureCandidateOf(
   result: Pick<TestRunResult, 'status' | 'passed' | 'failed' | 'failures'>,
   readTrace: (tracePath: string) => TraceSummary | undefined,
-  isLocatorMiss: (error: string) => boolean,
-): HeldFailure | undefined {
+): FailureCandidate | undefined {
   if (result.status === 'stopped') return undefined;
   if (result.failed !== 1 || result.passed !== 0) return undefined;
   const failure = result.failures?.length === 1 ? result.failures[0] : undefined;
-  if (!failure) return undefined;
-  const summary = failure.tracePath ? readTrace(failure.tracePath) : undefined;
-  if (!summary) return isLocatorMiss(failure.error) ? { failure, confidence: 'unchecked' } : undefined;
-  if (summary.multiDevice || !summary.endsOnFailedStep) return undefined;
-  return { failure, confidence: 'confirmed' };
+  if (!failure?.tracePath) return undefined;
+  const summary = readTrace(failure.tracePath);
+  if (!summary?.failureHierarchyXml || summary.multiDevice) return undefined;
+  return { failure, failureHierarchyXml: summary.failureHierarchyXml };
+}
+
+/** What a screen shows, as `role "text"` entries of the nodes a snapshot lists. */
+function screenEntries(hierarchyXml: string): Set<string> {
+  const entries = new Set<string>();
+  for (const node of semanticNodes(parseHierarchyXml(hierarchyXml))) {
+    const text = nodeStrings(node)[0];
+    if (text) entries.add(`${getNodeRole(node) || node.tagName} "${text}"`);
+  }
+  return entries;
+}
+
+/**
+ * Whether two hierarchy dumps show the same screen: most of what either
+ * shows, the other shows too. A screen with no text to compare is never
+ * judged the same.
+ */
+export function sameScreen(aXml: string, bXml: string): boolean {
+  const a = screenEntries(aXml);
+  const b = screenEntries(bXml);
+  if (a.size === 0 || b.size === 0) return false;
+  let shared = 0;
+  for (const e of a) if (b.has(e)) shared += 1;
+  return shared / Math.max(a.size, b.size) >= SAME_SCREEN_OVERLAP;
 }
 
 // ─── Closest elements ───
@@ -170,13 +194,12 @@ export type ClosestResult =
  * looked for, each with a locator the agent checked resolves to it alone.
  */
 export async function closestOnScreen(
-  client: Pick<TapsmithGrpcClient, 'getUiHierarchy' | 'evaluateSelectors'>,
+  client: Pick<TapsmithGrpcClient, 'evaluateSelectors'>,
+  hierarchyXml: string,
   locator: string,
 ): Promise<ClosestResult> {
   const needles = locatorNeedles(locator);
   if (needles.length === 0) return { kind: 'no-words' };
-  const { hierarchyXml, errorMessage } = await client.getUiHierarchy();
-  if (errorMessage) return { kind: 'error', message: errorMessage };
   // A few spare candidates: one element can be listed twice (an iOS
   // element and the container reporting the same label), and each is shown once.
   const nodes = closestNodes(semanticNodes(parseHierarchyXml(hierarchyXml)), needles, MAX_CLOSEST * CANDIDATES_PER_LISTED);
@@ -199,49 +222,77 @@ export async function closestOnScreen(
 // ─── The result's lines ───
 
 export interface FailureScreenOptions {
-  held: HeldFailure
+  candidate: FailureCandidate
   /** The locator the failure says matched nothing, if it is a locator miss. */
   missedLocator?: string
   /** The client of the device the test ran on; rejects when that is unclear. */
   client: () => Promise<Pick<TapsmithGrpcClient, 'getUiHierarchy' | 'evaluateSelectors'>>
 }
 
+export interface FailureScreenReport {
+  lines: string[]
+  /** Whether `lines` end with the next step, in place of the run's usual one. */
+  hasNextStep: boolean
+}
+
 /**
- * The lines `tapsmith_run_tests` adds for a failure the device still shows:
- * that it is held there, the closest elements for a locator miss, and the
- * next step. Never throws: a device it cannot read loses only the list.
+ * The lines `tapsmith_run_tests` adds for a failed run of one test: that the
+ * device is still on the screen where it failed (checked against the trace),
+ * the closest elements there for a locator miss, and the next step; or that
+ * the device has moved since. Nothing when the device cannot be read. Never
+ * throws.
  */
-export async function failureScreenLines(opts: FailureScreenOptions): Promise<string[]> {
-  const { held, missedLocator } = opts;
+export async function failureScreenReport(opts: FailureScreenOptions): Promise<FailureScreenReport> {
+  const { candidate, missedLocator } = opts;
+  const name = candidate.failure.fullName;
+  let client: Awaited<ReturnType<FailureScreenOptions['client']>>;
+  let liveXml: string;
+  try {
+    client = await opts.client();
+    const live = await client.getUiHierarchy();
+    if (live.errorMessage) return { lines: [], hasNextStep: false };
+    liveXml = live.hierarchyXml;
+  } catch {
+    return { lines: [], hasNextStep: false };
+  }
+  if (!sameScreen(candidate.failureHierarchyXml, liveXml)) {
+    return {
+      lines: [
+        `The device's screen no longer matches the one where "${name}" failed: something moved it after the failure `
+        + '(an afterEach or afterAll hook, or a fixture\'s teardown), or the test ran on another device. '
+        + 'The failure\'s trace (tapsmith_read_trace) shows that screen.',
+      ],
+      hasNextStep: false,
+    };
+  }
   const lines: string[] = [
-    held.confidence === 'confirmed'
-      ? `DEVICE HELD: the device is still on the screen where "${held.failure.fullName}" failed: it was the only test in the run, and nothing acted on the device after the failed step.`
-      : `DEVICE HELD: the device was left where "${held.failure.fullName}" failed (it was the only test in the run; with no trace to check, an afterEach or afterAll hook that drives the device may have moved it since).`,
+    `DEVICE HELD: the device is still on the screen where "${name}" failed (it was the only test in the run, and the screen matches the one in the failure's trace).`,
     'tapsmith_snapshot and tapsmith_test_locator act on that screen now. The next tapsmith_run_tests resets the app as usual.',
   ];
-  if (!missedLocator) return lines;
+  if (!missedLocator) return { lines, hasNextStep: false };
 
+  const shown = missedLocator.length > SHOWN_LOCATOR_CHARS ? `${missedLocator.slice(0, SHOWN_LOCATOR_CHARS - 1)}…` : missedLocator;
   let closest: ClosestResult;
   try {
-    closest = await closestOnScreen(await opts.client(), missedLocator);
+    closest = await closestOnScreen(client, liveXml, missedLocator);
   } catch (err) {
     closest = { kind: 'error', message: err instanceof Error ? err.message : String(err) };
   }
   lines.push('');
   if (closest.kind === 'matches' && closest.elements.length > 0) {
-    lines.push(`Closest on screen to ${missedLocator}:`);
+    lines.push(`Closest on screen to ${shown}:`);
     for (const e of closest.elements) {
       lines.push(e.locator ? `  - ${e.description}: ${e.locator}` : `  - ${e.description} (no locator finds it alone; tapsmith_snapshot lists it)`);
     }
   } else if (closest.kind === 'matches') {
-    lines.push(`Nothing on screen is close to ${missedLocator}: tapsmith_snapshot shows what is there.`);
+    lines.push(`Nothing on screen is close to ${shown}: tapsmith_snapshot shows what is there.`);
   } else if (closest.kind === 'error') {
-    lines.push(`(Could not read the screen for the elements closest to ${missedLocator}: ${closest.message})`);
+    lines.push(`(Could not check the elements closest to ${shown}: ${closest.message})`);
   }
   lines.push('');
   lines.push(
     'NEXT STEP: the locator matched nothing on this screen. Check a replacement with tapsmith_test_locator '
     + '(it must count exactly 1), change the test to use it, then run the test again with tapsmith_run_tests.',
   );
-  return lines;
+  return { lines, hasNextStep: true };
 }

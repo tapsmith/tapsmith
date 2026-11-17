@@ -368,7 +368,7 @@ long, fewer failures are shown in detail. The failures after those, up to the
 that have one, as many as fit the response limit. The report ends by pointing to `tapsmith_list_results`, which lists
 every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1. It also says how to try locators on the screen where a test failed: run just that test.
 
-When the run was one test and it failed, the report says whether the device is still on the screen where it failed (`DEVICE HELD`), and for a locator that matched nothing it lists the elements on that screen closest to it, each with a locator the device agent checked finds it alone. See [Fix a failing test](#fix-a-failing-test).
+When the run was one test and it failed, the report checks whether the device is still on the screen where it failed (`DEVICE HELD`), and for a locator that matched nothing it lists the elements on that screen closest to it, each with a locator the device agent checked finds it alone. See [Fix a failing test](#fix-a-failing-test).
 
 A file that dies before any test reports — a failed import, a crashed or
 timed-out worker — is reported as a single failure named
@@ -519,13 +519,14 @@ A test that fails on a locator can be fixed against the live app: the device sta
 3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen
 4. **Change the test and run it again:** the next `tapsmith_run_tests` resets the app as usual, so the test starts from its normal starting point
 
-Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is simply left where the test stopped. The report says `DEVICE HELD` only when that is certain:
+Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when it has checked that: the device's screen now matches the one the failure's trace captured at the failed step. It makes no claim:
 
-- **One test ran.** After a run of several tests, a later test may have moved the screen, so the report instead says to run the one test that failed.
-- **Nothing acted on the device after the failed step.** The test's own `afterEach` and `afterAll` hooks still run after a failure, and one that taps, navigates or relaunches the app moves the screen. The failure's trace shows whether a hook did; when one did, there is no `DEVICE HELD`. Without a trace (`trace` off in the config), a locator miss is still reported as held, with a note that a hook may have moved the screen.
-- **One device ran it.** A test on a [device group](#choosing-a-device) (`use.devices`) gets no `DEVICE HELD`.
+- **When more than one test ran.** A later test may have moved the screen, so the report instead says to run the one test that failed.
+- **When the screen has changed since the failure.** The test's own `afterEach` and `afterAll` hooks and its fixtures' teardown still run after a failure, and one that taps, navigates or relaunches the app moves the screen. The report then says the screen no longer matches the failure's; `tapsmith_read_trace` shows the failure screen.
+- **Without a trace.** The check needs the failure's trace. UI mode always records one; a headless session records one when the config's `trace` is not `'off'` (for example `trace: 'retain-on-failure'`).
+- **For a device group.** A test on a [device group](#choosing-a-device) (`use.devices`) gets no `DEVICE HELD`.
 
-It works the same in [UI mode](#ui-shared-workflow) and [headless](#headless-stdio-workflow) sessions. In UI mode, a failed run leaves its device alone until you prepare it or run again. When several devices could have run the test (UI mode with more than one worker for the project), pass `device` to `tapsmith_run_tests`, `tapsmith_snapshot` and `tapsmith_test_locator` so they all use the same one.
+It works the same in [UI mode](#ui-shared-workflow) and [headless](#headless-stdio-workflow) sessions. In UI mode, a failed run leaves its device alone until you prepare it or run again. With several UI workers for the project, leave `device` out of these calls (`tapsmith_run_tests` refuses it there): the screen is checked on the device the device tools use, and when that is not the one that ran the test, its screen does not match, so the report makes no claim.
 
 ## Locator format
 
