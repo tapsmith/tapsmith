@@ -67,8 +67,8 @@ const AFTER_HOOK_GROUPS = new Set(['afterEach Hooks', 'afterAll Hooks']);
  * The screen captured at the test's failed step (see {@link TraceSummary.failureHierarchyXml}).
  * A failed step did not necessarily fail the test (user code catches errors,
  * soft assertions carry on, a fixture's teardown runs after the test), so the
- * failed step is the last one whose error is the test's error, the way
- * tapsmith_read_trace names it (PILOT-917). A step a timed-out test left in
+ * failed step is the last one whose error is the test's error, as
+ * tapsmith_read_trace picks it (PILOT-917), outside the after hooks. A step a timed-out test left in
  * flight is recorded with the timeout's message, so it matches too.
  */
 function failedStepHierarchy(events: TraceEvent[], files: Record<string, Uint8Array>, testError: string): string | undefined {
