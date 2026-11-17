@@ -119,7 +119,7 @@ describe('tapsmith_run_tests on a failed run of one test', () => {
     liveScreen = HOME;
     const t = await callRunTests(makeDispatcher(oneFailure(trace([failedStep, { type: 'action', action: 'pressKey', duration: 5 }]))), { files: [FILE] });
     expect(t).not.toContain('DEVICE HELD');
-    expect(t).toContain('The device\'s screen no longer matches the one where "Login > signs in" failed');
+    expect(t).toContain('The device\'s screen differs from the one the trace captured where "Login > signs in" failed');
     // The usual step stays.
     expect(t).toContain('Read the failure\'s trace');
   });

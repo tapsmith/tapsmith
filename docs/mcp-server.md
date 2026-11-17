@@ -519,10 +519,10 @@ A test that fails on a locator can be fixed against the live app: the device sta
 3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen
 4. **Change the test and run it again:** the next `tapsmith_run_tests` resets the app as usual, so the test starts from its normal starting point
 
-Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when it has checked that: the device's screen now matches the one the failure's trace captured at the failed step. It makes no claim:
+Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when it has checked that: the device's screen now matches the one the failure's trace captured at the failed step. A failed assertion is captured when it starts waiting, and the screen may change while it waits, so for one that nothing in the trace followed, the report says `DEVICE HELD` even when the screen has changed since that capture. It makes no claim:
 
-- **When more than one test ran.** A later test may have moved the screen, so the report instead says to run the one test that failed.
-- **When the screen has changed since the failure.** The test's own `afterEach` and `afterAll` hooks and its fixtures' teardown still run after a failure, and one that taps, navigates or relaunches the app moves the screen. The report then says the screen no longer matches the failure's; `tapsmith_read_trace` shows the failure screen.
+- **When more than one test ran.** A later test may have moved the screen. For a locator that matched nothing, the report says to run the one test that failed.
+- **When the screen has changed since the failure.** The test's own `afterEach` and `afterAll` hooks and its fixtures' teardown still run after a failure, and one that taps, navigates or relaunches the app moves the screen. The report then says the screen differs from the failure's; `tapsmith_read_trace` shows the failure screen.
 - **Without a trace.** The check needs the failure's trace. UI mode always records one; a headless session records one when the config's `trace` is not `'off'` (for example `trace: 'retain-on-failure'`).
 - **For a device group.** A test on a [device group](#choosing-a-device) (`use.devices`) gets no `DEVICE HELD`.
 

@@ -8,10 +8,14 @@
  * or `afterAll` hook, a fixture's teardown) or a later test of the run, and
  * the failure's trace does not record all of those. So the claim is checked
  * against the device itself: its screen now is compared with the one the
- * trace captured at the failed step. When they match, this module tells the
- * agent so, and lists the elements on that screen closest to the locator
- * that matched nothing, so the agent can try a fix against the live app
- * (tapsmith_test_locator) instead of navigating back there itself.
+ * trace captured at the failed step. A failed assertion is the exception:
+ * its capture is from when it started waiting, and the screen may have
+ * changed while it waited, so when that capture does not match, nothing in
+ * the trace after the assertion is the evidence instead. When the device is
+ * held, this module tells the agent so, and lists the elements on that
+ * screen closest to the locator that matched nothing, so the agent can try a
+ * fix against the live app (tapsmith_test_locator) instead of navigating
+ * back there itself.
  *
  * It only reads: nothing here holds the device or skips a reset. The next
  * run resets the app as usual.
@@ -44,17 +48,23 @@ const IOS_CHUNK_SIZE = 500;
 const SHOWN_TEXT_CHARS = 60;
 const SHOWN_LOCATOR_CHARS = 300;
 
-/** A failed run of one test, and the screen its trace captured at the failed step. */
+/** A failed run of one test, and what its trace says about the failed step. */
 export interface FailureCandidate {
   failure: TestFailureDetail
-  failureHierarchyXml: string
+  /** The screen the trace captured at the failed step (see `FailedStep.hierarchyXml`). */
+  failureHierarchyXml?: string
+  /**
+   * The failed step is an assertion and nothing follows it in the trace: the
+   * device is held even when the screen changed while the assertion waited.
+   */
+  nothingAfterAssertion: boolean
 }
 
 /**
  * The failure whose screen the device may still show, or undefined when
- * there is no screen to check it against: more than one test ran (which
- * failure it would show is unclear), the failure has no trace or its trace
- * no hierarchy at the failed step, or a device group ran it.
+ * that cannot be checked: more than one test ran (which failure it would
+ * show is unclear), the failure has no trace, its trace has neither a screen
+ * at the failed step nor a failed assertion to go by, or a device group ran it.
  */
 export function failureCandidateOf(
   result: Pick<TestRunResult, 'status' | 'passed' | 'failed' | 'failures'>,
@@ -65,14 +75,22 @@ export function failureCandidateOf(
   const failure = result.failures?.length === 1 ? result.failures[0] : undefined;
   if (!failure?.tracePath) return undefined;
   const summary = readTrace(failure.tracePath);
-  if (!summary?.failureHierarchyXml || summary.multiDevice) return undefined;
-  return { failure, failureHierarchyXml: summary.failureHierarchyXml };
+  const step = summary?.failedStep;
+  if (!step || summary.multiDevice) return undefined;
+  const nothingAfterAssertion = step.kind === 'assertion' && !step.stepsAfter;
+  if (!step.hierarchyXml && !nothingAfterAssertion) return undefined;
+  return { failure, failureHierarchyXml: step.hierarchyXml, nothingAfterAssertion };
 }
 
-/** What a screen shows, as `role "text"` entries of the nodes a snapshot lists. */
+/**
+ * What a screen shows, as `role "text"` entries of the native nodes a
+ * snapshot lists. WebView DOM nodes are left out: a trace captured with a
+ * WebView active adds them, and a live hierarchy read has none.
+ */
 function screenEntries(hierarchyXml: string): Set<string> {
   const entries = new Set<string>();
   for (const node of semanticNodes(parseHierarchyXml(hierarchyXml))) {
+    if (node.attributes.get('webview') === 'true') continue;
     const text = nodeStrings(node)[0];
     if (text) entries.add(`${getNodeRole(node) || node.tagName} "${text}"`);
   }
@@ -184,7 +202,8 @@ export interface ClosestElement {
 }
 
 export type ClosestResult =
-  | { kind: 'matches'; elements: ClosestElement[] }
+  /** `checkError`: why the device agent stopped checking locators, when it did. */
+  | { kind: 'matches'; elements: ClosestElement[]; checkError?: string }
   /** The locator has no words to compare (a role alone, a RegExp, an id with no string). */
   | { kind: 'no-words' }
   | { kind: 'error'; message: string };
@@ -205,7 +224,7 @@ export async function closestOnScreen(
   const nodes = closestNodes(semanticNodes(parseHierarchyXml(hierarchyXml)), needles, MAX_CLOSEST * CANDIDATES_PER_LISTED);
   if (nodes.length === 0) return { kind: 'matches', elements: [] };
   const ios = hierarchyXml.includes('<XCUIElementType');
-  const { byNode } = await agentValidatedSuggestions(client, nodes, ios ? { chunkSize: IOS_CHUNK_SIZE } : {});
+  const { byNode, errorMessage } = await agentValidatedSuggestions(client, nodes, ios ? { chunkSize: IOS_CHUNK_SIZE } : {});
   const elements: ClosestElement[] = [];
   const seen = new Set<string>();
   for (const node of nodes) {
@@ -216,7 +235,7 @@ export async function closestOnScreen(
     elements.push(element);
     if (elements.length === MAX_CLOSEST) break;
   }
-  return { kind: 'matches', elements };
+  return { kind: 'matches', elements, ...(errorMessage ? { checkError: errorMessage } : {}) };
 }
 
 // ─── The result's lines ───
@@ -255,18 +274,21 @@ export async function failureScreenReport(opts: FailureScreenOptions): Promise<F
   } catch {
     return { lines: [], hasNextStep: false };
   }
-  if (!sameScreen(candidate.failureHierarchyXml, liveXml)) {
+  const matches = candidate.failureHierarchyXml !== undefined && sameScreen(candidate.failureHierarchyXml, liveXml);
+  if (!matches && !candidate.nothingAfterAssertion) {
     return {
       lines: [
-        `The device's screen no longer matches the one where "${name}" failed: something moved it after the failure `
-        + '(an afterEach or afterAll hook, or a fixture\'s teardown), or the test ran on another device. '
-        + 'The failure\'s trace (tapsmith_read_trace) shows that screen.',
+        `The device's screen differs from the one the trace captured where "${name}" failed, so it may have moved since `
+        + '(an afterEach or afterAll hook, a fixture\'s teardown), or the test ran on another device. '
+        + 'The failure\'s trace (tapsmith_read_trace) shows the failure screen.',
       ],
       hasNextStep: false,
     };
   }
   const lines: string[] = [
-    `DEVICE HELD: the device is still on the screen where "${name}" failed (it was the only test in the run, and the screen matches the one in the failure's trace).`,
+    matches
+      ? `DEVICE HELD: the device is still on the screen where "${name}" failed (it was the only test in the run, and the screen matches the one in the failure's trace).`
+      : `DEVICE HELD: the device is still where "${name}" failed: it was the only test in the run, and nothing acted on the device after the failed assertion (the screen changed while the assertion waited).`,
     'tapsmith_snapshot and tapsmith_test_locator act on that screen now. The next tapsmith_run_tests resets the app as usual.',
   ];
   if (!missedLocator) return { lines, hasNextStep: false };
@@ -282,8 +304,9 @@ export async function failureScreenReport(opts: FailureScreenOptions): Promise<F
   if (closest.kind === 'matches' && closest.elements.length > 0) {
     lines.push(`Closest on screen to ${shown}:`);
     for (const e of closest.elements) {
-      lines.push(e.locator ? `  - ${e.description}: ${e.locator}` : `  - ${e.description} (no locator finds it alone; tapsmith_snapshot lists it)`);
+      lines.push(e.locator ? `  - ${e.description}: ${e.locator}` : `  - ${e.description} (no checked locator; tapsmith_snapshot lists it)`);
     }
+    if (closest.checkError) lines.push(`(The device agent stopped checking locators for these: ${closest.checkError})`);
   } else if (closest.kind === 'matches') {
     lines.push(`Nothing on screen is close to ${shown}: tapsmith_snapshot shows what is there.`);
   } else if (closest.kind === 'error') {
