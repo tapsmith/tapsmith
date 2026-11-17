@@ -165,11 +165,11 @@ let linkTrait: UInt64 = 1 << 1
 
 func matches(
     _ role: String, _ type: ElementType, traits: UInt64 = 0, value: String? = nil, named: Bool = false,
-    inTabBar: Bool = false, inAlert: Bool = false
+    inTabBar: Bool = false, inAlert: Bool = false, emptyBarHost: Bool = false
 ) -> Bool {
     RoleMapping.matches(
         role: role, elementType: type, traits: traits, value: value, hasNameFilter: named, inTabBar: inTabBar,
-        inAlert: inAlert
+        inAlert: inAlert, isEmptyBarHost: emptyBarHost
     )
 }
 
@@ -378,6 +378,19 @@ check("a picker is still a spinner, not a progressbar", matches("progressbar", .
 check("a picker still reports \"spinner\"", RoleMapping.resolveRole(for: .picker, traits: 0, inTabBar: false), "spinner")
 check("a progressbar query covers both indicators",
       (try? RoleMapping.queryTypes(for: "progressbar")) ?? [], [.progressIndicator, .activityIndicator])
+
+// ─── iOS 27's empty Toolbar host (PILOT-1219) ───
+
+// The container-sized Toolbar iOS 27 lays over a screen with no toolbar
+// (BarHost.markEmptyHosts) is not a toolbar: it has no role and no toolbar
+// query matches it, named or not. A host holding items is the toolbar.
+check("an empty toolbar host is not a toolbar", matches("toolbar", .toolbar, emptyBarHost: true), false)
+check("an empty toolbar host is not a toolbar by name either",
+      matches("toolbar", .toolbar, named: true, emptyBarHost: true), false)
+check("a toolbar host holding items is a toolbar", matches("toolbar", .toolbar), true)
+check("an empty toolbar host reports no role",
+      RoleMapping.resolveRole(for: .toolbar, traits: 0, inTabBar: false, isEmptyBarHost: true), "")
+check("a toolbar reports \"toolbar\"", RoleMapping.resolveRole(for: .toolbar, traits: 0, inTabBar: false), "toolbar")
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

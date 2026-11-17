@@ -79,6 +79,14 @@ struct ElementSelector {
         guard let role, !hasNameFilter else { return false }
         return RoleMapping.normalize(role) == "textfield"
     }
+
+    /// Whether this is `getByRole("toolbar")` with no name: a live toolbar
+    /// query also returns iOS 27's empty toolbar hosts, which the match set
+    /// leaves out (BarHost.markEmptyHosts, PILOT-1219).
+    var roleOnlyToolbar: Bool {
+        guard let role, !hasNameFilter else { return false }
+        return RoleMapping.normalize(role) == "toolbar"
+    }
 }
 
 /// Bounding rectangle for an element.
@@ -185,13 +193,16 @@ struct ElementInfo {
     /// `SnapshotElementFinder.annotateTraits`) so the returned `role`
     /// honours React Native `accessibilityRole` flags. A live element can't
     /// see its ancestors, so the caller says whether it is inside a tab bar
-    /// (`inTabBar`, from find time), which makes a button a tab (PILOT-514).
+    /// (`inTabBar`, from find time), which makes a button a tab (PILOT-514),
+    /// or whether it is iOS 27's empty toolbar host (`isEmptyBarHost`, from
+    /// find time), which has no role (PILOT-1219).
     static func makeFromXCUIElement(
         _ element: XCUIElement,
         elementId: String,
         bounds: ElementBounds,
         viewportRatio: Float,
-        inTabBar: Bool
+        inTabBar: Bool,
+        isEmptyBarHost: Bool
     ) -> ElementInfo {
         let elType = element.elementType
         let label = element.label
@@ -209,7 +220,9 @@ struct ElementInfo {
 
         let className = RoleMapping.typeName(for: elType)
         let traits = ElementInfo.extractTraits(from: element)
-        let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
+        let role = RoleMapping.resolveRole(
+            for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost
+        )
 
         let isSelected = element.isSelected
         let isChecked = ElementInfo.deriveCheckedState(

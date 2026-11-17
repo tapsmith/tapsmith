@@ -305,33 +305,23 @@ struct OcclusionAnalyzer {
         return container < t && nodes[container].subtreeEnd > t
     }
 
-    /// Whether node `i` is the host of a bar rather than a bar (only a bar
-    /// type can be one; any other control still blocks): it fills its
-    /// whole container and is laid over the content before it there — an
-    /// earlier sibling that fills the container too. iOS 27 adds one as the
-    /// last child of every navigation container, a window's or a sheet's of
-    /// any height (PILOT-1207), empty when the screen has no toolbar and
-    /// otherwise holding the toolbar's items, laid out in it as floating
-    /// capsules. Clipping by its frame would call everything in the
-    /// container covered. A real bar is never laid over all of its
-    /// container's content: one in a wrapper of its own size (a
-    /// `UIViewRepresentable`, a React Native view around a custom tab bar)
-    /// shares it with nothing, or with something smaller (a badge). What a
-    /// host holds still covers what it is drawn over, as an interactive
-    /// control painted after the target. (`KeyboardDismissPlanner` treats a
-    /// host as plain for the same reason.)
+    /// Whether node `i` is the host of a bar rather than a bar: iOS 27's
+    /// container-sized `Toolbar`, laid over the content of every navigation
+    /// container (`BarHost.isHost` has the rule, PILOT-1207). Clipping by its
+    /// frame would call everything in the container covered. What a host
+    /// holds still covers what it is drawn over, as an interactive control
+    /// painted after the target. (`KeyboardDismissPlanner` treats a host as
+    /// plain for the same reason.)
     func isBarHost(_ i: Int) -> Bool {
-        guard Self.barTypes.contains(nodes[i].elementType),
-              let p = nodes[i].parent else { return false }
-        let container = nodes[p].frame
-        guard container.width > 0, container.height > 0,
-              nodes[i].frame.insetBy(dx: -1, dy: -1).contains(container) else { return false }
-        var sibling = p + 1
-        while sibling < i {
-            if Self.framesMatch(nodes[sibling].frame, container) { return true }
-            sibling = nodes[sibling].subtreeEnd
-        }
-        return false
+        guard let p = nodes[i].parent else { return false }
+        let nodes = self.nodes
+        let siblings = sequence(first: p + 1) { nodes[$0].subtreeEnd }.lazy
+            .prefix { $0 < i }
+            .map { nodes[$0].frame }
+        return BarHost.isHost(
+            elementType: nodes[i].elementType, frame: nodes[i].frame, container: nodes[p].frame,
+            earlierSiblings: siblings
+        )
     }
 
     // MARK: - Keyboard
