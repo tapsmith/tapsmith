@@ -96,6 +96,7 @@ import {
   matchesTestFile,
 } from '../test-file-discovery.js';
 import { filesToRediscover } from './ui-rediscovery.js';
+import { mirrorTouchPoint, parseDeviceTurn, type MirrorFrame } from './mirror-touch-point.js';
 import { WorkerStartupGate } from './worker-startup.js';
 
 /** No worker came up at startup, and none can be respawned: there is no device chip to respawn from. */
@@ -861,7 +862,7 @@ export async function startUIServer(
   /** Screen view mode: 'all' polls all workers, number polls a specific worker. */
   let screenViewMode: 'all' | number = 'all';
   /** Last known frame dimensions per mirrored device (`mirrorKey`), used to convert normalized coords. */
-  const lastFrameDims = new Map<string, { width: number; height: number }>();
+  const lastFrameDims = new Map<string, MirrorFrame>();
   /** Which device of the selected worker's group the single-view mirror shows. */
   let selectedDeviceIndex = 0;
   /** Set to true while a parallel run is in progress, to signal stop. */
@@ -4137,7 +4138,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // Read dimensions from the PNG IHDR chunk (bytes 16-23: width + height as big-endian uint32)
       const width = data.length >= 24 ? data.readUInt32BE(16) : 1080;
       const height = data.length >= 24 ? data.readUInt32BE(20) : 1920;
-      lastFrameDims.set(mirrorKey(workerId, deviceIndex), { width, height });
+      // The turn maps mirror touches back to the native points iOS
+      // coordinate touches take (mirror-touch-point.ts).
+      const turn = parseDeviceTurn(response.orientation);
+      lastFrameDims.set(mirrorKey(workerId, deviceIndex), turn ? { width, height, turn } : { width, height });
       const frame = encodeScreenFrame(screenSeq++, workerId, width, height, data, deviceIndex);
       broadcastBinary(frame);
     }
@@ -4676,7 +4680,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   function resolveGestureTarget(workerId?: number, deviceIndex?: number): {
     client: TapsmithGrpcClient | undefined
     dpr: number
-    dims: { width: number; height: number } | undefined
+    dims: MirrorFrame | undefined
   } {
     if (workersEnabled && workersInitialized) {
       const id = workerId ?? selectedWorkerId;
@@ -4694,21 +4698,6 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       client: ctx.client,
       dpr: cachedScreenScale(ctx.deviceSerial ?? '', singleWorkerPlatform) || 1,
       dims: lastFrameDims.get(mirrorKey(0, 0)),
-    };
-  }
-
-  /** Convert a normalized (0–1) point to logical points for the target. */
-  function normalizedToLogical(
-    nx: number,
-    ny: number,
-    dims: { width: number; height: number } | undefined,
-    dpr: number,
-  ): { x: number; y: number } | undefined {
-    if (!dims) return undefined;
-    const clamp = (v: number) => Math.min(1, Math.max(0, v));
-    return {
-      x: (clamp(nx) * dims.width) / dpr,
-      y: (clamp(ny) * dims.height) / dpr,
     };
   }
 
@@ -4997,22 +4986,22 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       case 'mirror-tap': {
         noteMirrorInteraction(msg.workerId, 'tap');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.tapXY(p.x, p.y).catch(() => {});
         break;
       }
       case 'mirror-long-press': {
         noteMirrorInteraction(msg.workerId, 'long press');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.longPressXY(p.x, p.y, msg.durationMs).catch(() => {});
         break;
       }
       case 'mirror-swipe': {
         noteMirrorInteraction(msg.workerId, 'swipe');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const from = normalizedToLogical(msg.fromX, msg.fromY, t.dims, t.dpr);
-        const to = normalizedToLogical(msg.toX, msg.toY, t.dims, t.dpr);
+        const from = mirrorTouchPoint(msg.fromX, msg.fromY, t.dims, t.dpr);
+        const to = mirrorTouchPoint(msg.toX, msg.toY, t.dims, t.dpr);
         if (t.client && from && to) {
           t.client.dragXY(from.x, from.y, to.x, to.y, msg.durationMs).catch(() => {});
         }
@@ -5033,21 +5022,21 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       case 'mirror-touch-start': {
         noteMirrorInteraction(msg.workerId, 'touch');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.touchDown(p.x, p.y, 0).catch(() => {});
         break;
       }
       case 'mirror-touch-move': {
         lastMirrorInteraction = Date.now();
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.touchMove(p.x, p.y, msg.tMs).catch(() => {});
         break;
       }
       case 'mirror-touch-end': {
         lastMirrorInteraction = Date.now();
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.touchUp(p.x, p.y, msg.tMs).catch(() => {});
         break;
       }

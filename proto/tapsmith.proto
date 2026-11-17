@@ -474,8 +474,16 @@ message ScreenshotRequest {
 message ScreenshotResponse {
   string request_id = 1;
   bool success = 2;
+  // Always upright, as the screen shows it.
   bytes data = 3;
   string error_message = 4;
+  // How the device was turned when the screen was captured (iOS):
+  // "portrait", "landscapeLeft", "landscapeRight" or "portraitUpsideDown".
+  // iOS coordinate touches (TapCoordinates, TouchDown, ...) take points in
+  // the device's native portrait space, so a client turning a point on the
+  // upright image into a touch maps it with this. Empty when unknown or not
+  // needed (Android, element screenshots).
+  string orientation = 5;
 }
 
 message UiHierarchyRequest {

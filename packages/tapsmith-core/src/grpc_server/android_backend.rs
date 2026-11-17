@@ -1031,12 +1031,14 @@ impl DeviceBackend for AndroidBackend<'_> {
                 success: true,
                 data,
                 error_message: String::new(),
+                orientation: String::new(),
             })),
             Err(e) => Ok(Response::new(proto::ScreenshotResponse {
                 request_id,
                 success: false,
                 data: Vec::new(),
                 error_message: e.to_string(),
+                orientation: String::new(),
             })),
         }
     }

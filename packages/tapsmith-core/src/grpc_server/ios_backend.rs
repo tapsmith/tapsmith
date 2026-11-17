@@ -1586,12 +1586,14 @@ impl DeviceBackend for IosBackend<'_> {
                         success: true,
                         data,
                         error_message: String::new(),
+                        orientation: screenshot_orientation(&resp.data),
                     })),
                     Err(e) => Ok(Response::new(proto::ScreenshotResponse {
                         request_id,
                         success: false,
                         data: Vec::new(),
                         error_message: format!("Failed to decode screenshot data: {e}"),
+                        orientation: String::new(),
                     })),
                 }
             }
@@ -1602,12 +1604,14 @@ impl DeviceBackend for IosBackend<'_> {
                 error_message: resp
                     .error
                     .unwrap_or_else(|| "Screenshot failed".to_string()),
+                orientation: String::new(),
             })),
             Err(status) => Ok(Response::new(proto::ScreenshotResponse {
                 request_id,
                 success: false,
                 data: Vec::new(),
                 error_message: status.message().to_string(),
+                orientation: String::new(),
             })),
         }
     }
@@ -2199,5 +2203,48 @@ impl DeviceBackend for IosBackend<'_> {
         _used_iptables: bool,
     ) {
         info!(%serial, "iOS proxy stopped on shutdown");
+    }
+}
+
+/// The device turn the agent's `screenshot` reply records (PILOT-1235): one
+/// of the names `ScreenshotResponse.orientation` documents, or empty when the
+/// reply has none (an older agent) or an unknown one.
+fn screenshot_orientation(data: &serde_json::Value) -> String {
+    match data.get("orientation").and_then(|v| v.as_str()) {
+        Some(turn @ ("portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown")) => {
+            turn.to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod screenshot_orientation_tests {
+    use super::screenshot_orientation;
+    use serde_json::json;
+
+    #[test]
+    fn passes_a_known_turn_through() {
+        for turn in [
+            "portrait",
+            "landscapeLeft",
+            "landscapeRight",
+            "portraitUpsideDown",
+        ] {
+            assert_eq!(
+                screenshot_orientation(&json!({ "data": "", "orientation": turn })),
+                turn
+            );
+        }
+    }
+
+    #[test]
+    fn is_empty_without_one() {
+        assert_eq!(screenshot_orientation(&json!({ "data": "" })), "");
+        assert_eq!(
+            screenshot_orientation(&json!({ "orientation": "sideways" })),
+            ""
+        );
+        assert_eq!(screenshot_orientation(&json!({ "orientation": 3 })), "");
     }
 }
