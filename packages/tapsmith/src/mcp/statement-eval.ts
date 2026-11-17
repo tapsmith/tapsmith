@@ -186,6 +186,8 @@ interface StatementBase {
   column: number
   /** Its source text. */
   text: string
+  /** The whole code it was parsed from (its node offsets are into this). */
+  code: string
   /** The statement as a test writes it with the `device` fixture (receivers spelled `device.` / `webview.`). */
   written: string
   /** The awaited call. */
@@ -307,6 +309,7 @@ function checkStatement(code: string, node: Program['body'][number], index: numb
   const text = code.slice(node.start, node.end);
   const loc = getLineInfo(code, node.start);
   const base = {
+    code,
     index,
     line: loc.line,
     column: loc.column + 1,
@@ -445,6 +448,30 @@ export async function buildStatement(statement: Statement, roots: LocatorRoots):
     }
     case 'device':
       return { kind: 'device', args: buildArgs(call.arguments, DEVICE_CALLS[statement.method], statement.method, ctx, call) };
+  }
+}
+
+/**
+ * {@link buildStatement} for a statement that uses no WebView, so it can be
+ * built before any statement runs: what the SDK's builder refuses (an unknown
+ * role, a `has` locator with a position) is refused then, with where, rather
+ * than after earlier statements have acted.
+ */
+export async function prebuildStatement(statement: Statement, device: Device): Promise<BuiltStatement> {
+  try {
+    return await buildStatement(statement, {
+      device,
+      webview: () => Promise.reject(new Error('internal: a statement without webview. asked for the WebView')),
+    });
+  } catch (err) {
+    const detail = locatorErrorDetail(err);
+    const reason = detail?.reason ?? (err instanceof Error ? err.message : String(err)).replace(/\.$/, '');
+    const at = detail?.at !== undefined ? getLineInfo(statement.code, detail.at) : { line: statement.line, column: statement.column - 1 };
+    throw new StatementError(
+      `Invalid statement at ${where(at.line, at.column + 1)} (\`${firstLine(statement.text)}\`): ${reason}.`,
+      at.line,
+      at.column + 1,
+    );
   }
 }
 

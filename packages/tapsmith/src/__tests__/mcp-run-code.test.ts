@@ -314,10 +314,26 @@ describe('tapsmith_run_code', () => {
     expect(Date.now() - started).toBeLessThan(4_000);
   });
 
-  it('reports an SDK refusal of a value as that statement failing', async () => {
-    const res = await runCode('await device.getByRole("dialogue").tap();');
+  it('refuses what the SDK\'s builder refuses before any statement runs, and says where', async () => {
+    const res = await runCode('await device.getByText("Sign in").tap();\n  await expect(device.getByRole("dialogue")).toBeVisible();');
     expect(res.isError).toBe(true);
-    expect(text(res)).toMatch(/^Statement 1 of 1 \(line 1\) failed: .*Unknown role "dialogue"/s);
+    expect(text(res)).toMatch(/^Invalid statement at line 2, column 3 \(`await expect\(device\.getByRole\("dialogue"\)\)\.toBeVisible\(\);`\): Unknown role "dialogue".*Nothing was run\.$/s);
+    expect(daemon.calls).toEqual([]);
+  });
+
+  it('refuses a `has` locator with a position before any statement runs, pointing at it', async () => {
+    const res = await runCode('await device.getByText("Sign in").tap();\nawait device.getByRole("button").filter({ has: device.getByText("x").first() }).tap();');
+    expect(res.isError).toBe(true);
+    expect(text(res)).toMatch(/^Invalid statement at line 2, column 48 .*must be a single getter.*Nothing was run\.$/s);
+    expect(daemon.calls).toEqual([]);
+  });
+
+  it('types with a test\'s budget once the field is there, unless the statement gives its own timeout', async () => {
+    await runCode('await device.getByText("Register").type("a long note");');
+    const budget = daemon.typeText.mock.calls[0][2] as number;
+    expect(budget).toBeGreaterThan(20_000);
+    await runCode('await device.getByText("Register").type("a long note", { timeout: 2000 });');
+    expect(daemon.typeText.mock.calls[1][2] as number).toBeLessThanOrEqual(2_000);
   });
 
   describe('webview.* statements', () => {

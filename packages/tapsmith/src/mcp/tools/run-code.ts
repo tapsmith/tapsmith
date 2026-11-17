@@ -10,7 +10,7 @@ import { asWrittenLineCheck, checkingLine, webViewLineCheck } from '../action-li
 import { describeLine, type LineCheck } from '../test-lines.js';
 import { invoke } from '../locator-eval.js';
 import {
-  buildStatement, isStatementError, parseStatements, runAssertion, runDeviceCall, type Statement,
+  buildStatement, isStatementError, parseStatements, prebuildStatement, runAssertion, runDeviceCall, type BuiltStatement, type Statement,
 } from '../statement-eval.js';
 
 /**
@@ -71,6 +71,19 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
       const timeoutMs = timeout ?? MCP_ACTION_TIMEOUT_MS;
       const sdkDevice = timeout === undefined ? base : sdkDeviceWithTimeout(target.client, base, timeout);
 
+      // Everything that needs no WebView is built before anything runs, so a
+      // statement the SDK's builder refuses stops the whole block.
+      const prebuilt = new Map<Statement, BuiltStatement>();
+      for (const statement of statements) {
+        if (statement.usesWebview) continue;
+        try {
+          prebuilt.set(statement, await prebuildStatement(statement, sdkDevice));
+        } catch (err) {
+          if (isStatementError(err)) return errorResult(`${err.message} Nothing was run.`);
+          throw err;
+        }
+      }
+
       const report: Report = { lines: [], usedWebview: false };
       const total = statements.length;
       for (const [i, statement] of statements.entries()) {
@@ -81,7 +94,7 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
           return errorResult(report.lines.join('\n'));
         }
         try {
-          const line = await runStatement(statement, sdkDevice, target.client, timeoutMs, report);
+          const line = await runStatement(statement, prebuilt.get(statement), sdkDevice, target.client, timeoutMs, report);
           report.lines.push(`${header}: OK`, line);
         } catch (err) {
           if (isStatementError(err)) report.lines.push(`${header} failed: ${err.message}`);
@@ -127,13 +140,14 @@ function hasOwnTimeout(args: unknown[]): boolean {
  */
 async function runStatement(
   statement: Statement,
+  prebuilt: BuiltStatement | undefined,
   device: Device,
   client: TapsmithGrpcClient,
   timeoutMs: number,
   report: Report,
 ): Promise<string> {
   return withLocatorRoots(device, client, async (roots) => {
-    const built = await buildStatement(statement, roots);
+    const built = prebuilt ?? await buildStatement(statement, roots);
     if (statement.kind === 'device' && built.kind === 'device') {
       await runDeviceCall(statement, device, built.args);
       return `Test line: ${statement.written}`;
