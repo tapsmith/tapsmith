@@ -779,6 +779,18 @@ jobs:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}-trace.log
         run: node verify-trace-archive.mjs -c tapsmith.config.ios-ci.mjs
 
+      # PILOT-1239: walk the login flow through a headless MCP session, then
+      # paste the test lines its action tools answered with into a spec and
+      # run it. The lines must all be verified, and the replay must pass and
+      # end on the screen the walk did. Shard 3: shard 1 verifies the trace
+      # archive and shard 2 the first MCP snapshot.
+      - name: Verify MCP test lines replay as a test
+        if: ${{ !cancelled() && matrix.shard == 3 }}
+        working-directory: e2e
+        env:
+          TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}-mcp-lines.log
+        run: node verify-mcp-test-lines.mjs -c tapsmith.config.ios-ci.mjs --device "$TAPSMITH_IOS_UDID"
+
       - name: Summarize iOS timing breakdown
         if: always()
         run: |

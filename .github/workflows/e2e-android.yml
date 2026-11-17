@@ -472,6 +472,19 @@ jobs:
             -c tapsmith.config.android-ci.mjs \
             --device "$SERIAL"
 
+      # PILOT-1239: walk the login flow through a headless MCP session, then
+      # paste the test lines its action tools answered with into a spec and
+      # run it. The lines must all be verified, and the replay must pass and
+      # end on the screen the walk did. One shard is enough.
+      - name: Verify MCP test lines replay as a test
+        if: matrix.shard == 1
+        working-directory: e2e
+        env:
+          TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-android-1-mcp-lines.log
+        run: |
+          SERIAL=$(adb devices | grep -w device | head -1 | awk '{print $1}')
+          node verify-mcp-test-lines.mjs -c tapsmith.config.android-ci.mjs --device "$SERIAL"
+
       # Network mocking with no trace config on an emulator whose adbd is not
       # root yet — a fresh CI emulator, as android-emulator-runner boots one
       # (PILOT-831). The shard run above rooted it, so `adb unroot` puts it
