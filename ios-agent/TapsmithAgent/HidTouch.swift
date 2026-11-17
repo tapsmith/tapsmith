@@ -15,8 +15,9 @@ enum HidTouch {
     /// and a double tap held 10 ms lost a press in every attempt on CI. The
     /// press and the lift are still two messages, so a scroll event between
     /// them is rarer, not impossible. So a one-frame tap, and each tap of a
-    /// double tap, is pressed and lifted back to back. A control's
-    /// frame-spanning hold is kept, because the control needs it.
+    /// double tap, is pressed and lifted back to back. A longer hold (a
+    /// control's, or an unknown target's) is kept, because the control needs
+    /// it.
     static func hold(forTapHold tapHold: TimeInterval) -> TimeInterval {
         tapHold <= TapTiming.oneFrameHold ? 0 : tapHold
     }

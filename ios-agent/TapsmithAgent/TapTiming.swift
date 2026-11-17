@@ -3,7 +3,7 @@ import XCTest
 /// How long the agent's taps hold their touch. Pure, so the rule is
 /// host-testable; `EventSynthesizer.tap(at:hold:)` takes the hold it picks.
 ///
-/// Two holds, chosen by what the touch lands on:
+/// Three holds, chosen by what the touch lands on:
 ///
 /// - **Within one display frame (10 ms)**, the default. React Native gives a
 ///   touch to the scroll view around it when a scroll event arrives while the
@@ -12,29 +12,41 @@ import XCTest
 ///   the tap reports success and nothing happens. Beside a self-paging
 ///   carousel, 20 ms holds lost 11 of 80 taps and 10 ms holds none
 ///   (Speedrun's agent: 100 ms lost 3 in 40, 20 ms 1 in 30, 10 ms none in 576).
-/// - **Across a frame (20 ms)** for UIKit controls that read a touch on a
-///   display frame: a UISwitch never toggles from a 12 ms touch and always
-///   does from 17 ms. So switches, toggles, checkboxes, every element type not
-///   known to be safe at one frame (sliders, steppers, segmented controls,
-///   pickers…), anything inside such a control (a segment, a stepper's
-///   increment button) or inside an alert or action sheet, and a touch whose
-///   target is unknown (a tap at a coordinate) are held 20 ms.
+/// - **Well across a frame (50 ms)** for UIKit controls that read a touch on
+///   a display frame: a UISwitch never toggles from a touch the app receives
+///   as 12 ms long and always does from 17 ms. The app can receive a touch
+///   shorter than it was pressed: a simulator tap reaches it as it happens,
+///   and the first touch after a launch is handed over late (iOS 27.2 loads
+///   its touch timing profile then), so a 20 ms press arrived as 12–16 ms and
+///   a SwiftUI Toggle missed it 6 times in 8 on iOS 27.2 and twice in 10 on
+///   iOS 26.5; 50 ms missed none (PILOT-1220). So switches, toggles,
+///   checkboxes, every element type not known to be safe at one frame
+///   (sliders, steppers, segmented controls, pickers…), anything inside such a
+///   control (a segment, a stepper's increment button) and anything inside an
+///   alert or action sheet are held 50 ms.
+/// - **Across a frame (20 ms)** for a touch whose target is unknown (a tap at
+///   a coordinate): it could be a switch, or a React Native button beside a
+///   carousel, where every extra millisecond held risks the cancel above.
 enum TapTiming {
     /// A touch on anything not listed below: lifted inside one 60 Hz frame,
     /// so no scroll event can arrive between its start and its end.
     static let oneFrameHold: TimeInterval = 0.010
 
-    /// A touch on a control that needs it to span a display frame, or on an
-    /// unknown target.
+    /// A touch on an unknown target: spans one display frame.
     static let frameSpanningHold: TimeInterval = 0.020
 
-    /// The shortest hold a UISwitch reliably toggles from: one 60 Hz frame.
+    /// A touch on a control that needs it to span a display frame: the
+    /// minimum below, plus about two frames for the touch to reach the app late.
+    static let controlHold: TimeInterval = 0.050
+
+    /// The shortest touch, as the app receives it, a UISwitch reliably
+    /// toggles from: one 60 Hz frame.
     static let minimumControlHold: TimeInterval = 0.017
 
     /// Element types a one-frame touch is known to work on (React Native's
     /// touchables are buttons or plain views; UIKit buttons, cells, links and
     /// text inputs act on the touch's end). Anything else gets
-    /// `frameSpanningHold`.
+    /// `controlHold`.
     static let oneFrameTypes: Set<XCUIElement.ElementType> = [
         .application, .window, .other, .group,
         .button, .staticText, .image, .icon, .link, .cell,
@@ -61,9 +73,10 @@ enum TapTiming {
         for elementType: XCUIElement.ElementType?,
         within ancestors: [XCUIElement.ElementType] = []
     ) -> TimeInterval {
-        guard let elementType, oneFrameTypes.contains(elementType),
+        guard let elementType else { return frameSpanningHold }
+        guard oneFrameTypes.contains(elementType),
               !ancestors.contains(where: frameReadingContainers.contains)
-        else { return frameSpanningHold }
+        else { return controlHold }
         return oneFrameHold
     }
 }
