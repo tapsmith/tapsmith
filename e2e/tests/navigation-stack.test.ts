@@ -52,6 +52,15 @@ describe("Navigation stack: a control that every screen has", () => {
     await expect(stackScreen.level).toHaveText("Level 1")
   })
 
+  test("pressKey('BACK') twice with no wait pops two screens", async ({ device, stackScreen }) => {
+    await stackScreen.push.tap()
+    await stackScreen.push.tap()
+    await expect(stackScreen.level).toHaveText("Level 3")
+    await device.pressKey("BACK")
+    await device.pressKey("BACK")
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
   test("pushes and pops can follow each other with no wait", async ({ stackScreen }) => {
     await stackScreen.push.tap()
     await stackScreen.push.tap()

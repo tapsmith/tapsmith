@@ -61,4 +61,27 @@ describe("Native: the BACK key", () => {
     await expect(dialogs.sheetContent).toBeVisible()
     await expect(dialogs.sheetDone).toBeVisible()
   })
+
+  test("refuses under an alert and leaves the screen where it is", async ({ device, dialogs }) => {
+    await openScreen(device, "dialogs")
+    await dialogs.showAlert.tap()
+    await expect(dialogs.alert).toBeVisible()
+    // A native alert hides the screen behind it from the tree, back button
+    // and all (iOS 26.5 and 27.2). An alert whose app stays in the tree (React
+    // Native's) refuses as "covered by alert" instead (BackButtonTests).
+    const error = await device.pressKey("BACK").catch((err: unknown) => err)
+    expect(String(error)).toContain("No back button found")
+    await expect(dialogs.alert).toBeVisible()
+    await dialogs.alertCancel.tap()
+    await expect(dialogs.showAlert).toBeVisible()
+  })
+
+  test("a push tapped just before BACK is popped", async ({ device, home, toggles }) => {
+    await openScreen(device, "")
+    await expect(home.title).toBeVisible()
+    await home.row("Toggles").tap()
+    await device.pressKey("BACK")
+    await expect(home.title).toBeVisible()
+    await expect(toggles.darkMode).toBeHidden()
+  })
 })
