@@ -1509,6 +1509,7 @@ describe('the device tools the server advertises', () => {
         'tapsmith_list_tests',
         'tapsmith_press_key',
         'tapsmith_read_trace',
+        'tapsmith_run_code',
         'tapsmith_run_tests',
         'tapsmith_screenshot',
         'tapsmith_session_info',
@@ -1525,7 +1526,7 @@ describe('the device tools the server advertises', () => {
       for (const name of [
         'tapsmith_snapshot', 'tapsmith_screenshot', 'tapsmith_test_locator',
         'tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key',
-        'tapsmith_launch_app', 'tapsmith_list_devices', 'tapsmith_watch',
+        'tapsmith_launch_app', 'tapsmith_list_devices', 'tapsmith_watch', 'tapsmith_run_code',
       ]) {
         expect(byName.has(name), `${name} is not registered`).toBe(true);
         expect(byName.get(name)!.description, `${name} has no description`).toBeTruthy();
@@ -1534,7 +1535,7 @@ describe('the device tools the server advertises', () => {
       // Every device tool takes the same two optional targeting arguments, and
       // neither is ever required — a single-device session must not have to
       // name one.
-      for (const name of ['tapsmith_snapshot', 'tapsmith_tap', 'tapsmith_launch_app']) {
+      for (const name of ['tapsmith_snapshot', 'tapsmith_tap', 'tapsmith_launch_app', 'tapsmith_run_code']) {
         const schema = byName.get(name)!.inputSchema as {
           properties: Record<string, unknown>
           required?: string[]

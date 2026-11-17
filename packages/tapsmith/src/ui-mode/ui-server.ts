@@ -830,7 +830,7 @@ export async function startUIServer(
   let lastRunProject: string | undefined;
   /** Coalesced mirror-gesture bursts per worker for the activity feed. */
   const mirrorBursts = new Map<number, { id: string; counts: Map<string, number>; startedAt: number; last: number }>();
-  const MUTATING_MCP_TOOLS = new Set(['tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key', 'tapsmith_launch_app']);
+  const MUTATING_MCP_TOOLS = new Set(['tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key', 'tapsmith_launch_app', 'tapsmith_run_code']);
   /** Mirror interactions within this window hold background preparation. */
   const READINESS_INTERACTION_HOLD_WINDOW_MS = 3_000;
   /** Workers whose Node process should be recycled before the next run (source changed). */

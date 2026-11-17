@@ -195,8 +195,8 @@ interface ElementHandleOptions {
    */
   platform?: Platform;
   /**
-   * @internal — Called by tap(), type() and clearAndType() with the element
-   * their auto-wait resolved, after strict mode and before the action is
+   * @internal — Called by each action on one element (tap(), type(),
+   * longPress(), dragTo()'s source, …) with the element its auto-wait resolved, after strict mode and before the action is
    * dispatched: the pre-action screen. Called again, with `again` true, with
    * each element a retry resolves before it dispatches (a not-hittable
    * refusal, a stale id), so the caller knows which element was finally
@@ -1527,8 +1527,8 @@ export class ElementHandle {
   }
 
   /**
-   * @internal — This handle, calling `hook` with the element tap(), type() or
-   * clearAndType() resolved, before the action is dispatched (see
+   * @internal — This handle, calling `hook` with the element an action on it
+   * resolved, before the action is dispatched (see
    * `ElementHandleOptions.onResolved`). Survives a per-call `timeout`.
    */
   _onResolved(hook: (element: ElementInfo, again: boolean) => Promise<void>): ElementHandle {
@@ -3004,6 +3004,7 @@ export class ElementHandle {
     const durationMs = options?.duration;
     const { target, remainingMs } = await this._tracedResolve('longPress', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('longPress');
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     const budget = actionBudget(remainingMs);
@@ -3075,6 +3076,7 @@ export class ElementHandle {
     if (call !== this) return call.clear();
     const { target, remainingMs } = await this._tracedResolve('clear', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     const budget = actionBudget(remainingMs);
@@ -3100,6 +3102,7 @@ export class ElementHandle {
     if (call !== this) return call.scroll(direction, { distance: options?.distance });
     const { target, remainingMs } = await this._tracedResolve('scroll', 'scroll', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     return this._tracedAction('scroll', 'scroll',
@@ -3124,6 +3127,7 @@ export class ElementHandle {
     if (call !== this) return call.doubleTap({ intervalMs: options?.intervalMs });
     const { target, remainingMs } = await this._tracedResolve('doubleTap', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('doubleTap');
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     // 0 on the wire = "use agent default (100ms)". User-supplied values
@@ -3163,6 +3167,7 @@ export class ElementHandle {
       // is (see _strictResolve), so a late find still gets a usable wait and drag.
       const left = () => Math.min(this._timeoutMs, Math.max(deadline - Date.now(), MIN_ACTION_BUDGET_MS));
       const source = await this._strictResolve();
+      if (source.element) await this._options.onResolved?.(source.element, false);
       const dest = shareBudget ? target._withTimeout(left()) : target;
       const targetRes = await dest._strictResolve();
       return {
@@ -3218,6 +3223,7 @@ export class ElementHandle {
       });
       // The timeout-0 path skips the wait and returns no element; resolve here.
       const el = element ?? await this._resolveOne();
+      await this._options.onResolved?.(el, false);
       return { target: await this._actionTarget(el), remainingMs, alreadySet: el.checked === checked };
     });
 
@@ -3352,6 +3358,7 @@ export class ElementHandle {
     if (call !== this) return call.selectOption(option);
     const { target, remainingMs } = await this._tracedResolve('selectOption', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     return this._tracedAction('selectOption', 'other',
@@ -3423,6 +3430,7 @@ export class ElementHandle {
     if (call !== this) return call.pinchIn({ scale: options?.scale });
     const { target, remainingMs } = await this._tracedResolve('pinchIn', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     return this._tracedAction('pinchIn', 'other',
@@ -3452,6 +3460,7 @@ export class ElementHandle {
     if (call !== this) return call.pinchOut({ scale: options?.scale });
     const { target, remainingMs } = await this._tracedResolve('pinchOut', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     return this._tracedAction('pinchOut', 'other',
@@ -3472,6 +3481,7 @@ export class ElementHandle {
     if (call !== this) return call.focus();
     const { target, remainingMs } = await this._tracedResolve('focus', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     const budget = actionBudget(remainingMs);
@@ -3493,6 +3503,7 @@ export class ElementHandle {
     if (call !== this) return call.blur();
     const { target, remainingMs } = await this._tracedResolve('blur', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     return this._tracedAction('blur', 'other',
