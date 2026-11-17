@@ -377,17 +377,28 @@ function capturesBeforeItWaits(action) {
 }
 
 /**
- * The screen a hierarchy dump records: its first element's box, when that is
- * the whole screen (it starts at the origin). iOS dumps start with the
- * application element; an Android dump's first node is its window's root,
- * which for a dialog sits inside the screen and says nothing about its shape.
+ * The screen a hierarchy dump records. iOS: the application element's box.
+ * Android: the largest box at the origin, when it covers at least half the
+ * screenshot (`pixels`, the same unit as Android bounds). A dump lists every
+ * window's root, often SystemUI's status bar first (a short wide box at the
+ * origin), and UiAutomator clips boxes to the display, so the largest one is
+ * the app's window across the screen — unless the app's only window is a
+ * dialog inside it, and then the status bar is all there is at the origin.
+ * Null when nothing says.
  */
-function dumpScreen(xml) {
-  const m = /bounds="\[(-?[\d.]+),(-?[\d.]+)\]\[(-?[\d.]+),(-?[\d.]+)\]"/.exec(xml)
-  if (!m) return null
-  const [left, top, right, bottom] = m.slice(1).map(Number)
-  if (left !== 0 || top !== 0 || right <= 0 || bottom <= 0) return null
-  return { width: right, height: bottom }
+function dumpScreen(xml, pixels) {
+  const box = (m) => {
+    const [left, top, right, bottom] = m.slice(1).map(Number)
+    return left === 0 && top === 0 && right > 0 && bottom > 0 ? { width: right, height: bottom } : null
+  }
+  const app = /<XCUIElementTypeApplication\b[^>]*?\bbounds="\[(-?[\d.]+),(-?[\d.]+)\]\[(-?[\d.]+),(-?[\d.]+)\]"/.exec(xml)
+  if (app) return box(app)
+  let largest = null
+  for (const m of xml.matchAll(/\bbounds="\[(-?[\d.]+),(-?[\d.]+)\]\[(-?[\d.]+),(-?[\d.]+)\]"/g)) {
+    const b = box(m)
+    if (b && (!largest || b.width * b.height > largest.width * largest.height)) largest = b
+  }
+  return largest && largest.width * largest.height * 2 >= pixels.width * pixels.height ? largest : null
 }
 
 const shape = (size) => (size.width > size.height ? "landscape" : "portrait")
@@ -402,14 +413,21 @@ const shape = (size) => (size.width > size.height ? "landscape" : "portrait")
  */
 function checkTurns(archive, r, expectLandscape) {
   const members = Object.keys(archive.files).filter((f) => f.startsWith("screenshots/")).sort()
+  // The capture right after a turn may straddle it: Android's setOrientation
+  // returns before the display turns, and its screenshot and dump are
+  // separate reads. Those are not judged.
+  const turning = new Set(
+    archive.steps.filter((s) => s.action === "setOrientation").map((s) => screenshotMember(s.actionIndex + 1)),
+  )
   let judged = 0
   let landscape = 0
   for (const member of members) {
+    if (turning.has(member)) continue
     const size = pngSize(archive.files[member])
     const dumpMember = member.replace(/^screenshots\//, "hierarchy/").replace(/\.png$/, ".xml")
     const dump = archive.files[dumpMember]
     if (!size || !dump || size.width === size.height) continue
-    const screen = dumpScreen(new TextDecoder().decode(dump))
+    const screen = dumpScreen(new TextDecoder().decode(dump), size)
     if (!screen || screen.width === screen.height) continue
     judged++
     const agrees = r.check(

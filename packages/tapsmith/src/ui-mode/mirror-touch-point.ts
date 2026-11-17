@@ -4,8 +4,9 @@
  * Mirror frames are upright, as the screen shows them, so a point on one is
  * a point in the app's interface. iOS coordinate touches (tapXY, touchDown,
  * …) take points in the device's native portrait space instead, so on a
- * turned iOS device the point is turned back with the frame's `turn`, the
- * same mapping the agent's `HidTouch.nativePoint` uses for test taps
+ * turned iOS device the point is turned back with the frame's `turn`: the
+ * inverse of the agent's upright redraw (`UprightScreenshot`), and for the
+ * landscape turns the mapping `HidTouch.nativePoint` uses for test taps
  * (PILOT-1235). Android touches take screen points, and its frames carry no
  * turn.
  */

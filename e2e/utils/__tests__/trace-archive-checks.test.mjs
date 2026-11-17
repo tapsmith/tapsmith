@@ -563,6 +563,50 @@ test("does not judge a dump whose first box is not the whole screen", () => {
   )
 })
 
+test("reads an Android screen from its largest window, not the status bar listed first", () => {
+  // Real Android dumps often list SystemUI's status bar window first: a short
+  // wide box at the origin that says nothing about the screen's shape.
+  const androidDump = (width, height) => encode(
+    `<hierarchy rotation="0">` +
+      `<node package="com.android.systemui" bounds="[0,0][${width},63]"/>` +
+      `<node package="dev.tapsmith.testapp" text="Fetch User" bounds="[0,0][${width},${height}]"/>` +
+      `</hierarchy>`,
+  )
+  assert.deepEqual(
+    failuresFor((p) => { p.hierarchies["hierarchy/action-002-before.xml"] = androidDump(1080, 2400) }),
+    [],
+  )
+  // …and still catches a sideways frame beside such a dump.
+  assertFails((p) => {
+    p.hierarchies["hierarchy/action-002-before.xml"] = androidDump(2400, 1080)
+  }, /action-002-before\.png is 1080x2400 \(portrait\), but its hierarchy dump records a 2400x1080 \(landscape\) screen/)
+})
+
+test("does not judge an Android dump whose only box at the origin is the status bar", () => {
+  // The app's only window is a dialog inside the screen.
+  assert.deepEqual(
+    failuresFor((p) => {
+      p.hierarchies["hierarchy/action-002-before.xml"] = encode(
+        `<hierarchy rotation="0"><node package="com.android.systemui" bounds="[0,0][1080,63]"/>` +
+          `<node text="Fetch User" bounds="[60,900][1020,1300]"/></hierarchy>`,
+      )
+    }),
+    [],
+  )
+})
+
+test("does not judge the capture taken while the device turns", () => {
+  // Android's setOrientation returns before the display turns, and a step's
+  // screenshot and dump are separate reads: the next capture may straddle it.
+  assert.deepEqual(
+    failuresFor((p) => {
+      p.events[0] = { ...p.events[0], action: "setOrientation", category: "device" }
+      p.hierarchies["hierarchy/action-001-before.xml"] = iosHierarchy(874, 402, "API Calls", "Fetch User")
+    }),
+    [],
+  )
+})
+
 function landscapeFailures(mutate = () => {}) {
   const zipPath = buildArchive(mutate)
   try {
