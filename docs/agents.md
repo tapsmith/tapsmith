@@ -112,7 +112,7 @@ The `AGENTS.md` section `tapsmith init` writes tells your agent the same, and
 `init` lists the plugin install for each coding agent it finds in the project.
 
 Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
-`tapsmith_test_locator`, `tapsmith_run_tests`, `tapsmith_read_trace`,
+`tapsmith_test_locator`, `tapsmith_run_code` (try assertions and other test statements on the device), `tapsmith_run_tests`, `tapsmith_read_trace`,
 `tapsmith_screenshot`. [The locator loop](#the-locator-loop) says how they fit together. The full API reference is exposed as the MCP resource
 `tapsmith://api-reference`.
 

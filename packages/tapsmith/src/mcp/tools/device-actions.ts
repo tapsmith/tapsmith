@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceClientFor, deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
+import { forgetToolDevice } from '../events.js';
 import { canonicalLocatorSource, isLocatorError, type EvaluatedLocator } from '../locator-eval.js';
 import { MCP_ACTION_RUN_TIMEOUT_MS, MCP_ACTION_TIMEOUT_MS, sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
 import type { ElementHandle } from '../../element-handle.js';
@@ -22,9 +23,20 @@ export function actionResult(success: boolean, errorMessage?: string) {
   return { content: [{ type: 'text' as const, text: 'OK' }] };
 }
 
-/** The tool result for an SDK action that threw: its message, as a test would see it. */
-function thrownResult(err: unknown) {
-  return actionResult(false, err instanceof Error ? err.message : String(err));
+/**
+ * What an SDK action on `locator` that threw says to the agent: its message,
+ * as a test would see it, pointing a miss at the tools that inspect the screen.
+ */
+export function actionErrorText(err: unknown, locator: string): string {
+  const message = err instanceof Error ? err.message : String(err);
+  // An agent that missed its target should look at the screen, as before
+  // (not one whose WebView or agent connection timed out). A native miss
+  // ends with the pointer at UI mode's picker, which is for a human: the
+  // agent gets its own tools instead, with the locator to check (PILOT-849).
+  if (message.includes(LOCATOR_PICKER_HINT)) return message.replace(LOCATOR_PICKER_HINT, mcpLocatorHint(locator));
+  return /not found|did not reach state|in WebView \(\d+ms\)/i.test(message)
+    ? `${message} Use tapsmith_snapshot or tapsmith_test_locator to inspect the current screen.`
+    : message;
 }
 
 /** What an action tool's locator miss tells the agent to do next (PILOT-849). */
@@ -45,7 +57,7 @@ const TEST_LINE_HINT = 'Answers with the test line that repeats the action, its 
   + 'the element acted on, on the screen before the action: write that line into the test as you go.';
 
 /** What a `webview.` line needs declared before it in the test. */
-const WEBVIEW_LINE_NOTE = '(Declare `const webview = await device.webview();` before this line in the test.)';
+export const WEBVIEW_LINE_NOTE = '(Declare `const webview = await device.webview();` before this line in the test.)';
 
 /**
  * Build a tool's locator string with the SDK's own builder (PILOT-848) on the
@@ -64,8 +76,10 @@ async function actOn(
   const sdkDevice = await sdkDeviceFor(client, device);
   let check: (() => LineCheck) | undefined;
   let kind = 'native' as EvaluatedLocator['kind'];
+  let reached = false;
   try {
     await withEvaluatedLocator(sdkDevice, client, locator, async (evaluated) => {
+      reached = true;
       kind = evaluated.kind;
       // The line spells the locator as a test with the `device` fixture does
       // (`page.`, `this.device.` and a bare getter all read as `device.`).
@@ -80,18 +94,11 @@ async function actOn(
       return action.act({ kind: 'native', handle: checking.handle });
     });
   } catch (err) {
+    // Refused before the action began (a locator the builder rejects): the
+    // device was not touched.
+    if (!reached) forgetToolDevice();
     if (isLocatorError(err)) return { content: [{ type: 'text' as const, text: err.message }], isError: true };
-    const message = err instanceof Error ? err.message : String(err);
-    // An agent that missed its target should look at the screen, as before
-    // (not one whose WebView or agent connection timed out). A native miss
-    // ends with the pointer at UI mode's picker, which is for a human: the
-    // agent gets its own tools instead, with the locator to check (PILOT-849).
-    if (message.includes(LOCATOR_PICKER_HINT)) {
-      return actionResult(false, message.replace(LOCATOR_PICKER_HINT, mcpLocatorHint(locator)));
-    }
-    return /not found|did not reach state|in WebView \(\d+ms\)/i.test(message)
-      ? actionResult(false, `${message} Use tapsmith_snapshot or tapsmith_test_locator to inspect the current screen.`)
-      : thrownResult(err);
+    return actionResult(false, actionErrorText(err, locator));
   }
   const lineCheck = check?.() ?? { status: 'unverified' as const, reason: 'the locator was not resolved' };
   const described = describeLine(lineCheck, (checked) => action.line(checked, kind));
@@ -105,13 +112,13 @@ async function actOn(
  * second) gets as long as a test would give it, or the `timeout` when that is
  * longer. A tap is quick once its target is there, and keeps 5 s.
  */
-async function acting(handle: ElementHandle, timeout: number | undefined): Promise<ElementHandle> {
+export async function acting(handle: ElementHandle, timeout: number | undefined): Promise<ElementHandle> {
   await handle.waitFor({ state: 'attached', timeout });
   return handle._withTimeout(Math.max(MCP_ACTION_RUN_TIMEOUT_MS, timeout ?? 0));
 }
 
 /** Longest `timeout` an action tool takes: well inside an MCP client's own tool-call limit. */
-const MAX_TOOL_TIMEOUT_MS = 120_000;
+export const MAX_TOOL_TIMEOUT_MS = 120_000;
 
 /** The `timeout` argument tapsmith_tap and tapsmith_type share (PILOT-840). */
 const timeoutArg = z.number().min(1).max(MAX_TOOL_TIMEOUT_MS).optional().describe(

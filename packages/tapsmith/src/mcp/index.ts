@@ -9,6 +9,7 @@ import { registerScreenshotTool } from './tools/screenshot.js';
 import { registerTestLocatorTool } from './tools/test-locator.js';
 import { registerDeviceActionTools } from './tools/device-actions.js';
 import { registerAppControlTools } from './tools/app-control.js';
+import { registerRunCodeTool } from './tools/run-code.js';
 import { registerListDevicesTool } from './tools/list-devices.js';
 import { registerRunTestsTool } from './tools/run-tests.js';
 import { registerReadTraceTool } from './tools/read-trace.js';
@@ -102,6 +103,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
   registerTestLocatorTool(server, dispatcher);
   registerDeviceActionTools(server, dispatcher);
   registerAppControlTools(server, dispatcher);
+  registerRunCodeTool(server, dispatcher);
   registerListDevicesTool(server, dispatcher);
   registerRunTestsTool(server, dispatcher);
   registerReadTraceTool(server);
@@ -205,7 +207,7 @@ async function callToolWithEvents(
   });
 
   // The device the tool resolves, for UI mode's invalidation (PILOT-1195).
-  const target: { device?: string } = {};
+  const target: { tool: string; device?: string } = { tool: toolName };
   try {
     const result = await runWithToolDevice(target, callback) as CallToolResult;
     const elapsed = Date.now() - start;

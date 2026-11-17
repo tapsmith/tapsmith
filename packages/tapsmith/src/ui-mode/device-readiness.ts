@@ -373,6 +373,49 @@ export function mcpToolWorkers(
   return hit.length > 0 ? hit.map((w) => w.id) : undefined;
 }
 
+/** MCP tools that act on a device (a preparation must not reset it under them). */
+export const MUTATING_MCP_TOOLS: ReadonlySet<string> = new Set([
+  'tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key', 'tapsmith_launch_app', 'tapsmith_run_code',
+]);
+
+/**
+ * Mutating MCP calls in flight. While any is, no background preparation
+ * starts (the readiness env's `recentlyInteracted`): a reset in the middle of
+ * a call would leave its later steps (tapsmith_run_code runs several
+ * statements) acting on a different app state than its earlier ones. A
+ * preparation already running when a call starts is not cut short (that
+ * would leave the app half reset); the call waits for it once it knows its
+ * device ({@link McpCallsInFlight.preparingFor}).
+ */
+export class McpCallsInFlight {
+  private readonly ids = new Set<string>();
+
+  /** Records a call; true when the tool is a mutating one. */
+  start(id: string, tool: string): boolean {
+    if (!MUTATING_MCP_TOOLS.has(tool)) return false;
+    this.ids.add(id);
+    return true;
+  }
+
+  end(id: string): void {
+    this.ids.delete(id);
+  }
+
+  get active(): boolean {
+    return this.ids.size > 0;
+  }
+
+  /**
+   * Of the workers now preparing, the ones a call that resolved `device`
+   * must wait for: the worker holding that device, or every one when no
+   * worker is known to hold it.
+   */
+  static preparingFor(device: string, workers: McpTargetWorker[], preparing: number[]): number[] {
+    const targets = mcpToolWorkers(device, undefined, workers);
+    return preparing.filter((id) => !targets || targets.includes(id));
+  }
+}
+
 // ─── Wire representation ───
 
 /** What the client sees; a flattened, JSON-friendly view of the state. */

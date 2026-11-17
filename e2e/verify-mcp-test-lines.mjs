@@ -14,6 +14,12 @@
  *   3. The lines go, as they are, into a generated spec, which `tapsmith test`
  *      runs on the same device. It must pass, and end on the same screen.
  *
+ * One step of the walk is a `tapsmith_run_code` block (PILOT-1240): it types
+ * the email and asserts on the form, and both statements' lines are replayed.
+ * Once signed in, two more blocks check how run_code fails: an assertion that
+ * does not hold answers with the error a test gets, and a block stops at its
+ * failing statement and says which did not run.
+ *
  * The checks on each result live in `utils/mcp-test-lines-checks.mjs` and are
  * unit-tested.
  *
@@ -31,7 +37,7 @@ import {
   splitJsonRpcLines,
   waitForChildExit,
 } from "./utils/mcp-first-snapshot-checks.mjs"
-import { replaySpec, testLineOf } from "./utils/mcp-test-lines-checks.mjs"
+import { replaySpec, runCodeResultOf, testLineOf } from "./utils/mcp-test-lines-checks.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLI = path.join(HERE, "node_modules", "tapsmith", "dist", "cli.js")
@@ -45,11 +51,40 @@ const SIGNED_IN = "Login successful!"
 /** How long the final snapshot may wait for the sign-in navigation to land. */
 const SETTLE_TIMEOUT_MS = 15_000
 
+const SIGNED_IN_ASSERTION = `await expect(device.getByText(${JSON.stringify(SIGNED_IN)}, { exact: true })).toBeVisible();`
+
+/**
+ * run_code blocks that must fail, once signed in: an assertion that does not
+ * hold, and a block whose second statement fails, so its third must not run.
+ */
+const FAILING_BLOCKS = [
+  {
+    code: `await expect(device.getByText(${JSON.stringify(SIGNED_IN)}, { exact: true })).toBeHidden({ timeout: 1000 });`,
+    passed: 0,
+    error: /^Expected element .* to be hidden, but it was visible/,
+    notRun: null,
+  },
+  {
+    code: [SIGNED_IN_ASSERTION, 'await device.getByText("No such element anywhere").tap({ timeout: 1000 });', 'await device.swipe("up");'].join("\n"),
+    passed: 1,
+    error: /No such element anywhere/,
+    notRun: "statement 3 (line 3).",
+  },
+]
+
 /** The walk: what an agent would send, step by step. */
 const WALK = [
   { name: "tapsmith_launch_app", args: { package: PACKAGE, clear_data: true } },
   { name: "tapsmith_tap", args: { locator: 'device.getByText("Login Form", { exact: true })' } },
-  { name: "tapsmith_type", args: { locator: 'device.getByRole("textfield", { name: "Email" })', text: "test@example.com" } },
+  {
+    name: "tapsmith_run_code",
+    args: {
+      code: [
+        'await device.getByRole("textfield", { name: "Email" }).type("test@example.com");',
+        'await expect(device.getByRole("heading", { name: "Sign In" })).toBeVisible();',
+      ].join("\n"),
+    },
+  },
   { name: "tapsmith_tap", args: { locator: 'device.getByRole("textfield").nth(1)' } },
   { name: "tapsmith_type", args: { locator: 'device.getByRole("textfield", { name: "Password" })', text: "password123", clear: true } },
   { name: "tapsmith_tap", args: { locator: 'device.getByRole("button", { name: "Sign in" })' } },
@@ -133,7 +168,7 @@ async function mcpSession(config, calls) {
       HANDSHAKE_TIMEOUT_MS,
     )
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
-    for (const { name, args, until } of calls) {
+    for (const { name, args, until, expectError } of calls) {
       const started = Date.now()
       let response = await request("tools/call", { name, arguments: args }, CALL_TIMEOUT_MS)
       // A read the walk expects to change (the screen after a navigating tap):
@@ -146,7 +181,7 @@ async function mcpSession(config, calls) {
       log(`  ${name} ${JSON.stringify(args)} (${((Date.now() - started) / 1000).toFixed(1)}s)`)
       for (const line of resultText(response).split("\n").slice(0, 4)) log(`    | ${line}`)
       results.push({ name, response })
-      if (response.error || response.result?.isError) break
+      if (response.error || (response.result?.isError && !expectError)) break
     }
   } catch (err) {
     error = err
@@ -173,7 +208,7 @@ function replay(baseConfig, device, lines) {
   fs.mkdirSync(GENERATED_DIR, { recursive: true })
   fs.writeFileSync(
     path.join(GENERATED_DIR, "walk.mcp-lines.ts"),
-    replaySpec(lines, `await expect(device.getByText(${JSON.stringify(SIGNED_IN)}, { exact: true })).toBeVisible();`),
+    replaySpec(lines, SIGNED_IN_ASSERTION),
   )
   // The base config's device, app and agent; one project, this spec only.
   const config = path.join(HERE, "tapsmith.config.mcp-lines.generated.mjs")
@@ -209,13 +244,28 @@ async function main() {
   const failures = []
 
   log("walking the login flow through the MCP server")
-  const calls = [...WALK, { name: "tapsmith_snapshot", args: {}, until: (text) => text.includes(SIGNED_IN) }].map((c) => ({ ...c, args: { ...c.args, device: opts.device } }))
+  const calls = [
+    ...WALK,
+    { name: "tapsmith_snapshot", args: {}, until: (text) => text.includes(SIGNED_IN) },
+    ...FAILING_BLOCKS.map(({ code }) => ({ name: "tapsmith_run_code", args: { code }, expectError: true })),
+  ].map((c) => ({ ...c, args: { ...c.args, device: opts.device } }))
   const session = await mcpSession(opts.config, calls)
   if (session.error) failures.push(`the MCP session broke: ${session.error.message}`)
   for (const line of session.nonJson) failures.push(`the MCP server wrote non-JSON-RPC output to stdout: ${line.slice(0, 200)}`)
 
   const lines = []
   WALK.forEach((step, i) => {
+    if (step.name === "tapsmith_run_code") {
+      const got = runCodeResultOf(session.results[i]?.response)
+      if ("problem" in got) failures.push(`step ${i + 1} (${step.name}): ${got.problem}`)
+      else if (got.failed || got.isError) failures.push(`step ${i + 1} (${step.name}): statement ${got.failed?.index} failed: ${got.failed?.message}`)
+      // Every statement of the block, one per line, must have answered: a
+      // partial answer would let the replay pass without the missing ones.
+      else if (got.total !== step.args.code.split("\n").length || got.lines.length !== got.total || got.notRun) {
+        failures.push(`step ${i + 1} (${step.name}): ${got.lines.length} of ${got.total} statement(s) answered with a test line (block has ${step.args.code.split("\n").length}); not run: ${got.notRun ?? "none"}`)
+      } else lines.push(...got.lines)
+      return
+    }
     const got = testLineOf(session.results[i]?.response)
     if ("problem" in got) failures.push(`step ${i + 1} (${step.name}): ${got.problem}`)
     else lines.push(got.line)
@@ -229,6 +279,17 @@ async function main() {
   if (snapshot && !resultText(snapshot).includes(SIGNED_IN)) {
     failures.push(`the walk did not end signed in; the screen was:\n${resultText(snapshot).slice(0, 1500)}`)
   }
+
+  FAILING_BLOCKS.forEach((block, i) => {
+    const got = runCodeResultOf(session.results[WALK.length + 1 + i]?.response)
+    const what = `failing run_code block ${i + 1}`
+    if ("problem" in got) return failures.push(`${what}: ${got.problem}`)
+    if (!got.isError) failures.push(`${what}: the result is not an error`)
+    if (got.lines.length !== block.passed) failures.push(`${what}: ${got.lines.length} statement(s) passed, expected ${block.passed}`)
+    if (!got.failed || got.failed.index !== block.passed + 1) failures.push(`${what}: statement ${block.passed + 1} did not fail`)
+    else if (!block.error.test(got.failed.message)) failures.push(`${what}: unexpected error: ${got.failed.message.slice(0, 500)}`)
+    if (got.notRun !== block.notRun) failures.push(`${what}: "Not run" said ${JSON.stringify(got.notRun)}, expected ${JSON.stringify(block.notRun)}`)
+  })
 
   if (failures.length === 0) {
     log("replaying the lines as a test")

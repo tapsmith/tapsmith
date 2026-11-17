@@ -12,7 +12,7 @@ import { Device } from '../device.js';
 import type { Platform } from '../config.js';
 import type { TapsmithGrpcClient } from '../grpc-client.js';
 import type { WebViewHandle } from '../webview-handle.js';
-import { evaluateLocator, type EvaluatedLocator } from './locator-eval.js';
+import { evaluateLocator, type EvaluatedLocator, type LocatorRoots } from './locator-eval.js';
 
 /** How long an MCP action or WebView query waits for its target, as before (resolveActionTarget). */
 export const MCP_ACTION_TIMEOUT_MS = 5_000;
@@ -110,6 +110,25 @@ export function endTestRun(): void {
   activeTestRuns = Math.max(0, activeTestRuns - 1);
 }
 
+/** Whether a test run (marked by `beginTestRun`) is in progress. */
+export function testRunActive(): boolean {
+  return activeTestRuns > 0;
+}
+
+/**
+ * A Device for the same target as `device` whose default timeout is
+ * `timeoutMs`: every locator built on it, and every wait that defaults to the
+ * device timeout, gets that budget. Shares `device`'s WebView connection.
+ */
+export function sdkDeviceWithTimeout(client: TapsmithGrpcClient, device: Device, timeoutMs: number): Device {
+  const simulator = simulators.get(device);
+  const timed = new Device(client, { platform: device.platform, simulator, timeout: timeoutMs });
+  const serial = serials.get(device);
+  if (serial) serials.set(timed, serial);
+  if (simulator) simulators.set(timed, simulator);
+  return timed;
+}
+
 /** The WebView call each (client, key) is waiting on, so calls run one at a time. */
 const webViewLocks = new WeakMap<TapsmithGrpcClient, Map<string, Promise<void>>>();
 
@@ -178,20 +197,42 @@ export async function withEvaluatedLocator<T>(
   client: TapsmithGrpcClient,
   source: string,
   use: (evaluated: EvaluatedLocator) => Promise<T>,
-  options: {
-    /**
-     * A WebView connection the caller already holds to use instead of one
-     * of these tools' own (UI mode's picker connection, which a second one
-     * on the same page would wedge).
-     */
-    webview?: () => Promise<WebViewHandle>
-    /**
-     * Runs before any WebView connection is used or made, and throws to
-     * refuse it (UI mode's live tab: no WebView on screen, so not worth a
-     * connect that can only time out).
-     */
-    beforeConnect?: () => void
-  } = {},
+  options: LocatorRootOptions = {},
+): Promise<T> {
+  return withLocatorRoots(device, client, async (roots) => use(await evaluateLocator(source, roots)), options);
+}
+
+/** Where the roots' WebView comes from: {@link withEvaluatedLocator}. */
+interface LocatorRootOptions {
+  /**
+   * A WebView connection the caller already holds to use instead of one
+   * of these tools' own (UI mode's picker connection, which a second one
+   * on the same page would wedge).
+   */
+  webview?: () => Promise<WebViewHandle>
+  /**
+   * Runs before any WebView connection is used or made, and throws to
+   * refuse it (UI mode's live tab: no WebView on screen, so not worth a
+   * connect that can only time out).
+   */
+  beforeConnect?: () => void
+  /**
+   * How long waits on the page may take (default {@link MCP_ACTION_TIMEOUT_MS}):
+   * a WebView locator built on these roots takes it as its timeout.
+   */
+  timeoutMs?: number
+}
+
+/**
+ * Hand `use` the roots locators are built on for `device`: the device, and
+ * the WebView connection {@link withEvaluatedLocator} describes, made only
+ * when `use` asks for it, and released once `use` ends.
+ */
+export async function withLocatorRoots<T>(
+  device: Device,
+  client: TapsmithGrpcClient,
+  use: (roots: LocatorRoots) => Promise<T>,
+  options: LocatorRootOptions = {},
 ): Promise<T> {
   const refuseConnect = (): void => {
     if (activeTestRuns > 0) {
@@ -202,7 +243,7 @@ export async function withEvaluatedLocator<T>(
   const held = options.webview;
   if (held) {
     // The caller's connection is shared with the page a run drives, too.
-    return use(await evaluateLocator(source, { device, webview: async () => { refuseConnect(); return held(); } }));
+    return use({ device, webview: async () => { refuseConnect(); return held(); } });
   }
   const key = webViewKey(device);
   let used: OpenWebView | undefined;
@@ -246,11 +287,11 @@ export async function withEvaluatedLocator<T>(
     // Reuses the live connection, or connects again if it died.
     const handle = await open.holder._webviewOfApp(packageName);
     // The connect had its own budget; waits on the page get the action one.
-    handle._setTimeoutMs(MCP_ACTION_TIMEOUT_MS);
+    handle._setTimeoutMs(options.timeoutMs ?? MCP_ACTION_TIMEOUT_MS);
     return handle;
   };
   try {
-    return await use(await evaluateLocator(source, { device, webview }));
+    return await use({ device, webview });
   } finally {
     if (used) {
       used.inUse--;

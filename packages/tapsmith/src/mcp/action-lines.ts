@@ -148,3 +148,20 @@ export function webViewLineCheck(locator: string, positional: boolean): LineChec
     }
     : { status: 'verified', locator };
 }
+
+/**
+ * The check for a statement whose element the runtime does not report
+ * (`scrollIntoView()`, `waitFor()`, an assertion): it ran as written, and
+ * resolved as a test resolves it, so the line is the statement itself. A
+ * locator that picks its element by position is flagged, unchecked.
+ */
+export function asWrittenLineCheck(locator: string, positional: boolean): LineCheck {
+  return positional
+    ? {
+      status: 'positional',
+      locator,
+      comment: POSITIONAL_UNCHECKED_COMMENT,
+      detail: '(The line picks its element by position, so it breaks if elements are added or reordered. No locator that matches it alone was looked for: find one with tapsmith_test_locator.)',
+    }
+    : { status: 'verified', locator };
+}

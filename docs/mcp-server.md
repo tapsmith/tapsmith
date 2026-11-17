@@ -321,6 +321,45 @@ Launch an app on the device.
 | `clear_data` | boolean | No | Clear app data before launching (default: false) |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
+#### `tapsmith_run_code`
+
+Run test statements on the device, written as a test body writes them, and see which pass. Use it to try an assertion before you write it into a test, or a step the other action tools do not have (a long press, a double tap, `scrollIntoView`, `dragTo`, a deep link, a coordinate tap): a wrong statement fails in seconds instead of costing a test run.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `code` | string | Yes | One or more statements, one per line or separated by `;` |
+| `timeout` | number | No | How long each statement may wait for its element or assertion, `webview.` ones included, in milliseconds (default 5000, at most 120000). A `{ timeout }` written in a statement wins for that statement. Once its field is there, typing gets up to 30 seconds, as with `tapsmith_type`. |
+| `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
+| `project` | string | No | Project whose device to use, as on the other device tools. |
+
+```
+await device.getByLabel("Full name").type("Grace Hopper");
+await expect(device.getByRole("button", { name: "Save" })).toBeEnabled();
+await device.getByText("Row 40").scrollIntoView();
+```
+
+The statements run in order, on the SDK's own objects, so each behaves as the same line in a test: auto-waiting, strict mode, and the same errors. The first one that fails stops the run, and the result says where it stopped, which statements passed, which failed and why, and which did not run:
+
+```
+Stopped at statement 2 of 3 (line 2): it failed. 1 passed, 1 not run.
+Statement 1 of 3 (line 1): OK
+Test line: await device.getByLabel("Full name").type("Grace Hopper");
+Statement 2 of 3 (line 2) failed: Expected element getByRole("button", { name: "Save" }) to be enabled, but it was not.
+Not run: statement 3 (line 3).
+```
+
+Each passing statement answers with its [test line](#test-lines). An action's locator is checked by the device agent as the action resolves its element, as for `tapsmith_tap`, so a `.first()`/`.nth()` locator is replaced by one that matches the element alone when there is one. An assertion, `scrollIntoView()` and `waitFor()` are written as they ran, and flagged position-dependent when their locator picks its element by position.
+
+**The code is parsed, never run as JavaScript.** Each statement must be one of:
+
+- `await <locator>.<action>(…);`, where the action is `tap`, `doubleTap`, `longPress`, `type`, `clearAndType`, `clear`, `scroll`, `scrollIntoView`, `dragTo`, `setChecked`, `selectOption`, `focus`, `blur`, `pinchIn`, `pinchOut` or `waitFor`, or `click` or `fill` on a `webview.` locator;
+- `await expect(<locator>).<matcher>(…);`, or `.not.<matcher>`, with any locator matcher (`toBeVisible`, `toBeHidden`, `toExist`, `toBeEnabled`, `toBeDisabled`, `toBeChecked`, `toBeEmpty`, `toBeFocused`, `toBeEditable`, `toBeInViewport`, `toHaveText`, `toContainText`, `toHaveCount`, `toHaveAttribute`, `toHaveAccessibleName`, `toHaveAccessibleDescription`, `toHaveRole`, `toHaveValue`; a `webview.` locator takes the WebView matchers);
+- `await device.<method>(…);`, where the method is `openDeepLink`, `tapXY`, `longPressXY`, `dragXY`, `swipe`, `pressKey`, `pressBack`, `pressHome`, `pressRecentApps`, `hideKeyboard`, `inputText`, `setOrientation`, `setColorScheme`, `launchApp`, `terminateApp` (with its package), `bringToForeground`, `sendToBackground`, `wake`, `unlock`, `openNotifications` or `openQuickSettings`.
+
+Locators are written as in the [locator format](#locator-format) (`page.`, `this.device.` and a bare getter work too, and are written `device.` in the lines). Arguments are literals: strings, numbers, booleans, RegExp literals, arrays of them where the method takes one (`toHaveText([…])`), option objects and nested locators (`dragTo(device.getByText("Done"))`). Anything else is refused before any statement runs, with its line and column: a variable or a declaration (`webview.` needs none), an assignment, a function, another identifier, a missing `await`, a query whose value would need a variable (`count()`, `getText()`, `isVisible()`: assert it instead, with `toHaveCount()`, `toHaveText()` or `toBeVisible()`), and a method not listed above.
+
+While a test run is in progress on the session, the tool is refused and nothing runs, because it would act on the device under the run; a run that starts between two statements stops it before the next one.
+
 #### `tapsmith_list_devices`
 
 List all connected mobile devices and emulators across all platforms. Returns serial numbers needed for the `device` parameter on other tools.
@@ -345,6 +384,7 @@ Test line: await device.getByRole("button", { name: "Sign in" }).tap();
 | `tapsmith_swipe` | `await device.swipe("up");` |
 | `tapsmith_press_key` | `await device.pressKey("back");` |
 | `tapsmith_launch_app` | `await device.launchApp("com.example.app");`, with `{ clearData: true }` when `clear_data` was set |
+| `tapsmith_run_code` | each passing statement, as a test writes it ([details](#tapsmith_run_code)) |
 
 **The locator in a tap or type line is checked by the device agent**, with the matching a test resolves locators with, against the screen the action started on. The check is the action's own wait for its element: a locator without a position must match exactly one element there (strict mode), so the line names exactly the element that was tapped or typed into. It is checked before the action runs, so a tap that opens another screen, or removes the element, still answers with a checked line. It costs no extra round trip to the device. The receiver is written `device.` (or `webview.`) whichever spelling the tool was given (`page.`, `this.device.`, a bare `getByText(…)`).
 
@@ -527,7 +567,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 3. **Understand the environment:** call `tapsmith_session_info` to see platform, device, package, and project configuration
 4. **Discover tests:** call `tapsmith_list_tests` to see the full test tree with file paths and test names
 5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested locators, then `tapsmith_test_locator` on each locator you will use, until it counts exactly 1. Only then put it in test code
-6. **Write the test as you walk the flow:** each action tool answers with the [test line](#test-lines) that repeats it; write each line into the test file as you go
+6. **Write the test as you walk the flow:** each action tool answers with the [test line](#test-lines) that repeats it; write each line into the test file as you go. Check each assertion with [`tapsmith_run_code`](#tapsmith_run_code) before writing it
 7. **Run tests:** call `tapsmith_run_tests` with file paths and optional test name / project filters. On failure, the response includes error details, trace steps, and a screenshot
 8. **Review results:** use `tapsmith_list_results` to browse the latest run (pass `details: true` to see trace steps for failures), and `tapsmith_suite_status` to see the whole suite's accumulated status including tests that have not run yet
 9. **Debug failures:** use `tapsmith_read_trace` with the trace file path from the failure report for step-by-step debugging
@@ -539,7 +579,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device, and put a locator in test code only once `tapsmith_test_locator` counts exactly 1
-5. **Write the test as you walk the flow:** write the [test line](#test-lines) each action tool answers with into the test file as you go
+5. **Write the test as you walk the flow:** write the [test line](#test-lines) each action tool answers with into the test file as you go, and check each assertion with [`tapsmith_run_code`](#tapsmith_run_code) before writing it
 6. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
 7. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
 
@@ -549,7 +589,7 @@ A test that fails on a locator can be fixed against the live app: the device sta
 
 1. **Run just that test:** call `tapsmith_run_tests` with its file and `test` set to its name (from `tapsmith_list_tests`), so the run is that one test
 2. **Read the report:** when it fails, the report says `DEVICE HELD` with the screen it is still on and, for a locator that matched nothing, lists the elements there closest to it, with checked locators
-3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen
+3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen. Then run the fixed line itself, or the failed assertion, with [`tapsmith_run_code`](#tapsmith_run_code) on that screen: it fails in seconds with the error the test would get, or passes with the test line to write back
 4. **Change the test and run it again:** the next `tapsmith_run_tests` resets the app as usual, so the test starts from its normal starting point
 
 Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when the device shows it: its screen now matches the one the failure's trace captured at the failed step, the last step whose error is the test's error, leaving out the test's `afterEach` and `afterAll` hooks. When no such step has a captured screen (for example, the test threw the error from its own code), there is nothing to compare, and the report says so. When the two differ, the report says so without claiming why. A step is captured when it starts, so the app may have moved on while the step waited; the test's own `afterEach` or `afterAll` hooks or a fixture's teardown may have moved it after the failure; or another device ran the test. For a locator that matched nothing it still lists the closest elements on the device's screen as it is now, to try once `tapsmith_snapshot` shows the screen the test failed on (`tapsmith_read_trace` shows the failure screen).
