@@ -45,7 +45,16 @@ export interface SuggestionOptions {
    *  large calls; one whose cost grows with every selector (Android below
    *  API 34) in small ones, so a slow chunk loses little. */
   chunkSize?: number
+  /** Wall-clock budget for the whole check (default 20 s); chunks not started by then are skipped. */
+  budgetMs?: number
 }
+
+/**
+ * Selectors per evaluateSelectors call on iOS, where each call costs one
+ * capture however many selectors it carries: a screen is checked in a few
+ * large calls there.
+ */
+export const IOS_CHUNK_SIZE = 500;
 
 /** Demoted priority of a suggestion pinned by position (`.nth()`), as before. */
 const POSITIONAL_PRIORITY = 8;
@@ -185,6 +194,14 @@ function indexOfNode(matches: ElementInfo[], node: HierarchyNode): number {
   return tied ? -1 : best;
 }
 
+/**
+ * Whether `element`, as the agent resolved it, is the dump node `node`: the
+ * same identity rule a suggestion is checked against its node with.
+ */
+export function isNodeElement(element: ElementInfo, node: HierarchyNode): boolean {
+  return indexOfNode([element], node) === 0;
+}
+
 // ─── Decision ───
 
 /**
@@ -297,11 +314,12 @@ async function evaluateInChunks(
   selectorOf: Map<string, Selector>,
   results: Map<string, SelectorEvaluation>,
   deadline: number,
+  budgetMs: number,
   chunkSize: number,
 ): Promise<string | undefined> {
   for (let start = 0; start < codes.length; start += chunkSize) {
     if (Date.now() >= deadline) {
-      return `checking took longer than ${CHECK_BUDGET_MS / 1000} s; ${codes.length - start} candidate(s) were not checked`;
+      return `checking took longer than ${budgetMs / 1000} s; ${codes.length - start} candidate(s) were not checked`;
     }
     const chunk = codes.slice(start, start + chunkSize);
     let response: EvaluateSelectorsResponse;
@@ -341,11 +359,12 @@ export async function agentValidatedSuggestions(
     const result = results.get(code);
     return !result || result.errorMessage ? null : collapseSameTargetDuplicates(result.elements ?? []);
   };
-  const deadline = Date.now() + CHECK_BUDGET_MS;
+  const budgetMs = options.budgetMs ?? CHECK_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
 
   const all = [...ladders.values()].flat();
   const bases = [...new Set([...all].sort((a, b) => a.base.priority - b.base.priority).map((l) => l.base.code))];
-  let errorMessage = await evaluateInChunks(evaluator, bases, selectorOf, results, deadline, chunkSize);
+  let errorMessage = await evaluateInChunks(evaluator, bases, selectorOf, results, deadline, budgetMs, chunkSize);
   let stoppedAt: AgentSuggestions['stoppedAt'] = errorMessage ? 'candidates' : undefined;
 
   if (!errorMessage) {
@@ -357,7 +376,7 @@ export async function agentValidatedSuggestions(
         for (const u of ladder.upgrades) if (!results.has(u.code)) upgrades.add(u.code);
       }
     }
-    errorMessage = await evaluateInChunks(evaluator, [...upgrades], selectorOf, results, deadline, chunkSize);
+    errorMessage = await evaluateInChunks(evaluator, [...upgrades], selectorOf, results, deadline, budgetMs, chunkSize);
     if (errorMessage) stoppedAt = 'variants';
   }
 

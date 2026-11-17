@@ -14,6 +14,7 @@ import { formatToolArgs } from '../ui-mode/components/tool-args.js';
 import { Device } from '../device.js';
 import { _setWebViewIdleCloseMs, beginTestRun, closeMcpWebViews, endTestRun, sdkDeviceFor, WEBVIEW_IDLE_CLOSE_MS, withEvaluatedLocator } from '../mcp/sdk-device.js';
 import type { WebViewHandle } from '../webview-handle.js';
+import { findPositionFreeLocator } from '../mcp/action-lines.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
 // swipe, press_key, launch_app, list_devices, test_locator, watch — had no
@@ -489,7 +490,7 @@ describe('tapsmith_tap', () => {
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBeFalsy();
-    expect(text(res)).toBe('OK');
+    expect(text(res)).toBe('OK\nTest line: await device.getByText("Sign in").tap();');
     expect(daemon.tap).toHaveBeenCalledTimes(1);
     expect(selectorToProto(daemon.findElements.mock.calls[0][0])).toEqual({ textContains: 'Sign in' });
     // On Android the tap goes to the element strict mode just checked, by its id.
@@ -661,7 +662,7 @@ describe('tapsmith_type', () => {
       locator: 'device.getByText("Email")',
       text: 'sam@example.com',
     });
-    expect(text(res)).toBe('OK');
+    expect(text(res)).toBe('OK\nTest line: await device.getByText("Email").type("sam@example.com");');
     expect(daemon.clearText).not.toHaveBeenCalled();
     expect(daemon.typeText.mock.calls[0][1]).toBe('sam@example.com');
   });
@@ -713,7 +714,7 @@ describe('tapsmith_type', () => {
     const daemon = makeDaemon({ find: () => (daemon.calls.some((c) => c.startsWith('clear')) ? [] : [field]) });
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_type', { locator: 'device.getByText("old value")', text: 'new', clear: true });
-    expect(text(res)).toBe('OK');
+    expect(text(res)).toBe('OK\nTest line: await device.getByText("old value").clearAndType("new");');
     expect(daemon.clearAndType).toHaveBeenCalledTimes(1);
   });
 
@@ -845,7 +846,10 @@ describe('webview.* locators in the action tools', () => {
     hoisted.client = daemon.client;
     const { locator, page, webview } = fakePage();
     const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Submit", { exact: true })' });
-    expect(text(res)).toBe('OK');
+    expect(text(res)).toBe(
+      'OK\nTest line: await webview.getByText("Submit", { exact: true }).click();\n'
+      + '(Declare `const webview = await device.webview();` before this line in the test.)',
+    );
     expect(webview).toHaveBeenCalledWith('com.example');
     expect(page.getByText).toHaveBeenCalledWith('Submit', { exact: true });
     expect(locator.click).toHaveBeenCalledTimes(1);
@@ -1072,6 +1076,25 @@ describe('webview.* locators in the action tools', () => {
     expect(locator.fill).toHaveBeenLastCalledWith('new', { timeout: undefined });
   });
 
+  it('answers a page field with the fill() line that leaves it holding the same value (PILOT-1239)', async () => {
+    hoisted.client = makeDaemon().client;
+    fakePage('sam@');
+    const res = await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'example.com' });
+    expect(text(res)).toMatch(/^OK\nTest line: await webview\.getByPlaceholder\("Email"\)\.fill\("sam@example\.com"\);\n\(Declare `const webview = await device\.webview\(\);`/);
+  });
+
+  it('flags a positional webview line (PILOT-1239)', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator, page } = fakePage();
+    const positioned = { ...locator, _nthIndex: 0 };
+    page.getByText.mockReturnValue({ ...locator, first: () => positioned } as unknown as typeof locator);
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go").first()' });
+    // No alternative is looked for in a page, and the comment says so rather
+    // than claiming a check that never ran.
+    expect(text(res)).toMatch(/^OK\nTest line \(position-dependent\): await webview\.getByText\("Go"\)\.first\(\)\.click\(\); \/\/ position-dependent: not checked for a locator that matches this element alone\n/);
+    expect(positioned.click).toHaveBeenCalledTimes(1);
+  });
+
   it('passes the timeout argument to the page field and button (PILOT-840)', async () => {
     hoisted.client = makeDaemon().client;
     const { locator } = fakePage('');
@@ -1120,7 +1143,7 @@ describe('tapsmith_swipe', () => {
     const daemon = makeDaemon();
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_swipe', { direction: 'up' });
-    expect(text(res)).toBe('OK');
+    expect(text(res)).toBe('OK\nTest line: await device.swipe("up");');
     expect(daemon.swipe).toHaveBeenCalledWith('up');
   });
 
@@ -1163,15 +1186,16 @@ describe('tapsmith_launch_app', () => {
     const daemon = makeDaemon();
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_launch_app', { package: 'com.example.app' });
-    expect(text(res)).toBe('OK');
+    expect(text(res)).toBe('OK\nTest line: await device.launchApp("com.example.app");');
     expect(daemon.launchApp).toHaveBeenCalledWith('com.example.app', { clearData: false });
   });
 
   it('clears app data when the caller asks for a fresh start', async () => {
     const daemon = makeDaemon();
     hoisted.client = daemon.client;
-    await callTool('tapsmith_launch_app', { package: 'com.example.app', clear_data: true });
+    const res = await callTool('tapsmith_launch_app', { package: 'com.example.app', clear_data: true });
     expect(daemon.launchApp).toHaveBeenCalledWith('com.example.app', { clearData: true });
+    expect(text(res)).toBe('OK\nTest line: await device.launchApp("com.example.app", { clearData: true });');
   });
 
   it('reports a launch failure', async () => {
@@ -1606,5 +1630,216 @@ describe('the device tools the server advertises', () => {
       await client.close();
       await server.close();
     }
+  });
+});
+
+// ─── Test lines (PILOT-1239) ───
+
+describe('the test line an action tool answers with (PILOT-1239)', () => {
+  /** Three buttons on an iOS screen, as the agent dumps them. */
+  function buttonsScreen(labels: string[]): { xml: string; elements: ElementInfo[] } {
+    const elements = labels.map((label, i) => makeElement({
+      elementId: `b${i}`,
+      className: 'XCUIElementTypeButton',
+      role: 'button',
+      text: label,
+      bounds: { left: 0, top: 100 * i, right: 390, bottom: 100 * i + 80 },
+    }));
+    const rows = elements.map((e) => `<XCUIElementTypeButton type="XCUIElementTypeButton" label="${e.text}" clickable="true" bounds="[${e.bounds!.left},${e.bounds!.top}][${e.bounds!.right},${e.bounds!.bottom}]" />`).join('\n');
+    return { xml: `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication">\n${rows}\n</XCUIElementTypeApplication></hierarchy>`, elements };
+  }
+
+  /** The device agent's matching for those buttons. */
+  function buttonsAgent(elements: ElementInfo[]) {
+    return (sel: Selector): ElementInfo[] => {
+      const k = sel.kind;
+      if (k.type === 'role') {
+        if (k.value.role !== 'button') return [];
+        const name = k.value.name;
+        return elements.filter((e) => name === undefined || (typeof name === 'string' && (k.value.exact ? e.text === name : e.text.toLowerCase().includes(name.toLowerCase()))));
+      }
+      if (k.type === 'textContains') return elements.filter((e) => e.text.toLowerCase().includes(k.value.toLowerCase()));
+      if (k.type === 'text') return elements.filter((e) => e.text === k.value);
+      return [];
+    };
+  }
+
+  it('takes its uniqueness from the device agent, not the snapshot: one agent match gives the line', async () => {
+    // The dump lists "Sign in" twice (a snapshot would call the text
+    // ambiguous); the agent, which tests resolve with, matches it once.
+    const { xml } = buttonsScreen(['Sign in', 'Sign in']);
+    const daemon = makeDaemon({ hierarchyXml: xml, elements: [makeElement({ text: 'Sign in' })] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Sign in")' });
+    expect(text(res)).toBe('OK\nTest line: await device.getByText("Sign in").tap();');
+    // The action's own resolution was the check: no dump, no second query.
+    expect(daemon.getUiHierarchy).not.toHaveBeenCalled();
+    expect(daemon.evaluateSelectors).not.toHaveBeenCalled();
+    expect(daemon.findElements).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives no line, and does not act, when the agent matches the locator twice', async () => {
+    // The dump shows one element; the agent's two matches decide.
+    const daemon = makeDaemon({
+      hierarchyXml: buttonsScreen(['Sign in']).xml,
+      elements: [makeElement({ elementId: 'a', text: 'Sign in' }), makeElement({ elementId: 'b', text: 'Sign in', bounds: { left: 0, top: 300, right: 100, bottom: 340 } })],
+    });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Sign in")', timeout: 50 });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toMatch(/strict mode violation/);
+    expect(text(res)).not.toContain('Test line');
+    expect(daemon.tap).not.toHaveBeenCalled();
+  });
+
+  it('verifies the line against the screen the tap started from, when the tap navigates away', async () => {
+    const button = makeElement({ elementId: 'go', text: 'Next', role: 'button' });
+    let navigated = false;
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const order: string[] = [];
+    daemon.findElements.mockImplementation(async () => {
+      order.push('find');
+      return { requestId: '1', elements: navigated ? [] : [button], errorMessage: '' };
+    });
+    daemon.tap.mockImplementation(async () => {
+      order.push('tap');
+      navigated = true;
+      return ok();
+    });
+    // With a per-call timeout too, which re-times the handle the check rides on.
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Next")', timeout: 2_000 });
+    expect(text(res)).toBe('OK\nTest line: await device.getByText("Next").tap();');
+    // Resolved (and checked) before the tap; nothing read the new screen.
+    expect(order).toEqual(['find', 'tap']);
+  });
+
+  it('replaces a positional locator with one the agent matches to the same element alone', async () => {
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana', 'Cherry']);
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, find: agent, evaluate: agent });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByRole("button").nth(1)' });
+    expect(text(res)).toBe(
+      'OK\nTest line: await device.getByRole("button", { name: "Banana" }).tap();\n'
+      + '(device.getByRole("button").nth(1) picks its element by position; the device agent matched this locator '
+      + 'to that same element alone, so the line uses it instead.)',
+    );
+    // The check ran before the tap, and the tap went to the element the position picked.
+    expect(daemon.evaluateSelectors.mock.invocationCallOrder[0]).toBeLessThan(daemon.tap.mock.invocationCallOrder[0]);
+    expect(daemon.tap.mock.calls[0][2]).toBe('b1');
+  });
+
+  it('flags a positional line when nothing matches its element alone', async () => {
+    const { xml, elements } = buttonsScreen(['Buy', 'Buy', 'Buy']);
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, find: agent, evaluate: agent });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Buy").first()' });
+    expect(text(res)).toMatch(
+      /^OK\nTest line \(position-dependent\): await device\.getByText\("Buy"\)\.first\(\)\.tap\(\); \/\/ position-dependent: no locator matched this element alone\n\(The line picks its element by position/,
+    );
+    expect(text(res)).toContain('no locator the device agent checked matches this element alone');
+    expect(daemon.tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the line is unverified, and gives none, when the agent check fails — the tap still happens', async () => {
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana']);
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, find: agent, evaluate: agent });
+    daemon.evaluateSelectors.mockResolvedValue({ requestId: '1', errorMessage: 'agent timed out', results: [] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByRole("button").last()' });
+    expect(res.isError).toBeFalsy();
+    expect(text(res)).toBe(
+      'OK\nTest line: none, the locator could not be verified (the locator picks its element by position, and checking '
+      + 'for one that matches it alone failed: agent timed out). Check a locator with tapsmith_test_locator before putting it in a test.',
+    );
+    expect(daemon.tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up on the check, not the action, once its budget is spent', async () => {
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana']);
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, evaluate: agent });
+    const found = await findPositionFreeLocator(daemon.client, elements[1], 0);
+    expect(found).toEqual({ error: expect.stringMatching(/checking took longer than 0 s/) });
+    expect(daemon.evaluateSelectors).not.toHaveBeenCalled();
+  });
+
+  it('says the line is unverified when a retry finds the position on another element (R1-F3)', async () => {
+    // The checked row shifts before the tap lands: the first dispatch comes
+    // back stale, and .nth(1) re-resolves to another row.
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana', 'Cherry']);
+    const shifted = [makeElement({ ...elements[0], elementId: 'z0' }), makeElement({ ...elements[0], elementId: 'z1', text: 'Zed', bounds: { left: 0, top: 50, right: 390, bottom: 90 } }), ...elements.slice(1)];
+    let stale = false;
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, evaluate: agent, find: (sel) => (stale ? buttonsAgent(shifted)(sel) : agent(sel)) });
+    daemon.tap.mockImplementationOnce(async () => {
+      stale = true;
+      return { requestId: '1', success: false, errorType: 'ACTION_FAILED', errorMessage: 'element is stale' };
+    });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByRole("button").nth(1)' });
+    expect(daemon.tap).toHaveBeenCalledTimes(2);
+    expect(daemon.tap.mock.calls[1][2]).toBe('z1');
+    expect(text(res)).toMatch(/^OK\nTest line: none, .*picked a different element from the one checked/);
+  });
+
+  it('keeps the line when a retry finds the same element again', async () => {
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana', 'Cherry']);
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, evaluate: agent, find: agent });
+    daemon.tap.mockImplementationOnce(async () => ({ requestId: '1', success: false, errorType: 'ACTION_FAILED', errorMessage: 'element is stale' }));
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByRole("button").nth(1)' });
+    expect(daemon.tap).toHaveBeenCalledTimes(2);
+    expect(text(res)).toMatch(/^OK\nTest line: await device\.getByRole\("button", \{ name: "Banana" \}\)\.tap\(\);/);
+  });
+
+  it('bounds every agent call of the check by what is left of its budget (R1-F4)', async () => {
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana']);
+    const daemon = makeDaemon({ hierarchyXml: xml, evaluate: buttonsAgent(elements) });
+    await findPositionFreeLocator(daemon.client, elements[1], 3_000);
+    const [hierarchyDeadline] = daemon.getUiHierarchy.mock.calls[0] as unknown as [number];
+    const [, evaluateDeadline] = daemon.evaluateSelectors.mock.calls[0] as unknown as [unknown, number];
+    expect(hierarchyDeadline).toBeGreaterThan(0);
+    expect(hierarchyDeadline).toBeLessThanOrEqual(3_000);
+    expect(evaluateDeadline).toBeGreaterThan(0);
+    expect(evaluateDeadline).toBeLessThanOrEqual(3_000);
+  });
+
+  it('says the line is unverified when the screen cannot be read for the check', async () => {
+    const { elements } = buttonsScreen(['Apple', 'Banana']);
+    const daemon = makeDaemon({ hierarchyError: 'hierarchy not ready', find: buttonsAgent(elements) });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByRole("button").first()' });
+    expect(text(res)).toMatch(/^OK\nTest line: none, .*hierarchy not ready/);
+  });
+
+  it('writes the typed text as a string literal a test can hold', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Note' })] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_type', { locator: ' device.getByText("Note") ', text: 'say "hi"\nbye' });
+    expect(text(res)).toBe('OK\nTest line: await device.getByText("Note").type("say \\"hi\\"\\nbye");');
+  });
+
+  it('spells the locator with the device fixture, however the agent wrote its receiver', async () => {
+    hoisted.client = makeDaemon({ elements: [makeElement({ text: 'Save' })] }).client;
+    const res = await callTool('tapsmith_tap', { locator: 'this.page.getByText("Save")' });
+    expect(text(res)).toBe('OK\nTest line: await device.getByText("Save").tap();');
+  });
+
+  it('answers press_key with its line', async () => {
+    hoisted.client = makeDaemon().client;
+    const res = await callTool('tapsmith_press_key', { key: 'back' });
+    expect(text(res)).toBe('OK\nTest line: await device.pressKey("back");');
+  });
+
+  it('gives no line for a failed action', async () => {
+    hoisted.client = makeDaemon({ actionError: 'no such key' }).client;
+    const res = await callTool('tapsmith_press_key', { key: 'teleport' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).not.toContain('Test line');
   });
 });

@@ -2,3 +2,5 @@ node_modules/
 tapsmith-results/
 tapsmith-report/
 blob-report/
+mcp-test-lines-generated/
+tapsmith.config.mcp-lines.generated.mjs

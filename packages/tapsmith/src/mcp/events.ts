@@ -122,7 +122,8 @@ export function summarizeResult(tool: string, result: string): string {
     case 'tapsmith_swipe':
     case 'tapsmith_press_key':
     case 'tapsmith_launch_app':
-      return result === 'OK' ? 'OK' : result.slice(0, 60);
+      // A success is `OK`, then the test line that repeats it (PILOT-1239).
+      return result === 'OK' || result.startsWith('OK\n') ? 'OK' : result.slice(0, 60);
     case 'tapsmith_read_trace':
       return result.includes('## Steps')
         ? result.match(/## Steps \((\d+) events\)/)?.[0] ?? result.slice(0, 60)

@@ -126,6 +126,47 @@ export async function evaluateLocator(source: string, roots: LocatorRoots): Prom
 }
 
 /**
+ * `source` as a test writes it with the `device` fixture: the receivers the
+ * tools also accept (`page.`, `this.device.`, `this.page.`, `this.webview.`,
+ * or a getter with none) are spelled `device.` / `webview.`, at the root and
+ * in nested locators alike. Everything else is kept as written. Only parses:
+ * call it on a string {@link evaluateLocator} accepted. Throws
+ * {@link isLocatorError} errors for one that does not parse.
+ */
+export function canonicalLocatorSource(source: string): string {
+  const trimmed = source.trim();
+  const expression = parseLocator(trimmed);
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    const n = node as Node & { type: string };
+    if (typeof n.type !== 'string') return;
+    const expr = n as Expr;
+    const root = rootOf(expr);
+    if (root) {
+      if (trimmed.slice(n.start, n.end) !== root) edits.push({ start: n.start, end: n.end, text: root });
+      return;
+    }
+    if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && Object.hasOwn(NATIVE_GETTERS, expr.callee.name)) {
+      edits.push({ start: expr.callee.start, end: expr.callee.start, text: 'device.' });
+    }
+    for (const [key, value] of Object.entries(n)) {
+      if (key !== 'loc' && key !== 'range') visit(value);
+    }
+  };
+  visit(expression);
+  let out = trimmed.slice(expression.start, expression.end);
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, edit.start - expression.start) + edit.text + out.slice(edit.end - expression.start);
+  }
+  return out;
+}
+
+/**
  * The plain Selector a native locator string builds (synchronously, on
  * `device`'s builder), or null when it is a WebView locator or carries
  * anything a Selector alone cannot hold (a position, filter, scope, and/or).

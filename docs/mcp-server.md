@@ -279,11 +279,11 @@ Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` i
 | `timeout` | number | No | How long the tap may take, waiting for the element included, in milliseconds (default 5000, at most 120000), as `tap({ timeout })` in a test (a tap on an element found just before it still gets up to a second). |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
-When nothing matches the locator, the error is the one a test gets, which can list locators that match the same words on screen (see [Locators that match nothing](locators.md#locators-that-match-nothing)), and it ends by asking you to check a locator with `tapsmith_test_locator` before acting on it. `tapsmith_type` answers a miss the same way.
+A tap answers with the [test line](#test-lines) that repeats it. When nothing matches the locator, the error is the one a test gets, which can list locators that match the same words on screen (see [Locators that match nothing](locators.md#locators-that-match-nothing)), and it ends by asking you to check a locator with `tapsmith_test_locator` before acting on it. `tapsmith_type` answers a miss the same way.
 
 #### `tapsmith_type`
 
-Type text into an element matching the locator, as `locator.type(text)` in a test would: it waits up to 5 seconds for the field to appear, then gives the typing a test's 30 seconds (a long string takes a while on iOS), which is also how long it waits for something covering the field, such as an open sheet, to go away. A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended.
+Type text into an element matching the locator, as `locator.type(text)` in a test would: it waits up to 5 seconds for the field to appear, then gives the typing a test's 30 seconds (a long string takes a while on iOS), which is also how long it waits for something covering the field, such as an open sheet, to go away. A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended. It answers with the [test line](#test-lines) that repeats it.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -329,6 +329,37 @@ No parameters.
 
 Returns a JSON array of device objects with `serial`, `model`, `platform` (android/ios), `os_version`, `is_emulator`, `state`, and `usable`. Usable devices come first. A device that is attached but cannot be used — an Android phone whose USB-debugging prompt was never accepted (`unauthorized`), an `offline` device, or one without USB permission on Linux (`no permissions (…)`) — is listed with `usable: false`, adb's state as `state`, and a `fix` with the same advice `tapsmith doctor` and `tapsmith list-devices` give. A device the session was using that has since disconnected (on either platform) is listed last with `usable: false` and `state: "Disconnected"`, or with adb's state and a `fix` when adb still lists it. In UI (HTTP) mode the list covers only the UI session's own devices, so an attached device the session is not using — usable or not — is not listed; use `tapsmith list-devices` for the whole machine.
 
+### Test lines
+
+Every action tool answers a successful action with `OK` and the test line that repeats it, as you would write it in the test with the `device` fixture. Write each line into the test file as you go:
+
+```
+OK
+Test line: await device.getByRole("button", { name: "Sign in" }).tap();
+```
+
+| Tool | Line |
+|---|---|
+| `tapsmith_tap` | `await <locator>.tap();` (`.click()` for a `webview.` locator) |
+| `tapsmith_type` | `await <locator>.type("…");`, or `.clearAndType("…")` with `clear` (`.fill("…")` for a `webview.` field, with the value the field ends up holding) |
+| `tapsmith_swipe` | `await device.swipe("up");` |
+| `tapsmith_press_key` | `await device.pressKey("back");` |
+| `tapsmith_launch_app` | `await device.launchApp("com.example.app");`, with `{ clearData: true }` when `clear_data` was set |
+
+**The locator in a tap or type line is checked by the device agent**, with the matching a test resolves locators with, against the screen the action started on. The check is the action's own wait for its element: a locator without a position must match exactly one element there (strict mode), so the line names exactly the element that was tapped or typed into. It is checked before the action runs, so a tap that opens another screen, or removes the element, still answers with a checked line. It costs no extra round trip to the device. The receiver is written `device.` (or `webview.`) whichever spelling the tool was given (`page.`, `this.device.`, a bare `getByText(…)`).
+
+A locator that picks its element by position (`.first()`, `.last()`, `.nth(n)`) is not unique by design. For one of those, before the action runs, the device agent checks the screen's candidate locators for that element (the ones `tapsmith_snapshot` would suggest), and:
+
+- when one matches that element alone, the line uses it instead, and says which positional locator it replaces;
+- when none does, the line keeps the position and is flagged `Test line (position-dependent):`, with a `// position-dependent` comment that goes into the test with it;
+- when the check cannot finish (the agent errors, or about 5 seconds pass), the action still runs, and the result says the line could not be verified and gives none. Check a locator with `tapsmith_test_locator` before writing that step.
+
+The check takes at most about 5 seconds, on top of the action's own `timeout`. If the action has to find its element again before it lands (the screen moved under it) and the position then picks a different element, the line is reported unverified too.
+
+A `webview.` locator is checked by the page, which is where a test's WebView locators are resolved too. A line that acts on one needs `const webview = await device.webview();` earlier in the test, and the result says so. A positional `webview.` locator is flagged as position-dependent, with a comment saying no alternative was looked for: find one with `tapsmith_test_locator`.
+
+A failed action gives no line. Lines use plain `device.` calls: if the test uses screen objects, move the locator into one.
+
 ### Response size
 
 Every tool response is held to a fixed size: 100 KiB of text and 5 MiB of
@@ -366,7 +397,9 @@ shown in detail, with each error cut to 2,000 characters; when their traces are
 long, fewer failures are shown in detail. The failures after those, up to the
 50th, get one line each, and any after that are counted. Screenshots are attached for up to the first 3 failures
 that have one, as many as fit the response limit. The report ends by pointing to `tapsmith_list_results`, which lists
-every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1.
+every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1. When more than one test ran, it also says how to try locators on the screen where a test failed: run just that test.
+
+When the run was one test and it failed, the report checks whether the device is still on the screen where it failed (`DEVICE HELD`), and for a locator that matched nothing it lists the elements on the device's screen closest to it, each with a locator the device agent checked finds it alone when there is one. See [Fix a failing test](#fix-a-failing-test).
 
 A file that dies before any test reports — a failed import, a crashed or
 timed-out worker — is reported as a single failure named
@@ -494,10 +527,11 @@ Returns a message indicating whether watch mode was enabled or disabled.
 3. **Understand the environment:** call `tapsmith_session_info` to see platform, device, package, and project configuration
 4. **Discover tests:** call `tapsmith_list_tests` to see the full test tree with file paths and test names
 5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested locators, then `tapsmith_test_locator` on each locator you will use, until it counts exactly 1. Only then put it in test code
-6. **Run tests:** call `tapsmith_run_tests` with file paths and optional test name / project filters. On failure, the response includes error details, trace steps, and a screenshot
-7. **Review results:** use `tapsmith_list_results` to browse the latest run (pass `details: true` to see trace steps for failures), and `tapsmith_suite_status` to see the whole suite's accumulated status including tests that have not run yet
-8. **Debug failures:** use `tapsmith_read_trace` with the trace file path from the failure report for step-by-step debugging
-9. **Iterate:** toggle `tapsmith_watch` on files being actively developed for automatic re-runs on save
+6. **Write the test as you walk the flow:** each action tool answers with the [test line](#test-lines) that repeats it; write each line into the test file as you go
+7. **Run tests:** call `tapsmith_run_tests` with file paths and optional test name / project filters. On failure, the response includes error details, trace steps, and a screenshot
+8. **Review results:** use `tapsmith_list_results` to browse the latest run (pass `details: true` to see trace steps for failures), and `tapsmith_suite_status` to see the whole suite's accumulated status including tests that have not run yet
+9. **Debug failures:** use `tapsmith_read_trace` with the trace file path from the failure report for step-by-step debugging
+10. **Iterate:** toggle `tapsmith_watch` on files being actively developed for automatic re-runs on save
 
 ### Headless stdio workflow
 
@@ -505,8 +539,28 @@ Returns a message indicating whether watch mode was enabled or disabled.
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device, and put a locator in test code only once `tapsmith_test_locator` counts exactly 1
-5. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
-6. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
+5. **Write the test as you walk the flow:** write the [test line](#test-lines) each action tool answers with into the test file as you go
+6. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
+7. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
+
+### Fix a failing test
+
+A test that fails on a locator can be fixed against the live app: the device stays on the screen where it failed.
+
+1. **Run just that test:** call `tapsmith_run_tests` with its file and `test` set to its name (from `tapsmith_list_tests`), so the run is that one test
+2. **Read the report:** when it fails, the report says `DEVICE HELD` with the screen it is still on and, for a locator that matched nothing, lists the elements there closest to it, with checked locators
+3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen
+4. **Change the test and run it again:** the next `tapsmith_run_tests` resets the app as usual, so the test starts from its normal starting point
+
+Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when the device shows it: its screen now matches the one the failure's trace captured at the failed step, the last step whose error is the test's error, leaving out the test's `afterEach` and `afterAll` hooks. When no such step has a captured screen (for example, the test threw the error from its own code), there is nothing to compare, and the report says so. When the two differ, the report says so without claiming why. A step is captured when it starts, so the app may have moved on while the step waited; the test's own `afterEach` or `afterAll` hooks or a fixture's teardown may have moved it after the failure; or another device ran the test. For a locator that matched nothing it still lists the closest elements on the device's screen as it is now, to try once `tapsmith_snapshot` shows the screen the test failed on (`tapsmith_read_trace` shows the failure screen).
+
+There is no screen report:
+
+- **When more than one test ran.** A later test may have moved the screen. For a locator that matched nothing, the report says to run the one test that failed.
+- **Without a trace.** The check needs the failure's trace. UI mode always records one; a headless session records one when the config's `trace` is not `'off'` (for example `trace: 'retain-on-failure'`).
+- **For a device group.** A test on a [device group](#choosing-a-device) (`use.devices`) gets no screen report.
+
+It works the same in [UI mode](#ui-shared-workflow) and [headless](#headless-stdio-workflow) sessions. In UI mode, a failed run leaves its device alone until you prepare it or run again. With several UI workers for the project, leave `device` out of these calls (`tapsmith_run_tests` refuses it there): the screen is checked on the device the device tools use, and when that is not the one that ran the test, its screen normally differs and the report does not say `DEVICE HELD`.
 
 ## Locator format
 
