@@ -102,9 +102,9 @@ class HierarchyDumper {
 
         // Resolve role from traits (heading, link, alert, etc.) and element type.
         let traits = SnapshotElementFinder.extractTraits(from: node)
+        let isEmptyBarHost = node[BarHost.emptyHostKey] as? Bool ?? false
         let role = RoleMapping.resolveRole(
-            for: elType, traits: traits, inTabBar: inTabBar,
-            isEmptyBarHost: node[BarHost.emptyHostKey] as? Bool ?? false
+            for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost
         )
 
         xml += "\(indent)<\(typeName)"
@@ -140,6 +140,12 @@ class HierarchyDumper {
         // viewer and the MCP snapshot leave it out too.
         if NonAppElements.isSwitchPart(elementType: elType, insideSwitch: insideSwitch) {
             xml += " tapsmith-switch-part=\"true\""
+        }
+        // iOS 27's empty toolbar host: no role, so no role query matches it
+        // (BarHost.markEmptyHosts, PILOT-1219). The trace viewer reads this,
+        // not the missing role, as a dump without roles still matches by type.
+        if isEmptyBarHost {
+            xml += " tapsmith-empty-bar-host=\"true\""
         }
 
         let children = node["children"] as? [[String: Any]] ?? []
