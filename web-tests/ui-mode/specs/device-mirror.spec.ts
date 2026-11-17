@@ -7,7 +7,28 @@
 // Blob instead would drop every frame with no error raised anywhere.
 
 import { test, expect } from "../fixtures.js"
+import type { Locator } from "@playwright/test"
 import { screenFrame, solidPng } from "../messages/frames.js"
+import type { DevicePane } from "../panes/device.pane.js"
+
+/**
+ * The canvas covers its bezel's screen opening on both axes, and its box keeps
+ * the frame's shape (no letterboxing either around or inside the canvas).
+ */
+async function expectCanvasFillsBezel(device: DevicePane, canvas?: Locator) {
+  await expect.poll(async () => {
+    const fill = await device.canvasFill(canvas)
+    return Math.min(fill.width, fill.height) > 0.9 && Math.abs(fill.shape - 1) < 0.02
+  }).toBe(true)
+}
+
+/** Whether the canvas pixel at (x, y) is the green test colour. */
+async function greenAt(canvas: Locator, x: number, y: number) {
+  return canvas.evaluate((el, [px, py]) => {
+    const d = (el as HTMLCanvasElement).getContext("2d")?.getImageData(px, py, 1, 1).data
+    return !!d && d[1] > 150 && d[0] < 50 && d[2] < 50
+  }, [x, y] as const)
+}
 
 test.describe("Device mirror", () => {
   test("paints a frame onto the canvas", async ({ app, device }) => {
@@ -75,6 +96,131 @@ test.describe("Device mirror", () => {
 
     await expect(device.canvas).toHaveAttribute("width", "200")
     await expect(device.canvas).toHaveAttribute("height", "400")
+  })
+
+  test("follows the frame's shape when choosing the bezel, including a rotation", async ({ app, device }) => {
+    const ui = app
+    // Frames here are real-screen sized: the canvas shrinks to fit its bezel
+    // but never grows, so a tiny frame would never fill one whatever the bezel.
+    // A modern phone (≈0.45, like 1080×2400) fits the photographic frame.
+    ui.sendFrame(screenFrame(540, 1200, 1))
+    await expect(device.canvas).toHaveAttribute("width", "540")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+    await expectCanvasFillsBezel(device)
+
+    // Rotated: a landscape frame must not be squeezed into the upright photo.
+    ui.sendFrame(screenFrame(1200, 540, 2))
+    await expect(device.canvas).toHaveAttribute("width", "1200")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expectCanvasFillsBezel(device)
+    // The upright phone's notch would sit over the rotated screen's content.
+    expect(await device.bezelCutoutShown()).toBe(false)
+
+    // And back. The canvas is the same element throughout, so it still paints.
+    ui.sendFrame({ width: 540, height: 1200, seq: 3, png: solidPng(540, 1200, [0, 200, 0]) })
+    await expect(device.canvas).toHaveAttribute("width", "540")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+    await expectCanvasFillsBezel(device)
+    await expect.poll(() => greenAt(device.canvas, 270, 600)).toBe(true)
+  })
+
+  test("returns to its full size after a rotation round trip", async ({ app, device }) => {
+    const ui = app
+    ui.sendFrame(screenFrame(540, 1200, 1))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+    await expectCanvasFillsBezel(device)
+    const before = await device.canvas.boundingBox()
+
+    ui.sendFrame(screenFrame(1200, 540, 2))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expectCanvasFillsBezel(device)
+    ui.sendFrame(screenFrame(540, 1200, 3))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+
+    // A landscape phase must not leave the pane (and so the device) shrunk.
+    await expect.poll(async () => (await device.canvas.boundingBox())?.width).toBeCloseTo(before!.width, 0)
+    expect((await device.canvas.boundingBox())!.height).toBeCloseTo(before!.height, 0)
+  })
+
+  for (const [what, w, h] of [
+    ["the photo bezel", 540, 1200],
+    ["the CSS bezel", 750, 1334],
+  ] as const) {
+    test(`grows back after the window is made shorter and then taller again (${what})`, async ({ app, device, page }) => {
+      const ui = app
+      const tall = page.viewportSize()!
+      ui.sendFrame(screenFrame(w, h, 1))
+      await expect(device.canvas).toHaveAttribute("width", String(w))
+      await expectCanvasFillsBezel(device)
+      const before = await device.canvas.boundingBox()
+
+      await page.setViewportSize({ width: tall.width, height: 450 })
+      await expect.poll(async () => (await device.canvas.boundingBox())!.height).toBeLessThan(before!.height - 50)
+      await page.setViewportSize(tall)
+
+      await expect.poll(async () => (await device.canvas.boundingBox())?.height).toBeCloseTo(before!.height, 0)
+      await expectCanvasFillsBezel(device)
+    })
+  }
+
+  test("gives a tablet-shaped screen the tablet bezel even with an opaque serial", async ({ app, device }) => {
+    const ui = app
+    // The seeded device is `emulator-5554`: nothing in the name says tablet.
+    ui.sendFrame(screenFrame(800, 1280, 1)) // 1600×2560
+    await expect(device.canvas).toHaveAttribute("width", "800")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-tablet")
+    await expectCanvasFillsBezel(device)
+  })
+
+  test("gives a squarer phone (iPhone SE class) the CSS bezel instead of letterboxing it", async ({ app, device }) => {
+    const ui = app
+    ui.sendFrame(screenFrame(750, 1334, 1)) // 750×1334
+    await expect(device.canvas).toHaveAttribute("width", "750")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expectCanvasFillsBezel(device)
+    // These phones have no notch: none drawn over the status bar.
+    expect(await device.bezelCutoutShown()).toBe(false)
+  })
+
+  for (const [what, w, h, bezel] of [
+    ["an iPhone SE-class phone", 750, 1334, "css-phone"],
+    ["a tablet", 800, 1280, "css-tablet"],
+  ] as const) {
+    test(`fits ${what} on the CSS bezel into a short pane without letterboxing it`, async ({ app, device, page }) => {
+      const ui = app
+      // A short window: the device has to shrink to the pane's height, and its
+      // box must keep the frame's shape, or taps map to the wrong spot.
+      await page.setViewportSize({ width: 1600, height: 500 })
+      ui.sendFrame(screenFrame(w, h, 1))
+      await expect(device.canvas).toHaveAttribute("width", String(w))
+      await expect(device.bezel).toHaveAttribute("data-bezel", bezel)
+      await expectCanvasFillsBezel(device)
+      expect(await device.canvasInsideWindow()).toBe(true)
+    })
+  }
+
+  test("refits the CSS bezel when the device changes skin at the same screen shape", async ({ app, device, page }) => {
+    const ui = app
+    // Android and iOS skins pad the canvas differently, so a same-shaped frame
+    // on the other platform needs a different canvas width to fit the pane.
+    await page.setViewportSize({ width: 1600, height: 500 })
+    ui.sendFrame(screenFrame(750, 1334, 1))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expect(device.bezel).toHaveClass(/dm-skin-android/)
+    await expectCanvasFillsBezel(device)
+
+    ui.send({ type: "device-info", serial: "SIM-1", isEmulator: true, platform: "ios", screenWidth: 750, screenHeight: 1334 })
+    await expect(device.bezel).toHaveClass(/dm-skin-ios/)
+    // The canvas is refitted inside the iOS skin's padding: its box keeps the
+    // frame's exact shape instead of being squashed by its max-height (a stale
+    // Android-padding width), which would skew the tap mapping.
+    await expect.poll(() => device.bezel.evaluate((el) => {
+      const cs = getComputedStyle(el)
+      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+      const r = el.querySelector("canvas")!.getBoundingClientRect()
+      return Math.abs(r.width / r.height - 750 / 1334) < 0.002 && r.height + padY <= el.parentElement!.clientHeight + 0.5
+    })).toBe(true)
+    await expectCanvasFillsBezel(device)
   })
 
   test("shows a placeholder while no device is connected", async ({ app, device }) => {

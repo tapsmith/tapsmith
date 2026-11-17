@@ -26,8 +26,12 @@ expect("a longer hold is kept", HidTouch.hold(forTapHold: 0.050) == 0.050)
 // What a tap's and a double tap's element types come to over HID.
 expect("a button's taps are pressed back to back",
        HidTouch.hold(forTapHold: TapTiming.hold(for: .button)) == 0)
-expect("a switch's taps keep their frame-spanning hold",
-       HidTouch.hold(forTapHold: TapTiming.hold(for: .switch)) == TapTiming.frameSpanningHold)
+expect("a switch's taps keep the control hold",
+       HidTouch.hold(forTapHold: TapTiming.hold(for: .switch)) == TapTiming.controlHold)
+// A double tap's two presses and the helper's ~120 ms gap between them stay
+// well inside UIKit's double-tap window (about 0.35 s) at the control hold.
+expect("a control's double tap fits the double-tap window",
+       2 * HidTouch.hold(forTapHold: TapTiming.controlHold) + 0.120 < 0.300)
 expect("an unknown target keeps the frame-spanning hold",
        HidTouch.hold(forTapHold: TapTiming.hold(for: nil)) == TapTiming.frameSpanningHold)
 

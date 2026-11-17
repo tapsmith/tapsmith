@@ -9,9 +9,9 @@ import type { ElementHandle } from "tapsmith"
  * cancelling the press: the action reports success and nothing happens. The
  * test app's carousel turns a page 50 ms after a touch lands on any control
  * below it, so on iOS a touch held past that is lost every time (taps held
- * 100 ms lost 30 of 30). Touches are held 10 ms, or 20 ms on a control that
- * needs the touch to span a display frame (the switch), or whose target is
- * unknown (a tap at a point). React Native on Android keeps the press whatever
+ * 100 ms lost 30 of 30). Touches are held 10 ms, 50 ms on a UIKit control
+ * that needs the touch to span a display frame (the switch), or 20 ms when
+ * the target is unknown (a tap at a point). React Native on Android keeps the press whatever
  * the hold, so there the tests only check that the actions land. The
  * double-tap target turns on its second touch. On an iOS simulator a double
  * tap presses through the simulator's input system, where each touch reaches
@@ -19,8 +19,9 @@ import type { ElementHandle } from "tapsmith"
  * reached React Native after the turn, and one of the taps was lost in every
  * attempt. Its taps are now pressed and lifted back to back, so the lift
  * arrives with the press, well before the turn. The switch's
- * test checks only that setChecked() lands (a switch needs its 20 ms, and
- * XCTest's own tap also lifts within 50 ms).
+ * test checks only that setChecked() lands: a native switch flips on its own
+ * lift, which the carousel's turn does not cancel (React Native's Switch keeps
+ * the touch from the scroll view).
  */
 async function count(handle: ElementHandle, pattern: RegExp): Promise<number> {
   const match = pattern.exec(await handle.getText())

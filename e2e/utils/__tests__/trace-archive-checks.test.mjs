@@ -511,6 +511,147 @@ test("catches captures that disagree on the screen size", () => {
   )
 })
 
+test("accepts captures turned to the transposed screen size (the device rotated)", () => {
+  assert.deepEqual(
+    failuresFor((p) => { p.screenshots["screenshots/action-002-before.png"] = screenPng([30, 30, 30], 2400, 1080) }),
+    [],
+  )
+})
+
+// ─── Turned screens (PILOT-1235) ───
+
+/** An iOS-shaped dump whose application element covers `width` x `height` points. */
+function iosHierarchy(width, height, ...labels) {
+  const leaves = labels
+    .map((l) => `<XCUIElementTypeButton label="${l}" bounds="[16,206][858,277]"/>`)
+    .join("")
+  return encode(
+    `<?xml version="1.0" encoding="UTF-8"?><XCUIElementTypeApplication label="App" ` +
+      `bounds="[0,0][${width},${height}]">${leaves}</XCUIElementTypeApplication>`,
+  )
+}
+
+test("catches a screenshot turned sideways against the screen its dump records", () => {
+  // A landscape screen captured as native portrait pixels: what iOS sent
+  // before the agent redrew turned screenshots upright.
+  assertFails((p) => {
+    p.hierarchies["hierarchy/action-002-before.xml"] = iosHierarchy(874, 402, "API Calls", "Fetch User")
+    p.screenshots["screenshots/action-002-before.png"] = screenPng([30, 30, 30], 1080, 2400)
+  }, /action-002-before\.png is 1080x2400 \(portrait\), but its hierarchy dump records a 874x402 \(landscape\) screen/)
+})
+
+test("accepts an upright landscape screenshot beside a landscape dump", () => {
+  assert.deepEqual(
+    failuresFor((p) => {
+      p.hierarchies["hierarchy/action-002-before.xml"] = iosHierarchy(874, 402, "API Calls", "Fetch User")
+      p.screenshots["screenshots/action-002-before.png"] = screenPng([30, 30, 30], 2400, 1080)
+    }),
+    [],
+  )
+})
+
+test("does not judge a dump whose first box is not the whole screen", () => {
+  // An Android dialog window's root sits inside the screen, and its shape
+  // says nothing about the screen's.
+  assert.deepEqual(
+    failuresFor((p) => {
+      p.hierarchies["hierarchy/action-002-before.xml"] = encode(
+        `<hierarchy rotation="0"><node class="android.widget.FrameLayout" text="Fetch User" bounds="[60,900][1020,1300]"/></hierarchy>`,
+      )
+    }),
+    [],
+  )
+})
+
+test("reads an Android screen from its largest window, not the status bar listed first", () => {
+  // Real Android dumps often list SystemUI's status bar window first: a short
+  // wide box at the origin that says nothing about the screen's shape.
+  const androidDump = (width, height) => encode(
+    `<hierarchy rotation="0">` +
+      `<node package="com.android.systemui" bounds="[0,0][${width},63]"/>` +
+      `<node package="dev.tapsmith.testapp" text="Fetch User" bounds="[0,0][${width},${height}]"/>` +
+      `</hierarchy>`,
+  )
+  assert.deepEqual(
+    failuresFor((p) => { p.hierarchies["hierarchy/action-002-before.xml"] = androidDump(1080, 2400) }),
+    [],
+  )
+  // …and still catches a sideways frame beside such a dump.
+  assertFails((p) => {
+    p.hierarchies["hierarchy/action-002-before.xml"] = androidDump(2400, 1080)
+  }, /action-002-before\.png is 1080x2400 \(portrait\), but its hierarchy dump records a 2400x1080 \(landscape\) screen/)
+})
+
+test("does not judge an Android dump whose only box at the origin is the status bar", () => {
+  // The app's only window is a dialog inside the screen.
+  assert.deepEqual(
+    failuresFor((p) => {
+      p.hierarchies["hierarchy/action-002-before.xml"] = encode(
+        `<hierarchy rotation="0"><node package="com.android.systemui" bounds="[0,0][1080,63]"/>` +
+          `<node text="Fetch User" bounds="[60,900][1020,1300]"/></hierarchy>`,
+      )
+    }),
+    [],
+  )
+})
+
+test("does not judge the capture taken while the device turns", () => {
+  // Android's setOrientation returns before the display turns, and a step's
+  // screenshot and dump are separate reads: the next capture may straddle it.
+  assert.deepEqual(
+    failuresFor((p) => {
+      p.events[0] = { ...p.events[0], action: "setOrientation", category: "device" }
+      p.hierarchies["hierarchy/action-001-before.xml"] = iosHierarchy(874, 402, "API Calls", "Fetch User")
+    }),
+    [],
+  )
+})
+
+function landscapeFailures(mutate = () => {}) {
+  const zipPath = buildArchive(mutate)
+  try {
+    return checkArchive(readArchive(zipPath), { expectedHost: EXPECTED_HOST, expectLandscape: true }).failures
+  } finally {
+    fs.rmSync(path.dirname(zipPath), { recursive: true, force: true })
+  }
+}
+
+test("with expectLandscape, catches a run that never captured a landscape screen", () => {
+  const failures = landscapeFailures()
+  assert.ok(
+    failures.some((f) => /no screenshot is wider than tall/.test(f)),
+    failures.join("\n"),
+  )
+})
+
+test("with expectLandscape, accepts a run with an upright landscape capture", () => {
+  assert.deepEqual(
+    landscapeFailures((p) => {
+      p.hierarchies["hierarchy/action-002-before.xml"] = iosHierarchy(874, 402, "API Calls", "Fetch User")
+      p.screenshots["screenshots/action-002-before.png"] = screenPng([30, 30, 30], 2400, 1080)
+    }),
+    [],
+  )
+})
+
+test("with expectLandscape, a landscape frame needs a landscape dump to vouch for it", () => {
+  // Wider than tall but beside a portrait dump: turned the wrong way, not landscape.
+  const failures = landscapeFailures((p) => {
+    p.hierarchies["hierarchy/action-002-before.xml"] = iosHierarchy(402, 874, "API Calls", "Fetch User")
+    p.screenshots["screenshots/action-002-before.png"] = screenPng([30, 30, 30], 2400, 1080)
+  })
+  assert.ok(failures.some((f) => /but its hierarchy dump records a 402x874 \(portrait\) screen/.test(f)), failures.join("\n"))
+})
+
+test("can skip the network checks for a driven test that makes no requests", () => {
+  const zipPath = buildArchive((p) => { p.network = []; p.bodies = {} })
+  try {
+    assert.deepEqual(checkArchive(readArchive(zipPath), { expectedHost: null, network: false }).failures, [])
+  } finally {
+    fs.rmSync(path.dirname(zipPath), { recursive: true, force: true })
+  }
+})
+
 test("catches a run where every capture is the same frame", () => {
   assertFails((p) => {
     const frame = screenPng([50, 50, 50])

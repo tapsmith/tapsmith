@@ -181,6 +181,36 @@ test.describe("Device groups", () => {
     await expect(device.mirrorFor(BOB)).toHaveAttribute("width", "200")
   })
 
+  test("each All-view tile picks its bezel from its own frame's shape and keeps painting after a rotation", async ({ ui, device }) => {
+    await openWithGroup(ui)
+    await device.selectWorkerView("All")
+    await expect(device.mirrorFor(ALICE)).toBeVisible()
+
+    // Alice is a phone (≈0.45), bob a tablet-shaped screen behind an opaque serial.
+    ui.sendFrame({ ...screenFrame(540, 1200, 1), workerId: 0, deviceIndex: 0 })
+    ui.sendFrame({ ...screenFrame(800, 1280, 2), workerId: 0, deviceIndex: 1 })
+    await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
+    await expect(device.mirrorFor(BOB)).toHaveAttribute("width", "800")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "image")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-bezel", "css-tablet")
+
+    // Alice rotates: her tile switches bezel, bob's is untouched.
+    ui.sendFrame({ ...screenFrame(1200, 540, 3), workerId: 0, deviceIndex: 0 })
+    await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "1200")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "css-phone")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-bezel", "css-tablet")
+    await expect.poll(async () => {
+      const fill = await device.canvasFill(device.mirrorFor(ALICE))
+      return Math.min(fill.width, fill.height) > 0.9 && Math.abs(fill.shape - 1) < 0.02
+    }).toBe(true)
+
+    // The tile's canvas survived the switch: it is still the one registered
+    // for alice's frames, so the next frame lands on it.
+    ui.sendFrame({ ...screenFrame(540, 1200, 4), workerId: 0, deviceIndex: 0 })
+    await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "image")
+  })
+
   test("gestures and picks on a member's tab name that device", async ({ ui, device }) => {
     await openWithGroup(ui)
     await device.selectWorkerView(BOB)

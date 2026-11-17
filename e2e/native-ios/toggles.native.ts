@@ -41,6 +41,17 @@ describe("Native: toggles and controls", () => {
     await expect(toggles.switches({ checked: true })).toHaveCount(1)
   })
 
+  // The first touch after a launch reaches the app late, and a switch only
+  // flips from a touch that spans a display frame as the app receives it: a
+  // 20 ms hold lost this tap 6 times in 8 on iOS 27.2 (PILOT-1220).
+  test("a Toggle's first tap after a launch flips it", async ({ device, toggles }) => {
+    await device.restartApp()
+    await openScreen(device, "toggles")
+    await expect(toggles.notifications).toBeChecked()
+    await toggles.notifications.tap()
+    await expect(toggles.notifications).not.toBeChecked()
+  })
+
   test("nth() by role alone taps the right Toggle", async ({ toggles }) => {
     await toggles.switches().nth(1).tap()
     await expect(toggles.notifications).not.toBeChecked()

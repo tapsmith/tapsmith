@@ -250,6 +250,13 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/region-screenshot-tests"
 "$OUT/region-screenshot-tests"
 
+# Screenshots of a turned device, redrawn upright (PILOT-1235).
+xcrun swiftc -sdk "$SDK" \
+  Tests/UprightScreenshotTests/main.swift \
+  TapsmithAgent/UprightScreenshot.swift \
+  -o "$OUT/upright-screenshot-tests"
+"$OUT/upright-screenshot-tests"
+
 # Pins XCTest's private animations-idle request (every element touch's wait).
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
