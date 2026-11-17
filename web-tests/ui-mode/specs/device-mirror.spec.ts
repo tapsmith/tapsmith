@@ -11,12 +11,15 @@ import type { Locator } from "@playwright/test"
 import { screenFrame, solidPng } from "../messages/frames.js"
 import type { DevicePane } from "../panes/device.pane.js"
 
-/** The canvas covers its bezel's screen opening on both axes (no letterboxing). */
+/**
+ * The canvas covers its bezel's screen opening on both axes, and its box keeps
+ * the frame's shape (no letterboxing either around or inside the canvas).
+ */
 async function expectCanvasFillsBezel(device: DevicePane, canvas?: Locator) {
   await expect.poll(async () => {
     const fill = await device.canvasFill(canvas)
-    return Math.min(fill.width, fill.height)
-  }).toBeGreaterThan(0.9)
+    return Math.min(fill.width, fill.height) > 0.9 && Math.abs(fill.shape - 1) < 0.02
+  }).toBe(true)
 }
 
 /** Whether the canvas pixel at (x, y) is the green test colour. */
@@ -110,6 +113,8 @@ test.describe("Device mirror", () => {
     await expect(device.canvas).toHaveAttribute("width", "1200")
     await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
     await expectCanvasFillsBezel(device)
+    // The upright phone's notch would sit over the rotated screen's content.
+    expect(await device.bezelCutoutShown()).toBe(false)
 
     // And back. The canvas is the same element throughout, so it still paints.
     ui.sendFrame({ width: 540, height: 1200, seq: 3, png: solidPng(540, 1200, [0, 200, 0]) })
@@ -134,7 +139,26 @@ test.describe("Device mirror", () => {
     await expect(device.canvas).toHaveAttribute("width", "750")
     await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
     await expectCanvasFillsBezel(device)
+    // These phones have no notch: none drawn over the status bar.
+    expect(await device.bezelCutoutShown()).toBe(false)
   })
+
+  for (const [what, w, h, bezel] of [
+    ["an iPhone SE-class phone", 750, 1334, "css-phone"],
+    ["a tablet", 800, 1280, "css-tablet"],
+  ] as const) {
+    test(`fits ${what} on the CSS bezel into a short pane without letterboxing it`, async ({ app, device, page }) => {
+      const ui = app
+      // A short window: the device has to shrink to the pane's height, and its
+      // box must keep the frame's shape, or taps map to the wrong spot.
+      await page.setViewportSize({ width: 1600, height: 500 })
+      ui.sendFrame(screenFrame(w, h, 1))
+      await expect(device.canvas).toHaveAttribute("width", String(w))
+      await expect(device.bezel).toHaveAttribute("data-bezel", bezel)
+      await expectCanvasFillsBezel(device)
+      expect(await device.canvasInsideWindow()).toBe(true)
+    })
+  }
 
   test("shows a placeholder while no device is connected", async ({ app, device }) => {
     const ui = app

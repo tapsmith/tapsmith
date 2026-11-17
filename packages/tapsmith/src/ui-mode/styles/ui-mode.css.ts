@@ -1346,6 +1346,18 @@ html, body, #app {
   border-radius: 0;
   display: block;
 }
+/* The single mirror fits its CSS bezel in JS (DeviceFrame sets --dm-canvas-w
+ * from the container's width and height); the height follows the canvas's
+ * own aspect ratio, so the box always has the frame's shape. */
+.dm-frame:not(.dm-frame-img) .dm-canvas {
+  width: var(--dm-canvas-w, auto);
+}
+/* No notch / punch-hole / side buttons where they would cover the screen
+ * (a rotated phone, or an older phone shape). See DeviceFrame. */
+.dm-frame.dm-skin-bare::after,
+.dm-frame.dm-skin-bare::before {
+  display: none;
+}
 
 .screenshot-device-frame {
   display: flex;

@@ -201,8 +201,8 @@ test.describe("Device groups", () => {
     await expect(device.bezelFor(BOB)).toHaveAttribute("data-bezel", "css-tablet")
     await expect.poll(async () => {
       const fill = await device.canvasFill(device.mirrorFor(ALICE))
-      return Math.min(fill.width, fill.height)
-    }).toBeGreaterThan(0.9)
+      return Math.min(fill.width, fill.height) > 0.9 && Math.abs(fill.shape - 1) < 0.02
+    }).toBe(true)
 
     // The tile's canvas survived the switch: it is still the one registered
     // for alice's frames, so the next frame lands on it.

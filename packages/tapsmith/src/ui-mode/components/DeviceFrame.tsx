@@ -50,24 +50,41 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
 
   const frame = imgFailed ? undefined : bezel.frame;
   const frameAspect = frame?.frameAspect;
+  // The CSS bezel's box is the canvas plus the skin's padding, so it is fitted
+  // through the canvas's own shape — known once a frame has arrived.
+  const cssFitAspect = frame ? undefined : contentAspect;
 
-  // Cap the frame width by (container height × aspect) so the whole device fits
-  // vertically. clientHeight reflects the real rendered height regardless of CSS
-  // definiteness, so this works where container-query height does not.
+  // Fit the whole device into the container by width AND height: CSS max-*
+  // alone caps the canvas's height without narrowing it, which letterboxes the
+  // screen inside the canvas box and skews the tap/pick mapping (both
+  // normalise against that box). For the image bezel this caps the frame
+  // width at (container height × frame aspect); for the CSS bezel, the canvas
+  // width at the room left inside the skin's padding. clientHeight reflects
+  // the real rendered height regardless of CSS definiteness, so this works
+  // where container-query height does not.
   useLayoutEffect(() => {
     const el = ref.current;
     const parent = el?.parentElement;
-    if (!heightBound || !frameAspect || !parent) return;
+    const fitAspect = frameAspect ?? cssFitAspect;
+    if (!heightBound || !fitAspect || !el || !parent) return;
     const measure = () => {
       const w = parent.clientWidth;
       const h = parent.clientHeight;
-      if (w > 0 && h > 0) setWidth(Math.min(w, h * frameAspect));
+      if (w <= 0 || h <= 0) return;
+      if (frameAspect) {
+        setWidth(Math.min(w, h * frameAspect));
+        return;
+      }
+      const cs = getComputedStyle(el);
+      const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      setWidth(Math.max(0, Math.min(w - padX, (h - padY) * fitAspect)));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(parent);
     return () => ro.disconnect();
-  }, [heightBound, frameAspect]);
+  }, [heightBound, frameAspect, cssFitAspect]);
 
   if (frame) {
     const style: Record<string, string> = { '--dm-fa': String(frame.frameAspect) };
@@ -95,8 +112,16 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
   // so Preact keeps the canvas element when the bezel switches.
   const classes = ['dm-frame'];
   if (platform) classes.push(`dm-skin-${platform}`, `dm-skin-${formFactor}`);
+  // A phone whose screen shape rules out the photo frame is rotated or has no
+  // notch (iPhone SE class): the skin's island / punch-hole / side buttons are
+  // drawn for an upright modern phone and would sit over real screen content.
+  if (platform && formFactor === 'phone' && !bezel.frame && contentAspect !== undefined) {
+    classes.push('dm-skin-bare');
+  }
+  const style: Record<string, string> = {};
+  if (platform && heightBound && cssFitAspect && width) style['--dm-canvas-w'] = `${width.toFixed(2)}px`;
   return (
-    <div ref={ref} class={classes.join(' ')} data-testid="device-bezel" data-bezel={platform ? `css-${formFactor}` : 'none'}>
+    <div ref={ref} class={classes.join(' ')} style={style} data-testid="device-bezel" data-bezel={platform ? `css-${formFactor}` : 'none'}>
       <div class="dm-frame-passthrough">
         <div class="dm-frame-passthrough">
           {children}
