@@ -90,7 +90,11 @@
         },
         "isEmulator": { "type": "boolean" },
         "packageName": { "type": "string" },
-        "devicePixelRatio": { "type": "number" }
+        "devicePixelRatio": { "type": "number" },
+        "networkHttpsPassthrough": {
+          "description": "The device did not trust Tapsmith's CA, so its HTTPS passed through the proxy uncaptured.",
+          "type": "boolean"
+        }
       }
     },
     "metadata": {

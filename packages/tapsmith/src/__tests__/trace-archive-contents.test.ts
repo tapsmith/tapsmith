@@ -788,6 +788,23 @@ describe('generated trace archive', () => {
     expect(archive.metadata.device.networkCaptureRoute).toBe('ios-system-proxy');
   });
 
+  // PILOT-1183: a device that did not trust the CA had its HTTPS passed
+  // through uncaptured; the trace says so instead of looking like the app
+  // made no HTTPS requests.
+  for (const httpsPassthrough of [true, false, undefined]) {
+    it(`records whether HTTPS passed through uncaptured (${String(httpsPassthrough)})`, async () => {
+      const { archive } = await runThreeActions({
+        trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },
+      }, {
+        startNetworkCapture: vi.fn(async () => ({
+          requestId: '1', success: true, proxyPort: 12345, errorMessage: '', route: 'ios-network-extension', httpsPassthrough,
+        })),
+      });
+
+      expect(archive.metadata.device.networkHttpsPassthrough).toBe(httpsPassthrough === true ? true : undefined);
+    });
+  }
+
   it('prints a persistent capture warning once even when the first start bundles it with another', async () => {
     const tag = `w-${Date.now()}`;
     const replies = [`${tag} CA install failed\n${tag} host-wide`, `${tag} host-wide`];
@@ -838,6 +855,32 @@ describe('generated trace archive', () => {
       expect(routes.every((r) => r === route)).toBe(true);
     });
   }
+
+  it('tells UI mode on every network publish that HTTPS passed through uncaptured (PILOT-1183)', async () => {
+    const log: CaptureLog = { screenshots: [], hierarchies: [] };
+    const client = makeCapturingClient(log, {
+      startNetworkCapture: vi.fn(async () => ({
+        requestId: '1', success: true, proxyPort: 12345, errorMessage: '', route: 'ios-network-extension', httpsPassthrough: true,
+      })),
+    });
+    const device = new Device(client, { package: 'com.example.app' });
+    const flags: Array<boolean | undefined> = [];
+    pushContext();
+    tapsmithTest('passthrough', async () => { await device.tapXY(1, 2); });
+    const ctx = popContext();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await runSuiteContext(ctx, '', [], [], makeOpts(device, {
+        trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },
+      }, {
+        onNetworkEntries: (_entries, _enabled, _route, httpsPassthrough) => { flags.push(httpsPassthrough); },
+      }));
+    } finally {
+      warn.mockRestore();
+    }
+    expect(flags.length).toBeGreaterThan(0);
+    expect(flags.every((f) => f === true)).toBe(true);
+  });
 
   it('keeps the route on a trace drained from a running proxy after that test\'s start threw', async () => {
     const log: CaptureLog = { screenshots: [], hierarchies: [] };

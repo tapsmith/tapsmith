@@ -62,6 +62,16 @@ impl MitmAuthority {
         &self.ca_pem_path
     }
 
+    /// SHA-256 of the CA certificate's DER as lowercase hex: the key an iOS
+    /// simulator's trust store files it under (PILOT-1183).
+    pub fn ca_cert_sha256_hex(&self) -> String {
+        ring::digest::digest(&ring::digest::SHA256, &self.ca_cert_der)
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
     /// Compute the Android `subject_hash_old` filename for this CA certificate.
     ///
     /// Android's user CA store (`/data/misc/user/0/cacerts-added/`) requires
@@ -296,6 +306,30 @@ mod tests {
             format!("{expected_hash}.0"),
             "Our hash must match openssl x509 -subject_hash_old"
         );
+    }
+
+    // The iOS simulator trust store keys a root by its SHA-256 fingerprint,
+    // the one `openssl x509 -fingerprint -sha256` prints (PILOT-1183).
+    #[test]
+    fn ca_cert_sha256_hex_is_the_openssl_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("ca.pem");
+        let ca = MitmAuthority::generate_new(&cert_path, &dir.path().join("ca-key.pem")).unwrap();
+        let output = std::process::Command::new("openssl")
+            .args(["x509", "-noout", "-fingerprint", "-sha256", "-in"])
+            .arg(&cert_path)
+            .output()
+            .expect("openssl must be installed");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let expected = stdout
+            .trim()
+            .rsplit('=')
+            .next()
+            .unwrap()
+            .replace(':', "")
+            .to_ascii_lowercase();
+        assert_eq!(expected.len(), 64, "{stdout}");
+        assert_eq!(ca.ca_cert_sha256_hex(), expected);
     }
 
     /// Run an in-memory TLS handshake for `host` against `server_config`,
