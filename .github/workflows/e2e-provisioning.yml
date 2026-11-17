@@ -11,7 +11,9 @@ name: E2E Provisioning
 #
 #   - Android: no emulator running; Tapsmith launches two -read-only instances
 #     of the AVD for two workers, then a rerun must reuse them.
-#   - iOS: no simulator booted; Tapsmith boots the configured one.
+#   - iOS: no simulator booted; Tapsmith boots the configured one — a fresh
+#     simulator the job creates with two keyboard languages, whose first
+#     type() must not be lost to the keyboard's intro sheets (PILOT-1226).
 #   - Android bare state (weekly): no AVD, no cached system image —
 #     `tapsmith create-avd --install-tools` bootstraps, then the same run.
 #
@@ -37,6 +39,7 @@ on:
       - "e2e/utils/provisioning-checks.mjs"
       - "e2e/tapsmith.config.android-provisioning-ci.mjs"
       - "e2e/tapsmith.config.ios-provisioning-ci.mjs"
+      - "e2e/tests/first-keyboard.provisioning.ts"
       - "packages/tapsmith/src/emulator.ts"
       - "packages/tapsmith/src/ios-simulator.ts"
       - "packages/tapsmith/src/create-avd.ts"
@@ -728,12 +731,26 @@ jobs:
           printf '0.0.0.0 mesu.apple.com\n0.0.0.0 gdmf.apple.com\n' | sudo tee -a /etc/hosts
           sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
 
-      - name: Select Xcode and pick a simulator
+      # A brand-new simulator, not one from the runner image: on its first
+      # keyboard, iOS shows its first-use intro sheets (swipe typing; with two
+      # keyboard languages, the multilingual one), which swallow every key
+      # typed until dismissed unless Tapsmith marks them as shown (PILOT-1226).
+      # Setting the keyboards needs one boot; the simulator is shut down again
+      # before the run, and no keyboard has appeared on it yet.
+      - name: Select Xcode and create a fresh simulator with two keyboard languages
         run: |
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
-          SIM=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
-          echo "Using simulator: $SIM"
+          MODEL=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
+          SIM="Tapsmith Fresh $MODEL"
+          UDID=$(xcrun simctl create "$SIM" "$MODEL")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID"
+          xcrun simctl spawn "$UDID" defaults write -g AppleKeyboards -array \
+            "en_US@sw=QWERTY;hw=Automatic" "pl_PL@sw=QWERTY;hw=Automatic" "emoji@sw=Emoji"
+          xcrun simctl spawn "$UDID" defaults write -g AppleKeyboardsExpanded -int 1
+          xcrun simctl shutdown "$UDID"
+          echo "Using simulator: $SIM ($UDID)"
           echo "TAPSMITH_IOS_SIMULATOR=$SIM" >> $GITHUB_ENV
 
       - name: Download daemon binary
