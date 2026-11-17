@@ -23,6 +23,14 @@ export interface TraceSummary {
   steps: string[]
   deviceLogs: string[]
   failureScreenshot?: Buffer
+  /**
+   * Whether the trace's last action or assertion is a failed one: nothing
+   * acted on the device after the step that failed (an `afterEach` or
+   * `afterAll` hook that drives the device records steps after it).
+   */
+  endsOnFailedStep: boolean
+  /** Whether the trace was recorded on a device group (`use.devices`). */
+  multiDevice: boolean
 }
 
 /** Whether `metadata.json` lists more than one device (a `use.devices` trace). */
@@ -45,6 +53,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
 
     const steps: string[] = [];
     const deviceLogs: string[] = [];
+    let endsOnFailedStep = false;
 
     // A trace recorded on a device group names the device on every step and
     // log line (`bob: tap`), the way tapsmith_read_trace does — a two-user
@@ -62,6 +71,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
       // Take last N meaningful events (actions + assertions, skip group markers)
       const meaningful = events.filter((e) => e.type === 'action' || e.type === 'assertion');
       const tail = meaningful.slice(-maxSteps);
+      endsOnFailedStep = Boolean(meaningful.at(-1)?.error);
 
       for (const event of tail) {
         const status = event.error ? 'FAIL' : 'OK';
@@ -107,7 +117,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
       failureScreenshot = Buffer.from(files[last]);
     }
 
-    return { steps, deviceLogs, failureScreenshot };
+    return { steps, deviceLogs, failureScreenshot, endsOnFailedStep, multiDevice };
   } catch {
     return undefined;
   }

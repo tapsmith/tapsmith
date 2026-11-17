@@ -11,6 +11,8 @@ import { getSessionResultsStore } from '../session-results.js';
 import { beginTestRun, endTestRun } from '../sdk-device.js';
 import { clipText, MCP_IMAGE_BUDGET_BYTES, serializedTextBytes } from '../response-limits.js';
 import { LOCATOR_PICKER_HINT } from '../../locator-miss-hint.js';
+import { failureScreenLines, heldFailureOf } from '../failure-screen.js';
+import { deviceTargetFor } from './device-target.js';
 
 /**
  * How often a running test suite reports progress to the MCP client. Clients
@@ -69,6 +71,20 @@ export function stdioTestArgs(opts: { files: string[]; testFilter?: string; proj
 const LISTED_MISSED_LOCATORS = 3;
 
 /**
+ * The locator a native locator miss names (its first sentence), or
+ * undefined when `error` is not one (locator-miss-hint.ts: every native miss
+ * ends with {@link LOCATOR_PICKER_HINT}).
+ */
+export function missedLocatorOf(error: string): string | undefined {
+  if (!error.includes(LOCATOR_PICKER_HINT)) return undefined;
+  // Quoted values are read as whole tokens, so a ")" or ". " inside one
+  // does not end the locator early.
+  const m = /^(?:Expected element|Element(?: not found:)?) ((?:"(?:[^"\\\n]|\\.)*"|[^"\n])+?\))(?: was not found| did not reach state| to (?:be visible|exist|have count)|\. |$)/m
+    .exec(error);
+  return m ? m[1] : undefined;
+}
+
+/**
  * The step an agent should take when failures are locator misses,
  * or undefined. A native miss is told by the sentence every one ends with
  * (locator-miss-hint.ts); the locator is the one its first sentence names.
@@ -77,18 +93,17 @@ export function locatorMissStep(failures: TestFailureDetail[]): string | undefin
   const misses = failures.filter((f) => f.error.includes(LOCATOR_PICKER_HINT));
   if (misses.length === 0) return undefined;
   const locators = [...new Set(misses.flatMap((f) => {
-    // Quoted values are read as whole tokens, so a ")" or ". " inside one
-    // does not end the locator early.
-    const m = /^(?:Expected element|Element(?: not found:)?) ((?:"(?:[^"\\\n]|\\.)*"|[^"\n])+?\))(?: was not found| did not reach state| to (?:be visible|exist|have count)|\. |$)/m
-      .exec(f.error);
-    return m ? [m[1]] : [];
+    const locator = missedLocatorOf(f.error);
+    return locator ? [locator] : [];
   }))];
   const shown = locators.slice(0, LISTED_MISSED_LOCATORS).join(', ');
   const more = locators.length > LISTED_MISSED_LOCATORS ? ` and ${locators.length - LISTED_MISSED_LOCATORS} more` : '';
   const which = misses.length === 1 ? '1 failure is a locator that matched nothing' : `${misses.length} failures are locators that matched nothing`;
   return `NEXT STEP: ${which}${shown ? `: ${shown}${more}` : ''}. ` +
     'Read the failure\'s trace (tapsmith_read_trace) to see the screen it was on, find a locator that matches with ' +
-    'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1.';
+    'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1. ' +
+    'To try locators on the screen where it failed, run just that test (`test` set to its name): when a run of one test fails, ' +
+    'the device stays on the screen where it failed.';
 }
 
 /**
@@ -103,7 +118,7 @@ function forAgent(error: string): string {
 export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_run_tests',
-    'Run Tapsmith test files and return structured results. Reports pass/fail counts and detailed failure information including error messages and trace file paths for debugging. Only one test run can execute at a time. Use tapsmith_list_tests first to discover available files, test names, and project names. On a failure, read its trace with tapsmith_read_trace; for a locator that matched nothing, find one that matches with tapsmith_snapshot and tapsmith_test_locator before changing the test.',
+    'Run Tapsmith test files and return structured results. Reports pass/fail counts and detailed failure information including error messages and trace file paths for debugging. Only one test run can execute at a time. Use tapsmith_list_tests first to discover available files, test names, and project names. On a failure, read its trace with tapsmith_read_trace; for a locator that matched nothing, find one that matches with tapsmith_snapshot and tapsmith_test_locator before changing the test. To fix a failing test against the live app, run just that test (`test`): when a run of one test fails, the device stays on the screen where it failed, and the result lists the elements there closest to a locator that matched nothing.',
     {
       files: z.array(z.string()).describe('Test file paths: absolute, relative to the config\'s directory (rootDir) or to the MCP server\'s working directory, or glob patterns matched the same way (e.g. ["/Users/me/project/e2e/tests/login.tapsmith.ts"], ["tests/login.tapsmith.ts"], ["**/login.tapsmith.ts"]). An argument that matches no discovered file is named in the error. Use tapsmith_list_tests to find available files.'),
       test: z.string().optional().describe('Run only tests whose full name contains this text (case-insensitive substring of "Describe > test name", e.g. "submits form"). May match more than one test, and applies across all the given files. If it matches nothing, the run returns an error listing the available tests — it never silently passes. Use tapsmith_list_tests to see exact names.'),
@@ -182,7 +197,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
         // Render per-failure details (steps, device logs, trace path) and
         // collect any failure screenshots. Shared by the stopped-with-failures
         // and failed branches.
-        const appendFailureDetails = (lines: string[]): void => {
+        const appendFailureDetails = (lines: string[], heldLines?: string[]): void => {
           if (!result.failures || result.failures.length === 0) return;
           const failures = result.failures;
           let detailed = 0;
@@ -255,6 +270,13 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             );
             lines.push(parts.join(' '));
           }
+          // A run of one test that failed left the device on its screen:
+          // say so, with what is closest to a missed locator there, in place
+          // of the step that sends the agent to the trace (PILOT-1241).
+          if (heldLines) {
+            lines.push('', ...heldLines);
+            return;
+          }
           const step = locatorMissStep(failures);
           if (step) lines.push('', step);
         };
@@ -313,7 +335,15 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
               ? `Tests failed: ${result.passed} passed, ${result.failed} failed, ${result.skipped} skipped (${result.duration}ms)`
               : buildNoTestsExecutedMessage(dispatcher, files, result.passed, result.skipped, result.duration),
           ];
-          appendFailureDetails(lines);
+          const held = heldFailureOf(result, readTraceSummary, (error) => missedLocatorOf(error) !== undefined);
+          const heldLines = held
+            ? await failureScreenLines({
+              held,
+              missedLocator: missedLocatorOf(held.failure.error),
+              client: async () => (await deviceTargetFor({ device: device || undefined, project: held.failure.projectName ?? project }, dispatcher)).client,
+            })
+            : undefined;
+          appendFailureDetails(lines, heldLines);
           // A session with no config has no app to launch, so every run here
           // fails for a reason that has nothing to do with the tests.
           const configWarning = dispatcher.getSessionInfo().configWarning;

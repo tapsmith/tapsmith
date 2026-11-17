@@ -48,6 +48,24 @@ describe('readTraceSummary()', () => {
     }
   });
 
+  it('says whether the trace ends on the failed step (PILOT-1241)', () => {
+    const failed = { type: 'assertion', assertion: 'toBeVisible', error: 'not visible', duration: 50 };
+    const cases: [object[], boolean][] = [
+      [[{ type: 'action', action: 'tap', duration: 10 }, failed, { type: 'group-start', title: 'afterEach Hooks' }], true],
+      // An afterEach/afterAll hook drove the device after the failure.
+      [[failed, { type: 'group-start', title: 'afterEach Hooks' }, { type: 'action', action: 'pressKey', duration: 10 }], false],
+      [[{ type: 'action', action: 'tap', duration: 10 }], false],
+    ];
+    for (const [events, expected] of cases) {
+      const zip = createTraceZip(events);
+      try {
+        expect(readTraceSummary(zip)!.endsOnFailedStep).toBe(expected);
+      } finally {
+        fs.unlinkSync(zip);
+      }
+    }
+  });
+
   it('skips group-start events', () => {
     const events = [
       { type: 'group-start', title: 'Test' },
