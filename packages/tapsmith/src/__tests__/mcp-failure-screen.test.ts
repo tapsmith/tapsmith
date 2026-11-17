@@ -175,6 +175,35 @@ describe('closestOnScreen', () => {
     expect(result.elements[1]).toEqual({ description: 'button "Sign in"', locator: undefined });
   });
 
+  it('lists an element reported twice (inside a same-label container, as iOS reports some) once', async () => {
+    const NESTED = `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][400,800]">
+      <node class="android.view.ViewGroup" text="Sign In" tapsmith-role="heading" bounds="[24,140][378,173]">
+        <node class="android.widget.TextView" text="Sign In" tapsmith-role="heading" bounds="[24,140][378,173]"/>
+      </node>
+      <node class="android.widget.Button" text="Sign in" clickable="true" bounds="[24,400][378,444]"/>
+    </node></hierarchy>`;
+    const evaluateSelectors = vi.fn(async (selectors: Selector[]): Promise<EvaluateSelectorsResponse> => ({
+      requestId: 'r', errorMessage: '',
+      results: selectors.map((s) => {
+        const words = s.kind.type === 'role' ? s.kind.value.name : 'value' in s.kind ? s.kind.value : undefined;
+        if (s.kind.type === 'role' && s.kind.value.role === 'heading' && words === 'Sign In') {
+          return { elements: [{ elementId: '', className: 'android.widget.TextView', text: 'Sign In', bounds: { left: 24, top: 140, right: 378, bottom: 173 } } as ElementInfo], errorMessage: '' };
+        }
+        if (s.kind.type === 'role' && s.kind.value.role === 'button' && words === 'Sign in') {
+          return { elements: [{ elementId: '', className: 'android.widget.Button', text: 'Sign in', bounds: { left: 24, top: 400, right: 378, bottom: 444 } } as ElementInfo], errorMessage: '' };
+        }
+        return { elements: [], errorMessage: '' };
+      }),
+    }));
+    const getUiHierarchy = async () => ({ requestId: 'r', hierarchyXml: NESTED, errorMessage: '' });
+    const result = await closestOnScreen({ evaluateSelectors, getUiHierarchy }, 'getByText("Sign Inn")');
+    if (result.kind !== 'matches') throw new Error(result.kind);
+    expect(result.elements.map((e) => e.locator)).toEqual([
+      'device.getByRole("heading", { name: "Sign In" })',
+      'device.getByRole("button", { name: "Sign in" })',
+    ]);
+  });
+
   it('does not read the screen for a locator with no words', async () => {
     const d = device();
     expect(await closestOnScreen(d, 'getByRole("button")')).toEqual({ kind: 'no-words' });

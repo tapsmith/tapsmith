@@ -23,6 +23,8 @@ import type { TraceSummary } from './tools/trace-utils.js';
 
 /** Elements listed at most. */
 const MAX_CLOSEST = 3;
+/** Candidates checked per element listed, for the duplicates left out. */
+const CANDIDATES_PER_LISTED = 2;
 /** The least similarity (0–1) an element needs to be listed as close. */
 const MIN_SIMILARITY = 0.5;
 /** Selectors per agent call on iOS, where each call costs one capture (as tapsmith_snapshot). */
@@ -175,14 +177,23 @@ export async function closestOnScreen(
   if (needles.length === 0) return { kind: 'no-words' };
   const { hierarchyXml, errorMessage } = await client.getUiHierarchy();
   if (errorMessage) return { kind: 'error', message: errorMessage };
-  const nodes = closestNodes(semanticNodes(parseHierarchyXml(hierarchyXml)), needles);
+  // A few spare candidates: one element can be listed twice (an iOS
+  // element and the container reporting the same label), and each is shown once.
+  const nodes = closestNodes(semanticNodes(parseHierarchyXml(hierarchyXml)), needles, MAX_CLOSEST * CANDIDATES_PER_LISTED);
   if (nodes.length === 0) return { kind: 'matches', elements: [] };
   const ios = hierarchyXml.includes('<XCUIElementType');
   const { byNode } = await agentValidatedSuggestions(client, nodes, ios ? { chunkSize: IOS_CHUNK_SIZE } : {});
-  return {
-    kind: 'matches',
-    elements: nodes.map((node) => ({ description: describeNode(node), locator: byNode.get(node)?.[0]?.code })),
-  };
+  const elements: ClosestElement[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    const element = { description: describeNode(node), locator: byNode.get(node)?.[0]?.code };
+    const key = element.locator ?? `${element.description}@${node.attributes.get('bounds') ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    elements.push(element);
+    if (elements.length === MAX_CLOSEST) break;
+  }
+  return { kind: 'matches', elements };
 }
 
 // ─── The result's lines ───
