@@ -1066,6 +1066,11 @@ html, body, #app {
 
 /* Device column (v2) */
 .device-col {
+  /* Fill the device pane rather than size to the mirror: the mirror fits
+   * itself to this height (DeviceFrame), so a content-sized column would
+   * shrink with a short or landscape frame and never grow back. */
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

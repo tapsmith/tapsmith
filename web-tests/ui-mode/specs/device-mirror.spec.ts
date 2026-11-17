@@ -124,6 +124,45 @@ test.describe("Device mirror", () => {
     await expect.poll(() => greenAt(device.canvas, 270, 600)).toBe(true)
   })
 
+  test("returns to its full size after a rotation round trip", async ({ app, device }) => {
+    const ui = app
+    ui.sendFrame(screenFrame(540, 1200, 1))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+    await expectCanvasFillsBezel(device)
+    const before = await device.canvas.boundingBox()
+
+    ui.sendFrame(screenFrame(1200, 540, 2))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expectCanvasFillsBezel(device)
+    ui.sendFrame(screenFrame(540, 1200, 3))
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+
+    // A landscape phase must not leave the pane (and so the device) shrunk.
+    await expect.poll(async () => (await device.canvas.boundingBox())?.width).toBeCloseTo(before!.width, 0)
+    expect((await device.canvas.boundingBox())!.height).toBeCloseTo(before!.height, 0)
+  })
+
+  for (const [what, w, h] of [
+    ["the photo bezel", 540, 1200],
+    ["the CSS bezel", 750, 1334],
+  ] as const) {
+    test(`grows back after the window is made shorter and then taller again (${what})`, async ({ app, device, page }) => {
+      const ui = app
+      const tall = page.viewportSize()!
+      ui.sendFrame(screenFrame(w, h, 1))
+      await expect(device.canvas).toHaveAttribute("width", String(w))
+      await expectCanvasFillsBezel(device)
+      const before = await device.canvas.boundingBox()
+
+      await page.setViewportSize({ width: tall.width, height: 450 })
+      await expect.poll(async () => (await device.canvas.boundingBox())!.height).toBeLessThan(before!.height - 50)
+      await page.setViewportSize(tall)
+
+      await expect.poll(async () => (await device.canvas.boundingBox())?.height).toBeCloseTo(before!.height, 0)
+      await expectCanvasFillsBezel(device)
+    })
+  }
+
   test("gives a tablet-shaped screen the tablet bezel even with an opaque serial", async ({ app, device }) => {
     const ui = app
     // The seeded device is `emulator-5554`: nothing in the name says tablet.
