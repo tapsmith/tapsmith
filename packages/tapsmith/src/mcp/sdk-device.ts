@@ -216,6 +216,11 @@ interface LocatorRootOptions {
    * connect that can only time out).
    */
   beforeConnect?: () => void
+  /**
+   * How long waits on the page may take (default {@link MCP_ACTION_TIMEOUT_MS}):
+   * a WebView locator built on these roots takes it as its timeout.
+   */
+  timeoutMs?: number
 }
 
 /**
@@ -282,7 +287,7 @@ export async function withLocatorRoots<T>(
     // Reuses the live connection, or connects again if it died.
     const handle = await open.holder._webviewOfApp(packageName);
     // The connect had its own budget; waits on the page get the action one.
-    handle._setTimeoutMs(MCP_ACTION_TIMEOUT_MS);
+    handle._setTimeoutMs(options.timeoutMs ?? MCP_ACTION_TIMEOUT_MS);
     return handle;
   };
   try {

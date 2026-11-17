@@ -26,7 +26,7 @@ const DESCRIPTION = 'Run test statements on the device, as a test body writes th
   + '`await expect(<locator>)[.not].<matcher>(…);` (toBeVisible, toHaveText, toBeEnabled, toHaveCount, …), or '
   + '`await device.<method>(…);` (openDeepLink, tapXY, longPressXY, dragXY, swipe, pressKey, hideKeyboard, setOrientation, launchApp, …). '
   + 'Arguments are literals; variables, functions and other code are refused with their line and column, and then nothing runs. '
-  + `Statements run in order and stop at the first failure, which is reported with the error a test would get. Each waits at most \`timeout\` (default ${MCP_ACTION_TIMEOUT_MS / 1000} s). `
+  + `Statements run in order and stop at the first failure, which is reported with the error a test would get. Each waits at most \`timeout\` for its element or assertion (default ${MCP_ACTION_TIMEOUT_MS / 1000} s; typing then gets up to 30 s). `
   + 'Each passing statement answers with its test line, its locator checked by the device agent: write those lines into the test. '
   + 'Refused while a test run is in progress.';
 
@@ -171,5 +171,5 @@ async function runStatement(
     }
     await invoke(handle, statement.method, built.args);
     return describeLine(check(), line);
-  });
+  }, { timeoutMs });
 }

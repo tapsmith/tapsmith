@@ -64,9 +64,9 @@ function buttonsScreen(labels: string[]) {
   return { xml, elements, agent };
 }
 
-function makeDaemon(screen = buttonsScreen(['Sign in', 'Register'])) {
+function makeDaemon(screen: { xml: string; agent: (sel: Selector) => ElementInfo[] } = buttonsScreen(['Sign in', 'Register'])) {
   const calls: string[] = [];
-  const action = (name: string) => vi.fn(async () => {
+  const action = (name: string) => vi.fn(async (..._args: unknown[]) => {
     calls.push(name);
     return ok();
   });
@@ -249,6 +249,36 @@ describe('tapsmith_run_code', () => {
     expect((daemon.longPress.mock.calls[0] as unknown[])[3]).toBe('b1');
   });
 
+  it('reports a positional setChecked line unverified when its stale retry picks another element', async () => {
+    const screen = buttonsScreen(['Apple', 'Banana', 'Cherry']);
+    let elements = screen.elements;
+    const agent = (sel: Selector): ElementInfo[] => {
+      const k = sel.kind;
+      if (k.type === 'role' && k.value.role === 'button') {
+        const name = k.value.name;
+        return elements.filter((e) => name === undefined || (typeof name === 'string' && e.text.toLowerCase().includes(name.toLowerCase())));
+      }
+      return [];
+    };
+    daemon = makeDaemon({ ...screen, agent });
+    hoisted.client = daemon.client;
+    let taps = 0;
+    daemon.tap.mockImplementation(async (_sel: unknown, _t: unknown, id: unknown) => {
+      taps++;
+      if (taps === 1) {
+        // The first tap's cached id went stale, and the list shifted: a new
+        // row on top moves every position down by one.
+        elements = [makeElement({ elementId: 'new', role: 'button', text: 'Date', bounds: { left: 0, top: 0, right: 390, bottom: 40 } }), ...elements];
+        return { requestId: '1', success: false, errorType: 'ACTION_FAILED', errorMessage: 'stale element reference' };
+      }
+      elements = elements.map((e) => (e.elementId === id ? { ...e, checked: true } : e));
+      return ok();
+    });
+    const res = await runCode('await device.getByRole("button").nth(1).setChecked(true);');
+    expect(taps).toBe(2);
+    expect(text(res)).toMatch(/^Statement 1 of 1 \(line 1\): OK\nTest line: none, the locator could not be verified \(.*picked a different element/s);
+  });
+
   it('checks a double tap\'s locator as it resolves: strict, no extra round trip', async () => {
     const res = await runCode('await device.getByText("Register").doubleTap();');
     expect(text(res)).toBe('Statement 1 of 1 (line 1): OK\nTest line: await device.getByText("Register").doubleTap();');
@@ -301,6 +331,8 @@ describe('tapsmith_run_code', () => {
       const page = { getByText: vi.fn(() => locator), locator: vi.fn(() => locator), _setTimeoutMs: vi.fn() };
       const connect = vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page as unknown as WebViewHandle);
       const res = await runCode('await webview.locator("#email").fill("a@b.c");\nawait this.webview.getByText("Go").click();');
+      // The page's waits get the default 5 s, as the other tools' do.
+      expect(page._setTimeoutMs).toHaveBeenLastCalledWith(5_000);
       expect(text(res)).toBe([
         'Statement 1 of 2 (line 1): OK',
         'Test line: await webview.locator("#email").fill("a@b.c");',
@@ -312,6 +344,14 @@ describe('tapsmith_run_code', () => {
       expect(locator.fill).toHaveBeenCalledWith('a@b.c');
       expect(locator.click).toHaveBeenCalledTimes(1);
       expect(daemon.calls).toEqual([]);
+    });
+
+    it('gives the page\'s waits the tool\'s timeout', async () => {
+      const locator = { click: vi.fn(async () => {}), _nthIndex: undefined };
+      const page = { getByText: vi.fn(() => locator), _setTimeoutMs: vi.fn() };
+      vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page as unknown as WebViewHandle);
+      await runCode('await expect(webview.getByText("Loaded")).toBeVisible();', { timeout: 20_000 }).catch(() => {});
+      expect(page._setTimeoutMs).toHaveBeenCalledWith(20_000);
     });
 
     it('is refused, before connecting, while a test run holds the device', async () => {

@@ -3200,7 +3200,11 @@ export class ElementHandle {
       } catch (err) {
         if (!isStaleElementError(err instanceof Error ? err.message : String(err))) throw err;
       }
-      return dispatch(await this._actionTarget(), await dest._actionTarget());
+      // A modified source resolves again here; whoever watches the action's
+      // resolutions (onResolved) is told which element it got.
+      const again = this._hasModifiers() ? await this._resolveOne() : undefined;
+      if (again) await this._options.onResolved?.(again, true);
+      return dispatch(await this._actionTarget(again), await dest._actionTarget());
     }, 'Drag and drop failed');
   }
 
@@ -3267,6 +3271,7 @@ export class ElementHandle {
       ) {
         const fresh = await this._resolveOne();
         if (fresh.checked === checked) return synthetic(true); // already set after the change
+        await this._options.onResolved?.(fresh, true);
         tapRes = await tapByTarget(await this._actionTarget(fresh));
       }
       if (!tapRes.success) return tapRes;
@@ -3309,6 +3314,7 @@ export class ElementHandle {
             lastTapAt = Date.now();
             nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
             try {
+              await this._options.onResolved?.(after, true);
               const retapRes = await tapByTarget(await this._actionTarget(after));
               if (retapRes.success) tapRes = retapRes;
             } catch (retapErr) {

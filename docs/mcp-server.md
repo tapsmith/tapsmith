@@ -328,7 +328,7 @@ Run test statements on the device, written as a test body writes them, and see w
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `code` | string | Yes | One or more statements, one per line or separated by `;` |
-| `timeout` | number | No | How long each statement may wait, in milliseconds (default 5000, at most 120000). A `{ timeout }` written in a statement wins for that statement. |
+| `timeout` | number | No | How long each statement may wait for its element or assertion, `webview.` ones included, in milliseconds (default 5000, at most 120000). A `{ timeout }` written in a statement wins for that statement. Once its field is there, typing gets up to 30 seconds, as with `tapsmith_type`. |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 | `project` | string | No | Project whose device to use, as on the other device tools. |
 
