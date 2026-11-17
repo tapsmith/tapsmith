@@ -43,6 +43,15 @@ describe("Navigation stack: a control that every screen has", () => {
     await expect(stackScreen.level).toHaveText("Level 2")
   })
 
+  // PILOT-1225: on iOS, BACK taps the native header's back button, not the
+  // first button in the header.
+  test("pressKey('BACK') pops the pushed screen", async ({ device, stackScreen }) => {
+    await stackScreen.push.tap()
+    await expect(stackScreen.level).toHaveText("Level 2")
+    await device.pressKey("BACK")
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
   test("pushes and pops can follow each other with no wait", async ({ stackScreen }) => {
     await stackScreen.push.tap()
     await stackScreen.push.tap()

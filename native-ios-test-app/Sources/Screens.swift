@@ -303,3 +303,50 @@ struct ToolbarScreenView: View {
         .navigationTitle("Toolbar")
     }
 }
+
+// ─── Back key ───
+
+/// Stacks for `pressKey("back")` (PILOT-1225), each presented full screen so
+/// its root has no back button of its own. Both roots put an Edit button
+/// where a back button would be, the first bar button on the screen: the
+/// back key must refuse there, not tap it.
+struct BackKeyView: View {
+    @State private var showSwiftUIStack = false
+    @State private var showUIKitStack = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Button("Open SwiftUI Stack") { showSwiftUIStack = true }
+            Button("Open UIKit Stack") { showUIKitStack = true }
+        }
+        .navigationTitle("Back Key")
+        .fullScreenCover(isPresented: $showSwiftUIStack) {
+            BackKeySwiftUIStack { showSwiftUIStack = false }
+        }
+        .fullScreenCover(isPresented: $showUIKitStack) {
+            UIKitBackKeyStack { showUIKitStack = false }.ignoresSafeArea()
+        }
+    }
+}
+
+private struct BackKeySwiftUIStack: View {
+    let close: () -> Void
+    @State private var items = ["Alpha", "Beta"]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                NavigationLink("Open SwiftUI Detail") {
+                    Text("SwiftUI detail content").navigationTitle("SwiftUI Detail")
+                }
+                ForEach(items, id: \.self) { Text($0) }
+                    .onDelete { items.remove(atOffsets: $0) }
+            }
+            .navigationTitle("SwiftUI Root")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { EditButton() }
+                ToolbarItem(placement: .topBarTrailing) { Button("Close", action: close) }
+            }
+        }
+    }
+}

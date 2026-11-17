@@ -1,6 +1,7 @@
 import { test as base, type Device } from "tapsmith"
 import {
   NativeAccessibilityScreen,
+  NativeBackKeyScreen,
   NativeDialogsScreen,
   NativeGesturesScreen,
   NativeHomeScreen,
@@ -32,6 +33,7 @@ type NativeFixtures = {
   gestures: NativeGesturesScreen
   slowLoad: NativeSlowLoadScreen
   a11y: NativeAccessibilityScreen
+  backKey: NativeBackKeyScreen
   uikitControls: UIKitControlsScreen
   uikitTable: UIKitTableScreen
   uikitDialogs: UIKitDialogsScreen
@@ -52,6 +54,7 @@ export const test = base.extend<NativeFixtures>({
   gestures: async ({ device }, use) => { await use(new NativeGesturesScreen(device)) },
   slowLoad: async ({ device }, use) => { await use(new NativeSlowLoadScreen(device)) },
   a11y: async ({ device }, use) => { await use(new NativeAccessibilityScreen(device)) },
+  backKey: async ({ device }, use) => { await use(new NativeBackKeyScreen(device)) },
   uikitControls: async ({ device }, use) => { await use(new UIKitControlsScreen(device)) },
   uikitTable: async ({ device }, use) => { await use(new UIKitTableScreen(device)) },
   uikitDialogs: async ({ device }, use) => { await use(new UIKitDialogsScreen(device)) },
