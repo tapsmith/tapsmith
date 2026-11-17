@@ -77,6 +77,13 @@ describe('readTraceSummary()', () => {
       { type: 'group-start', name: 'Test' }, failedStep, { type: 'group-end', name: 'Test' },
       { type: 'group-start', name: 'afterEach Hooks' }, hookStep, { type: 'group-end', name: 'afterEach Hooks' },
     ])).toBe(login);
+    // A fixture's teardown runs in no group, after the test: its failed step is not the test's (numbered after `Test` ends).
+    expect(read([
+      { type: 'group-start', name: 'Test', actionIndex: 1 }, failedStep, { type: 'group-end', name: 'Test', actionIndex: 2 },
+      hookStep,
+    ])).toBe(login);
+    // A step the test left in flight is recorded after the group ends, numbered inside it.
+    expect(read([{ type: 'group-start', name: 'Test', actionIndex: 1 }, { type: 'group-end', name: 'Test', actionIndex: 2 }, failedStep])).toBe(login);
     // A failure in a beforeEach hook is the test's failure.
     expect(read([{ type: 'group-start', name: 'beforeEach Hooks' }, failedStep, { type: 'group-end', name: 'beforeEach Hooks' }])).toBe(login);
     expect(read([{ type: 'action', action: 'tap', actionIndex: 1, hasHierarchyBefore: true }])).toBeUndefined();

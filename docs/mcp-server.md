@@ -368,7 +368,7 @@ long, fewer failures are shown in detail. The failures after those, up to the
 that have one, as many as fit the response limit. The report ends by pointing to `tapsmith_list_results`, which lists
 every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1. When more than one test ran, it also says how to try locators on the screen where a test failed: run just that test.
 
-When the run was one test and it failed, the report checks whether the device is still on the screen where it failed (`DEVICE HELD`), and for a locator that matched nothing it lists the elements on the device's screen closest to it, each with a locator the device agent checked finds it alone. See [Fix a failing test](#fix-a-failing-test).
+When the run was one test and it failed, the report checks whether the device is still on the screen where it failed (`DEVICE HELD`), and for a locator that matched nothing it lists the elements on the device's screen closest to it, each with a locator the device agent checked finds it alone when there is one. See [Fix a failing test](#fix-a-failing-test).
 
 A file that dies before any test reports — a failed import, a crashed or
 timed-out worker — is reported as a single failure named
@@ -515,11 +515,11 @@ Returns a message indicating whether watch mode was enabled or disabled.
 A test that fails on a locator can be fixed against the live app: the device stays on the screen where it failed.
 
 1. **Run just that test:** call `tapsmith_run_tests` with its file and `test` set to its name (from `tapsmith_list_tests`), so the run is that one test
-2. **Read the report:** when it fails, the report says `DEVICE HELD` with the screen it is still on and, for a locator that matched nothing, lists the elements there closest to it, each with a checked locator
+2. **Read the report:** when it fails, the report says `DEVICE HELD` with the screen it is still on and, for a locator that matched nothing, lists the elements there closest to it, with checked locators
 3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen
 4. **Change the test and run it again:** the next `tapsmith_run_tests` resets the app as usual, so the test starts from its normal starting point
 
-Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when the device shows it: its screen now matches the one the failure's trace captured at the failed step. When the two differ, the report says so and names no cause: a step is captured when it starts, so the app may have moved on while the step waited; the test's own `afterEach` or `afterAll` hooks or a fixture's teardown may have moved it after the failure; or another device ran the test. For a locator that matched nothing it still lists the closest elements on the device's screen as it is now, to try once `tapsmith_snapshot` shows the screen the test failed on (`tapsmith_read_trace` shows the failure screen).
+Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when the device shows it: its screen now matches the one the failure's trace captured at the failed step. When the two differ, the report says so without claiming why. A step is captured when it starts, so the app may have moved on while the step waited; the test's own `afterEach` or `afterAll` hooks or a fixture's teardown may have moved it after the failure; or another device ran the test. For a locator that matched nothing it still lists the closest elements on the device's screen as it is now, to try once `tapsmith_snapshot` shows the screen the test failed on (`tapsmith_read_trace` shows the failure screen).
 
 There is no screen report:
 

@@ -57,12 +57,18 @@ const AFTER_HOOK_GROUPS = new Set(['afterEach Hooks', 'afterAll Hooks']);
 
 /** The screen captured at the test's failed step (see {@link TraceSummary.failureHierarchyXml}). */
 function failedStepHierarchy(events: TraceEvent[], files: Record<string, Uint8Array>): string | undefined {
+  // Steps after the test's own (its afterEach/afterAll hooks, its fixtures'
+  // teardown, which runs in no group) are numbered after the `Test` group
+  // ends; a step the test left in flight when it failed was numbered before.
+  let testEnd: number | undefined;
+  for (const e of events) if (e.type === 'group-end' && e.name === 'Test') testEnd = e.actionIndex;
   const open: string[] = [];
   let failed: TraceEvent | undefined;
   for (const e of events) {
     if (e.type === 'group-start') open.push(e.name ?? '');
     else if (e.type === 'group-end') open.pop();
-    else if ((e.type === 'action' || e.type === 'assertion') && e.error && !open.some((g) => AFTER_HOOK_GROUPS.has(g))) failed = e;
+    else if ((e.type === 'action' || e.type === 'assertion') && e.error && !open.some((g) => AFTER_HOOK_GROUPS.has(g))
+      && (testEnd === undefined || (e.actionIndex !== undefined && e.actionIndex < testEnd))) failed = e;
   }
   if (failed?.actionIndex === undefined || !failed.hasHierarchyBefore) return undefined;
   const file = files[hierarchyArchivePath(failed.actionIndex, 'before')];

@@ -248,7 +248,7 @@ describe('failureScreenReport', () => {
     expect(t).toContain('NEXT STEP: the locator matched nothing on this screen. Check a replacement with tapsmith_test_locator');
   });
 
-  it('claims nothing and names no cause when the screen differs from the failure\'s, but still lists what is closest on the device\'s screen', async () => {
+  it('claims nothing when the screen differs from the failure\'s, but still lists what is closest on the device\'s screen', async () => {
     // A step is captured when it starts: the app may have moved on while it
     // waited, a hook may have moved it, or this is another device. Only the
     // device's screen matching the capture counts as held.

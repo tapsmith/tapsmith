@@ -202,7 +202,8 @@ export type ClosestResult =
 
 /**
  * The elements on the device's current screen closest to what `locator`
- * looked for, each with a locator the agent checked resolves to it alone.
+ * looked for, each with a locator the agent checked resolves to it alone
+ * when it found one.
  */
 export async function closestOnScreen(
   client: Pick<TapsmithGrpcClient, 'evaluateSelectors'>,
