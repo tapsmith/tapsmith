@@ -156,12 +156,12 @@ Check the daemon logs — run `tapsmith test` with `RUST_LOG=tapsmith_core=debug
 
 ### When the CA certificate can't be installed
 
-`xcrun simctl keychain add-root-cert` goes through CoreSimulator, which can stall on a loaded machine (most often a CI runner booting several simulators). Tapsmith tries the install up to three times, stopping after two that time out. When every attempt fails, it checks the simulator's trust store on disk, since an earlier run (or an attempt that timed out) may already have installed the CA. If the CA is there, capture carries on as usual.
+`xcrun simctl keychain add-root-cert` goes through CoreSimulator, which can stall on a loaded machine (most often a CI runner booting several simulators). Tapsmith tries the install up to three times, for at most about 40 seconds in all. When every attempt fails, it checks the simulator's trust store on disk, since an earlier run (or an attempt that timed out) may already have installed the CA. If the CA is there, capture carries on as usual.
 
 If it isn't, the simulator would reject every certificate the proxy presents, so Tapsmith stops decrypting HTTPS for the rest of the session instead of breaking the app's requests. It passes HTTPS through to the real servers and prints a warning:
 
 ```text
-[tapsmith] Network capture warning: Could not install Tapsmith's CA certificate on the simulator (tried 2 times): simctl keychain add-root-cert timed out after 30s (CoreSimulatorService may be wedged). HTTPS is passed through to its servers uncaptured, …
+[tapsmith] Network capture warning: Could not install Tapsmith's CA certificate on the simulator (tried 2 times): simctl keychain add-root-cert timed out after 6s (CoreSimulatorService may be wedged). HTTPS is passed through to its servers uncaptured, …
 ```
 
 What that means for the run:

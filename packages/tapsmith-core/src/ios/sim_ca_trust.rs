@@ -17,18 +17,27 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use super::device::SIMCTL_TIMEOUT;
+
 /// The wait before each retry of a failed install. Two retries: a wedged
 /// CoreSimulator sometimes recovers within seconds.
 pub(crate) const INSTALL_RETRY_BACKOFF: [Duration; 2] =
     [Duration::from_secs(2), Duration::from_secs(5)];
 
-/// No retry starts once the attempts so far have taken this long. Each
-/// attempt is bounded by `SIMCTL_TIMEOUT` (30 s), so two timed-out attempts
-/// end it: capture start (and the session's first test) is waiting.
-pub(crate) const INSTALL_RETRY_BUDGET: Duration = Duration::from_secs(60);
+/// Everything [`ensure_trusted`] spends on install attempts and the waits
+/// between them. Each attempt's timeout is cut to what is left of it. The
+/// SDK gives the whole capture start 60 s (its default gRPC deadline), so
+/// this leaves room for the trust-store reads, the proxy start and routing:
+/// a start that outlived the deadline would fail with DEADLINE_EXCEEDED
+/// instead of passing HTTPS through.
+pub(crate) const INSTALL_BUDGET: Duration = Duration::from_secs(40);
+
+/// No retry starts with less than this left of [`INSTALL_BUDGET`]: an attempt
+/// cut shorter than this could not finish even on a healthy CoreSimulator.
+const MIN_RETRY_ATTEMPT: Duration = Duration::from_secs(5);
 
 /// Bound on reading the trust store, which never involves CoreSimulator.
-const TRUST_STORE_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const TRUST_STORE_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Whether the simulator trusts the CA after [`ensure_trusted`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,28 +55,30 @@ pub(crate) enum SimCaTrust {
 /// Install the CA on simulator `udid`, retrying, and decide whether TLS can
 /// be intercepted.
 ///
-/// `install` runs one `simctl keychain add-root-cert`; `trusted` reads the
-/// trust store (`Some(true)` holds the CA, `Some(false)` does not, `None`
-/// unreadable). The trust store is read after each failed attempt, since an
-/// attempt that timed out may still have gone through. An unreadable trust
-/// store counts as untrusted: intercepting with a CA the simulator may not
-/// trust is what broke every HTTPS request.
+/// `install(timeout)` runs one `simctl keychain add-root-cert` bounded by
+/// `timeout`; `trusted` reads the trust store (`Some(true)` holds the CA,
+/// `Some(false)` does not, `None` unreadable). Attempts and the waits
+/// between them fit in [`INSTALL_BUDGET`]. The trust store is read after each
+/// failed attempt, since an attempt that timed out may still have gone
+/// through. An unreadable trust store counts as untrusted: intercepting with
+/// a CA the simulator may not trust is what broke every HTTPS request.
 pub(crate) async fn ensure_trusted<I, IF, T, TF>(
     udid: &str,
     mut install: I,
     mut trusted: T,
 ) -> SimCaTrust
 where
-    I: FnMut() -> IF,
+    I: FnMut(Duration) -> IF,
     IF: Future<Output = anyhow::Result<()>>,
     T: FnMut() -> TF,
     TF: Future<Output = Option<bool>>,
 {
-    let started = Instant::now();
+    let deadline = Instant::now() + INSTALL_BUDGET;
     let mut attempts = 0usize;
     let last_error = loop {
         attempts += 1;
-        let err = match install().await {
+        let timeout = SIMCTL_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+        let err = match install(timeout).await {
             Ok(()) => return SimCaTrust::Installed,
             Err(e) => e,
         };
@@ -85,7 +96,7 @@ where
         let Some(backoff) = INSTALL_RETRY_BACKOFF.get(attempts - 1) else {
             break cause;
         };
-        if started.elapsed() >= INSTALL_RETRY_BUDGET {
+        if Instant::now() + *backoff + MIN_RETRY_ATTEMPT > deadline {
             break cause;
         }
         tokio::time::sleep(*backoff).await;
@@ -171,11 +182,12 @@ mod tests {
 
     const UDID: &str = "11111111-2222-3333-4444-555555555555";
 
-    /// What `bounded_output` returns when simctl hangs past `SIMCTL_TIMEOUT`.
-    async fn simctl_timeout() -> anyhow::Result<()> {
-        tokio::time::sleep(Duration::from_secs(30)).await;
+    /// What `bounded_output` returns when simctl hangs past its timeout.
+    async fn simctl_hangs(timeout: Duration) -> anyhow::Result<()> {
+        tokio::time::sleep(timeout).await;
         Err(anyhow::anyhow!(
-            "simctl keychain add-root-cert timed out after 30s (CoreSimulatorService may be wedged)"
+            "simctl keychain add-root-cert timed out after {}s (CoreSimulatorService may be wedged)",
+            timeout.as_secs()
         ))
     }
 
@@ -186,27 +198,41 @@ mod tests {
         }
     }
 
-    // The CI failure: simctl times out every time and the trust store has
-    // no CA. TLS must be tunneled, and only two attempts fit the budget.
+    // The CI failure: simctl hangs every time and the trust store has no CA.
+    // TLS must be tunneled, and the whole decision must fit well inside the
+    // SDK's 60 s deadline for the capture start, or the start fails with
+    // DEADLINE_EXCEEDED instead of passing HTTPS through.
     #[tokio::test(start_paused = true)]
-    async fn wedged_simctl_and_untrusted_store_tunnels_after_two_attempts() {
-        let installs = Cell::new(0);
+    async fn wedged_simctl_and_untrusted_store_tunnels_within_the_capture_deadline() {
+        let timeouts = std::cell::RefCell::new(Vec::new());
         let started = Instant::now();
         let trust = ensure_trusted(
             UDID,
-            || {
-                installs.set(installs.get() + 1);
-                simctl_timeout()
+            |timeout| {
+                timeouts.borrow_mut().push(timeout);
+                simctl_hangs(timeout)
             },
-            || async { Some(false) },
+            // A slow read (the bound) after each attempt.
+            || async {
+                tokio::time::sleep(TRUST_STORE_READ_TIMEOUT).await;
+                Some(false)
+            },
         )
         .await;
-        assert_eq!(installs.get(), 2, "a third 30 s attempt exceeds the budget");
-        assert_eq!(started.elapsed(), Duration::from_secs(62));
+        assert_eq!(
+            *timeouts.borrow(),
+            vec![Duration::from_secs(30), Duration::from_secs(6)],
+            "the retry gets what is left of the budget"
+        );
+        assert!(
+            started.elapsed() <= Duration::from_secs(45),
+            "{:?} leaves too little of the SDK's 60 s",
+            started.elapsed()
+        );
         let warning = untrusted_warning_of(&trust);
         assert!(warning.starts_with(
             "Could not install Tapsmith's CA certificate on the simulator (tried 2 times): \
-             simctl keychain add-root-cert timed out after 30s (CoreSimulatorService may be wedged). \
+             simctl keychain add-root-cert timed out after 6s (CoreSimulatorService may be wedged). \
              HTTPS is passed through to its servers uncaptured"
         ), "{warning}");
         assert!(warning.contains("HTTPS requests still work"), "{warning}");
@@ -225,6 +251,27 @@ mod tests {
         );
     }
 
+    // No retry is started that could not run for MIN_RETRY_ATTEMPT.
+    #[tokio::test(start_paused = true)]
+    async fn no_retry_starts_without_time_left_for_it() {
+        let installs = Cell::new(0);
+        let trust = ensure_trusted(
+            UDID,
+            |_| {
+                installs.set(installs.get() + 1);
+                // Fails just under the full budget.
+                async {
+                    tokio::time::sleep(Duration::from_secs(34)).await;
+                    Err(anyhow::anyhow!("slow failure"))
+                }
+            },
+            || async { Some(false) },
+        )
+        .await;
+        assert_eq!(installs.get(), 1);
+        untrusted_warning_of(&trust);
+    }
+
     // A fast failure (simctl exits non-zero) gets all three attempts.
     #[tokio::test(start_paused = true)]
     async fn fast_failures_are_retried_twice_with_backoff() {
@@ -232,7 +279,7 @@ mod tests {
         let started = Instant::now();
         let trust = ensure_trusted(
             UDID,
-            || {
+            |_| {
                 installs.set(installs.get() + 1);
                 async {
                     Err(anyhow::anyhow!(
@@ -257,12 +304,12 @@ mod tests {
         let installs = Cell::new(0);
         let trust = ensure_trusted(
             UDID,
-            || {
+            |timeout| {
                 installs.set(installs.get() + 1);
                 let n = installs.get();
                 async move {
                     if n == 1 {
-                        simctl_timeout().await
+                        simctl_hangs(timeout).await
                     } else {
                         Ok(())
                     }
@@ -282,9 +329,9 @@ mod tests {
         let installs = Cell::new(0);
         let trust = ensure_trusted(
             UDID,
-            || {
+            |timeout| {
                 installs.set(installs.get() + 1);
-                simctl_timeout()
+                simctl_hangs(timeout)
             },
             || async { Some(true) },
         )
@@ -304,7 +351,7 @@ mod tests {
     // and intercepting on a guess is what broke every HTTPS request.
     #[tokio::test(start_paused = true)]
     async fn an_unreadable_trust_store_counts_as_untrusted() {
-        let trust = ensure_trusted(UDID, simctl_timeout, || async { None }).await;
+        let trust = ensure_trusted(UDID, simctl_hangs, || async { None }).await;
         untrusted_warning_of(&trust);
     }
 
@@ -313,7 +360,7 @@ mod tests {
         let reads = Cell::new(0);
         let trust = ensure_trusted(
             UDID,
-            || async { Ok(()) },
+            |_| async { Ok(()) },
             || {
                 reads.set(reads.get() + 1);
                 async { Some(false) }

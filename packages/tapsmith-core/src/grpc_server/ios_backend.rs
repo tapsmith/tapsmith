@@ -1809,7 +1809,7 @@ impl DeviceBackend for IosBackend<'_> {
                 let sha256 = mitm_ca.ca_cert_sha256_hex();
                 let trust = ios::sim_ca_trust::ensure_trusted(
                     &serial,
-                    || ios::device::install_ca_cert(&serial, ca_pem_path),
+                    |timeout| ios::device::install_ca_cert(&serial, ca_pem_path, timeout),
                     || ios::sim_ca_trust::trust_store_has(&serial, &sha256),
                 )
                 .await;
