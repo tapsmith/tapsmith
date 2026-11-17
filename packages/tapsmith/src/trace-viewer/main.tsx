@@ -669,6 +669,7 @@ function App() {
           testName={trace.metadata.testName}
           testStatus={trace.metadata.testStatus}
           platform={platform}
+          deviceHints={[selectedDevice?.model, selectedDevice?.serial]}
         />
         <ResizeHandle direction="horizontal" onResize={handleRightResize} />
         <div

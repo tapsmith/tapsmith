@@ -72,6 +72,8 @@ export interface DeviceView {
   deviceIndex: number
   /** Tab / tile label: the worker's display name, plus the member name for groups. */
   label: string
+  /** This device's own name (a group member's, not the worker's) — picks its bezel. */
+  deviceName: string
   deviceSerial: string
   platform?: DevicePlatform
   devicePixelRatio?: number
@@ -91,6 +93,7 @@ export function deviceViewsOf(workers: WorkerInfo[]): DeviceView[] {
         workerId: w.workerId,
         deviceIndex: d.index,
         label: group ? `${w.displayName} · ${d.name}` : w.displayName,
+        deviceName: d.displayName,
         deviceSerial: d.deviceSerial,
         platform: d.platform ?? w.platform,
         devicePixelRatio: d.devicePixelRatio ?? w.devicePixelRatio,
@@ -102,10 +105,11 @@ export function deviceViewsOf(workers: WorkerInfo[]): DeviceView[] {
 }
 
 /** Canvas ref callback for the "All" grid — registers/unregisters with multi-mirror hook. */
-function WorkerCanvas({ workerId, deviceIndex, label, deviceSerial, connected, registerCanvas, unregisterCanvas, platform, interactive, force, send }: {
+function WorkerCanvas({ workerId, deviceIndex, label, deviceName, deviceSerial, connected, registerCanvas, unregisterCanvas, platform, interactive, force, send }: {
   workerId: number
   deviceIndex: number
   label: string
+  deviceName: string
   deviceSerial: string
   connected: boolean
   registerCanvas: (id: number, canvas: HTMLCanvasElement, deviceIndex?: number) => void
@@ -150,7 +154,10 @@ function WorkerCanvas({ workerId, deviceIndex, label, deviceSerial, connected, r
             </div>
           </div>
         )}
-        <DeviceFrame platform={framePlatform} hints={[label, deviceSerial]} contentAspect={frameAspect}>
+        {/* The device's own name, not the tile label: a group's label is the
+            primary's name plus a user-chosen member name, which says nothing
+            about this member's hardware. */}
+        <DeviceFrame platform={framePlatform} hints={[deviceName, deviceSerial]} contentAspect={frameAspect}>
           <canvas
             ref={ref}
             aria-label={`Device screen mirror — ${label}`}
@@ -204,7 +211,7 @@ export function DevicePane({
   const mirrorPlatform = selectedView
     ? (selectedView.platform ?? inferDevicePlatform(selectedView.label, selectedView.deviceSerial) ?? platform)
     : platform;
-  const mirrorHints = selectedView ? [selectedView.label, selectedView.deviceSerial] : [];
+  const mirrorHints = selectedView ? [selectedView.deviceName, selectedView.deviceSerial] : [];
 
   // Left/Right move between the All tab and the per-device tabs; Home/End jump
   // to the ends. Additive: these are real buttons and stay individually
@@ -308,6 +315,7 @@ export function DevicePane({
                 workerId={v.workerId}
                 deviceIndex={v.deviceIndex}
                 label={v.label}
+                deviceName={v.deviceName}
                 deviceSerial={v.deviceSerial}
                 connected={connected}
                 registerCanvas={registerCanvas}

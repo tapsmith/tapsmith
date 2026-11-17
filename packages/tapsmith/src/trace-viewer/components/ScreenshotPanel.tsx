@@ -2,9 +2,9 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'preact/hooks'
 import { Focus, Download, Camera, LoaderCircle, CircleDot, Play, Layers, ListTree } from 'lucide-preact';
 import type { ActionTraceEvent, AssertionTraceEvent } from '../../trace/types.js';
 import type { ContainerSummary } from '../types.js';
+import type { Bezel } from '../../ui-mode/assets/bezels/frames.js';
 import { findNearestScreenshot } from '../../ui-mode/hooks/use-trace-data.js';
-import { inferDeviceFormFactor } from '../../ui-mode/ui-protocol.js';
-import { selectDeviceFrame, screenWindowStyle, screenMaskStyle } from '../../ui-mode/assets/bezels/frames.js';
+import { selectBezel, screenWindowStyle, screenMaskStyle, frameImageClass } from '../../ui-mode/assets/bezels/frames.js';
 import {
   actingDevice,
   frameIndexForDevice,
@@ -97,6 +97,8 @@ interface Props {
   onRunTest?: () => void
   isTestPending?: boolean
   platform?: 'android' | 'ios'
+  /** The device's model and serial, for the bezel (named tablets and foldables). */
+  deviceHints?: Array<string | undefined>
   nodeType?: 'test' | 'suite' | 'file' | 'project'
   containerSummary?: ContainerSummary
   onRunContainer?: () => void
@@ -156,7 +158,7 @@ function handleStageKeyDown(
   (strip?.querySelectorAll('[role="tab"]')[next] as HTMLElement | undefined)?.focus();
 }
 
-export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorHighlights, hoverBounds, onScreenshotClick, onScreenshotHover, pickMode, onPickModeToggle, hierarchyBorrowedFromStep, pickUnavailable, onDisplayedVariantChange, devicePixelRatio, afterActionIndex, group, testName, testStatus, onDownloadTrace, onDownloadVideo, hasTrace, onRunTest, isTestPending, platform, nodeType, containerSummary, onRunContainer }: Props) {
+export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorHighlights, hoverBounds, onScreenshotClick, onScreenshotHover, pickMode, onPickModeToggle, hierarchyBorrowedFromStep, pickUnavailable, onDisplayedVariantChange, devicePixelRatio, afterActionIndex, group, testName, testStatus, onDownloadTrace, onDownloadVideo, hasTrace, onRunTest, isTestPending, platform, deviceHints, nodeType, containerSummary, onRunContainer }: Props) {
   injectStyles();
 
   const [tab, setTab] = useState<ScreenshotTab>('action');
@@ -552,6 +554,7 @@ export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorH
                   url={url}
                   stage={tab}
                   platform={d.platform ?? platform}
+                  deviceHints={[d.model, d.serial]}
                   devicePixelRatio={d.devicePixelRatio}
                   bounds={isActing && tab === 'action' ? bounds : undefined}
                   point={isActing && tab === 'action' ? point : undefined}
@@ -616,27 +619,13 @@ export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorH
   // Show bounds + point overlay only on the "action" tab
   const showOverlay = tab === 'action' && (!!bounds || !!point);
 
-  // Once the screenshot has loaded we know its aspect ratio; a photographic
-  // bezel.fit frame is used for phone-shaped screens, the CSS bezel otherwise
-  // (tablets, square / odd ratios). Phones never flip (the frame is chosen on
-  // first paint and confirmed on load); tablets fall back to CSS after load.
+  // Once the screenshot has loaded we know its shape, which picks the frame
+  // (a photograph for modern phones, turned for landscape; an exact SVG frame
+  // for tablets, compact phones and foldables). Before that, the device's
+  // name decides.
   const contentAspect = naturalSize ? naturalSize.width / naturalSize.height : undefined;
-  const imageFrame = platform ? selectDeviceFrame({ platform, contentAspect }) : undefined;
-  const formFactor = inferDeviceFormFactor({ aspectRatio: contentAspect });
-
-  // Size the frame box in JS from the measured wrapper, so it fits by width AND
-  // height (this panel is often wide-and-short, unlike the tall mirror column,
-  // and container-query height isn't reliable here). Mirrors the CSS-skin
-  // `frameStyle` approach above.
-  const imageFrameStyle = (() => {
-    if (!imageFrame) return undefined;
-    const style: Record<string, string> = { '--dm-fa': String(imageFrame.frameAspect) };
-    if (viewportSize && viewportSize.width > 0 && viewportSize.height > 0) {
-      const width = Math.min(viewportSize.width, viewportSize.height * imageFrame.frameAspect);
-      style.width = `${width.toFixed(2)}px`;
-    }
-    return style;
-  })();
+  const bezel = selectBezel({ platform, hints: deviceHints, contentAspect });
+  const imageFrameStyle = frameBoxStyle(bezel, viewportSize);
 
   const screenshotImg = (
     <img
@@ -651,29 +640,7 @@ export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorH
     />
   );
 
-  let framedScreenshot: preact.JSX.Element;
-  if (imageFrame) {
-    framedScreenshot = (
-      <div class="dm-frame dm-frame-img" style={imageFrameStyle}>
-        <div class="dm-frame-screen" style={screenMaskStyle(imageFrame)}>
-          <div class="dm-frame-screen-rect" style={screenWindowStyle(imageFrame)}>
-            {screenshotImg}
-          </div>
-        </div>
-        <img class="dm-frame-png" src={imageFrame.src} alt="" aria-hidden="true" draggable={false} />
-      </div>
-    );
-  } else if (platform) {
-    framedScreenshot = (
-      <div class="screenshot-device-frame" style={frameStyle}>
-        <div class={`dm-frame dm-skin-${platform} dm-skin-${formFactor}`}>
-          {screenshotImg}
-        </div>
-      </div>
-    );
-  } else {
-    framedScreenshot = screenshotImg;
-  }
+  const framedScreenshot = <FramedImage img={screenshotImg} platform={platform} bezel={bezel} frameStyle={imageFrameStyle} cssStyle={frameStyle} />;
 
   return (
     <div class="screenshot-panel">
@@ -747,6 +714,64 @@ export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorH
   );
 }
 
+// ─── Bezel ───
+
+/** The frame box's size: fitted to the measured wrapper by width AND height
+ * (this panel is often wide-and-short, and container-query height isn't
+ * reliable here). */
+function frameBoxStyle(bezel: Bezel, viewportSize: { width: number; height: number } | null): Record<string, string> | undefined {
+  const frame = bezel.frame;
+  if (!frame) return undefined;
+  const style: Record<string, string> = { '--dm-fa': String(frame.frameAspect) };
+  if (viewportSize && viewportSize.width > 0 && viewportSize.height > 0) {
+    const width = Math.min(viewportSize.width, viewportSize.height * frame.frameAspect);
+    style.width = `${width.toFixed(2)}px`;
+  }
+  return style;
+}
+
+/**
+ * A screenshot in its device's bezel: the frame image over the screen window
+ * (bounds/point overlays use the screenshot's rendered rect, so they are
+ * unaffected), or the CSS skin if the frame image fails to load. Without a
+ * platform, the bare screenshot.
+ */
+function FramedImage({ img, platform, bezel, frameStyle, cssStyle }: {
+  img: preact.JSX.Element
+  platform: 'android' | 'ios' | undefined
+  bezel: Bezel
+  frameStyle: Record<string, string> | undefined
+  cssStyle: Record<string, string> | undefined
+}) {
+  const [failedSrc, setFailedSrc] = useState<string | undefined>(undefined);
+  const frame = bezel.frame && bezel.frame.src !== failedSrc ? bezel.frame : undefined;
+  if (frame) {
+    return (
+      <div class="dm-frame dm-frame-img" style={frameStyle} data-testid="screenshot-bezel" data-frame={frame.kind}>
+        <div class="dm-frame-screen" style={screenMaskStyle(frame)}>
+          <div class="dm-frame-screen-rect" style={screenWindowStyle(frame)}>{img}</div>
+        </div>
+        <img
+          class={frameImageClass(frame)}
+          src={frame.src}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          onError={() => setFailedSrc(frame.src)}
+        />
+      </div>
+    );
+  }
+  if (!platform) return img;
+  const skin = [`dm-frame dm-skin-${platform} dm-skin-${bezel.formFactor}`];
+  if (bezel.landscape) skin.push('dm-skin-landscape');
+  return (
+    <div class="screenshot-device-frame" style={cssStyle} data-testid="screenshot-bezel" data-frame="css">
+      <div class={skin.join(' ')}>{img}</div>
+    </div>
+  );
+}
+
 // ─── Device pane (multi-device traces) ───
 
 interface ScreenshotDevicePaneProps {
@@ -758,6 +783,7 @@ interface ScreenshotDevicePaneProps {
   url: string | undefined
   stage: ScreenshotTab
   platform?: 'android' | 'ios'
+  deviceHints: Array<string | undefined>
   devicePixelRatio?: number
   bounds?: { left: number; top: number; right: number; bottom: number }
   point?: { x: number; y: number }
@@ -780,7 +806,7 @@ interface ScreenshotDevicePaneProps {
  * active (a pick then lands on the next click); the active pane hit-tests.
  */
 function ScreenshotDevicePane({
-  name, hue, acting, active, url, stage, platform, devicePixelRatio, bounds, point,
+  name, hue, acting, active, url, stage, platform, deviceHints, devicePixelRatio, bounds, point,
   highlightBounds, hoverBounds, selectorHighlights, pickMode, onActivate, onPickPoint, onPickHover, scale,
 }: ScreenshotDevicePaneProps) {
   const [naturalSize, setNaturalSize] = useState<NaturalSize | null>(null);
@@ -870,17 +896,8 @@ function ScreenshotDevicePane({
   const handleMouseLeave = useCallback(() => { onPickHover?.(null); }, [onPickHover]);
 
   const contentAspect = naturalSize ? naturalSize.width / naturalSize.height : undefined;
-  const imageFrame = platform ? selectDeviceFrame({ platform, contentAspect }) : undefined;
-  const formFactor = inferDeviceFormFactor({ aspectRatio: contentAspect });
-  const imageFrameStyle = (() => {
-    if (!imageFrame) return undefined;
-    const style: Record<string, string> = { '--dm-fa': String(imageFrame.frameAspect) };
-    if (viewportSize && viewportSize.width > 0 && viewportSize.height > 0) {
-      const width = Math.min(viewportSize.width, viewportSize.height * imageFrame.frameAspect);
-      style.width = `${width.toFixed(2)}px`;
-    }
-    return style;
-  })();
+  const bezel = selectBezel({ platform, hints: deviceHints, contentAspect });
+  const imageFrameStyle = frameBoxStyle(bezel, viewportSize);
   const cssFrameStyle = (() => {
     if (!platform || !naturalSize || !viewportSize) return undefined;
     const aspect = naturalSize.width / naturalSize.height;
@@ -908,23 +925,7 @@ function ScreenshotDevicePane({
     />
   ) : null;
 
-  let framed: preact.JSX.Element | null = img;
-  if (img && imageFrame) {
-    framed = (
-      <div class="dm-frame dm-frame-img" style={imageFrameStyle}>
-        <div class="dm-frame-screen" style={screenMaskStyle(imageFrame)}>
-          <div class="dm-frame-screen-rect" style={screenWindowStyle(imageFrame)}>{img}</div>
-        </div>
-        <img class="dm-frame-png" src={imageFrame.src} alt="" aria-hidden="true" draggable={false} />
-      </div>
-    );
-  } else if (img && platform) {
-    framed = (
-      <div class="screenshot-device-frame" style={cssFrameStyle}>
-        <div class={`dm-frame dm-skin-${platform} dm-skin-${formFactor}`}>{img}</div>
-      </div>
-    );
-  }
+  const framed = img ? <FramedImage img={img} platform={platform} bezel={bezel} frameStyle={imageFrameStyle} cssStyle={cssFrameStyle} /> : null;
 
   const overlayGeometry = naturalSize && renderedSize
     ? {

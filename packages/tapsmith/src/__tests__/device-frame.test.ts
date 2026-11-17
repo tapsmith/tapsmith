@@ -4,7 +4,7 @@ import {
   inferDeviceFormFactor,
   resolveDeviceSkin,
 } from '../ui-mode/ui-protocol.js';
-import { selectDeviceFrame, selectMirrorBezel } from '../ui-mode/assets/bezels/frames.js';
+import { selectBezel, svgFrame, turnCcw } from '../ui-mode/assets/bezels/frames.js';
 
 describe('inferDeviceFormFactor', () => {
   it('treats tablet model names as tablets regardless of ratio', () => {
@@ -46,68 +46,221 @@ describe('resolveDeviceSkin', () => {
   });
 });
 
-describe('selectDeviceFrame', () => {
-  it('returns a photographic frame for phones', () => {
-    const ios = selectDeviceFrame({ platform: 'ios', formFactor: 'phone' });
-    expect(ios?.src).toBeTruthy();
-    expect(ios?.screenAspect).toBeGreaterThan(0.4);
-    expect(ios?.screenAspect).toBeLessThan(0.55);
-    expect(selectDeviceFrame({ platform: 'android', formFactor: 'phone' })?.src).toBeTruthy();
-  });
-
-  it('falls back to CSS for tablets and unknown platforms', () => {
-    expect(selectDeviceFrame({ platform: 'ios', formFactor: 'tablet' })).toBeUndefined();
-    expect(selectDeviceFrame({ platform: undefined })).toBeUndefined();
-  });
-
-  it('rejects screens whose aspect ratio differs too much from the frame', () => {
-    // Modern phone ratio → accepted.
-    expect(selectDeviceFrame({ platform: 'ios', contentAspect: 1179 / 2556 })).toBeTruthy();
-    // iPad-ish ratio → rejected (would be stretched).
-    expect(selectDeviceFrame({ platform: 'ios', contentAspect: 0.75 })).toBeUndefined();
-    // iPhone SE (squarer 16:9) → rejected.
-    expect(selectDeviceFrame({ platform: 'ios', contentAspect: 750 / 1334 })).toBeUndefined();
-  });
-});
-
-describe('selectMirrorBezel', () => {
-  // The live mirror's choice: name hints plus the shape of the frame on screen.
+describe('selectBezel', () => {
+  // The one choice the live mirror, its grid tiles and the trace viewer share:
+  // name hints plus the shape of the screen.
   const pick = (platform: 'ios' | 'android' | undefined, hints: string[], contentAspect?: number) =>
-    selectMirrorBezel({ platform, hints, contentAspect });
+    selectBezel({ platform, hints, contentAspect });
+  const kind = (platform: 'ios' | 'android' | undefined, hints: string[], contentAspect?: number) =>
+    pick(platform, hints, contentAspect).frame?.kind;
 
   it('uses the photographic frame for a modern portrait phone', () => {
-    const b = pick('android', ['Pixel 7'], 1080 / 2400);
-    expect(b.frame).toBeDefined();
-    expect(b.formFactor).toBe('phone');
-    expect(pick('ios', ['iPhone 16 Pro'], 1179 / 2556).frame).toBeDefined();
+    expect(kind('android', ['Pixel 7'], 1080 / 2400)).toBe('photo');
+    expect(kind('ios', ['iPhone 16 Pro'], 1179 / 2556)).toBe('photo');
+    expect(kind('android', ['emulator-5554'], 1080 / 2340)).toBe('photo');
+    expect(pick('ios', ['iPhone 16 Pro'], 1179 / 2556)).toMatchObject({ formFactor: 'phone', landscape: false });
   });
 
-  it('falls back to the CSS phone bezel for a landscape frame', () => {
+  it('turns the photographic frame for a landscape phone', () => {
     const b = pick('ios', ['iPhone 16 Pro'], 2556 / 1179);
-    expect(b.frame).toBeUndefined();
-    expect(b.formFactor).toBe('phone');
-    expect(pick('android', ['emulator-5554'], 2400 / 1080)).toEqual({ frame: undefined, formFactor: 'phone' });
+    expect(b.landscape).toBe(true);
+    expect(b.frame?.kind).toBe('photo-landscape');
+    expect(b.frame?.turn).toBe('ccw');
+    // The portrait image, in a box of the inverse shape, with a landscape window.
+    const portrait = pick('ios', ['iPhone 16 Pro'], 1179 / 2556).frame!;
+    expect(b.frame?.src).toBe(portrait.src);
+    expect(b.frame?.mask).not.toBe(portrait.mask);
+    expect(b.frame?.frameAspect).toBeCloseTo(1 / portrait.frameAspect, 6);
+    expect(b.frame?.screenAspect).toBeCloseTo(1 / portrait.screenAspect, 6);
+    expect(kind('android', ['emulator-5554'], 2400 / 1080)).toBe('photo-landscape');
   });
 
-  it('treats an opaque-named device with a tablet-shaped screen as a tablet', () => {
-    expect(pick('android', ['emulator-5554'], 1600 / 2560)).toEqual({ frame: undefined, formFactor: 'tablet' });
-    // Rotated, still a tablet.
-    expect(pick('android', ['emulator-5554'], 2560 / 1600)).toEqual({ frame: undefined, formFactor: 'tablet' });
+  it('turns the screen rect counter-clockwise (top edge to the left)', () => {
+    const r = turnCcw({ leftPct: 0.1, topPct: 0.02, widthPct: 0.8, heightPct: 0.9 });
+    expect(r.leftPct).toBeCloseTo(0.02, 9);
+    expect(r.topPct).toBeCloseTo(0.1, 9);
+    expect(r.widthPct).toBeCloseTo(0.9, 9);
+    expect(r.heightPct).toBeCloseTo(0.8, 9);
   });
 
-  it('falls back to the CSS phone bezel for squarer phones (iPhone SE class)', () => {
-    expect(pick('ios', ['iPhone SE (3rd generation)'], 750 / 1334)).toEqual({ frame: undefined, formFactor: 'phone' });
+  it('draws an SVG tablet frame at the exact screen shape, either way up', () => {
+    for (const [platform, hints, aspect] of [
+      ['ios', ['iPad Air 11-inch (M2)'], 1640 / 2360],
+      ['ios', ['iPad Air 11-inch (M2)'], 2360 / 1640],
+      ['android', ['emulator-5554'], 1600 / 2560],
+      ['android', ['emulator-5554'], 2560 / 1600],
+      ['android', ['Pixel Tablet'], 2560 / 1600],
+    ] as const) {
+      const b = pick(platform, [...hints], aspect);
+      expect(b.frame?.kind).toBe('tablet');
+      expect(b.formFactor).toBe('tablet');
+      expect(b.frame?.screenAspect).toBeCloseTo(aspect, 2);
+      expect(b.frame?.turn).toBeUndefined();
+    }
   });
 
   it('keeps a named tablet a tablet whatever the frame shape', () => {
-    expect(pick('ios', ['iPad Air 11-inch (M2)'], 0.46).formFactor).toBe('tablet');
-    expect(pick('ios', ['iPad Air 11-inch (M2)'], 0.46).frame).toBeUndefined();
+    expect(kind('ios', ['iPad Air 11-inch (M2)'], 0.46)).toBe('tablet');
+  });
+
+  it('draws compact (SE-class) phones as SVG, upright and turned', () => {
+    const b = pick('ios', ['iPhone SE (3rd generation)'], 750 / 1334);
+    expect(b.frame?.kind).toBe('compact');
+    expect(b.formFactor).toBe('phone');
+    expect(b.frame?.screenAspect).toBeCloseTo(750 / 1334, 2);
+    const turned = pick('ios', ['iPhone SE (3rd generation)'], 1334 / 750);
+    expect(turned.frame?.kind).toBe('compact');
+    expect(turned.landscape).toBe(true);
+    expect(turned.frame?.screenAspect).toBeCloseTo(1334 / 750, 2);
+    expect(turned.frame?.frameAspect).toBeGreaterThan(1);
+    // A 16:9 Android emulator is the same class.
+    expect(kind('android', ['emulator-5556'], 720 / 1280)).toBe('compact');
+  });
+
+  it('draws an exact SVG phone for phone shapes the photographs do not fit', () => {
+    // 18:9 is squarer than the ≈0.45 photo window; 0.4 is taller.
+    expect(kind('android', ['emulator-5554'], 1080 / 2160)).toBe('phone');
+    expect(kind('android', ['Pixel 7'], 0.4)).toBe('phone');
+    expect(pick('android', ['emulator-5554'], 1080 / 2160).frame?.screenAspect).toBeCloseTo(0.5, 2);
+  });
+
+  it('draws foldables folded (outer) and unfolded (inner)', () => {
+    // Pixel 9 Pro Fold: named like a phone, but a foldable.
+    expect(kind('android', ['Pixel 9 Pro Fold'], 1080 / 2424)).toBe('foldable-outer');
+    expect(pick('android', ['Pixel 9 Pro Fold'], 2076 / 2152)).toMatchObject({ formFactor: 'tablet' });
+    expect(kind('android', ['Pixel 9 Pro Fold'], 2076 / 2152)).toBe('foldable-inner');
+    expect(kind('android', ['pixel_fold'], 2208 / 1840)).toBe('foldable-inner');
+    expect(kind('android', ['Galaxy Z Fold6'], 968 / 2376)).toBe('foldable-outer');
+    // iPhone Duo: outer ≈5.4", inner ≈7.6" near-square.
+    expect(kind('ios', ['iPhone Duo'], 0.47)).toBe('foldable-outer');
+    expect(kind('ios', ['iPhone Duo'], 0.87)).toBe('foldable-inner');
+    expect(kind('ios', ['iPhone Duo'], 1 / 0.87)).toBe('foldable-inner');
+    // A folded foldable turned on its side is turned like a phone.
+    const turned = pick('ios', ['iPhone Duo'], 1 / 0.47).frame!;
+    expect(turned.kind).toBe('foldable-outer');
+    expect(turned.screenAspect).toBeCloseTo(1 / 0.47, 2);
   });
 
   it('decides from the name alone before the first frame arrives', () => {
-    expect(pick('ios', ['iPhone 16'], undefined).frame).toBeDefined();
-    expect(pick('ios', ['iPad Pro'], undefined)).toEqual({ frame: undefined, formFactor: 'tablet' });
-    expect(pick(undefined, ['mystery'], 0.46)).toEqual({ frame: undefined, formFactor: 'phone' });
+    expect(kind('ios', ['iPhone 16'])).toBe('photo');
+    expect(kind('ios', ['iPad Pro'])).toBe('tablet');
+    expect(kind('android', ['Pixel Fold'])).toBe('foldable-outer');
+    expect(pick('ios', ['iPhone 16']).landscape).toBe(false);
+  });
+
+  it('draws no bezel without a platform', () => {
+    expect(pick(undefined, ['mystery'], 0.46)).toEqual({ frame: undefined, formFactor: 'phone', landscape: false });
+  });
+
+  it('ignores a non-finite or zero aspect', () => {
+    expect(kind('ios', ['iPhone 16'], 0)).toBe('photo');
+    expect(kind('ios', ['iPhone 16'], Number.NaN)).toBe('photo');
+  });
+});
+
+describe('svgFrame (accept check)', () => {
+  // PILOT-1238's accept check for generated frames, applied to every SVG kind
+  // and both orientations: one axis-aligned window of the screen's shape,
+  // symmetric where the device is, within a frame box of the right shape.
+  const kinds = ['phone', 'compact', 'tablet', 'foldable-outer', 'foldable-inner'] as const;
+  const aspects = [0.45, 0.5625, 0.75, 0.87, 1, 1 / 0.87, 1.6, 2.2];
+  const DEFAULT_PORTRAIT = { 'phone': 0.46, 'compact': 0.5625, 'tablet': 0.7, 'foldable-outer': 0.52, 'foldable-inner': 0.86 } as const;
+
+  it.each(kinds.flatMap((k) => (['ios', 'android'] as const).flatMap((p) => aspects.map((a) => [k, p, a] as const))))(
+    '%s %s at %f',
+    (k, p, a) => {
+      const f = svgFrame(k, p, a);
+      expect(f.kind).toBe(k);
+      expect(Math.abs(f.screenAspect / a - 1)).toBeLessThan(0.005);
+      const { leftPct, topPct, widthPct, heightPct } = f.screen;
+      for (const v of [leftPct, topPct, widthPct, heightPct]) {
+        expect(v).toBeGreaterThan(0);
+        expect(v).toBeLessThan(1);
+      }
+      expect(leftPct + widthPct).toBeLessThan(1);
+      expect(topPct + heightPct).toBeLessThan(1);
+      // The folded foldable's hinge side is thicker; everything else is
+      // symmetric across the axis its camera sits on.
+      const right = 1 - leftPct - widthPct;
+      const bottom = 1 - topPct - heightPct;
+      const turned = f.frameAspect > 1 && (k === 'phone' || k === 'compact' || k === 'foldable-outer');
+      if (k !== 'foldable-outer') {
+        if (turned) expect(topPct).toBeCloseTo(bottom, 6);
+        else expect(leftPct).toBeCloseTo(right, 6);
+      }
+      expect(f.src.startsWith('data:image/svg+xml,')).toBe(true);
+      expect(f.mask.startsWith('data:image/svg+xml,')).toBe(true);
+      const svg = decodeURIComponent(f.src.slice('data:image/svg+xml,'.length));
+      const mask = decodeURIComponent(f.mask.slice('data:image/svg+xml,'.length));
+      const viewBox = (s: string) => /viewBox="([^"]+)"/.exec(s)?.[1];
+      expect(viewBox(mask)).toBe(viewBox(svg));
+      const [, , vw, vh] = viewBox(svg)!.split(' ').map(Number);
+      expect(vw / vh).toBeCloseTo(f.frameAspect, 4);
+    },
+  );
+
+  it('defines every gradient a frame paints with inside that frame', () => {
+    // Each frame is its own <img> document, so its ids are local to it; a
+    // reference with no definition would paint nothing (a see-through body).
+    for (const k of kinds) {
+      for (const a of [0.5, 2]) {
+        const svg = decodeURIComponent(svgFrame(k, 'ios', a).src);
+        const refs = new Set([...svg.matchAll(/url\(#([^)]+)\)/g)].map((m) => m[1]));
+        const ids = new Set([...svg.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+        expect(refs.size).toBeGreaterThan(0);
+        for (const r of refs) expect(ids.has(r)).toBe(true);
+      }
+    }
+  });
+
+  it('shades buttons and hinge grooves across their width, upright and turned', () => {
+    // Both are tall, thin rects in the upright drawing; a bounding-box
+    // gradient turns with them, so "across" is the x axis either way up.
+    for (const a of [0.5, 2]) {
+      const svg = decodeURIComponent(svgFrame('foldable-outer', 'android', a).src);
+      for (const id of ['b', 'h']) {
+        expect(svg).toContain(`<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="0">`);
+      }
+    }
+  });
+
+  it('keeps every camera lens inside the glass, clear of the metal band', () => {
+    const RIM = 16; // frames.ts: width of the metal band
+    for (const k of kinds) {
+      for (const p of ['ios', 'android'] as const) {
+        const svg = decodeURIComponent(svgFrame(k, p, DEFAULT_PORTRAIT[k]).src);
+        // A lens's outer ring is the circle filled #050506 with a stroke.
+        const rings = [...svg.matchAll(/<circle cx="[^"]+" cy="([^"]+)" r="([^"]+)" fill="#050506" stroke="[^"]+" stroke-width="([^"]+)"/g)];
+        expect(rings.length).toBeGreaterThan(0);
+        for (const [, cy, r, sw] of rings) {
+          expect(Number(cy) - Number(r) - Number(sw) / 2).toBeGreaterThanOrEqual(RIM);
+        }
+      }
+    }
+  });
+
+  it('keeps the mask a single plain screen shape', () => {
+    const mask = decodeURIComponent(svgFrame('phone', 'android', 0.5).mask);
+    expect(mask.match(/<path/g)).toHaveLength(1);
+    expect(mask).not.toContain('url(');
+  });
+
+  it('caches frames by kind, platform and shape', () => {
+    expect(svgFrame('tablet', 'ios', 0.75)).toBe(svgFrame('tablet', 'ios', 0.7501));
+    expect(svgFrame('tablet', 'ios', 0.75)).not.toBe(svgFrame('tablet', 'android', 0.75));
+  });
+
+  it('gives compact iPhones square screen corners (no status-bar clipping)', () => {
+    // Arc commands follow a number directly ("h930a35"), so read each path's
+    // `d` for an a/A command; a rounded phone mask is the control.
+    const arcs = (kind: 'compact' | 'phone') => {
+      const mask = decodeURIComponent(svgFrame(kind, 'ios', 750 / 1334).mask);
+      const paths = [...mask.matchAll(/\bd="([^"]*)"/g)].map((m) => m[1]);
+      expect(paths.length).toBeGreaterThan(0);
+      return paths.some((d) => /[aA]/.test(d));
+    };
+    expect(arcs('phone')).toBe(true);
+    expect(arcs('compact')).toBe(false);
   });
 });
 

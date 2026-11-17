@@ -191,14 +191,15 @@ test.describe("Device groups", () => {
     ui.sendFrame({ ...screenFrame(800, 1280, 2), workerId: 0, deviceIndex: 1 })
     await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
     await expect(device.mirrorFor(BOB)).toHaveAttribute("width", "800")
-    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "image")
-    await expect(device.bezelFor(BOB)).toHaveAttribute("data-bezel", "css-tablet")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-frame", "tablet")
 
-    // Alice rotates: her tile switches bezel, bob's is untouched.
+    // Alice rotates: her tile switches frame, bob's is untouched.
     ui.sendFrame({ ...screenFrame(1200, 540, 3), workerId: 0, deviceIndex: 0 })
     await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "1200")
-    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "css-phone")
-    await expect(device.bezelFor(BOB)).toHaveAttribute("data-bezel", "css-tablet")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo-landscape")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-frame", "tablet")
+    expect(await device.frameImageFillsBezel(device.mirrorFor(ALICE))).toBe(true)
     await expect.poll(async () => {
       const fill = await device.canvasFill(device.mirrorFor(ALICE))
       return Math.min(fill.width, fill.height) > 0.9 && Math.abs(fill.shape - 1) < 0.02
@@ -208,7 +209,53 @@ test.describe("Device groups", () => {
     // for alice's frames, so the next frame lands on it.
     ui.sendFrame({ ...screenFrame(540, 1200, 4), workerId: 0, deviceIndex: 0 })
     await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
-    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "image")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo")
+  })
+
+  test("frames each member by its own device name, not the primary's", async ({ ui, device }) => {
+    // An iPhone primary with an iPad member, and a Pixel Fold primary with an
+    // iPhone member: the tile label carries the primary's name, which must not
+    // decide the member's frame.
+    ui.seed([
+      ...idleSeed(singleFileTree()),
+      {
+        type: "workers-info",
+        workers: [
+          {
+            workerId: 0, deviceSerial: "SIM-A", displayName: "iPhone 17 Pro", platform: "ios",
+            devices: [
+              { index: 0, name: "alice", deviceSerial: "SIM-A", displayName: "iPhone 17 Pro", platform: "ios" },
+              { index: 1, name: "bob", deviceSerial: "SIM-B", displayName: "iPad Air 11-inch (M2)", platform: "ios" },
+            ],
+          },
+          {
+            workerId: 1, deviceSerial: "emulator-5554", displayName: "Pixel_9_Pro_Fold", platform: "android",
+            devices: [
+              { index: 0, name: "carol", deviceSerial: "emulator-5554", displayName: "Pixel_9_Pro_Fold", platform: "android" },
+              { index: 1, name: "dave", deviceSerial: "SIM-D", displayName: "iPhone 17 Pro", platform: "ios" },
+            ],
+          },
+        ],
+      },
+    ])
+    await ui.open()
+    await device.selectWorkerView("All")
+    const bobTile = "iPhone 17 Pro · bob"
+    const daveTile = "Pixel_9_Pro_Fold · dave"
+    await expect(device.mirrorFor(bobTile)).toBeVisible()
+    // bob's iPad at a phone-like 16:9 shape is still an iPad; dave's iPhone is a modern phone.
+    ui.sendFrame({ ...screenFrame(720, 1280, 1), workerId: 0, deviceIndex: 1 })
+    ui.sendFrame({ ...screenFrame(590, 1278, 2), workerId: 1, deviceIndex: 1 })
+    await expect(device.mirrorFor(bobTile)).toHaveAttribute("width", "720")
+    await expect(device.mirrorFor(daveTile)).toHaveAttribute("width", "590")
+    await expect(device.bezelFor(bobTile)).toHaveAttribute("data-frame", "tablet")
+    await expect(device.bezelFor(daveTile)).toHaveAttribute("data-frame", "photo")
+
+    // The member's own tab picks the same way.
+    await device.selectWorkerView(bobTile)
+    ui.sendFrame({ ...screenFrame(720, 1280, 3), workerId: 0, deviceIndex: 1 })
+    await expect(device.canvas).toHaveAttribute("width", "720")
+    await expect(device.bezel).toHaveAttribute("data-frame", "tablet")
   })
 
   test("gestures and picks on a member's tab name that device", async ({ ui, device }) => {

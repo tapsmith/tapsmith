@@ -1,12 +1,12 @@
 /**
  * DeviceFrame — wraps a device mirror canvas in a bezel.
  *
- * Renders a photographic frame image (from bezel.fit, see assets/bezels) when
- * one fits the device, with the canvas positioned over the frame's screen
- * window. Falls back to the CSS bezel (`.dm-skin-*`) for tablets, landscape or
- * odd-shaped screens, unknown platforms, or if the frame image fails to load.
- * The choice follows the live frame's shape (`contentAspect`), so a rotation
- * mid-session switches bezels.
+ * Renders the device's frame (a bezel.fit photograph, turned for landscape,
+ * or an SVG frame drawn at the screen's exact shape — see assets/bezels) with
+ * the canvas positioned over the frame's screen window. Falls back to the CSS
+ * bezel (`.dm-skin-*`) if the frame image fails to load. The choice follows
+ * the live frame's shape (`contentAspect`), so a rotation mid-session
+ * switches frames.
  *
  * Both bezels render the same element tree around `children` (the CSS bezel's
  * wrappers are `display: contents`), so switching bezels never remounts the
@@ -17,7 +17,7 @@
 import type { ComponentChildren } from 'preact';
 import { useState, useRef, useLayoutEffect } from 'preact/hooks';
 import type { DevicePlatform } from '../ui-protocol.js';
-import { selectMirrorBezel, screenWindowStyle, screenMaskStyle } from '../assets/bezels/frames.js';
+import { selectBezel, screenWindowStyle, screenMaskStyle, frameImageClass } from '../assets/bezels/frames.js';
 
 interface DeviceFrameProps {
   platform?: DevicePlatform
@@ -39,14 +39,15 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
   const [width, setWidth] = useState<number | undefined>(undefined);
   const ref = useRef<HTMLDivElement>(null);
 
-  const bezel = selectMirrorBezel({ platform, hints, contentAspect });
+  const bezel = selectBezel({ platform, hints, contentAspect });
   const formFactor = bezel.formFactor;
 
-  // Re-attempt the photographic frame when the device changes — a past load
-  // failure (or a different platform/form factor) shouldn't stick forever.
+  // Re-attempt the frame image when it changes — a past load failure (or a
+  // different device or shape) shouldn't stick forever.
+  const frameSrc = bezel.frame?.src;
   useLayoutEffect(() => {
     setImgFailed(false);
-  }, [platform, formFactor]);
+  }, [platform, formFactor, frameSrc]);
 
   const frame = imgFailed ? undefined : bezel.frame;
   const frameAspect = frame?.frameAspect;
@@ -91,14 +92,14 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
     const style: Record<string, string> = { '--dm-fa': String(frame.frameAspect) };
     if (heightBound && width) style.width = `${width.toFixed(2)}px`;
     return (
-      <div ref={ref} class="dm-frame dm-frame-img" data-testid="device-bezel" data-bezel="image" style={style}>
+      <div ref={ref} class="dm-frame dm-frame-img" data-testid="device-bezel" data-bezel="image" data-frame={frame.kind} style={style}>
         <div class="dm-frame-screen" style={screenMaskStyle(frame)}>
           <div class="dm-frame-screen-rect" style={screenWindowStyle(frame)}>
             {children}
           </div>
         </div>
         <img
-          class="dm-frame-png"
+          class={frameImageClass(frame)}
           src={frame.src}
           alt=""
           aria-hidden="true"
@@ -113,10 +114,14 @@ export function DeviceFrame({ platform, hints, contentAspect, heightBound, child
   // so Preact keeps the canvas element when the bezel switches.
   const classes = ['dm-frame'];
   if (platform) classes.push(`dm-skin-${platform}`, `dm-skin-${formFactor}`);
-  // A phone whose screen shape rules out the photo frame is rotated or has no
-  // notch (iPhone SE class): the skin's island / punch-hole / side buttons are
-  // drawn for an upright modern phone and would sit over real screen content.
-  if (platform && formFactor === 'phone' && !bezel.frame && contentAspect !== undefined) {
+  // Only reached if the frame image failed to load. Landscape moves the
+  // skin's camera and buttons to the short edges. A phone that is not a
+  // modern photo-frame shape (SE class, odd shapes), upright or turned, has
+  // no notch to draw: the skin's island / punch-hole would sit over screen
+  // content.
+  if (platform && bezel.landscape) classes.push('dm-skin-landscape');
+  if (platform && formFactor === 'phone' && contentAspect !== undefined
+    && bezel.frame?.kind !== 'photo' && bezel.frame?.kind !== 'photo-landscape') {
     classes.push('dm-skin-bare');
   }
   const style: Record<string, string> = {};
