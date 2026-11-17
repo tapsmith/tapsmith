@@ -527,7 +527,7 @@ There is no screen report:
 - **Without a trace.** The check needs the failure's trace. UI mode always records one; a headless session records one when the config's `trace` is not `'off'` (for example `trace: 'retain-on-failure'`).
 - **For a device group.** A test on a [device group](#choosing-a-device) (`use.devices`) gets no screen report.
 
-It works the same in [UI mode](#ui-shared-workflow) and [headless](#headless-stdio-workflow) sessions. In UI mode, a failed run leaves its device alone until you prepare it or run again. With several UI workers for the project, leave `device` out of these calls (`tapsmith_run_tests` refuses it there): the screen is checked on the device the device tools use, and when that is not the one that ran the test, its screen differs and the report does not say `DEVICE HELD`.
+It works the same in [UI mode](#ui-shared-workflow) and [headless](#headless-stdio-workflow) sessions. In UI mode, a failed run leaves its device alone until you prepare it or run again. With several UI workers for the project, leave `device` out of these calls (`tapsmith_run_tests` refuses it there): the screen is checked on the device the device tools use, and when that is not the one that ran the test, its screen normally differs and the report does not say `DEVICE HELD`.
 
 ## Locator format
 

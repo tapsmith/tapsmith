@@ -266,6 +266,7 @@ describe('failureScreenReport', () => {
   it('claims nothing when the trace has no screen at the failed step', async () => {
     const report = await failureScreenReport({ candidate: { failure }, client: async () => device() });
     expect(text(report)).not.toContain('DEVICE HELD');
+    expect(text(report)).toContain(`no screen captured at the step where "${failure.fullName}" failed (no traced step has the error it stopped on)`);
     expect(text(report)).toContain('could not be checked against it');
     expect(report.hasNextStep).toBe(false);
   });

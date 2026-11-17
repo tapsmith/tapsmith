@@ -275,7 +275,7 @@ export async function failureScreenReport(opts: FailureScreenOptions): Promise<F
     ]
     : [
       candidate.failureHierarchyXml === undefined
-        ? `The failure's trace has no screen captured at a step that failed with the error "${name}" stopped on, so the device's screen could not be checked against it.`
+        ? `The failure's trace has no screen captured at the step where "${name}" failed (no traced step has the error it stopped on), so the device's screen could not be checked against it.`
         : `The device's screen differs from the one the failure's trace captured when the step where "${name}" failed started. `
           + 'The app may have moved on while that step waited, something may have moved it after the failure '
           + '(an afterEach or afterAll hook, a fixture\'s teardown), or another device ran the test.',
