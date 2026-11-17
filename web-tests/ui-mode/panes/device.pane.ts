@@ -31,6 +31,46 @@ export class DevicePane {
     return this.page.getByLabel(`Device screen mirror — ${workerLabel}`)
   }
 
+  /**
+   * The bezel around the single mirror. Its `data-bezel` says which one:
+   * `image` (photographic phone frame), `css-phone`, `css-tablet` or `none`.
+   */
+  get bezel() {
+    return this.page.getByTestId("device-bezel").filter({ has: this.canvas })
+  }
+
+  /** The bezel around a grid tile's mirror. */
+  bezelFor(workerLabel: string) {
+    return this.page.getByTestId("device-bezel").filter({ has: this.mirrorFor(workerLabel) })
+  }
+
+  /**
+   * How much of the bezel's screen opening the canvas covers, per axis (0–1).
+   * The opening is the photo frame's screen window, or the CSS skin's content
+   * box. A frame of the wrong shape letterboxes, so one axis drops well below 1.
+   */
+  async canvasFill(canvas = this.canvas): Promise<{ width: number; height: number }> {
+    return canvas.evaluate((el) => {
+      const bezel = el.closest("[data-bezel]") as HTMLElement | null
+      if (!bezel) throw new Error("Mirror canvas has no bezel")
+      const c = el.getBoundingClientRect()
+      const window = bezel.querySelector(".dm-frame-screen-rect")
+      let w: number
+      let h: number
+      if (window) {
+        const r = window.getBoundingClientRect()
+        w = r.width
+        h = r.height
+      } else {
+        const r = bezel.getBoundingClientRect()
+        const cs = getComputedStyle(bezel)
+        w = r.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+        h = r.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+      }
+      return { width: c.width / w, height: c.height / h }
+    })
+  }
+
   get pickToggle() {
     return this.page.getByRole("button", { name: /^(Pick an element|Picking element|Select a device tab)/ })
   }

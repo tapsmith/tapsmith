@@ -1256,6 +1256,11 @@ html, body, #app {
 .dm-frame {
   display: contents;
 }
+/* The CSS bezel keeps the image bezel's wrapper elements (so switching bezels
+ * never remounts the canvas) but lays the canvas out as the skin's own child. */
+.dm-frame-passthrough {
+  display: contents;
+}
 
 /* ─── Image bezels (photographic frames from bezel.fit) ─── */
 

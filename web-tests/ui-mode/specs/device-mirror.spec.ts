@@ -7,7 +7,25 @@
 // Blob instead would drop every frame with no error raised anywhere.
 
 import { test, expect } from "../fixtures.js"
+import type { Locator } from "@playwright/test"
 import { screenFrame, solidPng } from "../messages/frames.js"
+import type { DevicePane } from "../panes/device.pane.js"
+
+/** The canvas covers its bezel's screen opening on both axes (no letterboxing). */
+async function expectCanvasFillsBezel(device: DevicePane, canvas?: Locator) {
+  await expect.poll(async () => {
+    const fill = await device.canvasFill(canvas)
+    return Math.min(fill.width, fill.height)
+  }).toBeGreaterThan(0.9)
+}
+
+/** Whether the canvas pixel at (x, y) is the green test colour. */
+async function greenAt(canvas: Locator, x: number, y: number) {
+  return canvas.evaluate((el, [px, py]) => {
+    const d = (el as HTMLCanvasElement).getContext("2d")?.getImageData(px, py, 1, 1).data
+    return !!d && d[1] > 150 && d[0] < 50 && d[2] < 50
+  }, [x, y] as const)
+}
 
 test.describe("Device mirror", () => {
   test("paints a frame onto the canvas", async ({ app, device }) => {
@@ -75,6 +93,47 @@ test.describe("Device mirror", () => {
 
     await expect(device.canvas).toHaveAttribute("width", "200")
     await expect(device.canvas).toHaveAttribute("height", "400")
+  })
+
+  test("follows the frame's shape when choosing the bezel, including a rotation", async ({ app, device }) => {
+    const ui = app
+    // Frames here are real-screen sized: the canvas shrinks to fit its bezel
+    // but never grows, so a tiny frame would never fill one whatever the bezel.
+    // A modern phone (≈0.45, like 1080×2400) fits the photographic frame.
+    ui.sendFrame(screenFrame(540, 1200, 1))
+    await expect(device.canvas).toHaveAttribute("width", "540")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+    await expectCanvasFillsBezel(device)
+
+    // Rotated: a landscape frame must not be squeezed into the upright photo.
+    ui.sendFrame(screenFrame(1200, 540, 2))
+    await expect(device.canvas).toHaveAttribute("width", "1200")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expectCanvasFillsBezel(device)
+
+    // And back. The canvas is the same element throughout, so it still paints.
+    ui.sendFrame({ width: 540, height: 1200, seq: 3, png: solidPng(540, 1200, [0, 200, 0]) })
+    await expect(device.canvas).toHaveAttribute("width", "540")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "image")
+    await expectCanvasFillsBezel(device)
+    await expect.poll(() => greenAt(device.canvas, 270, 600)).toBe(true)
+  })
+
+  test("gives a tablet-shaped screen the tablet bezel even with an opaque serial", async ({ app, device }) => {
+    const ui = app
+    // The seeded device is `emulator-5554`: nothing in the name says tablet.
+    ui.sendFrame(screenFrame(800, 1280, 1)) // 1600×2560
+    await expect(device.canvas).toHaveAttribute("width", "800")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-tablet")
+    await expectCanvasFillsBezel(device)
+  })
+
+  test("gives a squarer phone (iPhone SE class) the CSS bezel instead of letterboxing it", async ({ app, device }) => {
+    const ui = app
+    ui.sendFrame(screenFrame(750, 1334, 1)) // 750×1334
+    await expect(device.canvas).toHaveAttribute("width", "750")
+    await expect(device.bezel).toHaveAttribute("data-bezel", "css-phone")
+    await expectCanvasFillsBezel(device)
   })
 
   test("shows a placeholder while no device is connected", async ({ app, device }) => {
