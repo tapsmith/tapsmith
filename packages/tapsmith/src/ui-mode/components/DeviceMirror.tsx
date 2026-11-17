@@ -10,7 +10,8 @@
 import type { RefObject } from 'preact';
 import { useRef, useCallback, useEffect } from 'preact/hooks';
 import { useDeviceInteraction } from '../hooks/use-device-interaction.js';
-import type { ClientMessage, DevicePlatform, DeviceFormFactor } from '../ui-protocol.js';
+import { useCanvasAspect } from '../hooks/use-canvas-aspect.js';
+import type { ClientMessage, DevicePlatform } from '../ui-protocol.js';
 import type { Bounds } from '../../trace-viewer/components/hierarchy-utils.js';
 import { DeviceFrame } from './DeviceFrame.js';
 import { MirrorPickOverlay } from './MirrorPickOverlay.js';
@@ -23,7 +24,8 @@ interface DeviceMirrorProps {
    * frame yet — shows the loading placeholder instead of a black canvas. */
   loading?: boolean
   platform?: DevicePlatform
-  formFactor?: DeviceFormFactor
+  /** Device name / serial, for the bezel's phone-vs-tablet choice. */
+  deviceHints: Array<string | undefined>
   interactive: boolean
   force: boolean
   workerId: number
@@ -42,8 +44,10 @@ interface DeviceMirrorProps {
 
 const NO_BOUNDS: Bounds[] = [];
 
-export function DeviceMirror({ canvasRef, connected, loading, platform, formFactor, interactive, force, workerId, deviceIndex = 0, send, pickMode, pickDpr, pickHoverBounds, pickMatchBounds, onPickPoint, onPickHover }: DeviceMirrorProps) {
+export function DeviceMirror({ canvasRef, connected, loading, platform, deviceHints, interactive, force, workerId, deviceIndex = 0, send, pickMode, pickDpr, pickHoverBounds, pickMatchBounds, onPickPoint, onPickHover }: DeviceMirrorProps) {
   const interaction = useDeviceInteraction({ send, enabled: interactive && !pickMode, force, workerId, deviceIndex });
+  // The live frame's shape picks the bezel, so a rotation switches it.
+  const contentAspect = useCanvasAspect(canvasRef);
 
   // Hover hit-tests are coalesced to one per animation frame (mousemove can
   // fire faster than the display refreshes). The callback is read through a
@@ -115,7 +119,7 @@ export function DeviceMirror({ canvasRef, connected, loading, platform, formFact
             </div>
           </div>
         )}
-        <DeviceFrame platform={platform} formFactor={formFactor} heightBound>
+        <DeviceFrame platform={platform} hints={deviceHints} contentAspect={contentAspect} heightBound>
           <canvas
             ref={canvasRef}
             aria-label="Device screen mirror"

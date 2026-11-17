@@ -1066,6 +1066,11 @@ html, body, #app {
 
 /* Device column (v2) */
 .device-col {
+  /* Fill the device pane rather than size to the mirror: the mirror fits
+   * itself to this height (DeviceFrame), so a content-sized column would
+   * shrink with a short or landscape frame and never grow back. */
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1256,6 +1261,11 @@ html, body, #app {
 .dm-frame {
   display: contents;
 }
+/* The CSS bezel keeps the image bezel's wrapper elements (so switching bezels
+ * never remounts the canvas) but lays the canvas out as the skin's own child. */
+.dm-frame-passthrough {
+  display: contents;
+}
 
 /* ─── Image bezels (photographic frames from bezel.fit) ─── */
 
@@ -1340,6 +1350,18 @@ html, body, #app {
   border: none;
   border-radius: 0;
   display: block;
+}
+/* The single mirror fits its CSS bezel in JS (DeviceFrame sets --dm-canvas-w
+ * from the container's width and height); the height follows the canvas's
+ * own aspect ratio, so the box always has the frame's shape. */
+.dm-frame:not(.dm-frame-img) .dm-canvas {
+  width: var(--dm-canvas-w, auto);
+}
+/* No notch / punch-hole / side buttons where they would cover the screen
+ * (a rotated phone, or an older phone shape). See DeviceFrame. */
+.dm-frame.dm-skin-bare::after,
+.dm-frame.dm-skin-bare::before {
+  display: none;
 }
 
 .screenshot-device-frame {

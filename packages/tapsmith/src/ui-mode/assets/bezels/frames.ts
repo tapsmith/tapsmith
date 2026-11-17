@@ -13,6 +13,7 @@
  */
 
 import type { DevicePlatform, DeviceFormFactor } from '../../ui-protocol.js';
+import { inferDeviceFormFactor } from '../../ui-protocol.js';
 import iphoneFrame from './iphone.png';
 import androidFrame from './android.png';
 import iphoneMask from './iphone-mask.png';
@@ -88,6 +89,33 @@ export function selectDeviceFrame(opts: {
     if (Math.abs(contentAspect / f.screenAspect - 1) > ASPECT_TOLERANCE) return undefined;
   }
   return f;
+}
+
+/** The live mirror's bezel: a photographic frame, or the CSS skin for `formFactor`. */
+export interface MirrorBezel {
+  /** The photographic frame, or undefined to draw the CSS bezel. */
+  frame: DeviceFrame | undefined
+  /** Which CSS skin to draw when there is no frame. */
+  formFactor: DeviceFormFactor
+}
+
+/**
+ * Pick the live mirror's bezel from what is known about the device: its name
+ * and serial (`hints`, authoritative for tablets) and the shape of the frame
+ * currently on screen (`contentAspect`, width÷height — changes on rotation).
+ * Before the first frame arrives `contentAspect` is undefined and the choice
+ * rests on the name alone. The one entry point both the single mirror and the
+ * grid tiles go through, so frame choice (and any future per-form-factor
+ * frame list) lives here rather than in each caller.
+ */
+export function selectMirrorBezel(opts: {
+  platform?: DevicePlatform
+  hints: Array<string | undefined>
+  contentAspect?: number
+}): MirrorBezel {
+  const { platform, hints, contentAspect } = opts;
+  const formFactor = inferDeviceFormFactor({ hints, aspectRatio: contentAspect });
+  return { frame: selectDeviceFrame({ platform, formFactor, contentAspect }), formFactor };
 }
 
 /** Inline style positioning the content wrapper over the frame's screen window. */

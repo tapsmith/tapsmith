@@ -12,7 +12,8 @@ import type { RefObject } from 'preact';
 import { useRef, useEffect } from 'preact/hooks';
 import { Lock, LockOpen, Focus } from 'lucide-preact';
 import type { WorkerInfo, WorkerDeviceInfo, ClientMessage, DevicePlatform } from '../ui-protocol.js';
-import { inferDevicePlatform, inferDeviceFormFactor } from '../ui-protocol.js';
+import { inferDevicePlatform } from '../ui-protocol.js';
+import { useCanvasAspect } from '../hooks/use-canvas-aspect.js';
 import type { Bounds } from '../../trace-viewer/components/hierarchy-utils.js';
 import { DeviceMirror } from './DeviceMirror.js';
 import { DeviceFrame } from './DeviceFrame.js';
@@ -116,7 +117,7 @@ function WorkerCanvas({ workerId, deviceIndex, label, deviceSerial, connected, r
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const framePlatform = platform ?? inferDevicePlatform(label, deviceSerial);
-  const frameFormFactor = inferDeviceFormFactor({ hints: [label, deviceSerial] });
+  const frameAspect = useCanvasAspect(ref);
   const interaction = useDeviceInteraction({ send, enabled: interactive, force, workerId, deviceIndex });
 
   // Register this tile's canvas with the screenshot mirror.
@@ -149,7 +150,7 @@ function WorkerCanvas({ workerId, deviceIndex, label, deviceSerial, connected, r
             </div>
           </div>
         )}
-        <DeviceFrame platform={framePlatform} formFactor={frameFormFactor}>
+        <DeviceFrame platform={framePlatform} hints={[label, deviceSerial]} contentAspect={frameAspect}>
           <canvas
             ref={ref}
             aria-label={`Device screen mirror — ${label}`}
@@ -203,9 +204,7 @@ export function DevicePane({
   const mirrorPlatform = selectedView
     ? (selectedView.platform ?? inferDevicePlatform(selectedView.label, selectedView.deviceSerial) ?? platform)
     : platform;
-  const mirrorFormFactor = inferDeviceFormFactor({
-    hints: selectedView ? [selectedView.label, selectedView.deviceSerial] : [],
-  });
+  const mirrorHints = selectedView ? [selectedView.label, selectedView.deviceSerial] : [];
 
   // Left/Right move between the All tab and the per-device tabs; Home/End jump
   // to the ends. Additive: these are real buttons and stay individually
@@ -325,7 +324,7 @@ export function DevicePane({
             connected={connected}
             loading={mirrorLoading}
             platform={mirrorPlatform}
-            formFactor={mirrorFormFactor}
+            deviceHints={mirrorHints}
             interactive={interactive}
             force={force}
             workerId={mirroredWorkerId}

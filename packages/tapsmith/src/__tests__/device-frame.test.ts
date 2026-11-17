@@ -4,7 +4,7 @@ import {
   inferDeviceFormFactor,
   resolveDeviceSkin,
 } from '../ui-mode/ui-protocol.js';
-import { selectDeviceFrame } from '../ui-mode/assets/bezels/frames.js';
+import { selectDeviceFrame, selectMirrorBezel } from '../ui-mode/assets/bezels/frames.js';
 
 describe('inferDeviceFormFactor', () => {
   it('treats tablet model names as tablets regardless of ratio', () => {
@@ -67,6 +67,47 @@ describe('selectDeviceFrame', () => {
     expect(selectDeviceFrame({ platform: 'ios', contentAspect: 0.75 })).toBeUndefined();
     // iPhone SE (squarer 16:9) → rejected.
     expect(selectDeviceFrame({ platform: 'ios', contentAspect: 750 / 1334 })).toBeUndefined();
+  });
+});
+
+describe('selectMirrorBezel', () => {
+  // The live mirror's choice: name hints plus the shape of the frame on screen.
+  const pick = (platform: 'ios' | 'android' | undefined, hints: string[], contentAspect?: number) =>
+    selectMirrorBezel({ platform, hints, contentAspect });
+
+  it('uses the photographic frame for a modern portrait phone', () => {
+    const b = pick('android', ['Pixel 7'], 1080 / 2400);
+    expect(b.frame).toBeDefined();
+    expect(b.formFactor).toBe('phone');
+    expect(pick('ios', ['iPhone 16 Pro'], 1179 / 2556).frame).toBeDefined();
+  });
+
+  it('falls back to the CSS phone bezel for a landscape frame', () => {
+    const b = pick('ios', ['iPhone 16 Pro'], 2556 / 1179);
+    expect(b.frame).toBeUndefined();
+    expect(b.formFactor).toBe('phone');
+    expect(pick('android', ['emulator-5554'], 2400 / 1080)).toEqual({ frame: undefined, formFactor: 'phone' });
+  });
+
+  it('treats an opaque-named device with a tablet-shaped screen as a tablet', () => {
+    expect(pick('android', ['emulator-5554'], 1600 / 2560)).toEqual({ frame: undefined, formFactor: 'tablet' });
+    // Rotated, still a tablet.
+    expect(pick('android', ['emulator-5554'], 2560 / 1600)).toEqual({ frame: undefined, formFactor: 'tablet' });
+  });
+
+  it('falls back to the CSS phone bezel for squarer phones (iPhone SE class)', () => {
+    expect(pick('ios', ['iPhone SE (3rd generation)'], 750 / 1334)).toEqual({ frame: undefined, formFactor: 'phone' });
+  });
+
+  it('keeps a named tablet a tablet whatever the frame shape', () => {
+    expect(pick('ios', ['iPad Air 11-inch (M2)'], 0.46).formFactor).toBe('tablet');
+    expect(pick('ios', ['iPad Air 11-inch (M2)'], 0.46).frame).toBeUndefined();
+  });
+
+  it('decides from the name alone before the first frame arrives', () => {
+    expect(pick('ios', ['iPhone 16'], undefined).frame).toBeDefined();
+    expect(pick('ios', ['iPad Pro'], undefined)).toEqual({ frame: undefined, formFactor: 'tablet' });
+    expect(pick(undefined, ['mystery'], 0.46)).toEqual({ frame: undefined, formFactor: 'phone' });
   });
 });
 
