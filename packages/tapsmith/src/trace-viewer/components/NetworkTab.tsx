@@ -169,7 +169,7 @@ interface Props {
   hostWideCapture?: boolean
   /**
    * The device did not trust Tapsmith's CA, so its HTTPS passed through the
-   * proxy uncaptured (PILOT-1183).
+   * proxy uncaptured.
    */
   httpsPassthrough?: boolean
 }

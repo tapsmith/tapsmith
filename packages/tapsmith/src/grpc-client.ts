@@ -1257,7 +1257,7 @@ export class TapsmithGrpcClient {
     route?: NetworkCaptureRoute;
     /**
      * The device does not trust Tapsmith's CA, so HTTPS passes through the
-     * proxy uncaptured (PILOT-711, PILOT-1183). False from an older daemon.
+     * proxy uncaptured. False from an older daemon.
      */
     httpsPassthrough?: boolean;
   }> {

@@ -61,7 +61,7 @@ function capturedHostWide(metadata: TraceMetadata | undefined): boolean {
   return devices.some((d) => d.networkCaptureRoute === 'ios-system-proxy');
 }
 
-/** Whether any device's HTTPS passed through uncaptured because it did not trust the CA (PILOT-1183). */
+/** Whether any device's HTTPS passed through uncaptured because it did not trust the CA. */
 function capturedHttpsPassthrough(metadata: TraceMetadata | undefined): boolean {
   if (!metadata) return false;
   const devices = [...(metadata.devices ?? []), metadata.device].filter(Boolean);

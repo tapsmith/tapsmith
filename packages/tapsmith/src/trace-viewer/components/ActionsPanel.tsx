@@ -172,7 +172,7 @@ function networkRouteLabel(route: NetworkCaptureRoute | undefined): string | und
   return route ? NETWORK_ROUTE_LABELS[route] ?? route : undefined;
 }
 
-/** How a device's traffic was captured, and whether its HTTPS passed through uncaptured (PILOT-1183). */
+/** How a device's traffic was captured, and whether its HTTPS passed through uncaptured. */
 function networkCaptureLabel(device: TraceDeviceInfo): string | undefined {
   const parts = [
     networkRouteLabel(device.networkCaptureRoute),

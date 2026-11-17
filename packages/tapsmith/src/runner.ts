@@ -1486,7 +1486,7 @@ export interface RunOptions {
     entries: NetworkEntry[],
     networkCaptureEnabled?: boolean,
     networkCaptureRoute?: NetworkCaptureRoute,
-    /** A routed device did not trust Tapsmith's CA, so its HTTPS passed through uncaptured (PILOT-1183). */
+    /** A routed device did not trust Tapsmith's CA, so its HTTPS passed through uncaptured. */
     networkHttpsPassthrough?: boolean,
   ) => void;
   /**

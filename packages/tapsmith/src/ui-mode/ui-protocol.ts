@@ -445,7 +445,7 @@ export interface NetworkMessage {
   networkCaptureEnabled?: boolean
   /** How the capture reached the proxy; `ios-system-proxy` is host-wide (entries may include other apps' traffic). */
   networkCaptureRoute?: import('../trace/types.js').NetworkCaptureRoute | null
-  /** The device did not trust Tapsmith's CA, so its HTTPS passed through uncaptured (PILOT-1183). Absent from older workers. */
+  /** The device did not trust Tapsmith's CA, so its HTTPS passed through uncaptured. Absent from older workers. */
   networkHttpsPassthrough?: boolean
   /** Omitted for full snapshots, including reconnect replay. */
   bodyMode?: 'patch'
@@ -1182,7 +1182,7 @@ export interface UIWorkerNetworkMessage {
   networkCaptureEnabled?: boolean
   /** How the capture reached the proxy; `ios-system-proxy` is host-wide. */
   networkCaptureRoute?: import('../trace/types.js').NetworkCaptureRoute | null
-  /** The device did not trust Tapsmith's CA, so its HTTPS passed through uncaptured (PILOT-1183). Absent from older workers. */
+  /** The device did not trust Tapsmith's CA, so its HTTPS passed through uncaptured. Absent from older workers. */
   networkHttpsPassthrough?: boolean
   /** Omitted for full snapshots, including reconnect replay. */
   bodyMode?: 'patch'

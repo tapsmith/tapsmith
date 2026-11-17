@@ -273,7 +273,7 @@ export class Device {
    * @internal — The last successful capture start passed this device's HTTPS
    * through uncaptured: the device does not trust Tapsmith's CA (an iOS
    * simulator whose CA install failed, an Android Play image). Recorded in
-   * trace metadata and named by network waiters that time out (PILOT-1183).
+   * trace metadata and named by network waiters that time out.
    */
   _networkHttpsPassthrough = false;
   /** Set by the runner on retry attempts — see _setForceColdDeepLinks. */
@@ -1664,7 +1664,7 @@ export class Device {
    * Why a network waiter may have timed out, when that is down to capture
    * rather than the app: nothing was capturing, the proxy only came up
    * with this wait, after the app may have opened its connections, or the
-   * device's HTTPS passes through uncaptured (PILOT-1183).
+   * device's HTTPS passes through uncaptured.
    */
   private _networkWaiterHint(proxyWasRunning: boolean): string {
     const passthrough = this._networkHttpsPassthrough
