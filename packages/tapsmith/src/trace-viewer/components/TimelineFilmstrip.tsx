@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'preact/hooks';
+import { useRef, useEffect, useState } from 'preact/hooks';
 import { LoaderCircle, Play } from 'lucide-preact';
 import type { ActionTraceEvent, AssertionTraceEvent, TraceMetadata } from '../../trace/types.js';
 import type { ContainerSummary } from '../types.js';
@@ -50,6 +50,14 @@ export function TimelineFilmstrip({ events, screenshots, metadata, selectedIndex
   injectStyles();
 
   const selectedRef = useRef<HTMLElement>(null);
+  // A frame with no screenshot shows a placeholder the shape of the
+  // screenshots around it (a tablet or a landscape phone is not 9:19.5): the
+  // first thumbnail's shape once one loads, the device's recorded screen
+  // size before that.
+  const [thumbAspect, setThumbAspect] = useState<number | undefined>(undefined);
+  const res = metadata.device.screenResolution;
+  const placeholderAspect = thumbAspect
+    ?? (res && res.width > 0 && res.height > 0 ? res.width / res.height : undefined);
 
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
@@ -169,11 +177,16 @@ export function TimelineFilmstrip({ events, screenshots, metadata, selectedIndex
             class={`timeline-thumb film-thumb${isSelected ? ' selected' : ''}${isFailed ? ' failed' : ''}`}
             src={url}
             onClick={() => onSelect(i)}
+            onLoad={thumbAspect === undefined ? (e) => {
+              const img = e.currentTarget as HTMLImageElement;
+              if (img.naturalWidth > 0 && img.naturalHeight > 0) setThumbAspect(img.naturalWidth / img.naturalHeight);
+            } : undefined}
           />
         ) : (
           <div
             ref={isSelected ? selectedRef as preact.RefObject<HTMLDivElement> : undefined}
             class={`timeline-placeholder film-thumb${isSelected ? ' selected' : ''}`}
+            style={placeholderAspect ? { aspectRatio: String(placeholderAspect) } : undefined}
             onClick={() => onSelect(i)}
           >
             {i + 1}
