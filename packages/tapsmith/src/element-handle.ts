@@ -197,11 +197,14 @@ interface ElementHandleOptions {
   /**
    * @internal — Called by tap(), type() and clearAndType() with the element
    * their auto-wait resolved, after strict mode and before the action is
-   * dispatched: the pre-action screen. A throw stops the action before it
-   * touches anything. Only the MCP action tools set it (`_onResolved`), to
-   * report the test line that repeats the action (PILOT-1239).
+   * dispatched: the pre-action screen. Called again, with `again` true, with
+   * each element a retry resolves before it dispatches (a not-hittable
+   * refusal, a stale id), so the caller knows which element was finally
+   * acted on. A throw stops the action before it touches anything. Only the
+   * MCP action tools set it (`_onResolved`), to report the test line that
+   * repeats the action (PILOT-1239).
    */
-  onResolved?: (element: ElementInfo) => Promise<void>;
+  onResolved?: (element: ElementInfo, again: boolean) => Promise<void>;
 }
 
 // ─── Helpers ───
@@ -1528,7 +1531,7 @@ export class ElementHandle {
    * clearAndType() resolved, before the action is dispatched (see
    * `ElementHandleOptions.onResolved`). Survives a per-call `timeout`.
    */
-  _onResolved(hook: (element: ElementInfo) => Promise<void>): ElementHandle {
+  _onResolved(hook: (element: ElementInfo, again: boolean) => Promise<void>): ElementHandle {
     return new ElementHandle(this._client, this._selector, this._timeoutMs, { ...this._options, onResolved: hook });
   }
 
@@ -2199,7 +2202,11 @@ export class ElementHandle {
         if (isLast || !isStaleElementError(err instanceof Error ? err.message : String(err))) throw err;
       }
       try {
-        currentTarget = await this._actionTarget();
+        // A modified handle resolves its element again here; whoever watches
+        // the action's resolutions (onResolved) is told which one it got.
+        const again = this._hasModifiers() ? await this._resolveOne() : undefined;
+        if (again) await this._options.onResolved?.(again, true);
+        currentTarget = await this._actionTarget(again);
       } catch (err) {
         if (!isPollableNotFoundError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -2838,6 +2845,7 @@ export class ElementHandle {
       // element, and its touch would land after the timeout.
       if (Date.now() >= deadline) return refusedAtDeadline(res);
       const { element } = await this._waitForEnabled(action, { offScreenOk: options?.offScreenOk, deadline });
+      if (element) await this._options.onResolved?.(element, true);
       res = await dispatch(await this._actionTarget(element, { byResolvedId: options?.byResolvedId }), element);
     }
   }
@@ -2950,7 +2958,7 @@ export class ElementHandle {
     if (call !== this) return call.tap();
     const { target, remainingMs } = await this._tracedResolve('tap', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('tap');
-      if (element) await this._options.onResolved?.(element);
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element, { byResolvedId: true }), remainingMs };
     });
     const budget = actionBudget(remainingMs);
@@ -3019,7 +3027,7 @@ export class ElementHandle {
     if (call !== this) return call.type(text, { delay: options?.delay });
     const { target, remainingMs } = await this._tracedResolve('type', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
-      if (element) await this._options.onResolved?.(element);
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;
@@ -3044,7 +3052,7 @@ export class ElementHandle {
     if (call !== this) return call.clearAndType(text, { delay: options?.delay });
     const { target, remainingMs } = await this._tracedResolve('clearAndType', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
-      if (element) await this._options.onResolved?.(element);
+      if (element) await this._options.onResolved?.(element, false);
       return { target: await this._actionTarget(element), remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;

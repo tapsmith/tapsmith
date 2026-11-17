@@ -16,7 +16,7 @@
  * to exactly that element (agent-suggestions.ts).
  */
 
-import type { ElementHandle } from '../element-handle.js';
+import { sameTargetKey, type ElementHandle } from '../element-handle.js';
 import type { ElementInfo, TapsmithGrpcClient } from '../grpc-client.js';
 import { parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import { agentValidatedSuggestions, IOS_CHUNK_SIZE, isNodeElement } from './agent-suggestions.js';
@@ -24,12 +24,17 @@ import { semanticNodes } from './hierarchy-formatter.js';
 import type { LineCheck } from './test-lines.js';
 
 /** What finding a position-free locator needs from the daemon. */
-export type AlternativeClient = Pick<TapsmithGrpcClient, 'getUiHierarchy' | 'evaluateSelectors'>;
+export interface AlternativeClient {
+  getUiHierarchy(deadlineMs?: number): ReturnType<TapsmithGrpcClient['getUiHierarchy']>
+  evaluateSelectors(...args: Parameters<TapsmithGrpcClient['evaluateSelectors']>): ReturnType<TapsmithGrpcClient['evaluateSelectors']>
+}
 
 /**
  * How long the agent may take to check a position-free locator for a
- * positional one. The action waits for it, so it is kept short; a check
- * that runs out leaves the line unverified, not the action undone.
+ * positional one: the screen read and the candidate checks together, each
+ * call bounded by what is left of it. The action waits for it, so it is kept
+ * short; a check that runs out leaves the line unverified, not the action
+ * undone.
  */
 export const ALTERNATIVE_BUDGET_MS = 5_000;
 
@@ -48,12 +53,20 @@ export async function findPositionFreeLocator(
   element: ElementInfo,
   budgetMs = ALTERNATIVE_BUDGET_MS,
 ): Promise<Alternative> {
-  const { hierarchyXml, errorMessage } = await client.getUiHierarchy();
+  const deadline = Date.now() + budgetMs;
+  const left = () => deadline - Date.now();
+  const outOfTime = { error: `checking took longer than ${budgetMs / 1000} s` };
+  if (left() <= 0) return outOfTime;
+  const { hierarchyXml, errorMessage } = await client.getUiHierarchy(left());
   if (errorMessage) return { error: errorMessage };
+  if (left() <= 0) return outOfTime;
   const nodes = semanticNodes(parseHierarchyXml(hierarchyXml)).filter((node) => isNodeElement(element, node));
   if (nodes.length === 0) return { none: 'the element is not in the screen\'s accessibility tree, so no other locator could be checked for it' };
   const ios = hierarchyXml.includes('<XCUIElementType');
-  const checked = await agentValidatedSuggestions(client, nodes, { chunkSize: ios ? IOS_CHUNK_SIZE : undefined, budgetMs });
+  // Every agent call gets what is left of the budget as its deadline: the
+  // check's own budget is only looked at between calls.
+  const bounded = { evaluateSelectors: (selectors: Parameters<TapsmithGrpcClient['evaluateSelectors']>[0]) => client.evaluateSelectors(selectors, Math.max(1, left())) };
+  const checked = await agentValidatedSuggestions(bounded, nodes, { chunkSize: ios ? IOS_CHUNK_SIZE : undefined, budgetMs: left() });
   const best = nodes
     .flatMap((node) => checked.byNode.get(node) ?? [])
     .filter((s) => !POSITIONAL_SUFFIX_RE.test(s.code))
@@ -76,7 +89,16 @@ export function checkingLine(
   const positional = handle._isPositional();
   let resolved: ElementInfo | undefined;
   let alternative: Alternative | undefined;
-  const hooked = handle._onResolved(async (element) => {
+  /** Set when a retry's position picked another element than the one checked. */
+  let moved = false;
+  const hooked = handle._onResolved(async (element, again) => {
+    if (again) {
+      // A retry re-resolved the position (a stale id, a refusal); if the
+      // screen shifted meanwhile it is another element, and the line
+      // checked for the first one would not repeat the action.
+      if (positional && resolved && sameTargetKey(element) !== sameTargetKey(resolved)) moved = true;
+      return;
+    }
     resolved = element;
     if (!positional) return;
     // Never fails the action: a check that cannot finish leaves only the line unverified.
@@ -88,6 +110,12 @@ export function checkingLine(
     check: (): LineCheck => {
       if (!resolved) return { status: 'unverified', reason: 'the action did not report which element it resolved' };
       if (!positional) return { status: 'verified', locator };
+      if (moved) {
+        return {
+          status: 'unverified',
+          reason: 'the locator picks its element by position, and the action had to find it again, when the position picked a different element from the one checked',
+        };
+      }
       if (!alternative || 'error' in alternative) {
         return {
           status: 'unverified',

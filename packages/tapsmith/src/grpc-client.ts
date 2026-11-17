@@ -691,7 +691,7 @@ export class TapsmithGrpcClient {
    * the agent's own matching decides every count, so locator
    * suggestions can't drift from what a test resolves.
    */
-  async evaluateSelectors(selectors: Selector[]): Promise<EvaluateSelectorsResponse> {
+  async evaluateSelectors(selectors: Selector[], deadlineMs?: number): Promise<EvaluateSelectorsResponse> {
     // Agents scope a find by a resolved parent element id, never by a nested
     // parent selector, so a scoped selector would be counted unscoped.
     if (selectors.some((s) => s.parent)) {
@@ -700,7 +700,7 @@ export class TapsmithGrpcClient {
     return this.call<EvaluateSelectorsResponse>('evaluateSelectors', {
       requestId: requestId(),
       selectors: selectors.map((s) => this.selectorProto(s)),
-    });
+    }, deadlineMs);
   }
 
   async tap(selector: Selector | undefined, timeoutMs?: number, elementId?: string): Promise<ActionResponse> {

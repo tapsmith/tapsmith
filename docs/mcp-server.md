@@ -346,6 +346,8 @@ A locator that picks its element by position (`.first()`, `.last()`, `.nth(n)`) 
 - when none does, the line keeps the position and is flagged `Test line (position-dependent):`, with a `// position-dependent` comment that goes into the test with it;
 - when the check cannot finish (the agent errors, or about 5 seconds pass), the action still runs, and the result says the line could not be verified and gives none. Check a locator with `tapsmith_test_locator` before writing that step.
 
+The check takes at most about 5 seconds, on top of the action's own `timeout`. If the action has to find its element again before it lands (the screen moved under it) and the position then picks a different element, the line is reported unverified too.
+
 A `webview.` locator is checked by the page, which is where a test's WebView locators are resolved too. A line that acts on one needs `const webview = await device.webview();` earlier in the test, and the result says so. A positional `webview.` locator is flagged as position-dependent; no alternative is looked for.
 
 A failed action gives no line. Lines use plain `device.` calls: if the test uses screen objects, move the locator into one.

@@ -1765,6 +1765,48 @@ describe('the test line an action tool answers with (PILOT-1239)', () => {
     expect(daemon.evaluateSelectors).not.toHaveBeenCalled();
   });
 
+  it('says the line is unverified when a retry finds the position on another element (R1-F3)', async () => {
+    // The checked row shifts before the tap lands: the first dispatch comes
+    // back stale, and .nth(1) re-resolves to another row.
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana', 'Cherry']);
+    const shifted = [makeElement({ ...elements[0], elementId: 'z0' }), makeElement({ ...elements[0], elementId: 'z1', text: 'Zed', bounds: { left: 0, top: 50, right: 390, bottom: 90 } }), ...elements.slice(1)];
+    let stale = false;
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, evaluate: agent, find: (sel) => (stale ? buttonsAgent(shifted)(sel) : agent(sel)) });
+    daemon.tap.mockImplementationOnce(async () => {
+      stale = true;
+      return { requestId: '1', success: false, errorType: 'ACTION_FAILED', errorMessage: 'element is stale' };
+    });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByRole("button").nth(1)' });
+    expect(daemon.tap).toHaveBeenCalledTimes(2);
+    expect(daemon.tap.mock.calls[1][2]).toBe('z1');
+    expect(text(res)).toMatch(/^OK\nTest line: none, .*picked a different element from the one checked/);
+  });
+
+  it('keeps the line when a retry finds the same element again', async () => {
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana', 'Cherry']);
+    const agent = buttonsAgent(elements);
+    const daemon = makeDaemon({ hierarchyXml: xml, evaluate: agent, find: agent });
+    daemon.tap.mockImplementationOnce(async () => ({ requestId: '1', success: false, errorType: 'ACTION_FAILED', errorMessage: 'element is stale' }));
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByRole("button").nth(1)' });
+    expect(daemon.tap).toHaveBeenCalledTimes(2);
+    expect(text(res)).toMatch(/^OK\nTest line: await device\.getByRole\("button", \{ name: "Banana" \}\)\.tap\(\);/);
+  });
+
+  it('bounds every agent call of the check by what is left of its budget (R1-F4)', async () => {
+    const { xml, elements } = buttonsScreen(['Apple', 'Banana']);
+    const daemon = makeDaemon({ hierarchyXml: xml, evaluate: buttonsAgent(elements) });
+    await findPositionFreeLocator(daemon.client, elements[1], 3_000);
+    const [hierarchyDeadline] = daemon.getUiHierarchy.mock.calls[0] as unknown as [number];
+    const [, evaluateDeadline] = daemon.evaluateSelectors.mock.calls[0] as unknown as [unknown, number];
+    expect(hierarchyDeadline).toBeGreaterThan(0);
+    expect(hierarchyDeadline).toBeLessThanOrEqual(3_000);
+    expect(evaluateDeadline).toBeGreaterThan(0);
+    expect(evaluateDeadline).toBeLessThanOrEqual(3_000);
+  });
+
   it('says the line is unverified when the screen cannot be read for the check', async () => {
     const { elements } = buttonsScreen(['Apple', 'Banana']);
     const daemon = makeDaemon({ hierarchyError: 'hierarchy not ready', find: buttonsAgent(elements) });
