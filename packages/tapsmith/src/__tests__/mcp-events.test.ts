@@ -65,6 +65,10 @@ describe('summarizeResult()', () => {
     }
   });
 
+  it('summarizes a device action with its test line as "OK" (PILOT-1239)', () => {
+    expect(summarizeResult('tapsmith_tap', 'OK\nTest line: await device.getByText("Sign in").tap();')).toBe('OK');
+  });
+
   it('summarizes read_trace step count', () => {
     expect(summarizeResult('tapsmith_read_trace', '## Steps (12 events)\n...')).toBe('## Steps (12 events)');
   });

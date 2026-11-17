@@ -194,6 +194,14 @@ interface ElementHandleOptions {
    * outside a Device, which then get neither.
    */
   platform?: Platform;
+  /**
+   * @internal — Called by tap(), type() and clearAndType() with the element
+   * their auto-wait resolved, after strict mode and before the action is
+   * dispatched: the pre-action screen. A throw stops the action before it
+   * touches anything. Only the MCP action tools set it (`_onResolved`), to
+   * report the test line that repeats the action (PILOT-1239).
+   */
+  onResolved?: (element: ElementInfo) => Promise<void>;
 }
 
 // ─── Helpers ───
@@ -1513,6 +1521,20 @@ export class ElementHandle {
     const modified = o.nthIndex !== undefined || !!o.filters?.length || !!o.post?.length
       || !!o.andHandle || !!o.orHandle || !!o.scopeParent;
     return modified ? undefined : this._selector;
+  }
+
+  /**
+   * @internal — This handle, calling `hook` with the element tap(), type() or
+   * clearAndType() resolved, before the action is dispatched (see
+   * `ElementHandleOptions.onResolved`). Survives a per-call `timeout`.
+   */
+  _onResolved(hook: (element: ElementInfo) => Promise<void>): ElementHandle {
+    return new ElementHandle(this._client, this._selector, this._timeoutMs, { ...this._options, onResolved: hook });
+  }
+
+  /** @internal — Whether a position (`.first()`/`.last()`/`.nth()`) picks this handle's element: it is exempt from strict mode. */
+  _isPositional(): boolean {
+    return this._options.nthIndex !== undefined;
   }
 
   /**
@@ -2928,6 +2950,7 @@ export class ElementHandle {
     if (call !== this) return call.tap();
     const { target, remainingMs } = await this._tracedResolve('tap', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('tap');
+      if (element) await this._options.onResolved?.(element);
       return { target: await this._actionTarget(element, { byResolvedId: true }), remainingMs };
     });
     const budget = actionBudget(remainingMs);
@@ -2996,6 +3019,7 @@ export class ElementHandle {
     if (call !== this) return call.type(text, { delay: options?.delay });
     const { target, remainingMs } = await this._tracedResolve('type', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element);
       return { target: await this._actionTarget(element), remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;
@@ -3020,6 +3044,7 @@ export class ElementHandle {
     if (call !== this) return call.clearAndType(text, { delay: options?.delay });
     const { target, remainingMs } = await this._tracedResolve('clearAndType', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
+      if (element) await this._options.onResolved?.(element);
       return { target: await this._actionTarget(element), remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;

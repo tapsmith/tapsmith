@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Device } from '../device.js';
 import type { TapsmithGrpcClient } from '../grpc-client.js';
 import type { WebViewHandle } from '../webview-handle.js';
-import { evaluateLocator, nativeSelectorOf } from '../mcp/locator-eval.js';
+import { canonicalLocatorSource, evaluateLocator, nativeSelectorOf } from '../mcp/locator-eval.js';
 import { selectorToProto } from '../selectors.js';
 
 // PILOT-848: MCP locator strings are built by the SDK's own locator builder
@@ -167,5 +167,25 @@ describe('evaluateLocator — refuses anything that is not a locator', () => {
     const before = (globalThis as { __pilot848?: number }).__pilot848;
     await expect(refuse('device.getByText((globalThis.__pilot848 = 1))')).rejects.toThrow();
     expect((globalThis as { __pilot848?: number }).__pilot848).toBe(before);
+  });
+});
+
+describe('canonicalLocatorSource — the locator as a test line spells it (PILOT-1239)', () => {
+  it.each([
+    ['device.getByText("Sign in")', 'device.getByText("Sign in")'],
+    ['  device.getByText("Sign in");  ', 'device.getByText("Sign in")'],
+    ['page.getByRole("button", { name: "Save" })', 'device.getByRole("button", { name: "Save" })'],
+    ['this.device.getByText("A").first()', 'device.getByText("A").first()'],
+    ['this.page.getByLabel(/e-?mail/i)', 'device.getByLabel(/e-?mail/i)'],
+    ['getByText("Welcome")', 'device.getByText("Welcome")'],
+    ['this.webview.getByText("Go")', 'webview.getByText("Go")'],
+    ['page.getByRole("list").filter({ has: getByText("Milk") }).and(this.page.getByTestId("row"))', 'device.getByRole("list").filter({ has: device.getByText("Milk") }).and(device.getByTestId("row"))'],
+    ['device.getByText("page.getByText")', 'device.getByText("page.getByText")'],
+  ])('%s → %s', (source, expected) => {
+    expect(canonicalLocatorSource(source)).toBe(expected);
+  });
+
+  it('refuses a string that does not parse', () => {
+    expect(() => canonicalLocatorSource('device.getByText(')).toThrow(/Invalid locator/);
   });
 });

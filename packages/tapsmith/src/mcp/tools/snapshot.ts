@@ -5,10 +5,7 @@ import { deviceClientFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { parseHierarchyXml } from '../../trace-viewer/components/hierarchy-utils.js';
 import { formatHierarchy, semanticNodes } from '../hierarchy-formatter.js';
-import { agentValidatedSuggestions } from '../agent-suggestions.js';
-
-/** Selectors per agent call on iOS, where each call costs one snapshot. */
-const IOS_CHUNK_SIZE = 500;
+import { agentValidatedSuggestions, IOS_CHUNK_SIZE } from '../agent-suggestions.js';
 
 /**
  * How long an empty screen is read again before it is reported as empty. An

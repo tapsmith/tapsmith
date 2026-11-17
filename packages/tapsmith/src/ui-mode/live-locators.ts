@@ -12,11 +12,8 @@ import type { TapsmithGrpcClient } from '../grpc-client.js';
 import type { WebViewHandle } from '../webview-handle.js';
 import { getNodeBounds, type Bounds, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
-import { agentValidatedSuggestions } from '../mcp/agent-suggestions.js';
+import { agentValidatedSuggestions, IOS_CHUNK_SIZE } from '../mcp/agent-suggestions.js';
 import { sdkDeviceFor, withEvaluatedLocator } from '../mcp/sdk-device.js';
-
-/** iOS checks a batch in one XCUI snapshot, so it takes far more per call. */
-const IOS_CHUNK_SIZE = 500;
 
 /** One live WebView query's budget: a wedged page must not hold a tab's queue for the device timeout. */
 const LIVE_WEBVIEW_TIMEOUT_MS = 5_000;

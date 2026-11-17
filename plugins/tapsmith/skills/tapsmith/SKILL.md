@@ -66,7 +66,9 @@ Key tools:
 - `tapsmith_run_tests`: run files, or one test with `test: "<part of its name>"`.
 - `tapsmith_read_trace`: a failed test's steps, error and screen.
 - `tapsmith_screenshot`, `tapsmith_tap`, `tapsmith_type`, `tapsmith_swipe`: look at the
-  device and get the app to the screen under test.
+  device and get the app to the screen under test. Each action answers with the test line that
+  repeats it (`Test line: await device.getByRole("button", { name: "Save" }).tap();`), its
+  locator checked by the device to match exactly the element acted on.
 
 Headless, the server never boots a simulator or launches an emulator. If a tool says the
 configured device is not running, tell the user which one to start (the error names it), or to
@@ -89,6 +91,16 @@ Prefer accessibility-first locators, in this order: `getByRole('button', { name:
 
 Without MCP, ask the user to pick the element in UI mode: the pick button in the device mirror
 of `npx tapsmith test --ui` shows locators the device has checked (`ui-mode.md`).
+
+## Writing the test as you walk the flow
+
+When you drive the app through a flow you are writing a test for, write each action's
+`Test line:` into the test file as you go, in order: it is the call that repeats that step, with
+a locator the device checked. A line flagged `(position-dependent)` keeps its `.first()` /
+`.nth()`; replace it if you can find a locator `tapsmith_test_locator` counts 1 for. When a
+result says the line could not be verified, it gives none: check a locator for that step with
+`tapsmith_test_locator` before writing it. Leave out dead ends you backed out of. Lines use plain
+`device.` calls; move their locators into the project's screen objects where it has them.
 
 ## Writing the test
 

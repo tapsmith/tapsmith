@@ -65,6 +65,8 @@ Follow it for every locator you write:
 5. \`tapsmith_run_tests\`.
 6. On failure, \`tapsmith_read_trace\`. A locator that matched nothing may list locators that match the same words; either way, go back to step 1 for it instead of guessing again.
 
+When you walk a flow with \`tapsmith_tap\`, \`tapsmith_type\`, \`tapsmith_swipe\`, \`tapsmith_press_key\` or \`tapsmith_launch_app\`, each answers with a \`Test line:\` that repeats the step, its locator checked by the device to match exactly the element acted on. Write each line into the test file as you go. A \`(position-dependent)\` line keeps its \`.first()\`/\`.nth()\`; a result that says the line could not be verified gives none, so take that step's locator through the loop above.
+
 Without MCP, ask the user to pick the element in UI mode (\`npx tapsmith test --ui\`, pick button in the device mirror); its Locator tab lists locators the device has checked.
 
 ### Writing tests
