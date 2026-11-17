@@ -716,7 +716,6 @@ jobs:
             packages/tapsmith/package-lock.json
             e2e/package-lock.json
 
-      # Picks the simulator the way e2e-ios.yml does, but never boots it.
       # Keep the simulator off Apple's MobileAsset catalog servers. On each
       # boot mobileassetd fetches trustd's PKITrustSupplementals update; when
       # it lands (8-15 min after boot, depending on Apple's servers) trustd
