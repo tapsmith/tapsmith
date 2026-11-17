@@ -7,7 +7,8 @@
     "src/ui-mode/ui-discover.ts",
     "src/selection-preflight-child.ts",
     "src/index.ts",
-    "scripts/fetch-bezels.mjs"
+    "scripts/fetch-bezels.mjs",
+    "scripts/rotate-bezels.mjs"
   ],
   "ignore": ["scripts/clean-install-checks.d.mts", "scripts/docs-bundle.d.mts", "scripts/npm-dist-tag.d.mts"],
   "ignoreExportsUsedInFile": true

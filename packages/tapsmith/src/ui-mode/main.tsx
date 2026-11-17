@@ -2101,6 +2101,7 @@ function App() {
               onRunTest={handleRunSelectedTest}
               isTestPending={isTestPending}
               platform={viewedTestPlatform}
+              deviceHints={[viewedTestWorker?.displayName, viewedTestWorker?.deviceSerial ?? testDeviceSerial]}
             />
           </div>
         </div>

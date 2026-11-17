@@ -191,14 +191,15 @@ test.describe("Device groups", () => {
     ui.sendFrame({ ...screenFrame(800, 1280, 2), workerId: 0, deviceIndex: 1 })
     await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
     await expect(device.mirrorFor(BOB)).toHaveAttribute("width", "800")
-    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "image")
-    await expect(device.bezelFor(BOB)).toHaveAttribute("data-bezel", "css-tablet")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-frame", "tablet")
 
-    // Alice rotates: her tile switches bezel, bob's is untouched.
+    // Alice rotates: her tile switches frame, bob's is untouched.
     ui.sendFrame({ ...screenFrame(1200, 540, 3), workerId: 0, deviceIndex: 0 })
     await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "1200")
-    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "css-phone")
-    await expect(device.bezelFor(BOB)).toHaveAttribute("data-bezel", "css-tablet")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo-landscape")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-frame", "tablet")
+    expect(await device.frameImageFillsBezel(device.mirrorFor(ALICE))).toBe(true)
     await expect.poll(async () => {
       const fill = await device.canvasFill(device.mirrorFor(ALICE))
       return Math.min(fill.width, fill.height) > 0.9 && Math.abs(fill.shape - 1) < 0.02
@@ -208,7 +209,7 @@ test.describe("Device groups", () => {
     // for alice's frames, so the next frame lands on it.
     ui.sendFrame({ ...screenFrame(540, 1200, 4), workerId: 0, deviceIndex: 0 })
     await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
-    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-bezel", "image")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo")
   })
 
   test("gestures and picks on a member's tab name that device", async ({ ui, device }) => {
