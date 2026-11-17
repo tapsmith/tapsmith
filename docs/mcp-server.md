@@ -366,7 +366,9 @@ shown in detail, with each error cut to 2,000 characters; when their traces are
 long, fewer failures are shown in detail. The failures after those, up to the
 50th, get one line each, and any after that are counted. Screenshots are attached for up to the first 3 failures
 that have one, as many as fit the response limit. The report ends by pointing to `tapsmith_list_results`, which lists
-every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1.
+every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1. It also says how to try locators on the screen where a test failed: run just that test.
+
+When the run was one test and it failed, the report says whether the device is still on the screen where it failed (`DEVICE HELD`), and for a locator that matched nothing it lists the elements on that screen closest to it, each with a locator the device agent checked finds it alone. See [Fix a failing test](#fix-a-failing-test).
 
 A file that dies before any test reports — a failed import, a crashed or
 timed-out worker — is reported as a single failure named
@@ -507,6 +509,23 @@ Returns a message indicating whether watch mode was enabled or disabled.
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device, and put a locator in test code only once `tapsmith_test_locator` counts exactly 1
 5. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
 6. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
+
+### Fix a failing test
+
+A test that fails on a locator can be fixed against the live app: the device stays on the screen where it failed.
+
+1. **Run just that test:** call `tapsmith_run_tests` with its file and `test` set to its name (from `tapsmith_list_tests`), so the run is that one test
+2. **Read the report:** when it fails, the report says `DEVICE HELD` with the screen it is still on and, for a locator that matched nothing, lists the elements there closest to it, each with a checked locator
+3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen
+4. **Change the test and run it again:** the next `tapsmith_run_tests` resets the app as usual, so the test starts from its normal starting point
+
+Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is simply left where the test stopped. The report says `DEVICE HELD` only when that is certain:
+
+- **One test ran.** After a run of several tests, a later test may have moved the screen, so the report instead says to run the one test that failed.
+- **Nothing acted on the device after the failed step.** The test's own `afterEach` and `afterAll` hooks still run after a failure, and one that taps, navigates or relaunches the app moves the screen. The failure's trace shows whether a hook did; when one did, there is no `DEVICE HELD`. Without a trace (`trace` off in the config), a locator miss is still reported as held, with a note that a hook may have moved the screen.
+- **One device ran it.** A test on a [device group](#choosing-a-device) (`use.devices`) gets no `DEVICE HELD`.
+
+It works the same in [UI mode](#ui-shared-workflow) and [headless](#headless-stdio-workflow) sessions. In UI mode, a failed run leaves its device alone until you prepare it or run again. When several devices could have run the test (UI mode with more than one worker for the project), pass `device` to `tapsmith_run_tests`, `tapsmith_snapshot` and `tapsmith_test_locator` so they all use the same one.
 
 ## Locator format
 
