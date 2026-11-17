@@ -67,6 +67,8 @@ Follow it for every locator you write:
 
 When you walk a flow with \`tapsmith_tap\`, \`tapsmith_type\`, \`tapsmith_swipe\`, \`tapsmith_press_key\` or \`tapsmith_launch_app\`, each answers with a \`Test line:\` that repeats the step, its locator checked by the device to match exactly the element acted on. Write each line into the test file as you go. A \`(position-dependent)\` line keeps its \`.first()\`/\`.nth()\`; a result that says the line could not be verified gives none, so take that step's locator through the loop above.
 
+Check every assertion with \`tapsmith_run_code\` before you write it into the test: it runs statements as a test writes them (\`await expect(device.getByText("Saved")).toBeVisible();\`, \`await device.getByText("Row 40").scrollIntoView();\`, \`await device.openDeepLink("…");\`) on the device, stops at the first failure with the error the test would get, and answers each passing one with its \`Test line:\`.
+
 Without MCP, ask the user to pick the element in UI mode (\`npx tapsmith test --ui\`, pick button in the device mirror); its Locator tab lists locators the device has checked.
 
 ### Writing tests

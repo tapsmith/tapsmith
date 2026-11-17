@@ -69,6 +69,9 @@ Key tools:
   device and get the app to the screen under test. Each action answers with the test line that
   repeats it (`Test line: await device.getByRole("button", { name: "Save" }).tap();`), its
   locator checked by the device to match exactly the element acted on.
+- `tapsmith_run_code`: run statements as a test writes them (`await expect(locator).toBeVisible();`,
+  `await locator.longPress();`, `await device.openDeepLink("…");`) on the device; each passing one
+  answers with its test line. Parsed, not run as JavaScript: literal arguments only.
 
 Headless, the server never boots a simulator or launches an emulator. If a tool says the
 configured device is not running, tell the user which one to start (the error names it), or to
@@ -101,6 +104,11 @@ a locator the device checked. A line flagged `(position-dependent)` keeps its `.
 result says the line could not be verified, it gives none: check a locator for that step with
 `tapsmith_test_locator` before writing it. Leave out dead ends you backed out of. Lines use plain
 `device.` calls; move their locators into the project's screen objects where it has them.
+
+Check every assertion with `tapsmith_run_code` before you write it into the test
+(`await expect(device.getByText("Saved")).toBeVisible();`): a wrong matcher, text or locator fails
+there in seconds, with the error the test would get. Use it too for steps the other tools do not
+have: a long press, a double tap, `scrollIntoView()`, `dragTo()`, a deep link, a coordinate tap.
 
 ## Writing the test
 
