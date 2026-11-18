@@ -567,6 +567,12 @@ enum EventSynthesizer {
         }
         let addPathSel = NSSelectorFromString("addPointerEventPath:")
         if record.responds(to: addPathSel) { record.perform(addPathSel, with: path) }
+        // As `swipePath`: iOS 26 silently drops ~25% of records sent through
+        // dispatchSync (~5% through the daemon session), and a dropped
+        // clearing drag uses up one of the touch's two.
+        if runtimeCoalescesRapidTaps {
+            return dispatchViaDaemonSession(record) || dispatchSync(record) || dispatchViaDevice(record)
+        }
         return dispatchSync(record) || dispatchViaDevice(record) || dispatchViaDaemonSession(record)
     }
 

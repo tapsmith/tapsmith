@@ -96,13 +96,20 @@ describe("Covers", () => {
 
     // Under the header on Android (under the footer, the focused field would
     // sit under its own keyboard, which hides it from Android's tree), under
-    // the footer on iOS (see the header test below).
-    test("type() into a field under a bar scrolls it clear for its focusing tap", async ({ platform, coversScreen }) => {
-      await (platform === "android" ? coversScreen.noteUnderHeaderButton : coversScreen.noteUnderFooterButton).tap()
-
-      await coversScreen.note.type("hello")
-
-      await expect(coversScreen.note).toHaveValue("hello")
+    // the footer on iOS (see the header test below). On iOS the field then
+    // sits under its keyboard, so the test checks the focusing tap landed
+    // (the field has focus, the footer was not tapped) rather than typing
+    // into a field the keyboard hides.
+    test("type() and focus() on a field under a bar scroll it clear for the focusing tap", async ({ platform, coversScreen }) => {
+      if (platform === "android") {
+        await coversScreen.noteUnderHeaderButton.tap()
+        await coversScreen.note.type("hello")
+        await expect(coversScreen.note).toHaveValue("hello")
+      } else {
+        await coversScreen.noteUnderFooterButton.tap()
+        await coversScreen.note.focus()
+        await expect(coversScreen.note).toBeFocused()
+      }
       await expect(coversScreen.counts).toHaveText(counts({}))
     })
 

@@ -906,7 +906,7 @@ class CommandHandler {
                 if clearing.drags < CoverClearance.maxDrags,
                    let cleared = clearingDrag(target: target, cover: coverFrame, list: list, clock: clock),
                    let identifying = identifyingQuery() {
-                    let (drag, outside) = cleared
+                    let (drag, path, outside) = cleared
                     clearing.drags += 1
                     snapshotFinder.rebind(element.elementId, to: identifying.firstMatch)
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
@@ -917,7 +917,7 @@ class CommandHandler {
                     // over the list: stop, loudly, rather than touch the
                     // target on a screen that changed.
                     let after = (try? snapshotFinder.takeSnapshot()).flatMap {
-                        OcclusionAnalyzer(snapshot: $0, screenSize: snapshotFinder.screenSize).outsideList(list)
+                        OcclusionAnalyzer(snapshot: $0, screenSize: snapshotFinder.screenSize).outsideList(at: path, list: list)
                     }
                     if after != outside {
                         NSLog("[TapsmithCommand] the screen outside the list changed during the drag: \(outside) -> \(String(describing: after))")
@@ -1124,7 +1124,7 @@ class CommandHandler {
     /// deadline).
     private func clearingDrag(
         target: OcclusionAnalyzer.Target, cover: CGRect, list: CGRect, clock: TouchPlanClock
-    ) -> (CoverClearance.Drag, outside: [String: Int])? {
+    ) -> (CoverClearance.Drag, path: [Int], outside: [String: Int])? {
         let after = Date().addingTimeInterval(CoverClearance.dragSeconds)
         guard clock.sleepBeforeNextPass(at: after) != nil, !clock.isTooLateToAct(at: after) else { return nil }
         let screenSize = snapshotFinder.screenSize
@@ -1141,8 +1141,9 @@ class CommandHandler {
             return nil
         }
         // What lies outside the list now, to check the drag changed none of it.
-        guard let outside = analyzer.outsideList(list) else { return nil }
-        return (drag, outside)
+        guard let path = analyzer.listPath(holding: target, list: list),
+              let outside = analyzer.outsideList(at: path, list: list) else { return nil }
+        return (drag, path, outside)
     }
 
     /// What the UI tree says about touching the element, and how long a tap

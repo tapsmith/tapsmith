@@ -728,13 +728,19 @@ expectBool("a target whose list is not found never gets a drag",
 expectBool("no drag while an alert is up, even away from the drag start",
            analyzer(footer + [(1, .window, "", "", screen), (2, .alert, "Saved", "", R(40, 300, 322, 150))])
                .isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), false)
-// What lies outside the list, compared before and after a drag.
+// What lies outside the list, compared before and after a drag: found by
+// the target's list's place in the tree.
+func outsideAfterDrag(_ before: [Row], _ after: [Row], target: OcclusionAnalyzer.Target, list: CGRect) -> ([String: Int]?, [String: Int]?) {
+    guard let path = analyzer(before).listPath(holding: target, list: list) else { return (nil, nil) }
+    return (analyzer(before).outsideList(at: path, list: list), analyzer(after).outsideList(at: path, list: list))
+}
 let rowsScrolled: [Row] = listRows([
     (4, .cell, "Row 21", "", R(0, 700, 402, 44)),
     (4, .cell, "Row 22", "", R(0, 744, 402, 44)),
 ], after: [(3, .button, "Checkout", "", R(0, 774, 402, 100))])
+let scrolledOnly = outsideAfterDrag(footer, rowsScrolled, target: row20, list: list)
 expectBool("rows the list scrolls in and out leave what is outside it the same",
-           analyzer(footer).outsideList(list) == analyzer(rowsScrolled).outsideList(list), true)
+           scrolledOnly.0 != nil && scrolledOnly.0 == scrolledOnly.1, true)
 // A role-less dialog backdrop listed before the list (iOS lists views top to
 // bottom), dismissed by the drag that started on it.
 let backdropBeforeList: [Row] = [
@@ -747,10 +753,28 @@ let backdropBeforeList: [Row] = [
     (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
     (3, .button, "Checkout", "", R(0, 774, 402, 100)),
 ]
+let backdropGone = outsideAfterDrag(backdropBeforeList, footer, target: row20, list: list)
 expectBool("a backdrop gone after the drag changes what is outside the list",
-           analyzer(backdropBeforeList).outsideList(list) == analyzer(footer).outsideList(list), false)
-expectBool("no list, nothing to compare",
-           analyzer(footer).outsideList(R(0, 0, 10, 10)) == nil, true)
+           backdropGone.0 != nil && backdropGone.0 != backdropGone.1, true)
+// The list inside an outer scroller of the same frame (a horizontal tab
+// pager), with an in-page dialog beside it: the pager is not the list, so the
+// dialog counts as outside it.
+func pagerPage(dialog: Bool) -> [Row] {
+    [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .scrollView, "", "", list),
+        (4, .table, "", "", list),
+        (5, .cell, "Row 20", "", R(0, 790, 402, 44)),
+    ] + (dialog ? [(4, .other, "", "", list), (4, .other, "", "", R(20, 300, 362, 200)), (5, .button, "OK", "", R(40, 420, 322, 44))] : [])
+        + [(3, .button, "Checkout", "", R(0, 774, 402, 100))]
+}
+let pagerDialogGone = outsideAfterDrag(pagerPage(dialog: true), pagerPage(dialog: false), target: row20, list: list)
+expectBool("a dialog beside the list inside a same-frame pager, gone after the drag, changes what is outside the list",
+           pagerDialogGone.0 != nil && pagerDialogGone.0 != pagerDialogGone.1, true)
+expectBool("no list holding the target, nothing to compare",
+           analyzer(footer).listPath(holding: row20, list: R(0, 0, 10, 10)) == nil, true)
 
 // ─── Keyboard first (PILOT-622) ───
 
