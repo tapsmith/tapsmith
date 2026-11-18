@@ -69,7 +69,7 @@ export function isSwitchPartNode(node: HierarchyNode): boolean {
  * Whether the node is iOS 27's empty toolbar host, which the agent marks: a
  * container-sized Toolbar holding no toolbar items (nothing, or only the
  * iPhone Duo's floating back button). It is no toolbar a user can see, so no
- * locator matches it, but what it holds still does (PILOT-1219, PILOT-1251).
+ * locator matches it, but what it holds still does.
  */
 export function isEmptyBarHostNode(node: HierarchyNode): boolean {
   return node.attributes.get('tapsmith-empty-bar-host') === 'true';
