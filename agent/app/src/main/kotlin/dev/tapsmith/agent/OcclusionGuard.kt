@@ -199,6 +199,7 @@ class OcclusionGuard(
         override val isVisible: Boolean by lazy { node.isVisibleToUser }
         override val takesTouches: Boolean by lazy { node.isClickable || node.isLongClickable }
         override val offersDismiss: Boolean by lazy { node.isDismissable }
+        override val isProgressIndicator: Boolean by lazy { node.className?.toString()?.endsWith("ProgressBar") == true }
         private val childCount: Int by lazy { node.childCount }
         private val children = HashMap<Int, A11yHitNode?>()
 

@@ -561,6 +561,96 @@ check("an alert over an unhittable target covers it",
       // A native alert is named as one (PILOT-919).
       .covered(by: "alert \"Delete?\""))
 
+// ─── Loading overlays (PILOT-979) ───
+
+// A React Native loading overlay: a plain view (it may be see-through) over
+// the screen, with an ActivityIndicator in it. XCUITest's hit test lands on it,
+// so the target reads unhittable; the overlay is no interactive control.
+let loadingOverlay: [Row] = [
+    (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
+    (4, .activityIndicator, "In progress", "", R(181, 475, 40, 40)),
+]
+var loadingRows = screenRows()
+loadingRows.insert(contentsOf: loadingOverlay, at: loadingRows.count - 2)
+check("a plain overlay holding a spinner covers an unhittable target",
+      analyzer(loadingRows).analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (element \"loading-overlay\")"))
+checkPoint("…but XCUITest's hit test still wins when it says hittable",
+           analyzer(loadingRows).analyze(button("Covered action", covered), isHittable: true),
+           CGPoint(x: 201, y: 291.33))
+check("a spinner right over the touch point covers it",
+      analyzer(screenRows(extra: [(4, .activityIndicator, "In progress", "", R(181, 271, 40, 40))]))
+          .analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (progressbar \"In progress\")"))
+check("a progress bar counts as well",
+      analyzer(screenRows(extra: [(4, .other, "", "", R(0, 200, 402, 200)),
+                                  (5, .progressIndicator, "Uploading", "", R(16, 380, 370, 4))]))
+          .analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+checkPoint("a spinner painted after the target that misses the point is not a cover",
+           analyzer(screenRows(extra: [(4, .activityIndicator, "", "", R(181, 600, 40, 40))]))
+               .analyze(button("Covered action", covered), isHittable: false),
+           CGPoint(x: 201, y: 291.33))
+checkPoint("a spinner inside the target is not a cover",
+           analyzer(screenRows(extra: []).enumerated().flatMap { i, row -> [Row] in
+               row.label == "Covered action" && row.type == .staticText
+                   ? [row, (5, .activityIndicator, "", "", R(340, 271, 40, 40))] : [row]
+           }).analyze(button("Covered action", covered), isHittable: false),
+           CGPoint(x: 201, y: 291.33))
+// The trailing full-screen RN wrappers are painted after everything; one that
+// holds no spinner is still no cover (pass-through overlays look the same).
+checkPoint("a plain overlay with no spinner is still not a cover",
+           analyzer(screenRows(passThrough: true)).analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
+           CGPoint(x: 201, y: 359.33))
+// XCUITest calls a React Native text field under a loading overlay hittable:
+// the overlay still covers it (the focusing tap would land on the overlay).
+// Another control over a hittable field is still left to the hit test.
+let fieldUnderOverlay: [Row] = screenRows(extra: []).map { row in
+    row.label == "Covered action" && row.type == .button ? (row.depth, .textField, "Covered field", row.id, row.frame) : row
+}
+var fieldLoadingRows = fieldUnderOverlay
+fieldLoadingRows.insert(contentsOf: loadingOverlay, at: fieldLoadingRows.count - 2)
+let coveredField = OcclusionAnalyzer.Target(frame: covered, elementType: .textField, label: "Covered field", identifier: "")
+check("a loading overlay covers a text field XCUITest calls hittable",
+      analyzer(fieldLoadingRows).analyze(coveredField, isHittable: true),
+      .covered(by: "a loading overlay (element \"loading-overlay\")"))
+checkPoint("…but a plain control over a hittable text field is left to the hit test",
+           analyzer(fieldUnderOverlay).analyze(coveredField, isHittable: true),
+           CGPoint(x: 201, y: 291.33))
+// A hittable text field under an overlay whose Cancel button lies over it, or
+// under a control painted after the overlay: still covered, by the control.
+func asField(_ rows: [Row]) -> [Row] {
+    rows.map { row in
+        row.label == "Covered action" && row.type == .button ? (row.depth, .textField, "Covered field", row.id, row.frame) : row
+    }
+}
+var fieldCancelRows = asField(screenRows())
+fieldCancelRows.insert(contentsOf: [
+    (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
+    (4, .activityIndicator, "In progress", "", R(181, 475, 40, 40)),
+    (4, .button, "Cancel", "", R(100, 270, 200, 44)),
+], at: fieldCancelRows.count - 2)
+check("a hittable text field under an overlay with its Cancel over the point is covered by Cancel",
+      analyzer(fieldCancelRows).analyze(coveredField, isHittable: true),
+      .covered(by: "button \"Cancel\""))
+var fieldControlAfterRows = asField(screenRows())
+fieldControlAfterRows.insert(contentsOf: loadingOverlay + [(3, .button, "Retry", "", R(100, 270, 200, 44))],
+                             at: fieldControlAfterRows.count - 2)
+check("a hittable text field under an overlay and a control painted after it is covered by the control",
+      analyzer(fieldControlAfterRows).analyze(coveredField, isHittable: true),
+      .covered(by: "button \"Retry\""))
+// A control in the overlay over the point (its Cancel button) is named.
+let loadingWithCancel: [Row] = [
+    (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
+    (4, .activityIndicator, "In progress", "", R(181, 475, 40, 40)),
+    (4, .button, "Cancel", "", R(100, 270, 200, 44)),
+]
+var cancelRows = screenRows()
+cancelRows.insert(contentsOf: loadingWithCancel, at: cancelRows.count - 2)
+check("a control inside a loading overlay over the point is named as the cover",
+      analyzer(cancelRows).analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "button \"Cancel\""))
+
 // ─── Keyboard first (PILOT-622) ───
 
 func checkKF(_ name: String, _ got: OcclusionAnalyzer.KeyboardFirst, _ want: OcclusionAnalyzer.KeyboardFirst) {

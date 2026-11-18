@@ -25,6 +25,7 @@ class OcclusionAnalyzerTest {
         override val isVisible: Boolean = true,
         override val takesTouches: Boolean = false,
         override val offersDismiss: Boolean = false,
+        override val isProgressIndicator: Boolean = false,
         private val name: String = "node",
         val children: MutableList<FakeNode> = mutableListOf(),
     ) : OcclusionAnalyzer.HitNode {
@@ -586,6 +587,107 @@ class OcclusionAnalyzerTest {
         assertTrue(name, name.length < 80)
         assertTrue(name, name.startsWith("text \"xxx"))
         assertTrue(name, name.endsWith("…\""))
+    }
+
+    // ─── Loading overlays (PILOT-979) ───
+
+    @Test
+    fun `a non-touchable overlay holding a spinner covers the target`() {
+        // A React Native loading overlay: a plain view (it may be see-through)
+        // over the screen, with an ActivityIndicator (a ProgressBar) in it.
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true, name = "an unlabelled ProgressBar")
+        val overlay = FakeNode(Box(0, 0, 1080, 2400), drawingOrder = 2, name = "an unlabelled ViewGroup").add(spinner)
+        root(FakeNode(screen).add(button, overlay))
+        val verdict = analyze(button)
+        assertCoveredBy(verdict, "a loading overlay (an unlabelled ViewGroup)")
+        assertEquals(OcclusionAnalyzer.CoverKind.LOADING, coverKind(verdict))
+    }
+
+    @Test
+    fun `a spinner drawn right over the touch point covers the target`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(440, 805, 640, 905), drawingOrder = 2, isProgressIndicator = true, name = "an unlabelled ProgressBar")
+        root(FakeNode(screen).add(button, spinner))
+        assertCoveredBy(analyze(button), "a loading overlay (an unlabelled ProgressBar)")
+    }
+
+    @Test
+    fun `a spinner nested deep in a later branch over the point is found`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true)
+        val card = FakeNode(Box(300, 1000, 780, 1400)).add(FakeNode(Box(300, 1000, 780, 1400)).add(spinner))
+        val overlay = FakeNode(screen, drawingOrder = 2, name = "overlay").add(card)
+        root(FakeNode(screen).add(button, overlay))
+        assertCoveredBy(analyze(button), "a loading overlay (overlay)")
+    }
+
+    @Test
+    fun `an overlay without a spinner still does not cover the target`() {
+        // Indistinguishable from a pointerEvents="none" overlay.
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val overlay = FakeNode(screen, drawingOrder = 2).add(FakeNode(Box(490, 1150, 590, 1250), name = "text"))
+        root(FakeNode(screen).add(button, overlay))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `a spinner inside the target is not a cover`() {
+        val spinner = FakeNode(Box(940, 820, 1000, 880), isProgressIndicator = true)
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true).add(spinner)
+        root(FakeNode(screen).add(button))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `a spinner beside the target that misses the touch point is not a cover`() {
+        val button = FakeNode(Box(40, 780, 700, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(750, 805, 850, 905), drawingOrder = 2, isProgressIndicator = true)
+        root(FakeNode(screen).add(button, spinner))
+        assertClearAt(analyze(button), 370, 855)
+    }
+
+    @Test
+    fun `a spinner in a branch painted before the target is not a cover`() {
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true)
+        val background = FakeNode(screen, drawingOrder = 1).add(spinner)
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 2, takesTouches = true)
+        root(FakeNode(screen).add(background, button))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `an invisible spinner does not make an overlay a cover`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isVisible = false, isProgressIndicator = true)
+        val overlay = FakeNode(screen, drawingOrder = 2).add(spinner)
+        root(FakeNode(screen).add(button, overlay))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `a touchable control over the point is named before a loading overlay`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val cancel = FakeNode(Box(40, 780, 1040, 930), takesTouches = true, name = "button \"Cancel\"")
+        val overlay = FakeNode(screen, drawingOrder = 2).add(cancel, FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true))
+        root(FakeNode(screen).add(button, overlay))
+        val verdict = analyze(button)
+        assertCoveredBy(verdict, "button \"Cancel\"")
+        assertEquals(OcclusionAnalyzer.CoverKind.CONTROL, coverKind(verdict))
+    }
+
+    @Test
+    fun `a wide later branch without a spinner does not use up the search for nearer covers`() {
+        // A full-screen host over the point holds a long list elsewhere; the
+        // loading-overlay check walks all of it, and must not stop the search
+        // from reaching the control drawn over the target lower down.
+        val far = FakeNode(Box(0, 0, 1080, 100))
+        repeat(OcclusionAnalyzer.MAX_NODES_VISITED + 500) { far.add(FakeNode(Box(0, 0, 1080, 100))) }
+        val host = FakeNode(screen, drawingOrder = 2).add(far)
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val undo = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 2, takesTouches = true, name = "button \"Undo\"")
+        root(FakeNode(screen, drawingOrder = 1).add(button, undo), host)
+        assertCoveredBy(analyze(button), "button \"Undo\"")
     }
 }
 

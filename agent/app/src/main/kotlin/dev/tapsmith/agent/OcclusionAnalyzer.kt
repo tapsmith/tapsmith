@@ -73,6 +73,13 @@ data class Box(
  *   order still fall back to child order: Compose before 1.9, and every app
  *   below API 24, report 0 for all nodes, and there child order is paint
  *   order.
+ * - **A loading overlay** (PILOT-979): a node painted after the target, over
+ *   the touch point, that is a progress indicator (a ProgressBar — React
+ *   Native's ActivityIndicator is one) or holds a visible one. Apps lay one
+ *   over a screen while it loads, often see-through, and it takes the
+ *   touches though nothing in it is clickable. This is the one plain view
+ *   that is named: a spinner over the point says "wait", whether or not the
+ *   overlay passes touches through. Kind [CoverKind.LOADING].
  *
  * No Android dependencies — the tree and the windows come in through
  * [HitNode] and [WindowSpec] so the JVM unit tests can build them by hand.
@@ -123,7 +130,7 @@ object OcclusionAnalyzer {
     /** What a cover is. A focused field under the keyboard or a control on
      *  its own screen still gets the input; under another window it does
      *  not — that window has the input focus. */
-    enum class CoverKind { KEYBOARD, WINDOW, CONTROL }
+    enum class CoverKind { KEYBOARD, WINDOW, CONTROL, LOADING }
 
     data class WindowSpec(
         val id: Int,
@@ -146,6 +153,10 @@ object OcclusionAnalyzer {
 
         /** Offers the dismiss action (a Flutter modal barrier does). */
         val offersDismiss: Boolean get() = false
+
+        /** A spinner or a progress bar (Android's ProgressBar and its
+         *  subclasses, Compose's progress indicators). */
+        val isProgressIndicator: Boolean get() = false
 
         fun parent(): HitNode?
 
@@ -207,7 +218,7 @@ object OcclusionAnalyzer {
         val x = (visible.left + visible.right) / 2
         val y = (visible.top + visible.bottom) / 2
         if (target != null) {
-            findCoverInWindow(target, x, y)?.let { return Verdict.Covered(it.describe(), CoverKind.CONTROL) }
+            findCoverInWindow(target, x, y)?.let { return it }
         }
         return Verdict.Clear(x, y, visible)
     }
@@ -288,20 +299,25 @@ object OcclusionAnalyzer {
     // ─── The target's own window ───
 
     /**
-     * A touchable node painted over ([x], [y]) in the target's window, or null.
+     * What covers ([x], [y]) in the target's window, or null: a touchable
+     * node or a loading overlay painted over it.
      *
      * Walks up from the target; at each level, every sibling of the target's
      * branch that is painted after it is drawn over the whole branch, so its
-     * subtree is searched for a touchable node containing the point. Levels
-     * nearer the root are checked first — what they paint is on top.
+     * subtree is searched for a touchable node containing the point, then
+     * checked for a progress indicator. Levels nearer the root are checked
+     * first — what they paint is on top.
      */
     private fun findCoverInWindow(
         target: HitNode,
         x: Int,
         y: Int,
-    ): HitNode? {
+    ): Verdict.Covered? {
         val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
         val reader = BudgetedReader(MAX_NODES_VISITED)
+        // The loading-overlay check walks more widely; its own allowance
+        // keeps it from starving the touchable-cover search.
+        val loadingReader = BudgetedReader(MAX_NODES_VISITED)
         // (parent, the target's branch, its index among the parent's
         // children), from the target's parent up to the root.
         val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
@@ -326,11 +342,38 @@ object OcclusionAnalyzer {
                     .filter { (sibling, key) -> compareKeys(key, branchKey) > 0 && !isModalBarrierBehind(sibling, key, branchKey) }
                     .sortedWith { a, b -> compareKeys(b.second, a.second) }
             for ((sibling, _) in later) {
-                searchSubtree(sibling, x, y, reader)?.let { return it }
+                // A control in a loading overlay (its Cancel button) is named
+                // as the cover; the overlay is named when nothing in it is.
+                searchSubtree(sibling, x, y, reader)?.let { return Verdict.Covered(it.describe(), CoverKind.CONTROL) }
+                if (isLoadingOverlay(sibling, x, y, loadingReader)) {
+                    return Verdict.Covered("a loading overlay (${sibling.describe()})", CoverKind.LOADING)
+                }
             }
             if (reader.exhausted) return null
         }
         return null
+    }
+
+    /** Whether [branch], painted over the target, is a loading overlay over
+     *  ([x], [y]): visible, containing the point, and a progress indicator
+     *  or holding a visible one inside its bounds. */
+    private fun isLoadingOverlay(
+        branch: HitNode,
+        x: Int,
+        y: Int,
+        reader: BudgetedReader,
+    ): Boolean {
+        if (!branch.isVisible || !branch.bounds.contains(x, y)) return false
+        val stack = ArrayDeque<HitNode>()
+        stack.addLast(branch)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            if (!node.isVisible || node.bounds.isEmpty || !node.bounds.intersects(branch.bounds)) continue
+            if (node.isProgressIndicator) return true
+            if (reader.exhausted) return false
+            for (i in 0 until node.childCount()) reader.child(node, i)?.let(stack::addLast)
+        }
+        return false
     }
 
     /** Reads children while counting them against a shared budget; once it is

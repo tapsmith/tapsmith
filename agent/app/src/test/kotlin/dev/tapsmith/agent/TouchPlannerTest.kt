@@ -55,6 +55,7 @@ class TouchPlannerTest {
         override val drawingOrder: Int = 0,
         override val takesTouches: Boolean = false,
         private val name: String = "node",
+        override val isProgressIndicator: Boolean = false,
     ) : OcclusionAnalyzer.HitNode {
         override val isVisible = true
         var parentNode: Node? = null
@@ -500,5 +501,18 @@ class TouchPlannerTest {
             CommandCancellation.runWith(token) { planner.plan(target, BUTTON, budget(), LABELLED) }
         }
         assertEquals(1, target.reads)
+    }
+
+    // ─── plan: loading overlays (PILOT-979) ───
+
+    @Test
+    fun `a loading overlay over the target is waited out and named as a loading overlay`() {
+        val row = Node(Box(0, 800, 1080, 950), takesTouches = true)
+        val overlay = Node(Box(0, 700, 1080, 1100), drawingOrder = 1).add(Node(Box(490, 850, 590, 950), isProgressIndicator = true))
+        Node(SCREEN).add(Node(SCREEN).add(row), overlay)
+        target.readAt = { snapshot(row.bounds, node = row) }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 1_000), LABELLED) }
+        assertEquals(CoverKind.LOADING, e.kind)
+        assertTrue(e.message, e.message!!.contains("a loading overlay"))
     }
 }

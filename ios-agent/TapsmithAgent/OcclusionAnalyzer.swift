@@ -35,6 +35,13 @@ import XCTest
 ///   hittable. Plain views, texts, and images are never named: a
 ///   `pointerEvents="none"` overlay looks exactly like them, and on Xcode 26.6
 ///   it fools XCUITest's hit test as well (see `interactiveTypes`).
+/// - **A loading overlay** (PILOT-979), when XCUITest says the element is not
+///   hittable: a view painted after the target over the touch point that is
+///   an activity or progress indicator or holds one. Apps lay one over a
+///   screen while it loads, often see-through, and it takes the touches
+///   though nothing in it is a control. A spinner over the point says "wait"
+///   either way, so this is the one plain view that is named. A control
+///   painted over it (the overlay's Cancel button) is named instead.
 struct OcclusionAnalyzer {
     /// What the snapshot says about the target.
     enum Verdict: Equatable {
@@ -206,8 +213,11 @@ struct OcclusionAnalyzer {
 
         let point = CGPoint(x: visible.midX, y: visible.midY)
         // XCUITest's hit test passed: trust it over the snapshot (see the
-        // type comment on pass-through overlays).
-        if isHittable { return .clear(point: point, visible: visible) }
+        // type comment on pass-through overlays) — except about a loading
+        // overlay over a text input: XCUITest calls a React Native text field
+        // hittable under one, and the focusing tap then lands on the overlay.
+        let hittableInput = isHittable && targetIndex.map { Self.textInputTypes.contains(nodes[$0].elementType) } == true
+        if isHittable, !hittableInput { return .clear(point: point, visible: visible) }
         // Without the target's place in the tree there is no telling what is
         // drawn over it: a live target that just moved can be read again; a
         // tree that has nothing to match (no snapshot) is no evidence.
@@ -219,7 +229,8 @@ struct OcclusionAnalyzer {
         // Runs of the same text as the target (a link inside a paragraph).
         let paragraph = nodes[t].parent.flatMap { nodes[$0].elementType == .staticText ? $0 : nil }
 
-        var cover: Node?
+        var cover: Int?
+        var loading: Int?
         for i in nodes[t].subtreeEnd..<nodes.count {
             let node = nodes[i]
             if let w = node.window, keyboardWindows.contains(w), !targetInKeyboard { continue }
@@ -229,11 +240,35 @@ struct OcclusionAnalyzer {
             // over a sibling Pressable is not a run of the target's text.)
             if let paragraph, node.parent == paragraph, Self.textRunTypes.contains(node.elementType) { continue }
             if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            guard isInteractive(node), clippedFrame(of: i).contains(point) else { continue }
-            cover = node
+            guard clippedFrame(of: i).contains(point) else { continue }
+            if isInteractive(node) {
+                cover = i
+            } else if loading == nil, holdsProgressIndicator(i) {
+                // The outermost such view: what the overlay is.
+                loading = i
+            }
         }
-        if let cover { return .covered(by: describe(cover)) }
+        // The topmost of the two is in the way: a control painted after the
+        // overlay (or inside it: its Cancel button) is named, else the overlay.
+        // For a hittable text input the hit test is trusted unless a loading
+        // overlay was found; then whichever of the two is on top is named.
+        if hittableInput, loading == nil { return .clear(point: point, visible: visible) }
+        if let cover, loading.map({ cover > $0 }) ?? true { return .covered(by: describe(nodes[cover])) }
+        if let loading { return .covered(by: "a loading overlay (\(describe(nodes[loading])))") }
         return .clear(point: point, visible: visible)
+    }
+
+    static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
+
+    /// Whether node `i` is a progress indicator or holds a visible one inside
+    /// its frame (PILOT-979).
+    private func holdsProgressIndicator(_ i: Int) -> Bool {
+        let frame = clippedFrame(of: i)
+        for j in i..<nodes[i].subtreeEnd where Self.progressTypes.contains(nodes[j].elementType) {
+            let f = clippedFrame(of: j)
+            if !f.isNull, f.width > 0, f.height > 0, f.intersects(frame) { return true }
+        }
+        return false
     }
 
     /// The interactive control painted after the target that contains any of

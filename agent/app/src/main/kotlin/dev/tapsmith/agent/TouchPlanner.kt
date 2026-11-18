@@ -93,12 +93,13 @@ sealed class TouchPlan {
 
 /**
  * Plans element-addressed touches so they never land on something drawn over
- * the element (PILOT-362): the keyboard, another window, or a touchable view
- * painted on top. A covered element is waited on — up to the action's budget,
- * the way Playwright waits out a click's intercepting element — and then the
- * action fails with ELEMENT_COVERED naming the cover. The geometry lives in
- * [OcclusionAnalyzer]; the live reads come in through [GuardTarget] and
- * [GuardScreen], so this runs in JVM unit tests.
+ * the element (PILOT-362): the keyboard, another window, a touchable view or
+ * a loading overlay (PILOT-979) painted on top. A covered element is waited
+ * on — up to the action's budget, the way Playwright waits out a click's
+ * intercepting element — and then the action fails with ELEMENT_COVERED
+ * naming the cover. The geometry lives in [OcclusionAnalyzer]; the live reads
+ * come in through [GuardTarget] and [GuardScreen], so this runs in JVM unit
+ * tests.
  */
 class TouchPlanner(
     private val screen: GuardScreen,
