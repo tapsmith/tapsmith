@@ -125,12 +125,14 @@ class HierarchyDumper {
         xml += " selected=\"\(isSelected)\""
         xml += " hasFocus=\"\(hasFocus)\""
         xml += " bounds=\"\(bounds)\""
-        let nonApp = !insideNonApp && NonAppElements.excludesSubtree(
+        // iOS 27's empty toolbar host is nothing on screen: no locator
+        // matches it or anything in it, as for the keyboard (PILOT-1251).
+        let nonApp = !insideNonApp && (NonAppElements.excludesSubtree(
             elementType: elType,
             identifier: node["identifier"] as? String ?? "",
             frame: frame,
             keyboardTop: keyboardTop
-        )
+        ) || isEmptyBarHost)
         if nonApp {
             xml += " tapsmith-non-app=\"true\""
             if elType == .keyboard { keyboardTop = frame.minY }

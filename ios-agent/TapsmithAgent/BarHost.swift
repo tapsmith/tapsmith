@@ -54,6 +54,23 @@ enum BarHost {
         return false
     }
 
+    /// What a live query reads of a host: iOS 27 labels and identifies every
+    /// one "Toolbar".
+    private static let hostAttributes: NSDictionary = [
+        "elementType": XCUIElement.ElementType.toolbar.rawValue,
+        "label": "Toolbar",
+        "identifier": "Toolbar",
+        "title": "",
+        "value": "",
+        "placeholderValue": "",
+    ]
+
+    /// Whether a live query with `predicate` can return a host — so what it
+    /// returns could be an empty one, which no locator matches.
+    static func mayMatchHost(_ predicate: NSPredicate) -> Bool {
+        predicate.evaluate(with: hostAttributes)
+    }
+
     /// Key under which `markEmptyHosts` marks a host that holds nothing.
     static let emptyHostKey = "tapsmithEmptyBarHost"
 
@@ -97,9 +114,14 @@ enum BarHost {
         dict["children"] = children
     }
 
+    /// Whether `markEmptyHosts` marked `dict` as an empty host.
+    static func isMarkedEmpty(_ dict: [String: Any]) -> Bool {
+        dict[emptyHostKey] as? Bool == true
+    }
+
     /// Whether `dict` or a descendant is marked as an empty host.
     static func containsEmptyHost(_ dict: [String: Any]) -> Bool {
-        if dict[emptyHostKey] as? Bool == true { return true }
+        if isMarkedEmpty(dict) { return true }
         return (dict["children"] as? [[String: Any]] ?? []).contains { containsEmptyHost($0) }
     }
 

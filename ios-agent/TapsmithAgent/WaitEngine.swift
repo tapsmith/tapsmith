@@ -51,7 +51,11 @@ class WaitEngine {
 
         // Build a query for event-driven waiting
         let query = buildWaitQuery(selector)
+        // A query that can return iOS 27's toolbar host can't tell an empty
+        // one, which no locator matches, from one holding a toolbar: the
+        // snapshot finder can (BarHost.markEmptyHosts, PILOT-1251).
         let queryFullyRepresentsSelector = waitQueryFullyRepresentsSelector(selector)
+            && !(selectorPredicate(selector).map(BarHost.mayMatchHost) ?? false)
 
         if let query = query {
             let element = query.firstMatch
@@ -213,35 +217,36 @@ class WaitEngine {
     }
 
     private func buildSelectorQuery(_ selector: ElementSelector) -> XCUIElementQuery? {
+        selectorPredicate(selector).map { app.descendants(matching: .any).matching($0) }
+    }
+
+    /// The predicate of the query `buildSelectorQuery` makes for `selector`,
+    /// on elements of any type — nil when it can't be expressed as one.
+    private func selectorPredicate(_ selector: ElementSelector) -> NSPredicate? {
         if let text = selector.text {
-            return app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern(text)))
+            return NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern(text))
         }
         if let textContains = selector.textContains {
-            return app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label MATCHES %@", TextMatch.containsPattern(textContains)))
+            return NSPredicate(format: "label MATCHES %@", TextMatch.containsPattern(textContains))
         }
         if let contentDesc = selector.contentDesc {
-            return app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", contentDesc))
+            return NSPredicate(format: "label == %@", contentDesc)
         }
         if let id = selector.id {
-            return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", id))
+            return NSPredicate(format: "identifier == %@", id)
         }
         if let testId = selector.testId {
-            return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", testId))
+            return NSPredicate(format: "identifier == %@", testId)
         }
         if let className = selector.className {
-            return app.descendants(matching: .any).matching(
-                NSPredicate(format: "elementType == %d", elementTypeRawValue(className))
-            )
+            return NSPredicate(format: "elementType == %d", elementTypeRawValue(className))
         }
         if let role = selector.role {
             // queryTypes: a tab is also a tab bar's button (PILOT-514); the
             // snapshot finder then checks the ancestry.
             if let types = try? RoleMapping.queryTypes(for: role), !types.isEmpty {
                 let rawValues = types.map { NSNumber(value: $0.rawValue) }
-                let predicate = NSPredicate(format: "elementType IN %@", rawValues)
-                return app.descendants(matching: .any).matching(predicate)
+                return NSPredicate(format: "elementType IN %@", rawValues)
             }
         }
         // xpath, hint cannot be expressed as simple queries

@@ -233,6 +233,23 @@ check("iPhone Duo: an empty host alone in a same-size wrapper beside content is 
 check("containsEmptyHost finds an empty host deep in the tree", BarHost.containsEmptyHost(emptyScreen), true)
 check("containsEmptyHost finds none where the host holds items", BarHost.containsEmptyHost(withItems), false)
 
+// MARK: - Live queries that can return a host
+
+// The wait engine's fast path returns what its query finds first; when that
+// could be a host (PILOT-1251), the snapshot finder decides instead. These
+// are the predicates WaitEngine builds.
+for (name, predicate, want) in [
+    ("getByTestId(\"Toolbar\")", NSPredicate(format: "identifier == %@", "Toolbar"), true),
+    ("getByText(\"Toolbar\")", NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern("Toolbar")), true),
+    ("getByText(\"tool\") as a substring", NSPredicate(format: "label MATCHES %@", TextMatch.containsPattern("tool")), true),
+    ("className XCUIElementTypeToolbar", NSPredicate(format: "elementType == %d", XCUIElement.ElementType.toolbar.rawValue), true),
+    ("getByTestId(\"submit\")", NSPredicate(format: "identifier == %@", "submit"), false),
+    ("getByText(\"Sign in\")", NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern("Sign in")), false),
+    ("className XCUIElementTypeButton", NSPredicate(format: "elementType == %d", XCUIElement.ElementType.button.rawValue), false),
+] {
+    check("a live query for \(name) can return a host: \(want)", BarHost.mayMatchHost(predicate), want)
+}
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)
