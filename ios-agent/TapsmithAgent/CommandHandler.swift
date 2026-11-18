@@ -2636,7 +2636,15 @@ class CommandHandler {
             let targetFrame = snapshotFinder.getBounds(targetEl.elementId)
                 ?? CGRect(x: CGFloat(targetEl.bounds.left), y: CGFloat(targetEl.bounds.top),
                           width: CGFloat(targetEl.bounds.width), height: CGFloat(targetEl.bounds.height))
-            try actionExecutor.drag(from: sourceFrame, to: targetFrame)
+            // The frames are in the app's interface space, as the last
+            // snapshot saw it; on a turned screen the drag is mapped into the
+            // native portrait space the agent's touch takes (PILOT-1253).
+            try actionExecutor.drag(
+                from: sourceFrame,
+                to: targetFrame,
+                screen: snapshotFinder.lastSnapshotFrameSize() ?? snapshotFinder.screenSize,
+                device: Self.deviceTurn(XCUIDevice.shared.orientation)
+            )
             return ["success": true]
 
         // ─── Select Option ───

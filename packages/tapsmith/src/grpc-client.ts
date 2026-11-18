@@ -1186,11 +1186,16 @@ export class TapsmithGrpcClient {
     });
   }
 
-  async setOrientation(orientation: Orientation): Promise<ActionResponse> {
+  /**
+   * `cleanup`: the runner turning the device back after a test. It must
+   * still reach the device after a stop, or a stopped test leaves it turned
+   * for the next run.
+   */
+  async setOrientation(orientation: Orientation, opts?: { cleanup?: boolean }): Promise<ActionResponse> {
     return this.call<ActionResponse>('setOrientation', {
       requestId: requestId(),
       orientation,
-    });
+    }, undefined, opts?.cleanup ? { bypassAbort: true } : undefined);
   }
 
   async getOrientation(): Promise<GetOrientationResponse> {

@@ -48,6 +48,7 @@ import {
   type Route,
   type NetworkResponseEventData,
   matchUrlPattern,
+  currentRouteScope,
 } from './network.js';
 import { WebViewHandle } from './webview-handle.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
@@ -1065,11 +1066,59 @@ export class Device {
     return res.text;
   }
 
-  /** Rotate the device to `"portrait"` or `"landscape"`. */
+  /**
+   * Rotate the device to `"portrait"` or `"landscape"`. A turn made in a test,
+   * its `beforeEach`/`afterEach` hooks or its fixtures is undone after the
+   * test, pass or fail; a `beforeAll` or `afterAll` hook's turn is not.
+   */
   async setOrientation(orientation: Orientation): Promise<void> {
     return this._tracedAction('setOrientation', 'device', undefined,
-      () => this._client.setOrientation(orientation),
+      async () => {
+        await this._rememberTestOrientation();
+        return this._client.setOrientation(orientation);
+      },
       'Set orientation failed');
+  }
+
+  /**
+   * The orientation the device had before the current test first turned it;
+   * `null` once read for this test but unreadable. Undefined while the test
+   * has not turned it.
+   */
+  private _orientationBeforeTest: Orientation | null | undefined;
+
+  /**
+   * Before a test's first turn, read what the test found: the
+   * runner turns the device back after the test, so one that fails in
+   * landscape does not leave the next test turned. A suite hook's turn (in a
+   * route scope, as `beforeAll` runs) belongs to every test in its scope and
+   * is left alone. When the orientation cannot be read, nothing is restored.
+   */
+  private async _rememberTestOrientation(): Promise<void> {
+    if (this._orientationBeforeTest !== undefined || currentRouteScope() !== undefined) return;
+    try {
+      this._orientationBeforeTest = (await this._client.getOrientation()).orientation as Orientation;
+    } catch {
+      this._orientationBeforeTest = null;
+    }
+  }
+
+  /** @internal — Forget a turn made before the current test (the runner, at each attempt's start). */
+  _forgetTestOrientation(): void {
+    this._orientationBeforeTest = undefined;
+  }
+
+  /**
+   * @internal — Turn the device back to the orientation the test found it in,
+   * if the test turned it (the runner, after each attempt). Once: the next
+   * test starts from what it finds.
+   */
+  async _restoreTestOrientation(): Promise<void> {
+    const before = this._orientationBeforeTest;
+    this._orientationBeforeTest = undefined;
+    if (!before) return;
+    const res = await this._client.setOrientation(before, { cleanup: true });
+    if (!res.success) throw new Error(res.errorMessage || `Could not turn the device back to ${before}`);
   }
 
   /** The device's current orientation, `"portrait"` or `"landscape"`. */
