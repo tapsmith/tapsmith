@@ -3361,13 +3361,6 @@ async function runSuiteContext(
         d._routeManager?.removeTestListeners?.();
       });
 
-      // A device the test turned (its hooks and fixtures included) goes back
-      // to the orientation the test found it in, pass or fail, so a test that
-      // fails in landscape does not leave the next one turned, as each
-      // Playwright test gets its own viewport (PILOT-1253). Best effort: a
-      // device that cannot turn back fails nothing here.
-      await forEachDeviceBestEffort(opts, (d) => d._restoreTestOrientation?.());
-
       // System ANR / crash dialogs the agent answered during the attempt
       // (PILOT-977): a trace row each, while the trace is still recording,
       // and a warning on this test for the app under test's own.
@@ -3693,6 +3686,15 @@ async function runSuiteContext(
           );
         }
       }
+
+      // A device the test turned (its hooks and fixtures included) goes back
+      // to the orientation the test found it in, pass or fail, so a test that
+      // fails in landscape does not leave the next one turned, as each
+      // Playwright test gets its own viewport (PILOT-1253). Last, after the
+      // attempt's screenshots, trace and video, which show the screen the test
+      // ended on; also after a stop. Best effort: a device that cannot turn
+      // back fails nothing here.
+      await forEachDeviceBestEffort(opts, (d) => d._restoreTestOrientation?.());
 
       if (status !== 'failed' || attempt === maxRetries || opts.abortSignal?.aborted) break;
 

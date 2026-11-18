@@ -1111,7 +1111,7 @@ export class Device {
     const before = this._orientationBeforeTest;
     this._orientationBeforeTest = undefined;
     if (!before) return;
-    const res = await this._client.setOrientation(before);
+    const res = await this._client.setOrientation(before, { cleanup: true });
     if (!res.success) throw new Error(res.errorMessage || `Could not turn the device back to ${before}`);
   }
 

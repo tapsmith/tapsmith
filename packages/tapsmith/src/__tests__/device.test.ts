@@ -1195,7 +1195,14 @@ describe('Device orientation restore after a test', () => {
     await device.setOrientation('landscape');
     await device._restoreTestOrientation();
     expect(current()).toBe('portrait');
-    expect(setOrientation).toHaveBeenLastCalledWith('portrait');
+    expect(setOrientation).toHaveBeenLastCalledWith('portrait', { cleanup: true });
+  });
+
+  it('turns back as cleanup, so a stopped run still turns back', async () => {
+    const { device, setOrientation } = makeTurnable('portrait');
+    await device.setOrientation('landscape');
+    await device._restoreTestOrientation();
+    expect(setOrientation).toHaveBeenLastCalledWith('portrait', { cleanup: true });
   });
 
   it('remembers the orientation from before the first turn only', async () => {

@@ -3783,6 +3783,29 @@ describe('orientation restore after each test (PILOT-1253)', () => {
     expect(device.calls).toEqual(['forget', 'body', 'restore', 'forget', 'body', 'restore']);
   });
 
+  it('restores after the attempt\'s last screenshots, so they show the screen the test ended on', async () => {
+    const device = Object.assign(makeDevice(), {
+      takeScreenshot: vi.fn(async () => {
+        device.calls.push('screenshot');
+        return { success: true, data: Buffer.from('png') };
+      }),
+    });
+    const screenshotDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-orientation-'));
+    try {
+      pushContext();
+      tapsmithTest('ends turned', async () => { device.calls.push('body'); });
+      await runSuiteContext(popContext(), '', [], [], makeOpts({
+        config: makeConfig({ screenshot: 'always' }),
+        screenshotDir,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+        devices: [{ name: 'device-1', device }] as any,
+      }));
+      expect(device.calls).toEqual(['forget', 'body', 'screenshot', 'restore']);
+    } finally {
+      fs.rmSync(screenshotDir, { recursive: true, force: true });
+    }
+  });
+
   it('restores every device of a group, and a failed restore fails nothing', async () => {
     const a = makeDevice();
     const b = makeDevice();
