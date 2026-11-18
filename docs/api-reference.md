@@ -1268,7 +1268,7 @@ Scroll this element in the given direction: the way the view scrolls, so `"down"
 await device.getByTestId("product-list").scroll("down"); // a FlatList with testID="product-list"
 ```
 
-On iOS, `scroll()` first gives the app's UIKit animations up to a second to end, as [`device.swipe()`](#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid) does, so a scroll straight after an alert's OK is not dropped.
+On iOS, `scroll()` first gives the app's UIKit animations up to a second to end, as [`device.swipe()`](api-reference.md#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid) does, so a scroll straight after an alert's OK is not dropped.
 
 The device agents don't apply `distance` yet: each call scrolls by a fixed step of the element's size, whatever `distance` says. To reach a particular element, use [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid).
 
