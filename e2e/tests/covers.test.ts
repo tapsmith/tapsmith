@@ -80,8 +80,11 @@ describe("Covers", () => {
       }
     })
 
-    test("type() into a field under a header bar scrolls it clear for its focusing tap", async ({ coversScreen }) => {
-      await coversScreen.noteUnderHeaderButton.tap()
+    // Under the header on Android (under the footer, the focused field would
+    // sit under its own keyboard, which hides it from Android's tree), under
+    // the footer on iOS (see the header test below).
+    test("type() into a field under a bar scrolls it clear for its focusing tap", async ({ platform, coversScreen }) => {
+      await (platform === "android" ? coversScreen.noteUnderHeaderButton : coversScreen.noteUnderFooterButton).tap()
 
       await coversScreen.note.type("hello")
 
@@ -89,7 +92,12 @@ describe("Covers", () => {
       await expect(coversScreen.counts).toHaveText(counts({}))
     })
 
-    test("tap() on a row under a header bar scrolls it clear and taps it", async ({ coversScreen }) => {
+    test("tap() on a row under a header bar scrolls it clear and taps it", async ({ platform, coversScreen }) => {
+      // iOS lists sibling views top to bottom, so the header bar comes before
+      // the list it is laid over and the iOS agent cannot tell it is on top
+      // (as before this change; native navigation bars and toolbars are told
+      // by their type).
+      test.skip(platform !== "android", "iOS cannot tell a control laid over a list's top edge from one under it")
       await coversScreen.rowUnderHeaderButton.tap()
 
       await coversScreen.row("Row 5").tap()

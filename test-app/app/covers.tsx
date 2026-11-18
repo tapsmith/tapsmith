@@ -29,14 +29,19 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   row is told apart by its name alone.
 // - A "Note" text field sits in the list after Row 12. "Put note under
 //   header" scrolls it to the top of the list, under the header bar, so
-//   typing into it needs its focusing tap scrolled clear first. (Not under
-//   the footer: once focused, the field would sit under its own keyboard,
-//   and Android hides a field its keyboard covers from the tree.)
+//   typing into it needs its focusing tap scrolled clear first. "Put note
+//   under footer" puts it under the footer instead, for iOS, whose
+//   accessibility tree lists the header bar before the list it is laid over
+//   (top to bottom), so the iOS agent cannot tell it is on top. (Android
+//   uses the header: a field under the footer would, once focused, sit under
+//   its own keyboard, and Android hides a field its keyboard covers from the
+//   tree.)
 
 const ROW_HEIGHT = 60
 const ROWS = Array.from({ length: 30 }, (_, i) => `Row ${i + 1}`)
 // The header bar's height: the list's content starts below it.
 const HEADER_HEIGHT = 60
+const FOOTER_HEIGHT = 80
 type Item = { key: string; note?: boolean }
 const ITEMS: Item[] = [
   ...ROWS.slice(0, 12).map((key) => ({ key })),
@@ -59,6 +64,7 @@ export default function CoversScreen() {
   const [note, setNote] = useState("")
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const list = useRef<FlatList<Item>>(null)
+  const listHeight = useRef(0)
 
   // A warm reset navigates here rather than remounting, so clear local state
   // explicitly when the epoch moves.
@@ -131,6 +137,21 @@ export default function CoversScreen() {
         >
           <Text style={styles.smallButtonText}>Note under header</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.smallButton}
+          onPress={() =>
+            // The note's top 70 points above the list's bottom: its 60 points
+            // lie inside the 80-point footer.
+            list.current?.scrollToOffset({
+              offset: offsetUnderHeader(NOTE_INDEX) - (listHeight.current - FOOTER_HEIGHT + 10),
+              animated: false,
+            })
+          }
+          accessibilityRole="button"
+          accessibilityLabel="Put note under footer"
+        >
+          <Text style={styles.smallButtonText}>Note under footer</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.stack}>
@@ -157,6 +178,9 @@ export default function CoversScreen() {
       <View style={styles.listArea}>
         <FlatList
           ref={list}
+          onLayout={(e) => {
+            listHeight.current = e.nativeEvent.layout.height
+          }}
           data={ITEMS}
           testID="covers-list"
           getItemLayout={(_, index) => ({ length: ROW_HEIGHT, offset: ROW_HEIGHT * index, index })}
@@ -276,7 +300,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingTop: HEADER_HEIGHT,
-    paddingBottom: 80,
+    paddingBottom: FOOTER_HEIGHT,
   },
   header: {
     position: "absolute",
@@ -323,7 +347,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: 80,
+    height: FOOTER_HEIGHT,
     backgroundColor: "#34C759",
     alignItems: "center",
     justifyContent: "center",
