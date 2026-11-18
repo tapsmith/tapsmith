@@ -6,7 +6,7 @@ import { pickNodeAt } from '../trace-viewer/components/pick-node.js';
 import { Device } from '../device.js';
 import type { WebViewHandle } from '../webview-handle.js';
 import { beginTestRun, closeMcpWebViews, endTestRun } from '../mcp/sdk-device.js';
-import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, suggestLiveLocators } from '../ui-mode/live-locators.js';
+import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, PickGenerations, suggestLiveLocators } from '../ui-mode/live-locators.js';
 
 // PILOT-848: UI mode's live Locator tab and picker get their answers from the
 // device — the SDK builder plus the agent's matching — never from the
@@ -436,5 +436,41 @@ describe('LatestOnlyRunner', () => {
     expect(started).toEqual(['1', 'x', '3']);
     expect(replies).toEqual(expect.arrayContaining(['a:one', 'c:three', 'x:x']));
     expect(replies).not.toContain('b:two');
+  });
+});
+
+describe('LatestOnlyRunner.dropWaiting', () => {
+  it('drops the waiting request of one key and leaves the running one and other keys alone', async () => {
+    const runner = new LatestOnlyRunner<string>();
+    const replies: string[] = [];
+    let finishFirst!: () => void;
+    runner.run('d:tab', () => new Promise<string>((r) => { finishFirst = () => r('one'); }), (v) => replies.push(v));
+    runner.run('d:tab', async () => 'two', (v) => replies.push(v));
+    runner.run('d:other', () => new Promise<string>(() => {}), (v) => replies.push(v));
+    runner.run('d:other', async () => 'other-two', (v) => replies.push(v));
+    runner.dropWaiting('d:tab');
+    runner.dropWaiting('nothing-here');
+    finishFirst();
+    await vi.waitFor(() => expect(replies).toContain('one'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(replies).toEqual(['one']);
+  });
+});
+
+describe('PickGenerations', () => {
+  it('a newer pick or a cancel supersedes the one in flight, per key', () => {
+    const picks = new PickGenerations();
+    const first = picks.start('0:0:tab');
+    const elsewhere = picks.start('0:0:other');
+    expect(first()).toBe(false);
+    const second = picks.start('0:0:tab');
+    expect(first()).toBe(true);
+    expect(second()).toBe(false);
+    picks.cancel('0:0:tab');
+    expect(second()).toBe(true);
+    expect(elsewhere()).toBe(false);
+    // Cancelling with nothing in flight is a no-op, and a later pick is current.
+    picks.cancel('1:0:tab');
+    expect(picks.start('0:0:tab')()).toBe(false);
   });
 });

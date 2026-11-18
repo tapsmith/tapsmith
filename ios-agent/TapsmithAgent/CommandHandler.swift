@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import ImageIO
 
 /// Routes incoming JSON commands to the appropriate handler.
 ///
@@ -27,6 +28,13 @@ class CommandHandler {
     /// `KeyboardFirstGate`). A keyboard the app raises by itself
     /// (`autoFocus`) is not seen until the test types into the field.
     private var keyboardFirstGate = KeyboardFirstGate()
+    /// The screen as the last touch plan's app snapshot saw it (it follows a
+    /// rotation, unlike the cached `screenSize`); nil before a plan read one.
+    private var plannedScreenSize: CGSize?
+    /// The whole screen in native portrait space, as `waitForIdle` samples it
+    /// (`IdleSettle.screenRegion`). Kept across a rotation, which clears the
+    /// cached screen size but leaves the native space as it was.
+    private var idleRegion: CGRect?
 
     // Interactive-mirror live-drag: iOS can't stream touches, so buffer the
     // path during the drag and dispatch it as one gesture on touchUp.
@@ -104,19 +112,44 @@ class CommandHandler {
     }
 
     /// Recursively check whether a snapshot tree contains any rendered,
-    /// user-meaningful element (text, input, or control).
+    /// user-meaningful element: text, input or control, or a labelled or
+    /// identified container (`AppReadiness.isRenderedContent`).
     private func snapshotContainsContent(_ snapshot: XCUIElementSnapshot) -> Bool {
+        let isContentType: Bool
         switch snapshot.elementType {
         case .staticText, .textField, .secureTextField, .textView, .searchField,
              .button, .link, .image, .switch:
-            return true
+            isContentType = true
         default:
-            break
+            isContentType = false
+        }
+        if AppReadiness.isRenderedContent(
+            isContentType,
+            snapshot.elementType == .application,
+            snapshot.label,
+            snapshot.identifier
+        ) {
+            return true
         }
         for child in snapshot.children where snapshotContainsContent(child) {
             return true
         }
         return false
+    }
+
+    /// Wait between polls by running the main RunLoop rather than blocking
+    /// it: XCTest delivers its accessibility (XPC) replies on this RunLoop,
+    /// so a `Thread.sleep` here can hold back the very update a poll is
+    /// waiting to see. Falls back to sleeping when the RunLoop has no input
+    /// source to run (it would otherwise return at once and spin).
+    private static func pollWait(_ seconds: TimeInterval) {
+        let until = Date(timeIntervalSinceNow: seconds)
+        while Date() < until {
+            if !RunLoop.current.run(mode: .default, before: until) {
+                Thread.sleep(until: until)
+                return
+            }
+        }
     }
 
     private func safeAppState(_ app: XCUIApplication) -> XCUIApplication.State {
@@ -215,23 +248,25 @@ class CommandHandler {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
-                // Dialog accepted — re-check on the next iteration.
-            } else {
-                var acknowledged = false
-                _ = ObjCExceptionCatcher.catchException {
-                    guard let snapshot = try? app.snapshot(),
-                          let marker = self.hooksMarker(in: snapshot),
-                          let nav = marker.nav else { return }
-                    if let bootBefore, let boot = marker.boot, boot != bootBefore {
-                        acknowledged = nav >= 1
-                    } else {
-                        acknowledged = nav > navBefore
-                    }
+            // Read the marker first: a warm delivery is usually
+            // acknowledged within a poll or two of the request, and the
+            // SpringBoard query for the "Open in" prompt costs ~70 ms that
+            // only a delivery the prompt is still gating needs to pay.
+            var acknowledged = false
+            _ = ObjCExceptionCatcher.catchException {
+                guard let snapshot = try? app.snapshot(),
+                      let marker = self.hooksMarker(in: snapshot),
+                      let nav = marker.nav else { return }
+                if let bootBefore, let boot = marker.boot, boot != bootBefore {
+                    acknowledged = nav >= 1
+                } else {
+                    acknowledged = nav > navBefore
                 }
-                if acknowledged { return true }
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            if acknowledged { return true }
+            // Dialog accepted: re-check at once.
+            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return false
     }
@@ -258,26 +293,26 @@ class CommandHandler {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
-                // Dialog accepted — re-check on the next iteration.
-            } else {
-                var outcome: HooksEpochOutcome?
-                _ = ObjCExceptionCatcher.catchException {
-                    guard let snapshot = try? app.snapshot(),
-                          let marker = self.hooksMarker(in: snapshot),
-                          self.hooksAcknowledged(
-                              epoch: marker.epoch, boot: marker.boot,
-                              epochBefore: epochBefore, bootBefore: bootBefore
-                          ) else { return }
-                    if let err = marker.err {
-                        outcome = .hookError(err)
-                    } else {
-                        outcome = .acknowledged(marker.epoch)
-                    }
+            // Marker first, the "Open in" prompt only when it has not
+            // acknowledged yet (see waitForHooksNav).
+            var outcome: HooksEpochOutcome?
+            _ = ObjCExceptionCatcher.catchException {
+                guard let snapshot = try? app.snapshot(),
+                      let marker = self.hooksMarker(in: snapshot),
+                      self.hooksAcknowledged(
+                          epoch: marker.epoch, boot: marker.boot,
+                          epochBefore: epochBefore, bootBefore: bootBefore
+                      ) else { return }
+                if let err = marker.err {
+                    outcome = .hookError(err)
+                } else {
+                    outcome = .acknowledged(marker.epoch)
                 }
-                if let outcome { return outcome }
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            if let outcome { return outcome }
+            // Dialog accepted: re-check at once.
+            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return .timedOut
     }
@@ -341,53 +376,76 @@ class CommandHandler {
     /// the broken state into subsequent tests; the cold path's terminate +
     /// relaunch recreates the render surface and recovers.
     ///
-    /// Downscales one screenshot and takes the maximum channel value across
-    /// all sampled pixels, excluding the top and bottom 12% (the status
-    /// bar's clock/battery — and the home indicator — keep rendering even
-    /// when the app's window has stopped compositing). Any visible content,
-    /// including sparse light text on a dark-mode screen, produces bright
-    /// samples; a false positive merely costs a cold relaunch, never a
-    /// wrong verdict.
+    /// Reads the screen less the top and bottom 12% (the status bar and home
+    /// indicator keep rendering over a dead app window) and applies
+    /// `DeepLinkVerify.appearsBlack`. A false positive merely costs a cold
+    /// relaunch, never a wrong verdict.
     private func displayAppearsBlack() -> Bool {
-        let image = XCUIScreen.main.screenshot().image
-        guard let cgImage = image.cgImage, cgImage.width > 8, cgImage.height > 8 else {
-            return false
-        }
-        let sampleWidth = 64
-        let sampleHeight = 128
-        let bytesPerPixel = 4
-        var pixels = [UInt8](repeating: 0, count: sampleWidth * sampleHeight * bytesPerPixel)
-        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
-            guard let context = CGContext(
-                data: buffer.baseAddress,
-                width: sampleWidth,
-                height: sampleHeight,
-                bitsPerComponent: 8,
-                bytesPerRow: sampleWidth * bytesPerPixel,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return false }
-            context.interpolationQuality = .low
-            context.draw(
-                cgImage,
-                in: CGRect(x: 0, y: 0, width: sampleWidth, height: sampleHeight)
-            )
-            return true
-        }
-        guard drawn else { return false }
-
-        // Exclude both vertical ends rather than reasoning about CGContext
-        // row order — the status bar is at one end, the home indicator at
-        // the other, and both keep rendering over a dead app window.
-        let excludedRows = Int(Double(sampleHeight) * 0.12)
-        var maxChannel: UInt8 = 0
-        for row in excludedRows..<(sampleHeight - excludedRows) {
-            for col in 0..<sampleWidth {
-                let offset = (row * sampleWidth + col) * bytesPerPixel
-                maxChannel = max(maxChannel, pixels[offset], pixels[offset + 1], pixels[offset + 2])
+        // The content band alone, through XCTest's region screenshot as a
+        // low-quality JPEG: every warm link runs this, and a full-screen PNG
+        // costs ~115 ms. JPEG noise stays far below the threshold.
+        if case .success = RegionScreenshot.jpegAPI {
+            let band = DeepLinkVerify.contentBand(screen: snapshotFinder.screenSize)
+            if !band.isEmpty, let image = RegionScreenshot.capture(band, of: XCUIScreen.main, with: RegionScreenshot.jpegAPI) {
+                return DeepLinkVerify.appearsBlack(image, excludingEnds: 0)
             }
         }
-        return maxChannel < 10
+        guard let cgImage = XCUIScreen.main.screenshot().image.cgImage else { return false }
+        return DeepLinkVerify.appearsBlack(cgImage, excludingEnds: DeepLinkVerify.excludedEndFraction)
+    }
+
+    /// Hand `url` to the running app `bundleId`, and say how ("daemon",
+    /// "daemon-timeout" or "xctest", for the timing log).
+    ///
+    /// On a simulator this is testmanagerd's open-URL request
+    /// (`DaemonOpenURL`), which returns once the app has the URL;
+    /// `XCUIApplication.open(_:)` makes the same request and then sleeps a
+    /// fixed second. Only when the request can't be made, or reports that it
+    /// failed, does this fall back to `open(_:)`. A request that times out
+    /// may still land, so it is not repeated: the caller's verify decides,
+    /// and its miss sends the daemon down its cold path. Physical devices
+    /// keep `open(_:)` until the request is proven there.
+    @available(iOS 16.4, *)
+    private func deliverWarmURL(_ url: URL, bundleId: String, app: XCUIApplication) -> String {
+        #if targetEnvironment(simulator)
+        switch DaemonOpenURL.open(url, bundleId: bundleId, timeout: Self.daemonOpenURLTimeout) {
+        case .delivered:
+            return "daemon"
+        case .timedOut:
+            NSLog("[TapsmithAgent] open-URL request for %@ had no answer in %.0f s; not delivering it again", url.absoluteString, Self.daemonOpenURLTimeout)
+            return "daemon-timeout"
+        case .failed(let why):
+            NSLog("[TapsmithAgent] open-URL request for %@ failed (%@); delivering through XCUIApplication.open", url.absoluteString, why)
+        case .unavailable(let why):
+            if !Self.loggedDaemonOpenURLUnavailable {
+                Self.loggedDaemonOpenURLUnavailable = true
+                NSLog("[TapsmithAgent] XCTest's open-URL request is unavailable (%@); warm deep links use XCUIApplication.open, ~1 s slower", why)
+            }
+        }
+        #endif
+        _ = ObjCExceptionCatcher.catchException {
+            app.open(url)
+        }
+        return "xctest"
+    }
+
+    /// How long a warm delivery waits for testmanagerd to answer. A warm
+    /// app answers in tens of milliseconds; this plus the 8 s ack wait stays
+    /// under the daemon's 11 s warm-attempt timeout.
+    private static let daemonOpenURLTimeout: TimeInterval = 2.0
+    private static var loggedDaemonOpenURLUnavailable = false
+
+    /// Milliseconds spent in each phase of one command, reported back to the
+    /// daemon for its timing log.
+    private struct PhaseClock {
+        private var last = Date()
+        private(set) var laps: [String: Int] = [:]
+
+        mutating func lap(_ name: String) {
+            let now = Date()
+            laps[name] = Int((now.timeIntervalSince(last) * 1000).rounded())
+            last = now
+        }
     }
 
     /// Dismiss any blocking iOS system dialog currently covering the app
@@ -485,11 +543,12 @@ class CommandHandler {
         app = refreshedApp
         elementFinder = ElementFinder(app: refreshedApp)
         snapshotFinder = SnapshotElementFinder(app: refreshedApp)
+        snapshotFinder.commandDeadline = commandReadDeadline
         actionExecutor = ActionExecutor(app: refreshedApp)
         // Eagerly cache the screen size, but tolerate a transient XCUITest
-        // interruption: `screenSize` probes `app.windows.firstMatch.frame`, a
-        // direct query that can raise an "Interrupting test" NSException while
-        // SpringBoard is still settling (e.g. right after a deep-link launch).
+        // failure: `screenSize` probes `app.windows.firstMatch.frame`, a
+        // direct query whose failure XCTestIssueRelay raises as an NSException
+        // while SpringBoard is still settling (e.g. right after a deep-link launch).
         // On failure leave the cache unset — ActionExecutor resolves it lazily
         // on next use — so re-binding never fails a command that already
         // succeeded.
@@ -516,6 +575,7 @@ class CommandHandler {
         let params = json["params"] as? [String: Any] ?? [:]
         commandReadDeadline = (params["readTimeoutMs"] as? NSNumber)
             .map { Date(timeIntervalSinceNow: $0.doubleValue / 1000) }
+        snapshotFinder.commandDeadline = commandReadDeadline
 
         do {
             var result: [String: Any]?
@@ -699,7 +759,10 @@ class CommandHandler {
     /// nil when no part of `frame` is on screen.
     private static func screenshotPNG(of frame: CGRect) -> Data? {
         let image = XCUIScreen.main.screenshot().image
-        guard let cgImage = image.cgImage else { return nil }
+        guard let native = image.cgImage else { return nil }
+        // `frame` is in the app's interface space, which is the upright
+        // image's: crop that, not the native portrait pixels.
+        let cgImage = UprightScreenshot.upright(native, orientation: Self.cgOrientation(image.imageOrientation)) ?? native
         let scale = image.scale
         let pixels = CGRect(
             x: frame.minX * scale, y: frame.minY * scale,
@@ -707,7 +770,37 @@ class CommandHandler {
         ).integral.intersection(CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
         guard !pixels.isNull, pixels.width > 0, pixels.height > 0,
               let cropped = cgImage.cropping(to: pixels) else { return nil }
-        return UIImage(cgImage: cropped, scale: scale, orientation: image.imageOrientation).pngData()
+        return UprightScreenshot.png(cropped)
+    }
+
+    /// `screenshot` as PNG, upright (`UprightScreenshot`), and the device's
+    /// turn as it records it (nil for one no device turn makes). An upright
+    /// screenshot is sent as XCTest encoded it.
+    static func uprightPNG(_ screenshot: XCUIScreenshot) -> (png: Data, turn: String?) {
+        let image = screenshot.image
+        let orientation = cgOrientation(image.imageOrientation)
+        if let native = image.cgImage,
+           let upright = UprightScreenshot.upright(native, orientation: orientation),
+           let png = UprightScreenshot.png(upright) {
+            return (png, UprightScreenshot.turn(of: orientation))
+        }
+        // Upright already, or the redraw failed: as XCTest encoded it, and a
+        // turn only if the pixels really are upright.
+        return (screenshot.pngRepresentation, orientation == .up ? UprightScreenshot.turn(of: .up) : nil)
+    }
+
+    private static func cgOrientation(_ orientation: UIImage.Orientation) -> CGImagePropertyOrientation {
+        switch orientation {
+        case .up: return .up
+        case .down: return .down
+        case .left: return .left
+        case .right: return .right
+        case .upMirrored: return .upMirrored
+        case .downMirrored: return .downMirrored
+        case .leftMirrored: return .leftMirrored
+        case .rightMirrored: return .rightMirrored
+        @unknown default: return .up
+        }
     }
 
     /// Get the XCUIElement for an element ID, checking both caches.
@@ -730,36 +823,18 @@ class CommandHandler {
 
     /// How an element-addressed touch should be delivered.
     private enum TouchPlan {
-        /// XCUITest's hit test passed — tap through the element itself.
+        /// No UI tree could be read to plan a point, but XCUITest's hit test
+        /// passed: tap through the element itself.
         case hittableElement(XCUIElement)
         /// Touch at this screen point; nothing in the snapshot covers it.
-        /// `visible` is the uncovered part of the element around it.
-        case point(CGPoint, visible: CGRect)
+        /// `visible` is the uncovered part of the element around it. A tap
+        /// there holds its touch `hold` seconds (`TapTiming`, by the element's
+        /// type).
+        case point(CGPoint, visible: CGRect, hold: TimeInterval)
         /// No part of the element is on screen.
         case offScreen
     }
 
-    /// Decide where a touch on `element` can land, waiting up to `timeoutMs`
-    /// for anything covering it to go away (Playwright waits out a click's
-    /// intercepting element the same way). Throws ELEMENT_COVERED, naming the
-    /// cover, when it is still there at the deadline — never plans a touch
-    /// that would land on the cover.
-    ///
-    /// A target under in-window chrome that its list can scroll it away from
-    /// (`.coveredInList`: a sticky header or footer, a tab bar) is first
-    /// dragged clear — up to `CoverClearance.maxDrags` times, while the drags
-    /// move it — as a user would, and as Playwright scrolls a target whose
-    /// click another element intercepts (PILOT-980).
-    ///
-    /// `preferElementTap` short-circuits to `.hittableElement` when XCUITest
-    /// calls the element hittable, skipping the snapshot: `XCUIElement.tap()`
-    /// picks its own hit point, which already avoids the keyboard (it taps
-    /// the visible part of a half-covered element). Coordinate gestures
-    /// (double tap, long press, HID input) need an explicit point and always
-    /// take the snapshot.
-    ///
-    /// **Cost** per pass: `isHittable` (one hit-test IPC); when not
-    /// short-circuited, one `snapshot()` of the element plus one of the app.
     /// What a touch has done to clear its target of fixed chrome (PILOT-980),
     /// kept across every plan the touch makes (a re-plan after the settle, a
     /// pinch's retries): the drag limit is per touch, and once the list has
@@ -771,10 +846,29 @@ class CommandHandler {
         var identifying: XCUIElementQuery??
     }
 
+    /// Decide where a touch on `element` can land, waiting up to `timeoutMs`
+    /// for anything covering it to go away (Playwright waits out a click's
+    /// intercepting element the same way). Throws ELEMENT_COVERED, naming the
+    /// cover, when it is still there at the deadline — never plans a touch
+    /// that would land on the cover.
+    ///
+    /// A target under in-window chrome that its list can scroll it away from
+    /// (`.coveredInList`: a footer bar or button outside its list, a tab bar)
+    /// is first dragged clear — up to `CoverClearance.maxDrags` times, while
+    /// the drags move it — as a user would, and as Playwright scrolls a target
+    /// whose click another element intercepts (PILOT-980).
+    ///
+    /// Every touch is planned at a point, taps included: a tap through
+    /// `XCUIElement.tap()` holds its touch as long as XCTest chooses, which
+    /// React Native cancels when a scroll view beside the target moves under
+    /// it (`TapTiming`). `.hittableElement` is only the plan when no UI tree
+    /// can be read.
+    ///
+    /// **Cost** per pass: `isHittable` (one hit-test IPC), one `snapshot()`
+    /// of the element plus one of the app.
     private func planTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
-        preferElementTap: Bool,
         reserveMs: Int64 = 0,
         clearing: ClearingState = ClearingState()
     ) throws -> TouchPlan {
@@ -796,17 +890,12 @@ class CommandHandler {
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
             // Once the agent has scrolled the list itself, the tree has the
-            // last word: XCUITest's hit test called a React Native row under
-            // the sticky header it was dragged beside hittable (iOS 18.5),
-            // and XCUIElement.tap() then pressed the header.
+            // last word: XCUITest's hit test called a React Native row beside
+            // the bar it was dragged clear of hittable (iOS 18.5).
             let hittable = clearing.drags == 0 && (xcElem?.isHittable ?? false)
-            if preferElementTap, hittable, let xcElem {
-                try refuseIfLate(clock)
-                return .hittableElement(xcElem)
-            }
             let target = occlusionTarget(for: element, xcElem: xcElem)
-            var verdict = occlusionVerdict(for: target, isHittable: hittable)
-            if case .coveredInList(let cover, let coverFrame, let list)? = verdict {
+            var read = occlusionVerdict(for: target, isHittable: hittable)
+            if case .coveredInList(let cover, let coverFrame, let list)? = read?.verdict {
                 // Only a target that something identifies uniquely (its
                 // identifier, or its label among its type) is dragged, and
                 // its id is bound to that from then on — for this pass, any
@@ -835,21 +924,22 @@ class CommandHandler {
                     // one of the attempts.
                     continue
                 }
-                verdict = .covered(by: cover)
+                read?.verdict = .covered(by: cover)
             }
             // Checked after the pass: a slow pass that ends past the deadline
             // fails now instead of paying for another one.
             try refuseIfLate(clock)
             var sleep = clock.sleepBeforeNextPass(at: Date())
-            switch verdict {
+            let hold = read?.hold ?? TapTiming.frameSpanningHold
+            switch read?.verdict {
             case .clear(let point, let visible)?:
-                return .point(point, visible: visible)
+                return .point(point, visible: visible, hold: hold)
             case .unlocated(let point, let visible)?:
                 // Moved between the two reads (animating): read again for a
                 // moment — whatever the budget — and fall back to the old
                 // coordinate tap only if it does not settle.
                 if clock.shouldFallBackWhenUnlocated(at: Date()) {
-                    return .point(point, visible: visible)
+                    return .point(point, visible: visible, hold: hold)
                 }
                 sleep = TouchPlanClock.pollSeconds
             case .offScreen?:
@@ -893,24 +983,42 @@ class CommandHandler {
     /// be. The new plan has what is left of `timeoutMs`, and is not settled
     /// again. An element plan needs no new plan: `XCUIElement.tap()` works out
     /// its own hit point when it touches.
+    ///
+    /// First, the app's UIKit animations must be over (`AnimationsIdle`): a
+    /// touch during a presentation transition is dropped, and the pixel
+    /// settle can call a fading target still (PILOT-1129).
     private func planSettledTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
-        preferElementTap: Bool,
         reserveMs: Int64 = 0,
         clearing: ClearingState = ClearingState()
     ) throws -> TouchPlan {
         let started = Date()
-        let plan = try planTouch(
-            element, timeoutMs: timeoutMs, preferElementTap: preferElementTap, reserveMs: reserveMs, clearing: clearing
-        )
+        waitForAnimationsIdle(reserveMs: reserveMs)
+        let afterIdle = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
+        let plan = try planTouch(element, timeoutMs: afterIdle, reserveMs: reserveMs, clearing: clearing)
         let outcome = settleBeforeTouch(plan, reserveMs: reserveMs)
         guard case .point = plan, outcome.sawChange else { return plan }
         let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
         NSLog("[TapsmithCommand] \(element.elementId) changed while settling; planning the touch again")
-        return try planTouch(
-            element, timeoutMs: remaining, preferElementTap: preferElementTap, reserveMs: reserveMs, clearing: clearing
+        return try planTouch(element, timeoutMs: remaining, reserveMs: reserveMs, clearing: clearing)
+    }
+
+    /// Wait for the app's UIKit animations (a view controller presentation or
+    /// dismissal, any UIView animation) to end, at most
+    /// `AnimationsIdle.maxWaitSeconds` and never past the daemon's read
+    /// deadline (less `reserveMs` for a long press's hold). Returns at once
+    /// when nothing animates, or when XCTest can't be asked.
+    private func waitForAnimationsIdle(reserveMs: Int64) {
+        guard let request = AnimationsIdle.request(for: app) else { return }
+        let deadline = AnimationsIdle.deadline(
+            now: Date(),
+            readDeadline: commandReadDeadline,
+            reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
+        if AnimationsIdle.wait(deadline: deadline, request: request) == .timedOut {
+            NSLog("[TapsmithCommand] app still animating at the wait's deadline; touching anyway")
+        }
     }
 
     /// Wait for the planned touch's target to stop changing on screen
@@ -927,11 +1035,41 @@ class CommandHandler {
         switch plan {
         case .hittableElement(let xcElem):
             return actionExecutor.waitUntilSettled(xcElem, deadline: deadline)
-        case .point(_, let visible):
-            return actionExecutor.waitUntilSettled(region: visible, deadline: deadline)
+        case .point(_, let visible, _):
+            // The plan's rect is in the app's interface space, as the
+            // snapshot it was made from shows it; the screenshots read the
+            // device's native portrait space. When the way the screen is
+            // turned can't be told (a wide window on a device lying flat),
+            // the interface rect is used as it was before this mapping:
+            // right only on an upright screen.
+            let native = HidTouch.nativeRect(
+                visible,
+                screen: plannedScreenSize ?? snapshotFinder.screenSize,
+                device: Self.deviceTurn(XCUIDevice.shared.orientation)
+            )
+            return actionExecutor.waitUntilSettled(region: native ?? visible, deadline: deadline)
         case .offScreen:
             return .unreadable
         }
+    }
+
+    /// `waitForIdle`: wait until the screen holds still, a quarter of a
+    /// second at most (`IdleSettle`).
+    private func waitForScreenIdle(timeoutMs: Int64) {
+        let deadline = IdleSettle.deadline(now: Date(), timeoutMs: timeoutMs, readDeadline: commandReadDeadline)
+        // Only a screen size already cached: reading it afresh queries the
+        // app's window, which can wait on the app.
+        if let region = IdleSettle.screenRegion(actionExecutor.cachedScreenSize) { idleRegion = region }
+        guard let region = idleRegion else {
+            IdleSettle.sleepUntil(deadline, now: Date.init, sleep: Thread.sleep(forTimeInterval:))
+            return
+        }
+        IdleSettle.wait(
+            deadline: deadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            sample: { RegionScreenshot.captureData(region, of: XCUIScreen.main, with: RegionScreenshot.settleJPEGAPI) }
+        )
     }
 
     private func refuseIfLate(_ clock: TouchPlanClock) throws {
@@ -988,23 +1126,42 @@ class CommandHandler {
         return drag
     }
 
-    /// nil when no tree could be read.
+    /// What the UI tree says about touching the element, and how long a tap
+    /// on it holds its touch (`TapTiming`, by its type and what it sits in:
+    /// an alert, a segmented control…). nil when no tree could be read.
     private func occlusionVerdict(
         for target: OcclusionAnalyzer.Target,
         isHittable: Bool
-    ) -> OcclusionAnalyzer.Verdict? {
+    ) -> (verdict: OcclusionAnalyzer.Verdict, hold: TimeInterval)? {
         let screenSize = snapshotFinder.screenSize
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
-        return OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
-            .analyze(target, isHittable: isHittable)
+        plannedScreenSize = self.screenSize(of: appSnapshot)
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+        let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
+        // A target identified from what was cached (its live read was another
+        // element's, or none) is judged by the tree alone: the live element's
+        // hit test was not this element's (PILOT-952).
+        return (analyzer.analyze(target, isHittable: target.isLive && isHittable), hold)
     }
 
     /// The element as the occlusion analyzer identifies it: read live, or from
     /// what was cached when it was found.
     private func occlusionTarget(for element: ElementInfo, xcElem: XCUIElement?) -> OcclusionAnalyzer.Target {
         let target: OcclusionAnalyzer.Target
-        if let snap = try? xcElem?.snapshot() {
+        // A row's element bound by its place among others is read again
+        // here, and the table can have reused its cells since getElement
+        // checked it: plan on this read only if it is still where the match
+        // was found (RowBinding, PILOT-952). Nor on a read its own query
+        // could not have returned: the element changed while XCTest read it
+        // (React Native relabelling a reused view as the element that
+        // replaced it), and touching it would touch the replacement
+        // (LiveQueryPin, PILOT-1065).
+        if let snap = try? xcElem?.snapshot(),
+           snapshotFinder.isFoundElement(
+               element.elementId, liveFrame: snap.frame, liveLabel: snap.label, liveIdentifier: snap.identifier,
+               livePlaceholder: snap.placeholderValue ?? ""
+           ) {
             target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
         } else {
             // The live element can't be read (it unmounted, or an iOS 26 live
@@ -1040,9 +1197,9 @@ class CommandHandler {
             let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
             let visible: CGRect
             switch try planSettledTouch(
-                element, timeoutMs: remaining, preferElementTap: false, reserveMs: reserveMs, clearing: clearing
+                element, timeoutMs: remaining, reserveMs: reserveMs, clearing: clearing
             ) {
-            case .point(_, let area):
+            case .point(_, let area, _):
                 visible = area
             case .hittableElement:
                 throw AgentError.actionFailed(
@@ -1080,12 +1237,29 @@ class CommandHandler {
         return message
     }
 
-    /// Tap a resolved element. Prefer XCUIElement.tap() — synthesized
-    /// coordinate events are unreliable with UIKit/RN gesture recognizers
-    /// regardless of element type. A coordinate tap is only the fallback for
-    /// elements XCUITest calls unhittable, and only at a point the snapshot
-    /// shows uncovered (PILOT-223: the unguarded fallback tapped covers).
-    private func tapResolvedElement(_ element: ElementInfo, timeoutMs: Int64) throws {
+    /// Tap a resolved element: a synthesized tap at a point the snapshot
+    /// shows uncovered (PILOT-223: an unguarded coordinate tap tapped
+    /// covers), held as long as the element's type needs (`TapTiming`).
+    /// Not `XCUIElement.tap()`, whose hold XCTest picks: React Native cancels
+    /// a held press when a scroll view beside it moves (a carousel paging
+    /// itself), and XCTest's taps lost 1 in 40 there. It is only the fallback
+    /// when no UI tree can be read to plan a point.
+    ///
+    /// `beforeTouch` runs once the touch is planned and settled, just before
+    /// it is made (when the screen is as the touch will find it).
+    /// `scrollsIntoView`: an element that is off screen is tapped through
+    /// `XCUIElement.tap()`, which scrolls it into view first, rather than
+    /// refused (selectOption's trigger, which `XCUIElement.tap()` opened
+    /// before taps were planned). Returns how far that scroll moved the
+    /// element (zero when it did not scroll), so what `beforeTouch` read can
+    /// be moved with it.
+    @discardableResult
+    private func tapResolvedElement(
+        _ element: ElementInfo,
+        timeoutMs: Int64,
+        scrollsIntoView: Bool = false,
+        beforeTouch: (() -> Void)? = nil
+    ) throws -> CGVector {
         // Surface a stale id up front (the SDK's re-resolve retry keys on the
         // "gone stale" message) — but only once nothing else can tap: the
         // bounds-cache recovery path in resolveElement hands us ids with no
@@ -1096,13 +1270,21 @@ class CommandHandler {
         // A SwiftUI Toggle only flips from its knob: touch that (PILOT-790).
         let element = switchKnob(of: element) ?? element
         putKeyboardAwayIfItWouldEatTheTouch(element)
-        switch try planSettledTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
+        switch try planSettledTouch(element, timeoutMs: timeoutMs) {
         case .hittableElement(let xcElem):
+            beforeTouch?()
             xcElem.tap()
-        case .point(let point, _):
-            NSLog("[TapsmithCommand] \(element.elementId) is not hittable; tapping the uncovered point \(point)")
-            actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
+        case .point(let point, _, let hold):
+            beforeTouch?()
+            actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
         case .offScreen:
+            if scrollsIntoView, staleError == nil, let xcElem = try? getXCUIElement(element.elementId), xcElem.exists {
+                let before = xcElem.frame
+                beforeTouch?()
+                xcElem.tap()
+                guard let after = try? xcElem.snapshot().frame else { return .zero }
+                return CGVector(dx: after.minX - before.minX, dy: after.minY - before.minY)
+            }
             // An id with the bounds it was found at but no live element is
             // one found that way by design (a row's accessory indicator,
             // PILOT-895, or a getByLabel match): off screen, not stale.
@@ -1110,6 +1292,7 @@ class CommandHandler {
             throw (foundWithoutLiveElement ? nil : staleError)
                 ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
+        return .zero
     }
 
     /// The knob of a SwiftUI Toggle, as an element of its own, when `element`
@@ -1181,12 +1364,13 @@ class CommandHandler {
         // it gone. Ids that never had a query (placeholder, className, …)
         // still take the coordinate path.
         putKeyboardAwayIfItWouldEatTheTouch(element)
-        switch try planSettledTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
-        case .point(let point, _):
+        switch try planSettledTouch(element, timeoutMs: timeoutMs) {
+        case .point(let point, _, let hold):
             actionExecutor.doubleTapCoordinates(
                 x: Int(point.x.rounded()),
                 y: Int(point.y.rounded()),
-                intervalMs: intervalMs
+                intervalMs: intervalMs,
+                hold: hold
             )
         case .hittableElement, .offScreen:
             try actionExecutor.doubleTap(try getXCUIElement(element.elementId))
@@ -1234,12 +1418,24 @@ class CommandHandler {
     }
 
     private func focusTarget(_ element: ElementInfo, timeoutMs: Int64) throws -> FocusTarget {
-        switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
-        case .point(_, let visible):
+        switch try planTouch(element, timeoutMs: timeoutMs) {
+        case .point(_, let visible, _):
             return .area(visible)
         case .hittableElement, .offScreen:
             return .element
         }
+    }
+
+    /// How long clearText gives the field to show it emptied after its
+    /// select-all and backspace were played.
+    private static let clearShowsWait: TimeInterval = 0.3
+
+    /// Leave a field clearText emptied with the keyboard focus, as it is now
+    /// (the first focusing tap can have moved it): tapped again only when it
+    /// no longer has the focus. Best effort.
+    private func refocusUnlessFocused(_ element: ElementInfo) {
+        if isLiveFocused(element) { return }
+        try? refocusForTyping(element, settleTime: 0.1)
     }
 
     /// Refocus a field mid-command (a typeText retry, clearText's refocuses),
@@ -1251,7 +1447,7 @@ class CommandHandler {
     private func refocusForTyping(_ element: ElementInfo, settleTime: TimeInterval) throws {
         let plan: TouchPlan
         do {
-            plan = try planTouch(element, timeoutMs: 0, preferElementTap: false)
+            plan = try planTouch(element, timeoutMs: 0)
         } catch {
             // Still the focused input (typically behind the keyboard it
             // raised): input reaches it without a tap.
@@ -1259,7 +1455,7 @@ class CommandHandler {
             throw error
         }
         switch plan {
-        case .point(_, let visible):
+        case .point(_, let visible, _):
             try focusElementForTyping(element, settleTime: settleTime, within: visible)
         case .hittableElement:
             try focusElementForTyping(element, settleTime: settleTime, within: nil)
@@ -1306,9 +1502,9 @@ class CommandHandler {
                                   maxWait: focusWait, settleTime: settleTime) { return }
             // Planned again, one check and no waiting: the first tap can have
             // moved the field or raised a keyboard over its old spot.
-            let plan = try? planTouch(element, timeoutMs: 0, preferElementTap: false)
+            let plan = try? planTouch(element, timeoutMs: 0)
             var fallbacks: [CGPoint] = []
-            if case .point(_, let visible)? = plan {
+            if case .point(_, let visible, _)? = plan {
                 fallbacks = TypingFocus.fallbackPoints(in: visible, after: first)
             }
             for point in fallbacks + [nil] {
@@ -1342,8 +1538,15 @@ class CommandHandler {
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
-        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
+        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: tapHold(on: element))
         snapshotFinder.recordFocusedTextInputHint(element)
+    }
+
+    /// The hold for a tap on `element` planned without a UI tree read (a
+    /// focusing tap): by the type it was found with, unknown when that was not
+    /// kept.
+    private func tapHold(on element: ElementInfo) -> TimeInterval {
+        TapTiming.hold(for: snapshotFinder.getIdentity(element.elementId)?.elementType)
     }
 
     private static func describe(_ point: CGPoint) -> String {
@@ -1406,127 +1609,434 @@ class CommandHandler {
         }
     }
 
-    /// Type through EventSynthesizer, but don't advance to the next grapheme
-    /// until the target field's snapshot reflects the current one. This fixes
-    /// slow CI simulators dropping an in-string character (e.g. "test" ->
-    /// "tet"), which suffix-only verification cannot repair.
-    private func typeTextWithPerGraphemeVerification(
+    /// Type `text` with a typing delay, checking that it arrives
+    /// (PILOT-1012; the rules are in `TypingCheck`). The first key goes
+    /// alone and is waited for: a field just focused can drop keys while the
+    /// keyboard reacts to the first one (a slow CI simulator turned "test"
+    /// into "tet"). The rest goes as one burst of key events at the delay's
+    /// rate, and the field is read back once it holds the text, or holds
+    /// still short of it. A field showing the keys short or out of order (a
+    /// React Native controlled input falling behind) is emptied and typed
+    /// again a key at a time, each waited for; one showing something the
+    /// keys cannot have produced fails the action.
+    private func typeTextChecked(
         _ text: String,
         selectorParams: [String: Any],
         initialElement: ElementInfo,
         delayMs: Int
     ) throws {
-        let isSecureField = initialElement.className == "XCUIElementTypeSecureTextField"
-        var expectedValue = initialElement.text ?? ""
-        var expectedLength = expectedValue.count
-        let timeoutPerGrapheme = max(1.0, TimeInterval(delayMs) / 1000.0 * 5.0)
-        let pollInterval = 0.02
-        let maxAttempts = 3
-
-        for grapheme in text {
-            let next = String(grapheme)
-
-            // Single-line UITextField treats Return as submit/blur. After that
-            // the original field no longer receives trailing input, so preserve
-            // the existing iOS behavior tested by locator-regressions.
-            if next == "\n" && initialElement.className != "XCUIElementTypeTextView" {
-                if !actionExecutor.typeViaEventSynthesizer(next) {
-                    throw AgentError.actionFailed("typeText failed to synthesize Return key")
-                }
-                Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
-                return
-            }
-
-            let beforeValue = expectedValue
-            let beforeLength = expectedLength
-            expectedValue += next
-            expectedLength += 1
-
-            var delivered = false
-            var lastObserved = beforeValue
-
-            for attempt in 1...maxAttempts {
-                if !actionExecutor.typeViaEventSynthesizer(next) {
-                    NSLog("[typeText] EventSynthesizer returned false for grapheme '\(next)'")
-                }
-
-                let deadline = Date(timeIntervalSinceNow: timeoutPerGrapheme)
-                while Date() < deadline {
-                    let fresh = try resolveElement(selectorParams)
-                    let current = fresh.text ?? ""
-                    lastObserved = current
-
-                    if isSecureField {
-                        if current.count == expectedLength {
-                            delivered = true
-                            break
-                        }
-                        if current.count > expectedLength {
-                            throw AgentError.actionFailed(
-                                "typeText produced extra secure-field input: " +
-                                    "expected length \(expectedLength), got \(current.count)"
-                            )
-                        }
-                    } else {
-                        if current == expectedValue {
-                            delivered = true
-                            break
-                        }
-                        if current != beforeValue && !expectedValue.hasPrefix(current) {
-                            throw AgentError.actionFailed(
-                                "typeText diverged after grapheme '\(next)': " +
-                                    "expected prefix '\(expectedValue)', got '\(current)'"
-                            )
-                        }
-                    }
-
-                    RunLoop.current.run(
-                        mode: .default,
-                        before: Date(timeIntervalSinceNow: pollInterval)
-                    )
-                }
-
-                if delivered { break }
-                NSLog(
-                    "[typeText] Retry \(attempt) for grapheme '\(next)': " +
-                        "expected '\(expectedValue)', got '\(lastObserved)'"
+        let secure = initialElement.className == "XCUIElementTypeSecureTextField"
+        let plan = TypingCheck.plan(text, multiline: initialElement.className == "XCUIElementTypeTextView")
+        let before = initialElement.text ?? ""
+        if let first = plan.keys.first {
+            // From the first key on, part of the text can be in the field: no
+            // error may read as a stale element (`TypingCheck.notStale`).
+            do {
+                let field = try typeFirstKey(
+                    String(first), before: before, secure: secure, selectorParams: selectorParams
                 )
-                if lastObserved == beforeValue {
-                    let refreshed = try resolveElement(selectorParams)
-                    do {
-                        try refocusForTyping(refreshed, settleTime: 0.25)
-                    } catch let error as AgentError {
-                        // Part of the text is already in the field: never let
-                        // this read as a stale element, which the SDK would
-                        // answer by typing the whole text again. The type
-                        // alone names the cause without echoing a cover's
-                        // label (which could contain anything).
-                        // No typed text in the message either: the SDK
-                        // spots a stale element by matching "stale" in it.
+                let rest = String(plan.keys.dropFirst())
+                // Wait out the delay before the focus check: an app can move
+                // the focus on a while after the key shows (a React Native
+                // field moves it from its JavaScript change handler), and
+                // the next key goes no sooner anyway.
+                let firstShownAt = Date()
+                if !rest.isEmpty {
+                    Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(
+                        lastSentAt: firstShownAt, delayMs: delayMs, now: Date()
+                    ))
+                }
+                if !rest.isEmpty, focusMovedOn(from: field) {
+                    // A field that moves the focus on by itself (one box per
+                    // digit): keys sent while the focus moves are lost, and
+                    // the text ends up spread over several fields.
+                    NSLog("[typeText] the focus moved on after the first key: typing the rest a key at a time")
+                    try typeFollowingFocus(rest, from: field, before: before, typedBefore: String(first),
+                                           delayMs: delayMs, lastSentAt: firstShownAt)
+                } else {
+                    if !rest.isEmpty && !sendRest(rest, delayMs: delayMs, lastSentAt: firstShownAt) {
+                        NSLog("[typeText] the burst of \(rest.count) key(s) could not be synthesized")
+                    }
+                    try checkTyped(plan.keys, before: before, secure: secure, delayMs: delayMs,
+                                   selectorParams: selectorParams)
+                }
+            } catch let error as AgentError where TypingCheck.readsAsStale(error.message) {
+                throw AgentError.actionFailed(TypingCheck.notStale(error.message))
+            }
+        }
+        // Return submits a single-line field, which then usually gives up
+        // focus: nothing after it reaches the field, so nothing is checked.
+        if plan.submit {
+            if !actionExecutor.typeViaEventSynthesizer("\n") {
+                throw AgentError.actionFailed("typeText failed to synthesize Return key")
+            }
+            Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
+        }
+    }
+
+    /// Send the keys after the first, `delayMs` apart: one burst of key
+    /// events, or, for a delay over a second, a key at a time
+    /// (`TypingCheck.burstsAtOnce`).
+    /// The delay counts from `lastSentAt` (when the first key showed).
+    private func sendRest(_ keys: String, delayMs: Int, lastSentAt: Date) -> Bool {
+        var lastSentAt = lastSentAt
+        if TypingCheck.burstsAtOnce(delayMs: delayMs) {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            return EventSynthesizer.typeKeys(keys, charactersPerSecond: TypingCheck.charactersPerSecond(delayMs: delayMs))
+        }
+        var sent = true
+        for key in keys {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            sent = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond) && sent
+            lastSentAt = Date()
+        }
+        return sent
+    }
+
+    /// Send the first key and wait for the field to show it, sending it again
+    /// (after refocusing the field) when nothing arrived.
+    /// The field as read when it showed the key.
+    @discardableResult
+    private func typeFirstKey(
+        _ key: String, before: String, secure: Bool, selectorParams: [String: Any]
+    ) throws -> ElementInfo {
+        var shown = before
+        var field: ElementInfo?
+        func landed() throws -> Bool {
+            let fresh = try resolveElement(selectorParams)
+            field = fresh
+            shown = fresh.text ?? ""
+            switch TypingCheck.read(shown, before: before, typed: key, secure: secure) {
+            case .complete:
+                return true
+            case .changed where secure && shown.count < before.count:
+                throw AgentError.actionFailed(
+                    "typeText: the secure field dropped the \(before.count) character(s) it held as the first key " +
+                        "went in (iOS empties a secure field typed into after it takes focus); use clearAndType() to replace its text"
+                )
+            case .changed:
+                throw AgentError.actionFailed(
+                    "typeText: after the first key the field shows \(TypingCheck.describe(shown, secure: secure)), " +
+                        "not \(TypingCheck.describe(before + key, secure: secure)): it changed what was typed"
+                )
+            case .short, .scrambled:
+                return false
+            }
+        }
+        for attempt in 1...TypingCheck.firstKeyTries {
+            if !EventSynthesizer.typeKeys(key, charactersPerSecond: TypingCheck.maxCharactersPerSecond) {
+                NSLog("[typeText] the first key could not be synthesized")
+            }
+            let deadline = Date(timeIntervalSinceNow: TypingCheck.firstKeyWait)
+            repeat {
+                if try landed(), let field { return field }
+                Thread.sleep(forTimeInterval: 0.02)
+            } while Date() < deadline
+            guard TypingCheck.resendsFirstKey(before: before, secure: secure) else {
+                throw AgentError.actionFailed(
+                    "typeText: the secure field still shows \(before.count) character(s) after the first key: " +
+                        "iOS may have emptied it as the key went in (it empties a secure field typed into after it " +
+                        "takes focus); use clearAndType() to replace its text"
+                )
+            }
+            guard attempt < TypingCheck.firstKeyTries else { break }
+            NSLog("[typeText] the first key did not arrive (try \(attempt)); refocusing the field and sending it again")
+            let refreshed = try resolveElement(selectorParams)
+            do {
+                try refocusForTyping(refreshed, settleTime: 0.25)
+            } catch let error as AgentError {
+                // The type alone names the cause without echoing a cover's
+                // label (which could contain anything).
+                throw AgentError.actionFailed("typeText could not refocus the field to type into it (\(error.type))")
+            }
+        }
+        throw AgentError.actionFailed(
+            "typeText could not deliver the first key: the field still shows " +
+                "\(TypingCheck.describe(shown, secure: secure)) after \(TypingCheck.firstKeyTries) tries"
+        )
+    }
+
+    /// Whether `field` lost the keyboard focus to another text input as it
+    /// took the first key.
+    private func focusMovedOn(from field: ElementInfo) -> Bool {
+        guard !isLiveFocused(field) else { return false }
+        return snapshotFinder.liveFocusedInputState() != nil
+    }
+
+    /// Type `keys` a key at a time into whichever input has the focus, as it
+    /// moves on by itself: each key once the focused input holds still (keys
+    /// sent while the focus moves are lost), then waited for until the
+    /// focused input shows a change or the focus moves on. A key that changed
+    /// nothing is sent again (a field just focused can drop keys for a
+    /// while). A key that changed the input it went to is given the moment
+    /// the app takes to move the focus on (a React Native field moves it from
+    /// its JavaScript change handler, after the value shows), so the next key
+    /// is not sent to the input being left. Each input the focus reaches is
+    /// emptied first with `clearing` (typing the text again after a burst
+    /// went astray), once: a field that takes several keys keeps the ones
+    /// typed into it. Keys go at least `delayMs` apart, counting from
+    /// `lastSentAt`. The inputs the focus went through, `field` first, are
+    /// read back at the end: in the order the focus reached them they must
+    /// hold `before`, `typedBefore` (already typed into `field`) and `keys`.
+    private func typeFollowingFocus(
+        _ keys: String, from field: ElementInfo, before: String, typedBefore: String, clearing: Bool = false,
+        delayMs: Int, lastSentAt: Date?
+    ) throws {
+        func now() -> TypingCheck.FocusedInput? { snapshotFinder.liveFocusedInputState() }
+        let b = field.bounds
+        var visited = [CGRect(x: b.left, y: b.top, width: b.width, height: b.height)]
+        var typedKeys = 0
+        var lastSentAt = lastSentAt
+        // The inputs emptied (or found empty) so far, when `clearing`.
+        var cleared: [CGRect] = []
+        for key in keys {
+            // The delay first, so the focus is read just before the key goes.
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            var at = now()
+            let stillBy = Date(timeIntervalSinceNow: TypingCheck.focusStillWait)
+            while Date() < stillBy {
+                Thread.sleep(forTimeInterval: 0.015)
+                let again = now()
+                if again == at { break }
+                at = again
+            }
+            // Each input once, when the focus first reaches it, even one
+            // found empty: what is in it later was typed here.
+            if clearing, let input = at, !TypingCheck.contains(cleared, input.frame) {
+                cleared.append(input.frame)
+                if !input.value.isEmpty {
+                    _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+                    _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                    let emptyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+                    repeat {
+                        at = now()
+                        if at?.value.isEmpty == true { break }
+                        Thread.sleep(forTimeInterval: 0.01)
+                    } while Date() < emptyBy
+                    // Keys typed after what is left would read back wrong.
+                    if let left = at, !left.value.isEmpty {
                         throw AgentError.actionFailed(
-                            "typeText could not refocus the field after \(expectedValue.count) character(s) (\(error.type))"
+                            "typeText could not empty a field the focus moved on to, to type into it again: it still shows " +
+                                TypingCheck.describe(left.value, secure: false)
                         )
                     }
                 }
             }
-
-            guard delivered else {
-                let expectedDescription = isSecureField
-                    ? "length \(expectedLength)"
-                    : "'\(expectedValue)'"
-                let observedDescription = isSecureField
-                    ? "length \(lastObserved.count)"
-                    : "'\(lastObserved)'"
+            // Keys sent with no text input focused go nowhere.
+            guard let focused = at else {
                 throw AgentError.actionFailed(
-                    "typeText could not deliver grapheme '\(next)': " +
-                        "expected \(expectedDescription), got \(observedDescription) " +
-                        "(previous length \(beforeLength))"
+                    "typeText: the focus moved on by itself while typing, then left the text fields " +
+                        "with \(keys.count - typedKeys) key(s) still to type"
                 )
             }
-
-            if delayMs > 0 {
-                Thread.sleep(forTimeInterval: TimeInterval(delayMs) / 1000.0)
+            visited.append(focused.frame)
+            // A change to the focused input, or the focus moving on: to
+            // another input, or out of them all (an app that blurs or submits
+            // on its last digit).
+            var after: TypingCheck.FocusedInput??
+            for attempt in 0..<TypingCheck.keyTries {
+                if attempt > 0 {
+                    // Sending it again: keep the delay, and take a change
+                    // that came meanwhile as the last send arriving late.
+                    Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+                    let read = now()
+                    if read != focused { after = .some(read); break }
+                }
+                _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                lastSentAt = Date()
+                let keyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+                repeat {
+                    let read = now()
+                    if read != focused { after = .some(read); break }
+                    Thread.sleep(forTimeInterval: 0.01)
+                } while Date() < keyBy
+                if after != nil { break }
             }
+            guard let after else {
+                throw AgentError.actionFailed(
+                    "typeText: the focus moved on by itself while typing, and a key changed nothing " +
+                        "after \(TypingCheck.keyTries) tries"
+                )
+            }
+            typedKeys += 1
+            // The key changed the input it went to, which still has the
+            // focus: give the app its moment to move the focus on.
+            if let after, after.frame == focused.frame {
+                let handOffBy = Date(timeIntervalSinceNow: TypingCheck.focusHandOffWait)
+                while Date() < handOffBy, now()?.frame == focused.frame {
+                    Thread.sleep(forTimeInterval: 0.015)
+                }
+            }
+        }
+        try checkTypedAcross(TypingCheck.inVisitOrder(visited), before: before, typed: typedBefore + keys)
+    }
+
+    /// Read back the inputs at `frames` (the inputs typing went through, in
+    /// order) until together they hold `before` + `typed`, or hold still
+    /// short of it. Skipped, with a log line, when one of them can no longer
+    /// be found where the focus met it (the layout moved).
+    private func checkTypedAcross(_ frames: [CGRect], before: String, typed: String) throws {
+        let deadline = Date(timeIntervalSinceNow: TypingCheck.burstWait)
+        var last: String?
+        var since = Date()
+        while true {
+            guard let inputs = textInputs(at: frames) else {
+                NSLog("[typeText] an input the focus went through moved; not reading the text back")
+                return
+            }
+            let secure = inputs.contains { $0.secure }
+            let shown = inputs.map(\.value).joined()
+            let reading = TypingCheck.read(shown, before: before, typed: typed, secure: secure)
+            if reading == .complete { return }
+            if shown != last {
+                last = shown
+                since = Date()
+            }
+            if Date().timeIntervalSince(since) >= TypingCheck.stillWait || Date() >= deadline {
+                throw AgentError.actionFailed(
+                    "typeText: the focus moved on by itself while typing, and the \(frames.count) fields it went " +
+                        "through show \(TypingCheck.describe(shown, secure: secure)) together, " +
+                        "not \(TypingCheck.describe(before + typed, secure: secure))"
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
+    /// The value of the text input at each of `frames`, from one snapshot (an
+    /// empty field's placeholder reads as empty). Nil when any is missing.
+    private func textInputs(at frames: [CGRect]) -> [(value: String, secure: Bool)]? {
+        guard let root = try? app.snapshot() else { return nil }
+        let types: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .textView, .searchField]
+        var inputs: [XCUIElementSnapshot] = []
+        func walk(_ node: XCUIElementSnapshot) {
+            if types.contains(node.elementType) { inputs.append(node) }
+            node.children.forEach(walk)
+        }
+        walk(root)
+        var values: [(value: String, secure: Bool)] = []
+        for frame in frames {
+            guard let input = inputs.first(where: { OcclusionAnalyzer.framesMatch($0.frame, frame, tolerance: 1.5) })
+            else { return nil }
+            let value = TypingCheck.shownValue(input.value as? String ?? "", placeholder: input.placeholderValue)
+            values.append((value, input.elementType == .secureTextField))
+        }
+        return values
+    }
+
+    /// Read the field back once the burst is in, and repair a short or
+    /// scrambled result by typing the text again a key at a time.
+    private func checkTyped(
+        _ keys: String, before: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]
+    ) throws {
+        let window = TypingCheck.burstWait + TypingCheck.typingDuration(count: keys.count, delayMs: delayMs)
+        var (reading, shown) = try waitForTyped(keys, before: before, secure: secure,
+                                                selectorParams: selectorParams, within: window)
+        var tries = 0
+        while reading != .complete {
+            guard TypingCheck.retypes(reading, before: before, secure: secure), tries < TypingCheck.retypeTries else {
+                throw AgentError.actionFailed(
+                    "typeText: the field shows \(TypingCheck.describe(shown, secure: secure)), " +
+                        "not \(TypingCheck.describe(before + keys, secure: secure))" +
+                        (reading == .changed ? ": it changed what was typed" : " after typing it \(tries + 1) time(s)")
+                )
+            }
+            tries += 1
+            let target = try resolveElement(selectorParams)
+            if focusMovedOn(from: target) {
+                // The field moved the focus on by itself after the first key
+                // was checked (its app was slow to): the burst went astray
+                // across the fields. Type it again following the focus,
+                // emptying each field first.
+                NSLog("[typeText] the focus moved on during the burst: typing it again following the focus")
+                do {
+                    try refocusForTyping(target, settleTime: 0.25)
+                } catch let error as AgentError {
+                    throw AgentError.actionFailed("typeText could not refocus the field to type into it again (\(error.type))")
+                }
+                try typeFollowingFocus(before + keys, from: target, before: "", typedBefore: "", clearing: true,
+                                       delayMs: delayMs, lastSentAt: nil)
+                return
+            }
+            NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: secure)) after typing: typing it again a key at a time (try \(tries))")
+            try retypeKeyByKey(before + keys, secure: secure, delayMs: delayMs, selectorParams: selectorParams)
+            (reading, shown) = try waitForTyped(keys, before: before, secure: secure, selectorParams: selectorParams,
+                                                within: TypingCheck.keyWait + TypingCheck.stillWait)
+        }
+    }
+
+    /// Read the field until it shows the text, or holds the same value for
+    /// `TypingCheck.stillWait`, or `window` ends: the last reading, and the
+    /// value it was taken from.
+    private func waitForTyped(
+        _ keys: String, before: String, secure: Bool, selectorParams: [String: Any], within window: TimeInterval
+    ) throws -> (TypingCheck.Reading, String) {
+        let deadline = Date(timeIntervalSinceNow: window)
+        var last: String?
+        var since = Date()
+        while true {
+            let shown = try resolveElement(selectorParams).text ?? ""
+            let reading = TypingCheck.read(shown, before: before, typed: keys, secure: secure)
+            if reading == .complete { return (reading, shown) }
+            if shown != last {
+                last = shown
+                since = Date()
+            } else if Date().timeIntervalSince(since) >= TypingCheck.stillWait {
+                return (reading, shown)
+            }
+            if Date() >= deadline { return (reading, shown) }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+    }
+
+    /// Empty the field and type `value` into it a key at a time, each key
+    /// sent once the one before shows. Select-all and delete, so it does not
+    /// matter where the caret is (scrambled keys can leave it mid-text); a
+    /// field that does not take select-all is emptied a delete at a time.
+    /// Keys go at least `delayMs` apart.
+    private func retypeKeyByKey(_ value: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]) throws {
+        let field = try resolveElement(selectorParams)
+        // ⌘A and delete go to whichever input has focus.
+        if !isLiveFocused(field) {
+            do {
+                try refocusForTyping(field, settleTime: 0.25)
+            } catch let error as AgentError {
+                throw AgentError.actionFailed("typeText could not refocus the field to type into it again (\(error.type))")
+            }
+        }
+        func shown() throws -> String { try resolveElement(selectorParams).text ?? "" }
+        func waitUntilShown(_ expected: String) throws -> String {
+            let deadline = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+            var current = try shown()
+            while TypingCheck.read(current, before: "", typed: expected, secure: secure) != .complete,
+                  Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+                current = try shown()
+            }
+            return current
+        }
+        _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+        _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+        var left = try waitUntilShown("")
+        if !left.isEmpty {
+            _ = EventSynthesizer.typeKeys(String(repeating: "\u{8}", count: left.count),
+                                          charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+            left = try waitUntilShown("")
+        }
+        guard left.isEmpty else {
+            throw AgentError.actionFailed(
+                "typeText could not empty the field to type into it again: it still shows " +
+                    TypingCheck.describe(left, secure: secure)
+            )
+        }
+        var typed = ""
+        var lastSentAt: Date?
+        for key in value {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+            lastSentAt = Date()
+            typed.append(key)
+            _ = try waitUntilShown(typed)
         }
     }
 
@@ -1563,6 +2073,90 @@ class CommandHandler {
             let elements = try elementFinder.findElements(selector, parentId: parentId)
             return ["elements": elements.map { $0.toDict() }]
 
+        case "scrollStepPoints":
+            // An iOS scroll step's drag (PILOT-998), before the daemon makes
+            // it: its points in the app's interface space, mapped into the
+            // HID helper's native portrait space as a tap's point is. nil when
+            // the way the screen is turned cannot be told (no drag is made).
+            let raw = params["points"] as? [[NSNumber]] ?? []
+            let screen = snapshotFinder.lastSnapshotFrameSize() ?? snapshotFinder.screenSize
+            let turn = Self.deviceTurn(XCUIDevice.shared.orientation)
+            var mapped: [[Double]] = []
+            for p in raw {
+                guard p.count == 2,
+                      let native = HidTouch.nativePoint(
+                          CGPoint(x: p[0].doubleValue, y: p[1].doubleValue), screen: screen, device: turn
+                      )
+                else { return ["points": NSNull()] }
+                mapped.append([Double(native.x), Double(native.y)])
+            }
+            return ["points": mapped]
+
+        case "scrollStepFind":
+            // The find half of an iOS scroll step (PILOT-998), after the
+            // daemon's HID drag: wait for the list to stop re-laying out when
+            // the element is near, find, and say whether the list moved since
+            // the snapshot before the drag.
+            let selector = SelectorParser.parse(params["selector"] as? [String: Any] ?? [:])
+            guard let r = params["region"] as? [String: Any] else {
+                throw AgentError.invalidSelector("scrollStepFind needs a region")
+            }
+            func coord(_ key: String) -> CGFloat { CGFloat((r[key] as? NSNumber)?.doubleValue ?? 0) }
+            let region = CGRect(
+                x: coord("left"),
+                y: coord("top"),
+                width: coord("right") - coord("left"),
+                height: coord("bottom") - coord("top")
+            )
+            let before = snapshotFinder.lastSnapshotFingerprint(in: region)
+            let beforeSnapshot = snapshotFinder.lastSnapshotTaken()
+            var elements = try snapshotFinder.findElements(selector)
+            let matches = elements.map { e in
+                (frame: CGRect(
+                    x: CGFloat(e.bounds.left),
+                    y: CGFloat(e.bounds.top),
+                    width: CGFloat(e.bounds.right - e.bounds.left),
+                    height: CGFloat(e.bounds.bottom - e.bounds.top)
+                ), visible: e.isVisible)
+            }
+            var waited = "far, no wait"
+            // Whether the list's tree can be compared with the one before the
+            // drag: not while it is still moving, as a list bouncing back from
+            // an overscroll at its end is (after the 0.9 s cap, or caught at
+            // once on the far path below).
+            var settled = true
+            if ScrollStepWatch.isFar(matches, region: region) {
+                // No wait: the list may be mid-motion, so it moved only if the
+                // element itself moved about a step's length.
+                let beforeFrames = beforeSnapshot.map { snapshotFinder.matchFrames(selector, in: $0) } ?? []
+                settled = ScrollStepWatch.movedFar(before: beforeFrames, after: matches.map(\.frame), region: region)
+            } else {
+                let band = ScrollStepWatch.band(of: region)
+                let native = HidTouch.nativeRect(
+                    band,
+                    screen: snapshotFinder.screenSize,
+                    device: Self.deviceTurn(XCUIDevice.shared.orientation)
+                ) ?? band
+                var deadline = Date().addingTimeInterval(ScrollStepWatch.maxWaitSeconds)
+                if let read = commandReadDeadline {
+                    // Leave the find after the wait its time before the daemon gives up.
+                    deadline = min(deadline, read.addingTimeInterval(-(TouchPlanClock.readDeadlineMarginSeconds + 0.5)))
+                }
+                let started = Date()
+                let outcome = actionExecutor.waitUntilStill(region: native, deadline: deadline)
+                if case .still = outcome {} else { settled = false }
+                waited = "\(outcome) in \(Int(Date().timeIntervalSince(started) * 1000)) ms"
+                elements = try snapshotFinder.findElements(selector)
+            }
+            var out: [String: Any] = ["elements": elements.map { $0.toDict() }]
+            // Unknown otherwise: the SDK then judges the step by a screen read
+            // (PILOT-929), so an end of the list is still found.
+            if settled, let before, let after = snapshotFinder.lastSnapshotFingerprint(in: region) {
+                out["moved"] = before != after
+            }
+            NSLog("[TapsmithScrollStep] \(waited); \(elements.count) match(es), moved=\(String(describing: out["moved"]))")
+            return out
+
         case "evaluateSelectors":
             // PILOT-848: one snapshot, every selector matched by the walk
             // findElements uses; a failing selector fails only its entry.
@@ -1585,7 +2179,10 @@ class CommandHandler {
             let x = (params["x"] as? NSNumber)?.intValue ?? -1
             let y = (params["y"] as? NSNumber)?.intValue ?? -1
             if x >= 0 && y >= 0 {
-                actionExecutor.tapCoordinates(x: x, y: y)
+                // What is at the point is unknown: held across a frame
+                // (`TapTiming.frameSpanningHold`), shorter than a known
+                // control's hold.
+                actionExecutor.tapCoordinates(x: x, y: y, hold: TapTiming.hold(for: nil))
                 snapshotFinder.recordFocusedTextInputHint(at: CGPoint(x: CGFloat(x), y: CGFloat(y)))
                 // It may have landed on a text field.
                 keyboardFirstGate.arm()
@@ -1623,8 +2220,8 @@ class CommandHandler {
                 putKeyboardAwayIfItWouldEatTheTouch(element)
                 // The press itself must still fit the daemon's read timeout.
                 let coverBudget = max(0, actionTimeoutMs(params) - duration)
-                switch try planSettledTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: duration) {
-                case .point(let point, _):
+                switch try planSettledTouch(element, timeoutMs: coverBudget, reserveMs: duration) {
+                case .point(let point, _, _):
                     actionExecutor.longPressCoordinates(
                         x: Int(point.x.rounded()),
                         y: Int(point.y.rounded()),
@@ -1647,22 +2244,75 @@ class CommandHandler {
             // Resolve like findElement (which this replaces on the HID path):
             // dismiss a blocking system dialog, wait for a missing element.
             // Whatever the wait used comes off the cover-wait budget.
+            //
+            // `forTap`: the point is for a tap (the daemon's HID tap on a
+            // simulator), so plan it as the `tap` command plans its touch — on
+            // a SwiftUI Toggle's knob — and do the bookkeeping `tap` does
+            // after touching, since the daemon touches straight after this
+            // answer and tells the agent nothing more. The answer says
+            // `tap: true`, so the daemon knows this agent did both.
             let started = Date()
             let budget = actionTimeoutMs(params)
+            let forTap = (params["forTap"] as? Bool) == true
+            // XPath resolves only through the live element finder, which the
+            // agent's own gestures use (and which refuses it on iOS); the
+            // snapshot finder below would ignore it and match anything.
+            if params["xpath"] != nil { return ["useElement": true] }
             let element: ElementInfo
             if let elementId = params["elementId"] as? String, !elementId.isEmpty {
                 element = try resolveElement(params)
             } else {
                 element = try findTopLevelElement(SelectorParser.parse(params), timeoutMs: budget)
             }
-            // The daemon's HID double tap and long press land at this point.
-            putKeyboardAwayIfItWouldEatTheTouch(element)
+            let target = forTap ? (switchKnob(of: element) ?? element) : element
+            // The daemon's HID tap, double tap and long press land at this point.
+            putKeyboardAwayIfItWouldEatTheTouch(target)
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             // The daemon touches the point as soon as it has it, so the target
             // must have stopped changing first (PILOT-791).
-            switch try planSettledTouch(element, timeoutMs: remaining, preferElementTap: false) {
-            case .point(let point, _):
-                return ["x": Double(point.x), "y": Double(point.y)]
+            plannedScreenSize = nil
+            let plan = try planSettledTouch(target, timeoutMs: remaining)
+            switch plan {
+            case .point(let point, _, let hold):
+                // The daemon's helper places a point in the device's native
+                // portrait space, while the plan's point is in the app's
+                // interface space, as the snapshot the plan was made from
+                // shows it (the cached screen size misses a rotation Tapsmith
+                // did not make): on a rotated screen the point is mapped by
+                // the way the device is turned. When that cannot be told,
+                // XCTest touches: a tap is made here, at the planned point, as
+                // the `tap` command would make it (`tapped: true`), rather
+                // than handed back to be planned and settled all over again;
+                // other gestures go to the agent's own.
+                guard let native = HidTouch.nativePoint(
+                    point,
+                    screen: plannedScreenSize ?? snapshotFinder.screenSize,
+                    device: Self.deviceTurn(XCUIDevice.shared.orientation)
+                ) else {
+                    guard forTap else { return ["useElement": true] }
+                    actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
+                    snapshotFinder.recordFocusedTextInputHint(element)
+                    if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
+                    touchBarrier()
+                    return ["tapped": true]
+                }
+                // holdMs: how long the daemon's HID tap, and each tap of its
+                // double tap, holds its touch: `TapTiming`'s hold for the
+                // element's type, as HID presses it (`HidTouch.hold`: a
+                // one-frame tap is pressed and lifted back to back). This
+                // applies to the double tap as well as to the single tap: a
+                // double tap's 10 ms presses lost taps beside a moving scroll
+                // view on CI (PILOT-1005), so do not limit it to single taps.
+                let pressHold = HidTouch.hold(forTapHold: hold)
+                var answer: [String: Any] = [
+                    "x": Double(native.x), "y": Double(native.y), "holdMs": Int((pressHold * 1000).rounded()),
+                ]
+                if forTap {
+                    snapshotFinder.recordFocusedTextInputHint(element)
+                    if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
+                    answer["tap"] = true
+                }
+                return answer
             case .hittableElement, .offScreen:
                 // No point to hand out (off screen, or hittable with no tree
                 // to choose one from): the daemon should use the agent's own
@@ -1712,7 +2362,7 @@ class CommandHandler {
                 }
                 if delayMs > 0 {
                     let focused = isFocusedOnlySelector ? element : try resolveElement(selectorParams)
-                    try typeTextWithPerGraphemeVerification(
+                    try typeTextChecked(
                         text,
                         selectorParams: selectorParams,
                         initialElement: focused,
@@ -1795,7 +2445,9 @@ class CommandHandler {
             if target == nil {
                 // Already first responder behind a cover: clear it as is.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(x: Int(area.midX.rounded()), y: Int(area.midY.rounded()))
+                actionExecutor.tapCoordinates(
+                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
+                )
                 Thread.sleep(forTimeInterval: 0.1)
             } else if let xcElem = try? getXCUIElement(element.elementId), xcElem.isHittable {
                 xcElem.tap()
@@ -1814,11 +2466,12 @@ class CommandHandler {
                 )
             }
 
-            // Fast path: Cmd+A then a single backspace. Works on native
-            // UITextField and on simulators with a hardware-keyboard
-            // mapping; silently no-ops on RN-wrapped controls (which
-            // typically don't honor Cmd+A) where we fall through to the
-            // per-character loop.
+            // Fast path: Cmd+A then a single backspace, both as key events
+            // (PILOT-1012). The backspace used to go through
+            // `_XCT_sendString`, after which a React Native field kept its
+            // text (the select-all seemed not to take, so every clear fell to
+            // the loop below); as a key event it deletes the selection there
+            // too.
             //
             // We deliberately use `\u{8}` (backspace) instead of
             // `XCUIKeyboardKey.delete` because:
@@ -1831,12 +2484,16 @@ class CommandHandler {
             // forward-delete (data loss past the cursor) or no-op
             // depending on the IME, hence the safer backspace.
             if EventSynthesizer.keyPress(key: "a", modifiers: .command) {
-                Thread.sleep(forTimeInterval: 0.1)
-                actionExecutor.typeTextWithoutFocus("\u{8}")
-                Thread.sleep(forTimeInterval: 0.15)
-                let afterSelectAll = (try? resolveElement(params)) ?? element
+                _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                // The field shows the change a moment after the key is played.
+                var afterSelectAll = (try? resolveElement(params)) ?? element
+                let emptyBy = Date(timeIntervalSinceNow: Self.clearShowsWait)
+                while !(afterSelectAll.text ?? "").isEmpty, Date() < emptyBy {
+                    Thread.sleep(forTimeInterval: 0.03)
+                    afterSelectAll = (try? resolveElement(params)) ?? afterSelectAll
+                }
                 if (afterSelectAll.text ?? "").isEmpty {
-                    try? refocusForTyping(afterSelectAll, settleTime: 0.1)
+                    refocusUnlessFocused(afterSelectAll)
                     return ["success": true]
                 }
                 // Cmd+A didn't take (or deleted only one char). Fall
@@ -1894,7 +2551,10 @@ class CommandHandler {
                 // String.count counts grapheme clusters — matches keyboard
                 // backspace granularity for ASCII and composed emoji.
                 let count = min(displayed.count, perIterationCap)
-                actionExecutor.typeTextWithoutFocus(String(repeating: "\u{8}", count: count))
+                _ = EventSynthesizer.typeKeys(
+                    String(repeating: "\u{8}", count: count),
+                    charactersPerSecond: TypingCheck.maxCharactersPerSecond
+                )
                 // EventSynthesizer returns when events are queued, not when
                 // RN has committed the resulting text update. Without a short
                 // settle, CI can read the pre-backspace snapshot and report a
@@ -1922,7 +2582,7 @@ class CommandHandler {
                 )
             }
             // As it is now: the first focusing tap can have moved it.
-            try? refocusForTyping((try? resolveElement(params)) ?? element, settleTime: 0.1)
+            refocusUnlessFocused((try? resolveElement(params)) ?? element)
             return ["success": true]
 
         // ─── Interactive Mirror Live-Drag (buffered touch path) ───
@@ -2059,7 +2719,11 @@ class CommandHandler {
 
         case "pressKey":
             let key = params["key"] as? String ?? ""
-            try actionExecutor.pressKey(key)
+            try actionExecutor.pressKey(
+                key,
+                readScreen: { try snapshotFinder.settledSnapshot() },
+                deadline: snapshotFinder.commandDeadline
+            )
             return ["success": true]
 
         // ─── Drag and Drop ───
@@ -2089,15 +2753,30 @@ class CommandHandler {
         // ─── Select Option ───
 
         case "selectOption":
-            let element = try resolveElement(params)
-            let xcElem = try getXCUIElement(element.elementId)
-            if let optionText = params["option"] as? String {
-                try actionExecutor.selectOption(xcElem, optionText: optionText)
-            } else if let index = params["index"] as? Int, index >= 0 {
-                try actionExecutor.selectOptionByIndex(xcElem, index: index)
-            } else {
+            let optionText = params["option"] as? String
+            let index = (params["index"] as? Int).flatMap { $0 >= 0 ? $0 : nil }
+            guard optionText != nil || index != nil else {
                 throw AgentError.invalidSelector("selectOption requires either 'option' (string) or 'index' (int)")
             }
+            let element = try resolveElement(params)
+            // What already carries the option's text (the trigger, the screen
+            // behind, on screen or below the fold) is not the option. Read
+            // just before the opening touch: putting the keyboard away or
+            // settling can move it first.
+            var shownBefore: [CGRect] = []
+            // Opened with the same planned, held tap as tap(). A trigger off
+            // screen is scrolled in by the opening tap, which moves what was
+            // read before it by as much as it moved the trigger.
+            let scrolled = try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params), scrollsIntoView: true) {
+                if let optionText { shownBefore = self.actionExecutor.textFrames(optionText) }
+            }
+            shownBefore = shownBefore.map { $0.offsetBy(dx: scrolled.dx, dy: scrolled.dy) }
+            if let optionText {
+                try actionExecutor.selectOption(optionText, shownBefore: shownBefore)
+            } else if let index {
+                try actionExecutor.selectOptionByIndex(index)
+            }
+            touchBarrier()
             return ["success": true]
 
         // ─── Pinch Zoom ───
@@ -2124,7 +2803,9 @@ class CommandHandler {
             if target == nil {
                 // Verified focused behind a cover: nothing to do.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(x: Int(area.midX.rounded()), y: Int(area.midY.rounded()))
+                actionExecutor.tapCoordinates(
+                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
+                )
             } else {
                 let xcElem = try getXCUIElement(element.elementId)
                 try actionExecutor.focus(xcElem)
@@ -2161,16 +2842,18 @@ class CommandHandler {
         // ─── Screenshots ───
 
         case "screenshot":
-            let screenshot = XCUIScreen.main.screenshot()
-            let pngData = screenshot.pngRepresentation
-            let base64 = pngData.base64EncodedString()
-            return ["data": base64, "format": "png"]
+            // Upright, with the turn the UI-mode mirror maps its touches by:
+            // coordinate touches land in the native portrait space (PILOT-1235).
+            let (pngData, turn) = Self.uprightPNG(XCUIScreen.main.screenshot())
+            var result: [String: Any] = ["data": pngData.base64EncodedString(), "format": "png"]
+            if let turn { result["orientation"] = turn }
+            return result
 
         case "elementScreenshot":
             let element = try resolveElement(params)
             let pngData: Data
             if let xcElem = try? getXCUIElement(element.elementId) {
-                pngData = xcElem.screenshot().pngRepresentation
+                pngData = Self.uprightPNG(xcElem.screenshot()).png
             } else if let frame = snapshotFinder.getBounds(element.elementId) {
                 // Found with no live element by design (a row's accessory
                 // indicator, PILOT-895, or a getByLabel match): the screen
@@ -2214,9 +2897,7 @@ class CommandHandler {
             }
 
             if wantScreenshot {
-                let screenshot = XCUIScreen.main.screenshot()
-                let pngData = screenshot.pngRepresentation
-                result["screenshotData"] = pngData.base64EncodedString()
+                result["screenshotData"] = Self.uprightPNG(XCUIScreen.main.screenshot()).png.base64EncodedString()
             }
             if wantHierarchy {
                 if let snapshot = snapshot {
@@ -2243,7 +2924,7 @@ class CommandHandler {
 
         case "waitForIdle":
             let timeout = params["timeout"] as? Int64 ?? 5000
-            waitEngine.waitForIdle(timeoutMs: timeout)
+            waitForScreenIdle(timeoutMs: timeout)
             return ["success": true]
 
         case "waitForElement":
@@ -2277,7 +2958,18 @@ class CommandHandler {
             // If running in background, this brings it to foreground.
             let targetApp = rebindApp(bundleId: targetBundleId(fallback: params))
             targetApp.activate()
-            Thread.sleep(forTimeInterval: 0.5)
+            // Wait for the state instead of a fixed 0.5 s (PILOT-976).
+            // activate() normally returns with the app already in front, so
+            // this costs nothing; the bound only matters for an app that does
+            // not get there, which the daemon's session probe then judges.
+            var inForeground = false
+            let waitStarted = Date()
+            _ = ObjCExceptionCatcher.catchException {
+                inForeground = targetApp.wait(for: .runningForeground, timeout: 5)
+            }
+            NSLog(
+                "[TapsmithAgent] launchApp: foreground=\(inForeground) after \(Int(Date().timeIntervalSince(waitStarted) * 1000)) ms"
+            )
             // Dismiss "Save Password?" dialog from iOS Passwords framework.
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
             let notNow = springboard.buttons["Not Now"]
@@ -2328,6 +3020,30 @@ class CommandHandler {
             }
             return ["state": state]
 
+        // Has the app drawn real content yet (PILOT-1058)? Read with the
+        // warm deep-link path's own test (`snapshotContainsContent`), so
+        // "ready" means a warm delivery right after it is applicable. Never
+        // launches the app: a snapshot of one that is not running reads as
+        // "not yet". Running out of time is `ready: false`, not an error.
+        case "waitForAppReady":
+            let bundleId = targetBundleId(fallback: params)
+            let timeoutMs = (params["timeout"] as? NSNumber)?.intValue ?? 10_000
+            // A process launched outside the runner (simctl launch / openurl)
+            // can stay invisible to an XCUIApplication bound while it was
+            // still registering, and XCTest learns of it through XPC callbacks
+            // on the main RunLoop. So wait by running the RunLoop, not
+            // Thread.sleep, and read through a fresh binding each check. With
+            // either alone, 1–4 of 20 such relaunches read no content for the
+            // whole wait while the app was rendered (PILOT-1062 spike).
+            let outcome = AppReadiness.wait(
+                timeoutMs: timeoutMs,
+                now: { Date() },
+                sleep: { RunLoop.current.run(until: Date(timeIntervalSinceNow: $0)) },
+                check: { appHasRenderedContent(XCUIApplication(bundleIdentifier: bundleId)) }
+            )
+            NSLog("[Tapsmith] waitForAppReady ready=\(outcome.ready) in \(outcome.elapsedMs)ms (\(outcome.checks) checks)")
+            return ["ready": outcome.ready, "elapsedMs": outcome.elapsedMs, "checks": outcome.checks]
+
         case "currentPackage":
             // On iOS, report the target app's bundle ID
             // XCUIApplication doesn't expose bundleID directly.
@@ -2360,8 +3076,9 @@ class CommandHandler {
             let ackNavGreaterThan = (params["ackNavGreaterThan"] as? NSNumber)?.uint64Value
             let ackBootBefore = params["ackBootBefore"] as? String
             let targetApp = XCUIApplication(bundleIdentifier: bundleId)
-            _ = safeAppState(targetApp)
+            let stateBefore = safeAppState(targetApp)
             QuiescenceDisabler.disable(for: targetApp)
+            var phases = PhaseClock()
 
             if deliverInProcess {
                 guard #available(iOS 16.4, *) else {
@@ -2387,16 +3104,29 @@ class CommandHandler {
                         )
                     }
                     preOpenHierarchy = HierarchyDumper(app: targetApp).dump(from: pre)
+                    phases.lap("preSnapshot")
                 }
 
-                _ = ObjCExceptionCatcher.catchException {
+                let activateError = ObjCExceptionCatcher.catchException {
                     targetApp.activate()
-                    Thread.sleep(forTimeInterval: 0.15)
-                    targetApp.open(url)
+                    // Let an app brought back from the background settle
+                    // before the URL arrives. One that was already in front
+                    // (every per-test reset and in-test link) has nothing to
+                    // settle: activate() returns at once for it.
+                    if stateBefore != .runningForeground {
+                        Thread.sleep(forTimeInterval: 0.15)
+                    }
                 }
+                phases.lap("activate")
+                // An activate() that raised used to skip the delivery too
+                // (both ran in one catch); the verify below then reports the
+                // miss and the daemon falls back to its cold path.
+                let delivery = activateError == nil ? deliverWarmURL(url, bundleId: bundleId, app: targetApp) : "none"
+                phases.lap("deliver")
 
                 if let epochBefore = ackEpochGreaterThan {
                     let outcome = waitForHooksEpoch(targetApp, greaterThan: epochBefore, bootBefore: ackBootBefore, timeout: 8.0)
+                    phases.lap("verify")
                     switch outcome {
                     case .acknowledged(let epoch):
                         if displayAppearsBlack() {
@@ -2405,8 +3135,10 @@ class CommandHandler {
                                     + "in-process delivery of \(urlString)"
                             )
                         }
+                        phases.lap("displayCheck")
                         _ = rebindApp(bundleId: bundleId)
-                        return ["success": true, "epochAfter": epoch]
+                        phases.lap("rebind")
+                        return ["success": true, "epochAfter": epoch, "phasesMs": phases.laps, "delivery": delivery]
                     case .hookError(let message):
                         throw AgentError.actionFailed("openDeepLink: in-app reset reported an error: \(message)")
                     case .timedOut:
@@ -2419,14 +3151,17 @@ class CommandHandler {
 
                 if let navBefore = ackNavGreaterThan {
                     if waitForHooksNav(targetApp, greaterThan: navBefore, bootBefore: ackBootBefore, timeout: 8.0) {
+                        phases.lap("verify")
                         if displayAppearsBlack() {
                             throw AgentError.actionFailed(
                                 "openDeepLink: display is not rendering after warm "
                                     + "in-process delivery of \(urlString)"
                             )
                         }
+                        phases.lap("displayCheck")
                         _ = rebindApp(bundleId: bundleId)
-                        return ["success": true]
+                        phases.lap("rebind")
+                        return ["success": true, "phasesMs": phases.laps, "delivery": delivery]
                     }
                     throw AgentError.actionFailed(
                         "openDeepLink: navigation was not acknowledged (nav > \(navBefore)) "
@@ -2436,6 +3171,7 @@ class CommandHandler {
 
                 if let before = preOpenHierarchy {
                     if waitForDeepLinkNavigation(targetApp, before: before, timeout: 5.0) {
+                        phases.lap("verify")
                         // The hierarchy check can pass against a display that
                         // has stopped compositing (a11y stays healthy while
                         // the screen shows black); reject so the daemon's
@@ -2446,8 +3182,10 @@ class CommandHandler {
                                     + "in-process delivery of \(urlString)"
                             )
                         }
+                        phases.lap("displayCheck")
                         _ = rebindApp(bundleId: bundleId)
-                        return ["success": true]
+                        phases.lap("rebind")
+                        return ["success": true, "phasesMs": phases.laps, "delivery": delivery]
                     }
                     throw AgentError.actionFailed(
                         "openDeepLink: UI did not change after warm in-process "
@@ -2539,13 +3277,52 @@ class CommandHandler {
             // requested state. If it still doesn't stick, fall through so
             // the caller sees whatever the device settled on — rotation
             // outside of Tapsmith's control is a valid platform state.
-            XCUIDevice.shared.orientation = target
-            Thread.sleep(forTimeInterval: 0.4)
-            if XCUIDevice.shared.orientation != target {
-                XCUIDevice.shared.orientation = target
-                Thread.sleep(forTimeInterval: 0.4)
+            // The setter can raise an XCTest automation issue on a loaded
+            // simulator, even after the turn went through: the read-back
+            // decides (RotationSettle.turnDevice, PILOT-1072).
+            let turnError = RotationSettle.turnDevice(
+                to: target,
+                set: { orientation in
+                    ObjCExceptionCatcher.catchException {
+                        XCUIDevice.shared.orientation = orientation
+                    }?.localizedDescription
+                },
+                read: {
+                    var current: UIDeviceOrientation?
+                    _ = ObjCExceptionCatcher.catchException {
+                        current = XCUIDevice.shared.orientation
+                    }
+                    return current
+                }
+            )
+            if let turnError {
+                // The device may have turned part-way: what is cached about
+                // the screen is no longer known to be right.
+                snapshotFinder.invalidateScreenSize()
+                actionExecutor.cachedScreenSize = nil
+                throw AgentError.actionFailed("Could not turn the device to \(orientation.lowercased()): \(turnError)")
             }
+            // The screen size is cached and decides what counts as on screen,
+            // so re-read it only once the app's window has turned: on a
+            // loaded simulator it can still be portrait here (RotationSettle).
+            _ = RotationSettle.waitForWindow(
+                landscape: target.isLandscape,
+                deadline: Date(timeIntervalSinceNow: Self.rotationSettleTimeout),
+                readSize: {
+                    // A failed read (an AX timeout on a loaded simulator) counts
+                    // as not turned yet: the rotation itself has happened, and
+                    // the caches below must still be dropped.
+                    var size = CGSize.zero
+                    _ = ObjCExceptionCatcher.catchException {
+                        size = app.windows.firstMatch.frame.size
+                    }
+                    return size
+                }
+            )
             snapshotFinder.invalidateScreenSize()
+            // The action executor keeps its own copy (dropdown options are
+            // judged against it): drop it too, so it reads the turned screen.
+            actionExecutor.cachedScreenSize = nil
             return ["success": true]
 
         case "getOrientation":
@@ -2605,7 +3382,10 @@ class CommandHandler {
             // keyboard that has not started moving looks the same, and calling
             // it gone would report success with a keyboard about to come up.
             _ = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace), stopWhenParked: false)
-            Thread.sleep(forTimeInterval: 0.3)
+            // On screen, but possibly still sliding up: plan around where it
+            // comes to rest. Usually it has long since (PILOT-1012: this was
+            // a fixed 0.3 s).
+            waitForKeyboardToHoldStill(within: Self.keyboardRestWait)
             do {
                 try dismissKeyboard()
             } catch {
@@ -2614,6 +3394,7 @@ class CommandHandler {
             }
             settleAfterKeyboardDismissed()
             return ["success": true]
+
 
         // ─── Color Scheme ───
 
@@ -2821,9 +3602,28 @@ class CommandHandler {
         return max(0, min(wait, deadline.timeIntervalSinceNow))
     }
 
+    /// How long hideKeyboard gives an on-screen keyboard to come to rest.
+    private static let keyboardRestWait: TimeInterval = 0.3
+
+    /// Wait, at most `within`, until two reads of the keyboard's frames a
+    /// moment apart agree.
+    private func waitForKeyboardToHoldStill(within wait: TimeInterval) {
+        let deadline = Date(timeIntervalSinceNow: wait)
+        var frames = keyboardReading()?.frames
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+            let again = keyboardReading()?.frames
+            if let again, again == frames, !again.isEmpty { return }
+            frames = again
+        }
+    }
+
     /// How long a keyboard element with no on-screen area gets to slide in
     /// before isKeyboardShown and hideKeyboard treat it as not on screen.
     private static let keyboardAppearGrace: TimeInterval = 1.5
+    /// How long setOrientation waits for the app's window to turn. An app
+    /// that does not rotate waits it out, so it is kept short.
+    private static let rotationSettleTimeout: TimeInterval = 2
 
     /// Set by `dismissKeyboard`: whether any strategy touched the screen.
     private var touchedScreen = false
@@ -2874,7 +3674,7 @@ class CommandHandler {
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
-            guard EventSynthesizer.tap(at: key) else { return .notPossible("the tap could not be synthesized") }
+            guard EventSynthesizer.tap(at: key, hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .blankTap:
             guard let field = snapshotFinder.liveFocusedTextInput() else {
@@ -2883,7 +3683,8 @@ class CommandHandler {
             guard let point = planner.blankPoint(focusedFrame: field.frame) else {
                 return .notPossible("no blank spot beside the field above the keyboard")
             }
-            guard EventSynthesizer.tap(at: point) else { return .notPossible("the tap could not be synthesized") }
+            // A blank spot: nothing known is there.
+            guard EventSynthesizer.tap(at: point, hold: TapTiming.hold(for: nil)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .returnKey:
             switch planner.returnKey(focusedInput: snapshotFinder.liveFocusedTextInput()?.elementType) {
@@ -2937,6 +3738,17 @@ class CommandHandler {
         guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return (.absent, []) }
         let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
         return (planner.keyboardRegion == nil ? .offScreen : .onScreen, planner.keyboardFrames)
+    }
+
+    /// `XCUIDevice.orientation` as `HidTouch` takes it.
+    private static func deviceTurn(_ orientation: UIDeviceOrientation) -> HidTouch.DeviceTurn {
+        switch orientation {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return .other
+        }
     }
 
     /// The screen as `snapshot` saw it: the application element's frame,

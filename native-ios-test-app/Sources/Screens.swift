@@ -277,3 +277,76 @@ struct AccessibilityView: View {
         .navigationTitle("Accessibility")
     }
 }
+
+// ─── Toolbar ───
+
+/// A real bottom toolbar over a list that scrolls under it (PILOT-1207): its
+/// buttons take touches, and a row behind it is covered. iOS 27 also adds a
+/// full-window, empty "Toolbar" node to every app window, which must not.
+struct ToolbarScreenView: View {
+    @State private var status = "None"
+
+    var body: some View {
+        List {
+            Text("Last action: \(status)")
+            ForEach(1...40, id: \.self) { i in
+                Button("Row \(i)") { status = "Row \(i)" }
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .bottomBar) {
+                Button("Archive") { status = "Archive" }
+                Spacer()
+                Button("Compose") { status = "Compose" }
+            }
+        }
+        .navigationTitle("Toolbar")
+    }
+}
+
+// ─── Back key ───
+
+/// Stacks for `pressKey("back")` (PILOT-1225), each presented full screen so
+/// its root has no back button of its own. Both roots put an Edit button
+/// where a back button would be, the first bar button on the screen: the
+/// back key must refuse there, not tap it.
+struct BackKeyView: View {
+    @State private var showSwiftUIStack = false
+    @State private var showUIKitStack = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Button("Open SwiftUI Stack") { showSwiftUIStack = true }
+            Button("Open UIKit Stack") { showUIKitStack = true }
+        }
+        .navigationTitle("Back Key")
+        .fullScreenCover(isPresented: $showSwiftUIStack) {
+            BackKeySwiftUIStack { showSwiftUIStack = false }
+        }
+        .fullScreenCover(isPresented: $showUIKitStack) {
+            UIKitBackKeyStack { showUIKitStack = false }.ignoresSafeArea()
+        }
+    }
+}
+
+private struct BackKeySwiftUIStack: View {
+    let close: () -> Void
+    @State private var items = ["Alpha", "Beta"]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                NavigationLink("Open SwiftUI Detail") {
+                    Text("SwiftUI detail content").navigationTitle("SwiftUI Detail")
+                }
+                ForEach(items, id: \.self) { Text($0) }
+                    .onDelete { items.remove(atOffsets: $0) }
+            }
+            .navigationTitle("SwiftUI Root")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { EditButton() }
+                ToolbarItem(placement: .topBarTrailing) { Button("Close", action: close) }
+            }
+        }
+    }
+}

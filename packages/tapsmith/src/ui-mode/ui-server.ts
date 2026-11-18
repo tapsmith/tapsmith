@@ -1,4 +1,5 @@
 import { NetworkReplayBuffer } from './network-replay.js';
+import { createNetworkApiScanner } from '../network-api-scan.js';
 /**
  * UI mode server.
  *
@@ -13,13 +14,13 @@ import { NetworkReplayBuffer } from './network-replay.js';
  * @see PILOT-87
  */
 
-import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync, fork, type ChildProcess } from 'node:child_process';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
-import { WebSocketServer, type WebSocket } from 'ws';
-import { McpEventEmitter } from '../mcp/events.js';
+import type { WebSocket } from 'ws';
+import { createLocalHttpServer, createLocalWebSocketServer } from '../local-server-guard.js';
+import { McpEventEmitter, setToolActGate } from '../mcp/events.js';
 import { McpSessionRouter } from '../mcp/http-session-router.js';
 import { configureMcpConnection, type UiDaemonPorts } from '../mcp/connection.js';
 import { matchRequestedFiles, fileFailureEntry } from '../mcp/headless-dispatcher.js';
@@ -75,12 +76,12 @@ import { deviceGroupSize, deviceGroupNames } from '../config.js';
 import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js';
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
-import { DeviceReadiness, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
+import { DeviceReadiness, holdReason, McpCallsInFlight, mcpToolWorkers, MUTATING_MCP_TOOLS, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
 import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
-import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
+import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, PickGenerations, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
 import { nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import {
   forkStdioForLaunchProgress,
@@ -95,6 +96,7 @@ import {
   matchesTestFile,
 } from '../test-file-discovery.js';
 import { filesToRediscover } from './ui-rediscovery.js';
+import { mirrorTouchPoint, parseDeviceTurn, type MirrorFrame } from './mirror-touch-point.js';
 import { WorkerStartupGate } from './worker-startup.js';
 
 /** No worker came up at startup, and none can be respawned: there is no device chip to respawn from. */
@@ -187,6 +189,12 @@ export interface UIServerContext {
    * at startup (the CLI already did the primary). Never on a respawn.
    */
   forceInstall: boolean
+  /**
+   * Whether the session's test files use the network APIs:
+   * every worker starts its devices' network proxy before the app launches.
+   * Required, like `forceInstall`.
+   */
+  networkApisInRun: boolean
   projects?: ResolvedProject[]
   /** Dependency-ordered project waves from topologicalSort(). */
   projectWaves?: ResolvedProject[][]
@@ -372,6 +380,7 @@ export async function startUIServer(
   options: UIServerOptions = {},
 ): Promise<{ port: number; close: () => void }> {
   const clients = new Set<WebSocket>();
+  const sessionStartedAt = new Date().toISOString();
   let testTree: TestTreeNode[] = [];
   let isRunning = false;
   let runStartedAt = 0;
@@ -388,6 +397,9 @@ export async function startUIServer(
 
   /** Devices a target retry already set up with `--force-install`. */
   const forceInstalledSerials = new Set<string>();
+  // Each run asks again whether the session's tests use the network APIs:
+  // the user may write the first mocking test mid-session (PILOT-1013).
+  const scanNetworkApis = createNetworkApiScanner();
   /** Worker ids a failed target retry gave back, for the next attempt. */
   const freeWorkerIds: number[] = [];
   /** Ends a run's wait on a device-target retry (Stop). */
@@ -401,8 +413,6 @@ export async function startUIServer(
     isRunning = true;
     targetsRetriedThisRun.clear();
     runStartedAt = Date.now();
-    runFirstActionAt = undefined;
-    runPreflightOrigin = undefined;
     // Per-worker counters are per run: `run-ended` reads `failed` to decide
     // whether to hold a device for inspection, so a failure must not stick
     // to the worker across later (single-file) runs.
@@ -467,8 +477,6 @@ export async function startUIServer(
       failed: final.failed,
       skipped: final.skipped,
       interrupted: final.interrupted,
-      timeToFirstActionMs: runFirstActionAt !== undefined && runStartedAt > 0 ? runFirstActionAt - runStartedAt : undefined,
-      preflight: { origin: runPreflightOrigin ?? 'unknown' },
     });
     lastRunEnd = final;
     for (const w of runEndWaiters.splice(0)) w(final);
@@ -542,7 +550,7 @@ export async function startUIServer(
       speculationEnabled: speculationAllowed,
       nextCandidate: () => candidateFor(worker),
       graceMs: () => preferences.prepareDelayMs,
-      recentlyInteracted: () => Date.now() - lastMirrorInteraction < READINESS_INTERACTION_HOLD_WINDOW_MS,
+      recentlyInteracted: () => mcpCallsInFlight.active || Date.now() - lastMirrorInteraction < READINESS_INTERACTION_HOLD_WINDOW_MS,
     });
     worker.readiness = readiness;
     return readiness;
@@ -691,10 +699,22 @@ export async function startUIServer(
     }
   }
 
+  /**
+   * Something outside the workers touched these devices (a mirror gesture, an
+   * MCP tool). The server's readiness claim goes stale, and so must each
+   * worker's own prepared records — the run consumes those, and a preparation
+   * skips any device still holding one (PILOT-1195). Sent in every readiness
+   * state: a touch during a run outdates the records just the same. A worker
+   * still starting is not in `uiWorkers` yet, so only an MCP tool (the mirror
+   * has no client for it) can touch its devices unseen.
+   */
   function invalidateWorkers(reason: StaleReason, workerIds?: number[]): void {
     for (const w of uiWorkers) {
       if (w.retired) continue;
       if (workerIds && !workerIds.includes(w.id)) continue;
+      try {
+        w.process.send({ type: 'invalidate-prepared' } satisfies UIWorkerMessage);
+      } catch { /* IPC closed */ }
       readinessEvent(w, { type: 'invalidate', reason });
     }
   }
@@ -717,13 +737,34 @@ export async function startUIServer(
   }
 
   /** Route an MCP device interaction to the worker(s) it touched. */
-  function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined): void {
+  function invalidateForMcpTool(tool: string, args: Record<string, unknown> | undefined, device: string | undefined, status: 'completed' | 'error'): void {
     if (!MUTATING_MCP_TOOLS.has(tool)) return;
-    const projectName = typeof args?.project === 'string' ? args.project : undefined;
-    const bucket = projectName ? ctx.bucketByProject?.get(projectName) : undefined;
-    const targets = bucket ? uiWorkers.filter((w) => w.bucketSignature === bucket).map((w) => w.id) : undefined;
-    invalidateWorkers('mcp-tool', targets);
+    invalidateWorkers('mcp-tool', mcpToolWorkers(device, args, mcpTargetWorkers(), status));
   }
+
+  function mcpTargetWorkers() {
+    return uiWorkers.filter((w) => !w.retired).map((w) => ({
+      id: w.id,
+      devices: workerDevicesInfo(w).map((d) => ({ serial: d.deviceSerial, name: d.name })),
+    }));
+  }
+
+  /**
+   * A mutating MCP call has resolved its device: wait until no background
+   * preparation is resetting it (none starts while the call runs). Bounded,
+   * so a worker that never reports back cannot wedge the call.
+   */
+  async function waitForPreparationsBeforeMcpAct(tool: string, device: string): Promise<void> {
+    if (!MUTATING_MCP_TOOLS.has(tool)) return;
+    const deadline = Date.now() + MCP_PREPARE_SETTLE_MAX_MS;
+    for (;;) {
+      const preparing = uiWorkers.filter((w) => !w.retired && w.readiness?.state.kind === 'preparing').map((w) => w.id);
+      if (McpCallsInFlight.preparingFor(device, mcpTargetWorkers(), preparing).length === 0) return;
+      if (Date.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
 
   let screenPollTimer: ReturnType<typeof setTimeout> | null = null;
   let screenSeq = 0;
@@ -807,12 +848,12 @@ export async function startUIServer(
   /** Node the client has selected — the strongest hint for what runs next. */
   let selectedNode: { file: string; projectName?: string } | undefined;
   let lastRunProject: string | undefined;
-  /** Per run: when the first traced action landed, and how the first file's isolation was satisfied. */
-  let runFirstActionAt: number | undefined;
-  let runPreflightOrigin: 'prepared' | 'inline' | 'skipped' | undefined;
   /** Coalesced mirror-gesture bursts per worker for the activity feed. */
   const mirrorBursts = new Map<number, { id: string; counts: Map<string, number>; startedAt: number; last: number }>();
-  const MUTATING_MCP_TOOLS = new Set(['tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key', 'tapsmith_launch_app']);
+  /** Mutating MCP calls running now: background preparation waits for them. */
+  const mcpCallsInFlight = new McpCallsInFlight();
+  /** Longest a mutating MCP call waits for a preparation already resetting its device. */
+  const MCP_PREPARE_SETTLE_MAX_MS = 120_000;
   /** Mirror interactions within this window hold background preparation. */
   const READINESS_INTERACTION_HOLD_WINDOW_MS = 3_000;
   /** Workers whose Node process should be recycled before the next run (source changed). */
@@ -844,7 +885,7 @@ export async function startUIServer(
   /** Screen view mode: 'all' polls all workers, number polls a specific worker. */
   let screenViewMode: 'all' | number = 'all';
   /** Last known frame dimensions per mirrored device (`mirrorKey`), used to convert normalized coords. */
-  const lastFrameDims = new Map<string, { width: number; height: number }>();
+  const lastFrameDims = new Map<string, MirrorFrame>();
   /** Which device of the selected worker's group the single-view mirror shows. */
   let selectedDeviceIndex = 0;
   /** Set to true while a parallel run is in progress, to signal stop. */
@@ -1288,7 +1329,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         package: ctx.config.package,
         device: singleWorkerDisplayName ?? ctx.deviceSerial,
         timeout: ctx.config.timeout,
-        retries: ctx.config.retries,
+        // UI mode never retries a failed test, whatever is configured (PILOT-1175).
+        retries: 0,
         projects,
         deviceTargets,
         configPath: ctx.configPath,
@@ -1421,7 +1463,19 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // A headless MCP server refusing our daemons but then starting its own
     // agent on these devices took them over just the same.
     const devices = [...new Set([...workerGroups.flat(), ...daemons.map((d) => d.deviceSerial)].filter(Boolean))];
-    return { daemons, owned, devices };
+    return {
+      daemons,
+      owned,
+      devices,
+      // Who this session is, for an MCP server that works in the project's UI
+      // session when one is running (`tapsmith mcp-server --prefer-ui`,
+      // PILOT-1164): it asks every UI server on the machine and takes the one
+      // whose project is its own.
+      mcpUrl: mcpPort ? `http://127.0.0.1:${mcpPort}/mcp` : undefined,
+      project: { cwd: process.cwd(), rootDir: resolvedRootDir, configPath: ctx.configPath },
+      pid: process.pid,
+      startedAt: sessionStartedAt,
+    };
   }
 
   configureMcpConnection({ uiMode: true, configFile: ctx.configPath, uiDaemonPorts });
@@ -1449,11 +1503,17 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     };
   }
 
+  const removeMcpActGate = setToolActGate(waitForPreparationsBeforeMcpAct);
   mcpEvents.onToolCall((event) => {
     const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
     if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
     broadcast(mcpMsg);
-    if (event.status !== 'started') invalidateForMcpTool(event.tool, event.args);
+    if (event.status === 'started') {
+      mcpCallsInFlight.start(event.id, event.tool);
+    } else {
+      mcpCallsInFlight.end(event.id);
+      invalidateForMcpTool(event.tool, event.args, event.device, event.status);
+    }
   });
 
   // ─── Test Discovery ───
@@ -2165,6 +2225,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
      * passes it; a respawn passes false (it must not wipe the app mid-session).
      */
     forceInstall: boolean,
+    /**
+     * The hold the replaced worker was in (a respawn that reused the device
+     * as it was): resumed instead of preparing, so a code reload does not
+     * reset a device someone drove to a screen.
+     */
+    hold?: StaleReason,
   ): Promise<UIWorkerHandle> {
     // The rest of this worker's device group (`use.devices`), each on a
     // daemon of its own — adopted from the CLI when it opened them beside
@@ -2407,6 +2473,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           adoptPrimary: !!adopt,
           adoptPrepared: !!adopt && adoptPrepared,
           forceInstall,
+          networkApisInRun: ctx.networkApisInRun,
           ...(members.length > 0 ? {
             groupMembers: members.map((m) => ({
               name: m.name,
@@ -2455,7 +2522,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     });
     attachReadiness(worker);
     broadcastWorkerStatus(worker, 'idle');
-    readinessEvent(worker, { type: 'worker-ready', initialPolicy: worker.initialPolicy });
+    readinessEvent(worker, { type: 'worker-ready', initialPolicy: worker.initialPolicy, hold });
     return worker;
   }
 
@@ -2756,6 +2823,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // A device target that could not start is tried again first; while it
     // still cannot, its files fail with the reason (PILOT-415).
     const unavailable = await reviveTargetsFor(files);
+    // The files as they are now: the user may have written the session's
+    // first mocking test since it started (PILOT-1013).
+    scanNetworkApis.newRun();
+    const networkApisInRun = await scanNetworkApis(ctx.testFiles);
     if (!parallelRunAborted) {
       for (const f of unavailable) {
         const sig = f.projectName ? ctx.bucketByProject?.get(f.projectName) : undefined;
@@ -2907,6 +2978,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           fullNames: next.fullNames ? [...next.fullNames] : undefined,
           grep: serializeGrepFilters(grepFor(next.projectName)),
           preparedFor,
+          networkApisInRun,
         };
         // A worker can die between exit-event delivery and this dispatch; an
         // unguarded send would throw ERR_IPC_CHANNEL_CLOSED out of the
@@ -3079,14 +3151,6 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               break;
             }
             case 'trace-event': {
-              const ev = msg.event as { type?: string; action?: string; origin?: string };
-              if (runFirstActionAt === undefined && (ev.type === 'action' || ev.type === 'assertion')) {
-                runFirstActionAt = Date.now();
-              }
-              if (runPreflightOrigin === undefined && ev.type === 'action') {
-                if (ev.action === 'appReset' && (ev.origin === 'prepared' || ev.origin === 'skipped')) runPreflightOrigin = ev.origin;
-                else if (ev.action === 'resetApp' || ev.action === 'restoreAppState') runPreflightOrigin = 'inline';
-              }
               const traceMsg: TraceEventMessage = {
                 type: 'trace-event',
                 testFullName: worker.currentTest ?? '',
@@ -3114,7 +3178,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               break;
             }
             case 'network': {
-              const networkMsg: NetworkMessage = { type: 'network', filePath: worker.currentFile?.filePath, testFullName: worker.currentTest ?? '', projectName: worker.currentFile?.projectName, entries: msg.entries, bodies: msg.bodies, bodyMode: msg.bodyMode, networkCaptureEnabled: msg.networkCaptureEnabled, networkCaptureRoute: msg.networkCaptureRoute };
+              const networkMsg: NetworkMessage = { type: 'network', filePath: worker.currentFile?.filePath, testFullName: worker.currentTest ?? '', projectName: worker.currentFile?.projectName, entries: msg.entries, bodies: msg.bodies, bodyMode: msg.bodyMode, networkCaptureEnabled: msg.networkCaptureEnabled, networkCaptureRoute: msg.networkCaptureRoute, networkHttpsPassthrough: msg.networkHttpsPassthrough };
               networkBuffer.add(networkMsg);
               broadcast(networkMsg);
               break;
@@ -3546,6 +3610,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // without this flag).
     worker.respawning = true;
     worker.retired = true;
+    const hold = holdReason(worker.readiness?.state);
     readinessEvent(worker, { type: 'worker-retired' });
     try {
       await terminateWorkerProcess(worker);
@@ -3571,6 +3636,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       const newWorker = await initializeOneWorker(
         worker.id, worker.deviceSerial, daemonPort, agentPort, daemonBin, undefined, undefined, undefined, adopt,
         false, false,
+        // Only an adopting respawn leaves the device as it was; a worker that
+        // starts its own daemon relaunches the app, which ends any hold.
+        adopt ? hold : undefined,
       );
       // Preserve the friendly display name from before respawn.
       newWorker.displayName = worker.displayName;
@@ -3635,9 +3703,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   async function recycleStaleWorkers(reason: string): Promise<void> {
     // A worker mid-background-prepare is deliberately skipped: killing it now
     // wastes the preparation for nothing — it stays codeStale and
-    // ensureWorkersReady recycles it before the next run anyway.
+    // ensureWorkersReady recycles it before the next run anyway. So is a held
+    // one: a respawn that cannot adopt relaunches the app, and the device is
+    // held for someone driving it (an agent writing the screen object it just
+    // explored, say).
     const stale = uiWorkers.filter(
-      (w) => w.codeStale && !w.retired && !w.busy && w.readiness?.state.kind !== 'preparing',
+      (w) => w.codeStale && !w.retired && !w.busy && w.readiness?.state.kind !== 'preparing'
+        && !holdReason(w.readiness?.state),
     );
     await Promise.allSettled(stale.map((w) => recycleWorker(w, reason)));
   }
@@ -3663,6 +3735,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           }
         })());
       } else if (worker.codeStale && !worker.busy) {
+        // Held workers too: dispatch never re-checks `codeStale`, so a worker
+        // skipped here could run this run's files on old code. An adopting
+        // respawn keeps the hold; one with its own daemon relaunches the app.
         work.push(recycleWorker(worker, 'source files changed'));
       }
     }
@@ -4008,8 +4083,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   const liveHierarchies = new LiveHierarchyCache();
   /** One live locator evaluation per device at a time; superseded ones never run. */
   const liveEvaluations = new LatestOnlyRunner<LiveLocatorEvaluation>();
-  /** The latest pick per device and tab, by a generation count. */
-  const latestPicks = new Map<string, number>();
+  /** The latest pick per device and tab. */
+  const latestPicks = new PickGenerations();
   /**
    * When a live WebView connect last failed per device (`worker:device`),
    * off the adopted primary: re-asking every capture would otherwise spend
@@ -4092,7 +4167,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // Read dimensions from the PNG IHDR chunk (bytes 16-23: width + height as big-endian uint32)
       const width = data.length >= 24 ? data.readUInt32BE(16) : 1080;
       const height = data.length >= 24 ? data.readUInt32BE(20) : 1920;
-      lastFrameDims.set(mirrorKey(workerId, deviceIndex), { width, height });
+      // The turn maps mirror touches back to the native points iOS
+      // coordinate touches take (mirror-touch-point.ts).
+      const turn = parseDeviceTurn(response.orientation);
+      lastFrameDims.set(mirrorKey(workerId, deviceIndex), turn ? { width, height, turn } : { width, height });
       const frame = encodeScreenFrame(screenSeq++, workerId, width, height, data, deviceIndex);
       broadcastBinary(frame);
     }
@@ -4631,7 +4709,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   function resolveGestureTarget(workerId?: number, deviceIndex?: number): {
     client: TapsmithGrpcClient | undefined
     dpr: number
-    dims: { width: number; height: number } | undefined
+    dims: MirrorFrame | undefined
   } {
     if (workersEnabled && workersInitialized) {
       const id = workerId ?? selectedWorkerId;
@@ -4649,21 +4727,6 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       client: ctx.client,
       dpr: cachedScreenScale(ctx.deviceSerial ?? '', singleWorkerPlatform) || 1,
       dims: lastFrameDims.get(mirrorKey(0, 0)),
-    };
-  }
-
-  /** Convert a normalized (0–1) point to logical points for the target. */
-  function normalizedToLogical(
-    nx: number,
-    ny: number,
-    dims: { width: number; height: number } | undefined,
-    dpr: number,
-  ): { x: number; y: number } | undefined {
-    if (!dims) return undefined;
-    const clamp = (v: number) => Math.min(1, Math.max(0, v));
-    return {
-      x: (clamp(nx) * dims.width) / dpr,
-      y: (clamp(ny) * dims.height) / dpr,
     };
   }
 
@@ -4923,10 +4986,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         }
         // A tab's newer pick on this device replaces this one: its check
         // stops between candidates and its answer is never sent.
-        const pickKey = `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`;
-        const generation = (latestPicks.get(pickKey) ?? 0) + 1;
-        latestPicks.set(pickKey, generation);
-        const superseded = () => latestPicks.get(pickKey) !== generation;
+        const superseded = latestPicks.start(`${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`);
         void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview, beforeConnect: target.beforeConnect, superseded })
           .then((result) => {
             noteLiveConnect(target.workerId, target.deviceIndex, result.note);
@@ -4938,28 +4998,39 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           }));
         break;
       }
+      case 'cancel-live-locators': {
+        // A test started on the device (PILOT-1179): stop this tab's pick
+        // check between candidates and forget its waiting evaluation. Work
+        // already on the device finishes; the tab has stopped listening.
+        const id = msg.workerId ?? selectedWorkerId;
+        const index = msg.deviceIndex ?? (id === selectedWorkerId ? selectedDeviceIndex : 0);
+        const key = `${id}:${index}:${msg.clientId ?? ''}`;
+        latestPicks.cancel(key);
+        liveEvaluations.dropWaiting(key);
+        break;
+      }
       case 'request-source':
         sendSourceFromDisk(msg.path);
         break;
       case 'mirror-tap': {
         noteMirrorInteraction(msg.workerId, 'tap');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.tapXY(p.x, p.y).catch(() => {});
         break;
       }
       case 'mirror-long-press': {
         noteMirrorInteraction(msg.workerId, 'long press');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.longPressXY(p.x, p.y, msg.durationMs).catch(() => {});
         break;
       }
       case 'mirror-swipe': {
         noteMirrorInteraction(msg.workerId, 'swipe');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const from = normalizedToLogical(msg.fromX, msg.fromY, t.dims, t.dpr);
-        const to = normalizedToLogical(msg.toX, msg.toY, t.dims, t.dpr);
+        const from = mirrorTouchPoint(msg.fromX, msg.fromY, t.dims, t.dpr);
+        const to = mirrorTouchPoint(msg.toX, msg.toY, t.dims, t.dpr);
         if (t.client && from && to) {
           t.client.dragXY(from.x, from.y, to.x, to.y, msg.durationMs).catch(() => {});
         }
@@ -4980,21 +5051,21 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       case 'mirror-touch-start': {
         noteMirrorInteraction(msg.workerId, 'touch');
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.touchDown(p.x, p.y, 0).catch(() => {});
         break;
       }
       case 'mirror-touch-move': {
         lastMirrorInteraction = Date.now();
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.touchMove(p.x, p.y, msg.tMs).catch(() => {});
         break;
       }
       case 'mirror-touch-end': {
         lastMirrorInteraction = Date.now();
         const t = resolveGestureTarget(msg.workerId, msg.deviceIndex);
-        const p = normalizedToLogical(msg.x, msg.y, t.dims, t.dpr);
+        const p = mirrorTouchPoint(msg.x, msg.y, t.dims, t.dpr);
         if (t.client && p) t.client.touchUp(p.x, p.y, msg.tMs).catch(() => {});
         break;
       }
@@ -5103,7 +5174,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }
   }
 
-  const server = http.createServer((req, res) => {
+  // Only the UI's own page and local tools: a DNS-rebinding page must not
+  // read traces or videos through its own hostname (PILOT-1215).
+  const server = createLocalHttpServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -5191,7 +5264,17 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
   // ─── WebSocket Server ───
 
-  const wss = new WebSocketServer({ server });
+  // The socket drives the session — runs, taps, typing, results — so only
+  // the UI's own page (or a local non-browser client) may open it. Any other
+  // page in the user's browser could otherwise connect to 127.0.0.1 and drive
+  // the device (cross-site WebSocket hijacking, PILOT-1215).
+  const wss = createLocalWebSocketServer(server, {
+    onRefused: (origin, host) => {
+      const from = origin !== undefined ? `a page on "${origin}"` : `a client addressed to "${host ?? ''}"`;
+      // Handshakes arrive only after listen(), so the port is known by now.
+      console.warn(`${YELLOW}UI mode refused a connection from ${from}: only the UI page itself (http://127.0.0.1:${actualPort}/ or http://localhost:${actualPort}/) may connect.${RESET}`);
+    },
+  });
 
   // ws re-emits the HTTP server's 'error' events here; without a listener
   // they rethrow as uncaughtException and kill the process before the bind
@@ -5316,7 +5399,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   // ─── MCP Server (separate fixed port) ───
 
   const MCP_DEFAULT_PORT = 9274;
-  const mcpHttpServer = http.createServer(async (req, res) => {
+  // Local clients only (`tapsmith mcp-server`, MCP HTTP clients): no web
+  // page may call the device tools or inject /mcp-events (PILOT-1215; the MCP
+  // spec requires servers to validate Origin).
+  const mcpHttpServer = createLocalHttpServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
 
     // Streamable HTTP endpoint — handles POST (JSON-RPC) + GET (SSE stream) + DELETE (session close)
@@ -5343,7 +5429,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           const mcpMsg: McpToolCallMessage = { type: 'mcp-tool-call', ...event };
           if (mcpToolCallBuffer.length < MAX_MCP_BUFFER) mcpToolCallBuffer.push(mcpMsg);
           broadcast(mcpMsg);
-          if (mcpMsg.status !== 'started') invalidateForMcpTool(mcpMsg.tool, mcpMsg.args);
+          if (mcpMsg.status !== 'started') invalidateForMcpTool(mcpMsg.tool, mcpMsg.args, typeof mcpMsg.device === 'string' ? mcpMsg.device : undefined, mcpMsg.status);
         } catch { /* ignore malformed */ }
         res.writeHead(200);
         res.end('OK');
@@ -5459,6 +5545,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       ctx.device?.close();
       ctx.client?.close();
 
+      removeMcpActGate();
       mcpHttpServer.close();
       mcpRouter.close();
       try { fs.unlinkSync(portFilePath); } catch { /* already gone */ }

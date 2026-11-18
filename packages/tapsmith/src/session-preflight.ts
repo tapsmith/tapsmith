@@ -1,14 +1,15 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
-import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
+import { appResetAction, parseHooksMarker, routeDeepLink, satisfies, warmResetTarget, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
-import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, isSystemDrawnDialog } from './emulator.js';
+import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
 import { appDependsOnTapsmithHooks } from './init-detect.js';
 
 type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
-type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
+type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy' | 'takeSystemDialogEvents' | 'waitForAppReady'>
 
 export interface SessionPreflightContext {
   label: string
@@ -52,9 +53,18 @@ export interface SessionPreflightContext {
    * reference, like `capabilities`.
    */
   notices: PreflightNotice[]
+  /**
+   * How many times {@link ensureSessionReady} has (re)launched the app this
+   * session. One object per device session, shared by reference like
+   * `notices`: the runner reads it around an embedder's own readiness check
+   * (`beforeEachTest`), which knows nothing of the start route, to see whether
+   * that check took the app off the route the reset just delivered.
+   */
+  relaunches: { count: number }
 }
 
-/** A system ANR/crash dialog the Android preflight dealt with, or a session-level finding about the app. */
+/** A system ANR/crash dialog the Android preflight (or, mid-test, the agent)
+ *  dealt with, or a session-level finding about the app. */
 export interface PreflightNotice {
   /** `app-dialog`: the app under test's own, or one whose owner could not be
    *  read (dismissed, session recovered; its test gets a warning).
@@ -72,6 +82,51 @@ export interface PreflightNotice {
   timestamp: number
 }
 
+/** Deadline for taking the agent's answered dialogs at the end of a test: a
+ *  queue read on the device, so anything slower is a wedged agent, and the
+ *  report must not hold the test's end for it. */
+const ANSWERED_DIALOGS_DEADLINE_MS = 3_000;
+
+/**
+ * Take the system ANR / crash dialogs the Android agent answered on its own
+ * (during a test, or a lookup or tap outside one) and add them to {@link SessionPreflightContext.notices},
+ * so the runner reports them like the preflight's: a trace row for each, and a
+ * warning on the test for the app under test's own ANR (a finding, not noise).
+ * Best effort: an agent that cannot say (an older one, a dead session) adds
+ * nothing, and the test's own outcome stands.
+ */
+export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext): Promise<void> {
+  if (ctx.config.platform === 'ios') return;
+  let events;
+  try {
+    ({ events } = await ctx.client.takeSystemDialogEvents(ANSWERED_DIALOGS_DEADLINE_MS));
+  } catch {
+    return;
+  }
+  for (const event of events ?? []) {
+    const title = event.title || GENERIC_BLOCKING_DIALOG;
+    const owner = event.owner || undefined;
+    const timestamp = Number(event.timestampMs) || Date.now();
+    ctx.notices.push(event.ownedByTarget
+      ? {
+        kind: 'app-dialog',
+        title,
+        owner,
+        message: `The app under test (${owner ?? ctx.config.package}) stopped responding and showed "${title}"; `
+          + `Tapsmith pressed ${event.button}. Check the app's logs (adb logcat) for what blocked its main thread.`,
+        timestamp,
+      }
+      : {
+        kind: 'foreign-dialog',
+        title,
+        owner,
+        message: `A system dialog from another app came up: ${formatBlockingDialog(title, owner)}. `
+          + `Tapsmith pressed ${event.button}.`,
+        timestamp,
+      });
+  }
+}
+
 /**
  * Look at the app's accessibility tree once and record whether it advertises
  * `@tapsmith/react-native` reset hooks. Cheap (one hierarchy fetch) and
@@ -87,8 +142,13 @@ export async function probeResetCapabilities(
   const caps: ResetCapabilities = (ctx.capabilities ??= {});
   const deadline = Date.now() + (options.pollMs ?? HOOKS_PROBE_POLL_MS);
   let readWithoutMarker = false;
+  // Consecutive reads that showed the app's own rendered UI and no marker,
+  // and whether the project may stop on them (decided on first need).
+  let renderedWithoutMarker = 0;
+  let mayStopEarly: boolean | undefined;
   for (;;) {
-    const seen = await readHooksMarker(ctx);
+    const read = await readHooksMarkerAndContent(ctx);
+    const seen = read?.seen;
     if (seen === false) readWithoutMarker = true;
     if (seen) {
       caps.hooksDetected = true;
@@ -101,6 +161,14 @@ export async function probeResetCapabilities(
     // single-shot miss there would pin every file of a sequential run to
     // clear resets with nothing to upgrade it.
     if (caps.hooksDetected !== undefined || Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+    // Unless the app has rendered its own UI, twice in a row, without the
+    // marker, and the project does not depend on @tapsmith/react-native: the
+    // marker mounts with the React root, so there is nothing left to wait
+    // for, and an app without the hooks (most apps) paid the whole budget
+    // at every session start. A project that depends on the package keeps
+    // the budget: its app could render before the component that mounts it.
+    renderedWithoutMarker = read?.rendered ? renderedWithoutMarker + 1 : 0;
+    if (renderedWithoutMarker >= HOOKS_PROBE_RENDERED_READS && (mayStopEarly ??= projectWithoutHooks(ctx.config))) break;
     await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
   }
   // Sticky: hooks compiled into the app do not vanish mid-session. A probe
@@ -130,10 +198,70 @@ async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?:
     // app whose startup dumps all failed.
     if (options.strict && (h.errorMessage || !h.hierarchyXml)) return undefined;
     const marker = parseHooksMarker(h.hierarchyXml);
-    return !!marker && marker.urlPrefix.length > 0;
+    if (!marker?.urlPrefix) return false;
+    (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
+    return true;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * {@link readHooksMarker} for the probe, with whether the read showed the
+ * app's own rendered UI (`rendered`); undefined when the read failed.
+ */
+async function readHooksMarkerAndContent(ctx: SessionPreflightContext): Promise<{ seen: boolean; rendered: boolean } | undefined> {
+  let xml: string;
+  try {
+    xml = (await ctx.client.getUiHierarchy()).hierarchyXml ?? '';
+  } catch {
+    return undefined;
+  }
+  const marker = parseHooksMarker(xml);
+  if (marker?.urlPrefix) (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
+  const rendered = ctx.config.platform === 'ios'
+    ? iosHierarchyHasRenderedContent(xml)
+    : !!ctx.config.package && androidHierarchyHasRenderedContent(xml, ctx.config.package);
+  return { seen: !!marker && marker.urlPrefix.length > 0, rendered };
+}
+
+/**
+ * True when the iOS hierarchy has an element of the app, other than the
+ * application node itself (which carries the app's name from launch on),
+ * with a label or an identifier: the app has drawn real UI. Keyboard subtrees
+ * (`tapsmith-non-app`) do not count.
+ */
+function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
+  let nonAppDepth = 0;
+  for (const [tag] of hierarchyXml.matchAll(/<\/?XCUIElementType\w+\b[^>]*>/g)) {
+    const closing = tag.startsWith('</');
+    const selfClosing = tag.endsWith('/>');
+    if (nonAppDepth > 0) {
+      if (closing) nonAppDepth--;
+      else if (!selfClosing) nonAppDepth++;
+      continue;
+    }
+    if (closing) continue;
+    if (tag.includes('tapsmith-non-app="true"')) {
+      if (!selfClosing) nonAppDepth = 1;
+      continue;
+    }
+    if (tag.startsWith('<XCUIElementTypeApplication')) continue;
+    if (/\blabel="[^"]+"/.test(tag) || /\bidentifier="[^"]+"/.test(tag)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the project's package.json lookup finds no `@tapsmith/react-native`
+ * dependency. False when it finds one, and when there is no `rootDir` to look
+ * from. A lookup that finds no package.json at all also reads as true: a
+ * hooked app tested from outside its repo then stops early, and its first
+ * resets are clear ones until a clear reset's re-read sees the marker.
+ */
+function projectWithoutHooks(config: SessionPreflightContext['config']): boolean {
+  if (!config.rootDir) return false;
+  return !appUsesTapsmithHooks({ rootDir: config.rootDir, apk: config.apk, app: config.app });
 }
 
 /**
@@ -216,6 +344,12 @@ async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabi
 /** Marker poll cadence inside {@link probeResetCapabilities}. */
 const HOOKS_PROBE_POLL_INTERVAL_MS = 250;
 /**
+ * Consecutive reads of rendered UI without the marker after which a project
+ * without the hooks stops probing: two, a poll interval apart, so one frame
+ * caught mid-launch is not the answer.
+ */
+const HOOKS_PROBE_RENDERED_READS = 2;
+/**
  * How long a probe keeps looking for the hooks marker before concluding the
  * app has none. Only a session that has never seen the marker polls, so the
  * budget is paid once per session (per embedder process), and only by apps
@@ -225,6 +359,12 @@ const HOOKS_PROBE_POLL_MS = 3_000;
 
 export interface EnsureSessionReadyOptions {
   onRecovery?: (error: unknown) => void
+  /**
+   * Called whenever the check (re)launches the app — an inline relaunch of an
+   * app that was no longer in front, or a session recovery. The app is then on
+   * its launch screen, whatever screen it was left on.
+   */
+  onRelaunch?: () => void
   /**
    * Delay (ms) before recovery attempt N (the last entry is reused when
    * attempts exceed the list). Defaults to {@link DEFAULT_RETRY_BACKOFF_MS};
@@ -390,9 +530,13 @@ const IOS_FOREGROUND_PROBE_BUDGET_MS = 30_000;
  *  unreachable while the per-attempt deadline is shorter; kept as defence. */
 const AGENT_SLOW_SIGNATURES = ['DEADLINE_EXCEEDED', 'Agent command timed out'];
 const HIERARCHY_POLL_INTERVAL_MS = 500;
-/** How long a cold-launched Android app gets to render its first content
- * before we proceed anyway (see {@link waitForAndroidAppReady}). */
-const ANDROID_APP_READY_TIMEOUT_MS = 10_000;
+/** How long a (re)launched app gets to render its first content before we
+ * proceed anyway (see {@link waitForRenderedContent}). */
+const APP_RENDER_READY_TIMEOUT_MS = 10_000;
+/** How much longer than its budget the `waitForAppReady` RPC may take: the
+ *  daemon answers at the end of the budget at the latest, plus its own agent
+ *  round-trip slack. */
+const APP_READY_RPC_SLACK_MS = 5_000;
 const DEFAULT_SOFT_RESET_WAIT_MS = 750;
 /**
  * Buttons that dismiss a system ANR/crash dialog, in the order we prefer them.
@@ -419,6 +563,10 @@ export async function ensureSessionReady(
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   options: EnsureSessionReadyOptions = {},
 ): Promise<void> {
+  const onRelaunch = (): void => {
+    ctx.relaunches.count++;
+    options.onRelaunch?.();
+  };
   return withActionProgress('sessionReady', ctx.config.package, async (progress) => {
     let lastError: unknown;
     // Whether the recovery before THIS rung completed. Drives the probe's
@@ -440,7 +588,7 @@ export async function ensureSessionReady(
         // agent), and a stale detail would then describe the wrong attempt on
         // the end event.
         progress.setDetail(undefined);
-        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs);
+        await verifySession(ctx, progress, probeTimingForAttempt(recovered && budgetSpent, options.iosForegroundProbe), tally, dialogs, onRelaunch);
         return;
       } catch (err) {
         lastError = err;
@@ -452,6 +600,9 @@ export async function ensureSessionReady(
         // immediate retry lands inside the same drop window (PILOT-282).
         await delay(backoff[attempt - 1] ?? backoff.at(-1) ?? 0);
         try {
+          // Before the call: a recovery that fails part-way may already have
+          // relaunched the app.
+          onRelaunch();
           await recoverSession(ctx);
           recovered = true;
         } catch (recoveryErr) {
@@ -490,7 +641,17 @@ export async function ensureSessionReady(
 export async function launchConfiguredApp(
   ctx: SessionPreflightContext,
   phase: string,
-  options: { readinessAttempts?: number; freshInstall?: boolean; hooksProbeMs?: number } = {},
+  options: {
+    readinessAttempts?: number
+    freshInstall?: boolean
+    hooksProbeMs?: number
+    /**
+     * The app was already cleared (unless `freshInstall`) and launched for
+     * this phase, by `startAndroidLaunchEarly` before the agent started:
+     * skip straight to the readiness checks.
+     */
+    appLaunched?: boolean
+  } = {},
 ): Promise<PreparedState> {
   const readinessAttempts = options.readinessAttempts;
   const probe = { pollMs: options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS };
@@ -515,7 +676,7 @@ export async function launchConfiguredApp(
     // Fresh install: there's no state to clear. On Android,
     // explicitly launch the app (iOS auto-launches via the XCUITest agent
     // during startAgent), then go straight to ensuring the session is ready.
-    if (ctx.config.platform !== 'ios') {
+    if (ctx.config.platform !== 'ios' && !options.appLaunched) {
       await ctx.device.launchApp(ctx.config.package, launchOptions(ctx.config));
     }
     await ensureSessionReady(ctx, phase, readinessAttempts);
@@ -525,12 +686,51 @@ export async function launchConfiguredApp(
     return prepared();
   }
 
-  await hardClearAndLaunch(ctx);
+  if (!options.appLaunched) await hardClearAndLaunch(ctx);
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
   await probeResetCapabilities(ctx, probe);
   await checkMissingResetHooks(ctx, probe.pollMs);
   return prepared();
+}
+
+/** A startup launch started by `startAndroidLaunchEarly`. */
+export interface EarlyLaunch {
+  /** Whether the launch went through. Never rejects. */
+  launched: Promise<boolean>
+}
+
+/**
+ * Android startup launch, started before the agent: terminate and clear the
+ * app (unless it was just installed), then start its launch without waiting
+ * for it, so the app's cold start overlaps the agent's instrumentation start
+ * (each takes about a second). Resolves once the clear has finished, since a
+ * clear must not race the agent start; pass `appLaunched` to
+ * `launchConfiguredApp` once `launched` resolves true. Resolves undefined
+ * when the clear fails, having launched nothing, so the caller's usual
+ * launch path runs the whole sequence after the agent and reports the error
+ * as it always has.
+ */
+export async function startAndroidLaunchEarly(
+  ctx: Pick<SessionPreflightContext, 'config' | 'device'>,
+  options: { freshInstall: boolean },
+): Promise<EarlyLaunch | undefined> {
+  const pkg = ctx.config.package;
+  if (!pkg || ctx.config.platform === 'ios') return undefined;
+  if (!options.freshInstall) {
+    try {
+      await ctx.device.terminateApp(pkg);
+    } catch {
+      // App may not be running yet
+    }
+    try {
+      await ctx.device.clearAppData(pkg);
+    } catch {
+      return undefined;
+    }
+  }
+  const launched = ctx.device.launchApp(pkg, launchOptions(ctx.config)).then(() => true, () => false);
+  return { launched };
 }
 
 export interface ExecuteAppResetOptions {
@@ -595,7 +795,19 @@ export async function executeAppReset(
   }
 
   if (options.prepared && satisfies(options.prepared.policy, policy)) {
-    await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
+    let relaunched = false;
+    await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, {
+      onRelaunch: () => { relaunched = true; },
+    }));
+    // The prepared state stands, but not necessarily on this scope's start
+    // route: one navigation instead of a whole reset. An app the readiness
+    // check had to relaunch is on its launch screen, whatever was prepared.
+    if (policy.route !== undefined && action.kind !== 'none'
+      && (relaunched || options.prepared.policy.route !== policy.route)) {
+      // A link sent into a still-booting app is lost.
+      if (relaunched) await step('waitForAppReady', () => waitForAppReady(ctx));
+      await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
+    }
     const when = new Date(options.prepared.preparedAt).toLocaleTimeString();
     return finish({
       origin: 'prepared',
@@ -618,15 +830,131 @@ export async function executeAppReset(
   let fellBack = false;
   let reason: string | undefined;
   let processRecreated = true;
+  // Whether the reset itself left the app on the declared start route (only
+  // an acknowledged in-app reset can carry it).
+  let routeReached = false;
+
+  // Set after a cold restore that may let the next restore of the same
+  // archive keep the data: read the write count once the app is ready.
+  let recordBaselineFor: string | undefined;
+  // …or, when the hooks have not been seen yet, once the read after it finds them.
+  let recordIfHooksAppearFor: string | undefined;
 
   if (action.kind === 'restore') {
-    await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
-    await step('restartApp', () => ctx.device.restartApp(pkg));
+    const archiveName = path.basename(action.archive);
+    const plan = await planKeptRestore(ctx, policy, action.archive, options, step);
+    let kept = false;
+    if (plan.keep) {
+      // The data on the device still matches the archive: reset in-memory
+      // state through the hook (`onReload`) instead of restoring and
+      // relaunching. Only the hooks rung can keep data, so no fallback and
+      // no legacy reset link — any failure restores the archive below.
+      const target = policy.route !== undefined ? warmResetTarget(policy.route, ctx.capabilities?.hooksUrlPrefix) : undefined;
+      let result: Awaited<ReturnType<SessionDevice['_resetApp']>> | undefined;
+      try {
+        await step('resetApp', async () => {
+          result = await ctx.device._resetApp(pkg, {
+            mode: 'warm',
+            fallback: false,
+            keepAppData: true,
+            recoverable: true,
+            forceCold: false,
+            // The SDK bounds a run of kept resets itself (planKeptRestore):
+            // a valve relaunch here would only be followed by a restore.
+            coldEveryNResets: 0,
+            skipTraceCapture: true,
+            ...(target !== undefined ? { target } : {}),
+          });
+          for (const s of result.steps) {
+            steps.push({ name: s.name, durationMs: s.durationMs, ok: s.ok, ...(s.detail ? { detail: s.detail } : {}) });
+          }
+        });
+      } catch (err) {
+        reason = `warm reset keeping ${archiveName} failed (${formatError(err)}); restored it cold`;
+      }
+      // A restart keeps the data too (a fresh process reads it back); only a
+      // clear lost it.
+      if (result && result.modeUsed !== 'clear') {
+        kept = true;
+        modeUsed = result.modeUsed;
+        processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
+        routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
+        reason = `kept ${archiveName}: no persisted writes since the restore`;
+        // A process the reset recreated (a cold delivery: the warm-window
+        // valve, or a warm delivery that relaunched) took its count with it:
+        // a write made after the count was read cannot be checked any more.
+        // One that survived dropped no pending timers: a write it had
+        // scheduled before the reset (a debounced save) may have landed
+        // since the count was read. Check again.
+        const baseline = ctx.capabilities?.appStateBaseline;
+        if (result.modeUsed === 'warm' && result.keptAppData !== true) {
+          // The daemon could not pass the keep request on (one older than
+          // this SDK): the hook ran its full reset, which clears data — some
+          // of it possibly where the write count cannot see it (a native
+          // sign-out). Every later attempt would do the same.
+          kept = false;
+          reason = `${DAEMON_CANNOT_KEEP}; restored ${archiveName} cold`;
+          ((ctx.capabilities ??= {}).appStateKeep ??= {}).daemonCannotKeep = true;
+        } else if (processRecreated) {
+          kept = false;
+          reason = `the warm reset relaunched the app (${result.reason ?? 'cold delivery'}), so writes made just before it cannot be ruled out; restored ${archiveName} cold`;
+        } else if (baseline) {
+          let after: ReturnType<typeof parseHooksMarker>;
+          await step('readWriteCount', async () => { after = await readMarker(ctx); });
+          // Unverified is not kept: a write the app made during the reset is
+          // exactly what this read is for, and the next restore would only
+          // catch it after a test had already run on it.
+          if (after?.writes === undefined) {
+            kept = false;
+            reason = `could not read the app's write count after the warm reset; restored ${archiveName} cold`;
+          } else if (after.boot !== baseline.boot) {
+            // Relaunched after all (a delivery that went cold without the
+            // daemon seeing it): as above, the count went with the process.
+            kept = false;
+            reason = `the warm reset relaunched the app, so writes made just before it cannot be ruled out; restored ${archiveName} cold`;
+          } else if (after.writes !== baseline.writes) {
+            kept = false;
+            const n = after.writes - baseline.writes;
+            reason = `the app wrote persisted data during the warm reset (${n} write${n === 1 ? '' : 's'}); restored ${archiveName} cold`;
+            const keepState = ((ctx.capabilities ??= {}).appStateKeep ??= {});
+            keepState.writingKeeps = (keepState.writingKeeps ?? 0) + 1;
+          }
+        }
+        if (kept && baseline) {
+          baseline.kept += 1;
+          if (ctx.capabilities?.appStateKeep) ctx.capabilities.appStateKeep.writingKeeps = 0;
+        }
+      } else if (result) {
+        reason = `warm reset keeping ${archiveName} cleared the app (${result.reason ?? 'no reason given'}); restored it cold`;
+      }
+      if (!kept) {
+        fellBack = true;
+        process.stderr.write(`[tapsmith] ${reason}\n`);
+      }
+    } else {
+      reason = plan.reason;
+    }
+    if (!kept) {
+      modeUsed = 'restore';
+      processRecreated = true;
+      routeReached = false;
+      if (ctx.capabilities) delete ctx.capabilities.appStateBaseline;
+      await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
+      await step('restartApp', () => ctx.device.restartApp(pkg));
+      if (plan.recordBaseline) recordBaselineFor = action.archive;
+      else if (plan.recordIfHooksAppear) recordIfHooksAppearFor = action.archive;
+    }
   } else {
     // warm / restart / clear run the daemon's ladder: it knows whether the app
     // advertises in-app reset hooks, owns the warm-window cold policy, and
     // reports exactly which rung ran so the trace stays honest.
     let result: Awaited<ReturnType<SessionDevice['_resetApp']>> | undefined;
+    // A warm reset lands on the start route in the same delivery: the in-app
+    // hook's reset link carries the route. A deep link outside the hooks' URL
+    // prefix cannot ride on it — reset to "/" and open the link afterwards.
+    const target = policy.route !== undefined && action.kind === 'warm'
+      ? warmResetTarget(policy.route, ctx.capabilities?.hooksUrlPrefix)
+      : undefined;
     await step('resetApp', async () => {
       result = await ctx.device._resetApp(pkg, {
         mode: action.kind,
@@ -643,6 +971,7 @@ export async function executeAppReset(
         // it — fall to clear. Explicit device.resetApp() calls keep the
         // gentler restart fallback.
         fallbackToClear: action.kind === 'warm',
+        ...(target !== undefined ? { target } : {}),
       });
       for (const s of result.steps) {
         steps.push({ name: s.name, durationMs: s.durationMs, ok: s.ok, ...(s.detail ? { detail: s.detail } : {}) });
@@ -651,8 +980,13 @@ export async function executeAppReset(
     if (result) {
       modeUsed = result.modeUsed;
       fellBack = result.fellBack;
-      reason = result.reason;
+      reason = result.reason
+        // `appState: ''` asks for a clear even where a warm reset could run.
+        ?? (policy.appState === '' && policy.mode === 'warm' && ctx.capabilities?.hooksDetected
+          ? "warm skipped: appState '' clears the app's data"
+          : undefined);
       processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
+      routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
       // The daemon seeing the marker is fresh proof of hooks. The reverse is
       // not: a missed read under load plans a fallback without disproving the
       // hooks, so detection only ever upgrades (sticky, like the probe).
@@ -675,14 +1009,30 @@ export async function executeAppReset(
     }
   }
 
-  await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
-  if (processRecreated || ctx.config.platform === 'ios') {
-    // A relaunched process is "ready" only once the app has drawn something:
-    // the session check above is satisfied by a bare Activity/splash window,
-    // and a deep link or hooks probe fired into a still-booting React Native
-    // app is silently lost. An acknowledged warm reset needs none of this —
-    // the marker epoch is the proof of rendering.
-    await step('waitForAppReady', () => waitForAppReady(ctx));
+  // A relaunch by the readiness checks below puts the app back on its launch
+  // screen, so a reset that landed on the start route no longer stands there.
+  let relaunched = false;
+  const relaunchedAfterReset = (): void => { relaunched = true; };
+  await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, { onRelaunch: relaunchedAfterReset }));
+  // A relaunched process is "ready" only once the app has drawn something:
+  // the session check above is satisfied by a bare Activity/splash window,
+  // and a deep link or hooks probe fired into a still-booting React Native
+  // app is silently lost. An acknowledged warm reset needs none of this —
+  // the marker epoch is the proof of rendering — and on iOS neither does a
+  // ladder restart/clear on a daemon that already waited for it before
+  // answering: a second agent round trip there (a full snapshot) costs every
+  // relaunch. iOS keeps only its non-empty-hierarchy check in both cases.
+  // A relaunch by the session check above came after the daemon's wait, so
+  // it always needs its own. Android keeps its own wait: its agent stops at
+  // the first rendered node, so the repeat is nearly free, and skipping it
+  // left CI's hook-less emulator still landscape after a rotation test
+  // restored portrait.
+  const daemonRendered = ctx.config.platform === 'ios'
+    && (modeUsed === 'restart' || modeUsed === 'clear')
+    && ctx.capabilities?.daemonWaitsForRender === true;
+  const rendered = (processRecreated && !daemonRendered) || relaunched;
+  if (rendered || ctx.config.platform === 'ios') {
+    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered, onRelaunch: relaunchedAfterReset }));
   }
   if (
     action.kind !== 'warm'
@@ -697,11 +1047,243 @@ export async function executeAppReset(
     await probeResetCapabilities(ctx, { pollMs: 0 });
     if (action.kind === 'clear') await checkMissingResetHooks(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
   }
+  if (recordIfHooksAppearFor !== undefined) {
+    // The relaunched app is rendering now; the read above covered a session
+    // that already missed the hooks (`false`), this covers one that never
+    // looked (`undefined`).
+    if (ctx.capabilities?.hooksDetected === undefined) await probeResetCapabilities(ctx, { pollMs: 0 });
+    if (ctx.capabilities?.hooksDetected === true) recordBaselineFor = recordIfHooksAppearFor;
+  }
+  if (recordBaselineFor !== undefined) {
+    // Before the start route opens: a screen that writes when it mounts
+    // changes the data the next test would keep.
+    const archive = recordBaselineFor;
+    let marker: ReturnType<typeof parseHooksMarker>;
+    await step('readWriteCount', async () => { marker = await recordAppStateBaseline(ctx, archive); });
+    // A restore with no earlier baseline to compare against: what this read
+    // found is why it could not have been kept.
+    reason ??= marker?.writes === undefined
+      ? (marker ? NO_WRITES_REASON : 'warm skipped: could not read the hooks marker')
+      : `warm skipped: no earlier restore of ${path.basename(archive)} to compare against`;
+  }
+  // Last, on a ready app (a link sent into a still-booting app is lost), and
+  // after the hooks re-read above, which may have just learnt the URL prefix.
+  if (policy.route !== undefined && (!routeReached || relaunched)) {
+    await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
+  }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
+}
+
+// ─── Keeping a restored appState between tests ───
+
+const DAEMON_CANNOT_KEEP = 'tapsmith-core did not pass the request to keep the app\'s data on to the app (a daemon older than this SDK: check `daemonBin` or the installed @tapsmith/core-* package)';
+
+const NO_WRITES_REASON = 'warm skipped: the app does not report persisted writes (give <TapsmithTestHooks> onReload and track; a tracked store whose methods cannot be wrapped also turns the count off)';
+
+interface KeptRestorePlan {
+  /** The data still matches the archive: reset warm and keep it. */
+  keep: boolean;
+  /**
+   * Why the restore runs cold (trace detail), when warm was possible in
+   * principle. Undefined with `recordBaseline` set: the read after the
+   * restore says why (no baseline yet, or an app that reports no writes).
+   */
+  reason?: string;
+  /**
+   * After a cold restore (including the fallback of a failed keep), read the
+   * write count the next restore compares against.
+   */
+  recordBaseline: boolean;
+  /**
+   * The hooks have not been seen yet under `appReset: 'auto'` (a fresh MCP
+   * session, a probe that ran before the app mounted them): record the
+   * baseline after all if the read after this restore finds them, so the
+   * next restore can already keep.
+   */
+  recordIfHooksAppear?: boolean;
+}
+
+/**
+ * Decide whether a restore of `archive` can keep the data already on the
+ * device. It can when the last cold restore was of the same archive, the app
+ * is still the process that restore launched (`boot`), and the hooks have
+ * counted no persisted write since (`writes`). Anything else — and every
+ * forced-cold reset — restores the archive again. The marker is read only
+ * when a baseline for this archive exists, the one case its answer can
+ * change; every cold restore reads it once after the relaunch instead.
+ */
+async function planKeptRestore(
+  ctx: SessionPreflightContext,
+  policy: AppResetPolicy,
+  archive: string,
+  options: ExecuteAppResetOptions,
+  step: StepRunner,
+): Promise<KeptRestorePlan> {
+  const hooks = ctx.capabilities?.hooksDetected === true;
+  const unseenUnderAuto = !hooks && (ctx.config.appReset ?? 'auto') === 'auto' && !options.forceCold;
+  if (policy.mode !== 'warm') {
+    return {
+      keep: false, recordBaseline: false,
+      ...(hooks ? { reason: `warm skipped: appReset is '${policy.mode}'` } : {}),
+      ...(unseenUnderAuto ? { recordIfHooksAppear: true } : {}),
+    };
+  }
+  if (!hooks) return { keep: false, recordBaseline: false, ...(unseenUnderAuto ? { recordIfHooksAppear: true } : {}) };
+  if (options.forceCold) return { keep: false, recordBaseline: true, reason: 'warm skipped: a retry restores the archive cold' };
+  const learnt = ctx.capabilities?.appStateKeep;
+  // A build's hooks either report writes or they do not: no need to look again.
+  if (learnt?.noWrites) return { keep: false, recordBaseline: false, reason: NO_WRITES_REASON };
+  if (learnt?.daemonCannotKeep) return { keep: false, recordBaseline: false, reason: `warm skipped: ${DAEMON_CANNOT_KEEP}` };
+  // One write during a warm reset can be a save the test had scheduled; two
+  // in a row are the reset itself (an `onReload` that writes back what it
+  // reads), and every later attempt would pay a warm reset on top of the restore.
+  if ((learnt?.writingKeeps ?? 0) >= WRITING_KEEPS_LIMIT) {
+    return { keep: false, recordBaseline: false, reason: 'warm skipped: the app writes persisted data during its warm resets (an onReload that writes, or a save on blur), so restored data cannot be kept' };
+  }
+  const baseline = ctx.capabilities?.appStateBaseline;
+  if (!baseline) return { keep: false, recordBaseline: true };
+  if (baseline.archive !== archive) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: the last restore on this device was of ${path.basename(baseline.archive)}` };
+  }
+  // The same path saved again (a setup project re-run, possibly on another
+  // device) holds other data than this device restored.
+  if (archiveStamp(archive) !== baseline.archiveStamp) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: ${path.basename(archive)} was saved again since it was restored` };
+  }
+  let marker: ReturnType<typeof parseHooksMarker>;
+  await step('readWriteCount', async () => { marker = await readMarker(ctx); });
+  if (!marker) return { keep: false, recordBaseline: true, reason: 'warm skipped: could not read the hooks marker' };
+  if (marker.writes === undefined) return { keep: false, recordBaseline: true, reason: NO_WRITES_REASON };
+  if (marker.boot !== baseline.boot) {
+    return { keep: false, recordBaseline: true, reason: 'warm skipped: the app relaunched since the restore' };
+  }
+  const bound = ctx.config.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY;
+  if (bound > 0 && baseline.kept >= bound) {
+    return { keep: false, recordBaseline: true, reason: `warm skipped: ${baseline.kept} resets in a row kept ${path.basename(archive)} (appResetColdEvery)` };
+  }
+  if (marker.writes !== baseline.writes) {
+    // Same process, so the count only grew.
+    const n = marker.writes - baseline.writes;
+    return { keep: false, recordBaseline: true, reason: `warm skipped: the app wrote persisted data since the restore (${n} write${n === 1 ? '' : 's'})` };
+  }
+  return { keep: true, recordBaseline: true };
+}
+
+const WRITING_KEEPS_LIMIT = 2;
+const MARKER_READ_ATTEMPTS = 3;
+const MARKER_READ_RETRY_MS = 250;
+
+/**
+ * Read the hooks marker, trying again briefly on a miss: right after a
+ * relaunch or mid-transition a dump can come back without it, and a miss
+ * costs a cold restore (the daemon's own marker reads retry the same way).
+ */
+async function readMarker(ctx: SessionPreflightContext): Promise<ReturnType<typeof parseHooksMarker>> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const marker = parseHooksMarker((await ctx.client.getUiHierarchy()).hierarchyXml ?? '');
+      if (marker) return marker;
+    } catch { /* a failed read is a miss */ }
+    if (attempt >= MARKER_READ_ATTEMPTS) return undefined;
+    await delay(MARKER_READ_RETRY_MS);
+  }
+}
+
+/**
+ * After a cold restore of `archive`, remember the process it launched and
+ * its write count, so the next restore of the same archive can tell whether
+ * the data changed. A marker without a count records nothing. Returns the
+ * marker read (undefined when none was found).
+ */
+async function recordAppStateBaseline(ctx: SessionPreflightContext, archive: string): Promise<ReturnType<typeof parseHooksMarker>> {
+  const marker = await readMarker(ctx);
+  const stamp = archiveStamp(archive);
+  if (marker?.boot && marker.writes !== undefined && stamp !== undefined) {
+    (ctx.capabilities ??= {}).appStateBaseline = { archive, archiveStamp: stamp, boot: marker.boot, writes: marker.writes, kept: 0 };
+  } else if (marker && marker.writes === undefined) {
+    // The hooks publish the count from their first render, so a marker
+    // without one is this build's answer, not a read taken too early.
+    ((ctx.capabilities ??= {}).appStateKeep ??= {}).noWrites = true;
+  }
+  return marker;
+}
+
+/** The archive file's identity on disk (mtime and size), or undefined when it cannot be read. */
+function archiveStamp(archive: string): string | undefined {
+  try {
+    const st = fs.statSync(archive);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Open the declared start route (`appResetRoute`) as a deep link, for a reset
+ * that could not land on it itself (a restart, clear or restore, a fallback,
+ * or a prepared device). A path needs the hooks' URL prefix; a session that
+ * has not recorded it yet looks at the marker for it.
+ */
+async function openStartRoute(
+  ctx: SessionPreflightContext,
+  route: string,
+  step: StepRunner,
+  hooksProbeMs: number | undefined,
+): Promise<void> {
+  let url = routeDeepLink(route, ctx.capabilities?.hooksUrlPrefix);
+  if (url === undefined) {
+    await step('readHooksUrlPrefix', async () => {
+      // Look for the whole budget even when the session recorded no hooks:
+      // that `false` only says the startup probe never saw the marker (a
+      // probe can miss it under load), and a path on a hooked app must not
+      // fail on one missed read. Only a misconfigured hookless app pays the
+      // budget, on its way to the error below.
+      const deadline = Date.now() + (hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
+      for (;;) {
+        if (await readHooksMarker(ctx)) {
+          // Fresh proof of hooks: detection only ever upgrades.
+          (ctx.capabilities ??= {}).hooksDetected = true;
+          break;
+        }
+        if (Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+        await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
+      }
+    });
+    url = routeDeepLink(route, ctx.capabilities?.hooksUrlPrefix);
+  }
+  if (url === undefined) {
+    const example = `myapp://${route.startsWith('/') ? route : `/${route}`}`;
+    throw new Error(
+      `appResetRoute '${route}' is a path, which Tapsmith resolves against the URL prefix that `
+        + '@tapsmith/react-native publishes in its hooks marker, but the app shows no hooks marker. '
+        + `Mount <TapsmithTestHooks /> in the app, or give the full deep link instead (e.g. appResetRoute: '${example}').`,
+    );
+  }
+  const link = url;
+  await step('openRoute', async () => {
+    try {
+      await ctx.device.openDeepLink(link);
+    } catch (err) {
+      // Name the option: the bare delivery error reads as though the test
+      // itself had opened the link.
+      const wrapped = new Error(`Could not open appResetRoute '${route}' (${link}): ${formatError(err)}`);
+      throw Object.assign(wrapped, { cause: err });
+    }
+  }, link);
 }
 
 type StepRunner = (name: string, fn: () => Promise<void>, detail?: string) => Promise<void>;
 const runDirect: StepRunner = (_name, fn) => fn();
+
+/**
+ * Put the app back on the declared start route after a readiness check outside
+ * the reset relaunched it (the app is then on its launch screen). Waits for
+ * the relaunched app first: a link sent into a still-booting app is lost.
+ */
+export async function reopenStartRoute(ctx: SessionPreflightContext, route: string, hooksProbeMs?: number): Promise<void> {
+  await waitForAppReady(ctx);
+  await openStartRoute(ctx, route, runDirect, hooksProbeMs);
+}
 
 /**
  * The `clear` action: wipe app data and cold-launch. Does NOT include the
@@ -881,6 +1463,7 @@ async function verifySession(
   iosForegroundProbe?: Partial<IosForegroundProbeTiming>,
   tally?: ProbeLatencyTally,
   dialogs: BlockingDialogTally = { dismissals: 0, seen: new Map() },
+  onRelaunch?: () => void,
 ): Promise<void> {
   const pong = await ctx.client.ping();
   if (!pong.agentConnected) {
@@ -909,6 +1492,7 @@ async function verifySession(
       }
       if (state !== 'foreground') {
         try {
+          onRelaunch?.();
           await ctx.device.launchApp(ctx.config.package);
         } catch (err) {
           // The probe answered; the relaunch is what broke. Drop the probe
@@ -946,6 +1530,7 @@ async function verifySession(
         // recovery destroys beforeAll-established state) escalate to a
         // whole-file retry. A genuinely broken session fails the relaunch or
         // the readiness wait below, and THAT propagates into real recovery.
+        onRelaunch?.();
         await ctx.device.launchApp(ctx.config.package);
         const relaunched = await waitForHierarchy(ctx.client);
         await waitForAndroidAppHierarchy(ctx, relaunched.hierarchyXml, ctx.config.package, dialogs);
@@ -961,11 +1546,14 @@ async function verifySession(
 
 /**
  * Wait for a (re)launched app to have rendered its first content. Platform
- * dispatch: iOS polls for a non-empty hierarchy ({@link waitForIosAppReady});
- * Android polls for rendered content ({@link waitForAndroidAppReady}).
+ * dispatch: iOS first needs a non-empty hierarchy ({@link waitForIosAppReady});
+ * both then wait, bounded, for rendered content ({@link waitForRenderedContent}).
  */
-async function waitForAppReady(ctx: SessionPreflightContext): Promise<void> {
-  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx);
+async function waitForAppReady(
+  ctx: SessionPreflightContext,
+  options: { rendered?: boolean; onRelaunch?: () => void } = {},
+): Promise<void> {
+  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, options);
   return waitForAndroidAppReady(ctx);
 }
 
@@ -989,25 +1577,59 @@ export function androidHierarchyHasRenderedContent(hierarchyXml: string, package
  * After a cold launch on Android, `ensureSessionReady` returns as soon as
  * the app's window exists — for a React Native app that is the splash,
  * seconds before the JS bundle has rendered anything. Anything sent to the
- * app in that window (a deep link, the hooks-marker probe) is lost. Poll for
- * rendered content, bounded; a first screen with no text at all simply falls
- * through after the timeout — the tests' own auto-waiting takes over.
+ * app in that window (a deep link, the hooks-marker probe) is lost. Wait for
+ * rendered content, bounded (see {@link waitForRenderedContent}).
  */
 async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<void> {
   const pkg = ctx.config.package;
   if (!pkg) return;
+  await waitForRenderedContent(ctx, pkg, (xml) => androidHierarchyHasRenderedContent(xml, pkg));
+}
+
+/**
+ * Wait, bounded, for the app to draw real content; a first screen with none
+ * simply falls through after {@link APP_RENDER_READY_TIMEOUT_MS} with a
+ * breadcrumb — the tests' own auto-waiting takes over.
+ *
+ * The daemon's `WaitForAppReady` has the agent watch the app itself (Android
+ * PILOT-976, iOS PILOT-1058). A daemon or agent that predates it, or a call
+ * that fails, gets polling of full hierarchy dumps read with `hasContent` for
+ * what is left of the budget.
+ */
+async function waitForRenderedContent(
+  ctx: SessionPreflightContext,
+  pkg: string,
+  hasContent: (hierarchyXml: string) => boolean,
+): Promise<void> {
   const start = Date.now();
+  const noContent = (): void => {
+    process.stderr.write(
+      `[tapsmith] ${pkg} showed no rendered content ${APP_RENDER_READY_TIMEOUT_MS}ms after launch; continuing\n`,
+    );
+  };
+  try {
+    const answer = await ctx.client.waitForAppReady(
+      pkg,
+      APP_RENDER_READY_TIMEOUT_MS,
+      APP_RENDER_READY_TIMEOUT_MS + APP_READY_RPC_SLACK_MS,
+    );
+    if (answer.supported) {
+      (ctx.capabilities ??= {}).daemonWaitsForRender = true;
+      if (!answer.ready) noContent();
+      return;
+    }
+  } catch {
+    // An older daemon (UNIMPLEMENTED) or a failed call: poll dumps below.
+  }
   while (true) {
     try {
       const h = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
-      if (androidHierarchyHasRenderedContent(h.hierarchyXml ?? '', pkg)) return;
+      if (hasContent(h.hierarchyXml ?? '')) return;
     } catch {
       // Agent may still be settling after the relaunch — keep polling.
     }
-    if (Date.now() - start >= ANDROID_APP_READY_TIMEOUT_MS) {
-      process.stderr.write(
-        `[tapsmith] ${pkg} showed no rendered content ${ANDROID_APP_READY_TIMEOUT_MS}ms after launch; continuing\n`,
-      );
+    if (Date.now() - start >= APP_RENDER_READY_TIMEOUT_MS) {
+      noContent();
       return;
     }
     await delay(HIERARCHY_POLL_INTERVAL_MS);
@@ -1015,12 +1637,37 @@ async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<voi
 }
 
 /**
- * Wait for an iOS app to be ready after launch by polling for a non-empty
- * accessibility hierarchy. Used at the file level (after launchConfiguredApp)
- * where we know the app should be in the foreground; not used per-test
- * because tests may intentionally leave the app stopped.
+ * Wait for an iOS app to be ready after launch: first a non-empty
+ * accessibility hierarchy (the app is up), then, bounded, rendered content.
+ * Used at the file level (after launchConfiguredApp) where we know the app
+ * should be in the foreground; not used per-test because tests may
+ * intentionally leave the app stopped. `rendered: false` (an acknowledged warm
+ * reset, whose epoch already proves rendering) skips the second phase.
+ *
+ * A non-empty hierarchy alone is not "ready": a relaunched React Native app
+ * is a bare shell (application, window, empty containers) until its bundle
+ * renders. A warm deep link sent into it finds no content and falls back to a
+ * cold relaunch, and the hooks-marker read misses, pinning a hooked session
+ * to clear resets (PILOT-1058).
  */
-async function waitForIosAppReady(ctx: SessionPreflightContext): Promise<void> {
+async function waitForIosAppReady(
+  ctx: SessionPreflightContext,
+  options: { rendered?: boolean; onRelaunch?: () => void } = {},
+): Promise<void> {
+  // A relaunch inside the hierarchy phase puts the app back on a bare shell,
+  // so it needs the rendered-content phase even where the caller skipped it.
+  let relaunched = false;
+  await waitForIosAppHierarchy(ctx, () => {
+    relaunched = true;
+    options.onRelaunch?.();
+  });
+  if ((options.rendered !== false || relaunched) && ctx.config.package) {
+    await waitForRenderedContent(ctx, ctx.config.package, iosHierarchyHasRenderedContent);
+  }
+}
+
+/** The first phase of {@link waitForIosAppReady}: a non-empty hierarchy. */
+async function waitForIosAppHierarchy(ctx: SessionPreflightContext, onRelaunch?: () => void): Promise<void> {
   const start = Date.now();
   const deadline = start + IOS_APP_READY_TIMEOUT_MS;
   // An "empty hierarchy" almost never means an empty tree: the daemon maps
@@ -1059,6 +1706,7 @@ async function waitForIosAppReady(ctx: SessionPreflightContext): Promise<void> {
             `[tapsmith] iOS app not in foreground (${state}) after ` +
             `${Math.round((Date.now() - start) / 1000)}s waiting for readiness; relaunching once\n`,
           );
+          onRelaunch?.();
           await ctx.device.launchApp(ctx.config.package);
         }
       } catch {

@@ -32,9 +32,45 @@ class CommandHandler(
     private val actionExecutor: ActionExecutor,
     private val waitEngine: WaitEngine,
     private val hierarchyDumper: HierarchyDumper,
+    private val appReadiness: AppReadinessProbe,
+    private val systemDialogs: SystemDialogAnswerer,
 ) {
     companion object {
         private const val TAG = "TapsmithCommand"
+
+        /**
+         * Commands that answer a system ANR / crash dialog on screen before
+         * they run (PILOT-977). One that comes up mid-test takes focus and
+         * covers the app: input (a key, a tap) would go to it, and the app's
+         * elements cannot even be found while it is up. Hierarchy dumps,
+         * screenshots and `evaluateSelectors` (only ever asked for locator
+         * suggestions: MCP and UI-mode snapshots, the near-miss hint) stay free
+         * of side effects, so a trace or snapshot still shows the dialog; a
+         * gesture already under way (touchMove/Up) is not interrupted.
+         */
+        val DIALOG_ANSWERING_METHODS =
+            setOf(
+                // Finding elements.
+                "findElement",
+                "findElements",
+                "waitForElement",
+                "scrollStep",
+                // Input.
+                "tap",
+                "longPress",
+                "doubleTap",
+                "typeText",
+                "clearText",
+                "swipe",
+                "scroll",
+                "touchDown",
+                "pressKey",
+                "dragAndDrop",
+                "selectOption",
+                "pinchZoom",
+                "focus",
+                "blur",
+            )
     }
 
     /** Cache of last clipboard text set via setClipboard, used as fallback on Android 13+. */
@@ -59,6 +95,8 @@ class CommandHandler(
 
         val start = SystemClock.uptimeMillis()
         return try {
+            systemDialogs.startCommand()
+            if (method in DIALOG_ANSWERING_METHODS) systemDialogs.answer()
             val result = dispatch(method, params, actionBudget(params, start))
             successResponse(id, result)
         } catch (e: ElementCoveredException) {
@@ -132,7 +170,8 @@ class CommandHandler(
      * compute tap coordinates from them without re-reading the node (each read
      * is a blocking accessibility round-trip on the app's main looper;
      * PILOT-278). Cached-elementId resolution performs no reads and leaves it
-     * null; actions then run their own bounded stability check.
+     * null; actions then run their own bounded stability check, which a tap
+     * starts from [findSample], the bounds the find that cached the id read.
      */
     private class ResolvedElement(
         val obj: UiObject2,
@@ -140,6 +179,7 @@ class CommandHandler(
         /** What identified the element when it was found, re-checked before
          *  it is touched (PILOT-362). */
         val identity: TargetIdentity?,
+        val findSample: FindSample<Rect>? = null,
     )
 
     /**
@@ -161,6 +201,7 @@ class CommandHandler(
                 elementFinder.getElement(elementId),
                 freshBounds = null,
                 identity = elementFinder.identityOf(elementId),
+                findSample = elementFinder.findSampleOf(elementId),
             )
         }
         // Selector-based: auto-wait then find
@@ -242,6 +283,65 @@ class CommandHandler(
                 )
             }
 
+            // One scrollIntoView() step (PILOT-998): drag, let the list go
+            // quiet, find, and say whether the list under the finger moved.
+            "scrollStep" -> {
+                val selector = parseSelectorParams(params.getJSONObject("selector"))
+                val direction = params.getString("direction")
+                val distance = params.optDouble("distance", 0.8)
+                val region =
+                    params.optJSONObject("region")?.let { r ->
+                        HierarchyAttributes.Box(r.getInt("left"), r.getInt("top"), r.getInt("right"), r.getInt("bottom"))
+                    }
+                var dragged: HierarchyAttributes.Box? = null
+                val device =
+                    object : ScrollStepDevice<ElementInfo> {
+                        override fun now() = SystemClock.uptimeMillis()
+
+                        override fun waitForQuiet(
+                            quietMs: Long,
+                            capMs: Long,
+                        ) = actionExecutor.waitForQuiet(quietMs, capMs)
+
+                        override fun find() = elementFinder.findElements(selector)
+
+                        override fun dragList() {
+                            // Picked only once the step drags: a first step
+                            // that finds its element on screen needs none.
+                            val box = region ?: actionExecutor.pickScrollContainer()
+                            dragged = box
+                            actionExecutor.scrollStepDrag(box ?: actionExecutor.screenBox(), direction, distance)
+                        }
+
+                        override fun lastChangeAt() = actionExecutor.lastChangeAt
+
+                        override fun scrolledUnderFingerSince(since: Long) = actionExecutor.stepScrolledSince(since)
+                    }
+                val result =
+                    try {
+                        ScrollStep.run(device, params.optBoolean("findFirst", false)) { it.isVisible }
+                    } finally {
+                        actionExecutor.endScrollStep()
+                    }
+                val out =
+                    JSONObject()
+                        .put("elements", org.json.JSONArray(result.elements.map { it.toJson() }))
+                        .put("swiped", result.swiped)
+                result.moved?.let { out.put("moved", it) }
+                dragged?.let { b ->
+                    out.put(
+                        "region",
+                        JSONObject()
+                            .put("left", b.left)
+                            .put("top", b.top)
+                            .put("right", b.right)
+                            .put("bottom", b.bottom),
+                    )
+                }
+                Log.d(TAG, "scrollStep swiped=${result.swiped} moved=${result.moved} refinds=${result.refinds} region=$dragged")
+                out
+            }
+
             "evaluateSelectors" -> {
                 val raw = params.optJSONArray("selectors") ?: org.json.JSONArray()
                 val selectors =
@@ -267,7 +367,7 @@ class CommandHandler(
                     actionExecutor.tapCoordinates(x, y)
                 } else {
                     actOnElement(params, budget) { element ->
-                        actionExecutor.tap(element.obj, element.freshBounds, budget, element.identity)
+                        actionExecutor.tap(element.obj, element.freshBounds, budget, element.identity, findSample = element.findSample)
                     }
                 }
                 JSONObject().put("success", true)
@@ -362,6 +462,9 @@ class CommandHandler(
                     val direction = params.getString("direction")
                     val speed = params.optInt("speed", 5000)
                     val distance = params.optDouble("distance", 0.5)
+                    // A drag that leaves no fling (scrollIntoView, PILOT-973);
+                    // only for a region or screen swipe.
+                    val drag = params.optBoolean("drag", false)
                     val elementId = params.optString("elementId", null)
                     if (elementId != null) {
                         actionExecutor.swipe(elementFinder.getElement(elementId), direction, speed, distance)
@@ -378,9 +481,9 @@ class CommandHandler(
                                 r.getInt("right"),
                                 r.getInt("bottom"),
                             )
-                        actionExecutor.swipeRegion(region, direction, speed, distance)
+                        actionExecutor.swipeRegion(region, direction, speed, distance, drag)
                     } else {
-                        actionExecutor.swipeScreen(direction, speed, distance)
+                        actionExecutor.swipeScreen(direction, speed, distance, drag)
                     }
                 }
                 JSONObject().put("success", true)
@@ -449,6 +552,18 @@ class CommandHandler(
                 val timeout = params.optLong("timeout", 10000L)
                 val element = waitEngine.waitForElement(selector, timeout, elementFinder)
                 element.toJson()
+            }
+
+            // Has the app drawn real content yet (PILOT-976)? Running out of
+            // time is `ready: false`, not an error: the callers go on anyway.
+            "waitForAppReady" -> {
+                val pkg = params.getString("package")
+                val timeout = params.optLong("timeout", 10000L)
+                val outcome = appReadiness.await(pkg, timeout)
+                JSONObject()
+                    .put("ready", outcome.ready)
+                    .put("elapsedMs", outcome.elapsedMs)
+                    .put("checks", outcome.checks)
             }
 
             "screenshot" -> {
@@ -571,6 +686,20 @@ class CommandHandler(
             "clearElementCache" -> {
                 elementFinder.clearElementCache()
                 JSONObject().put("success", true)
+            }
+
+            "takeSystemDialogEvents" -> {
+                val events =
+                    systemDialogs.takeEvents().map { e ->
+                        JSONObject()
+                            .put("title", e.title ?: "")
+                            .put("owner", e.owner ?: "")
+                            .put("ownedByTarget", e.ownedByTarget)
+                            .put("kind", e.kind.name.lowercase())
+                            .put("button", e.button.label)
+                            .put("timestampMs", e.timestampMs)
+                    }
+                JSONObject().put("events", org.json.JSONArray(events))
             }
 
             "ping" -> {

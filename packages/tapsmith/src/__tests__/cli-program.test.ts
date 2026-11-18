@@ -454,6 +454,7 @@ describe('commands', () => {
     expect((await run(['verify', '--json', '--config=t.mjs'])).calls).toEqual([['verify', { json: true, config: 't.mjs' }]]);
     expect((await run(['mcp-server', '-c', 'm.mjs'])).calls).toEqual([['mcpServer', { config: 'm.mjs' }]]);
     expect((await run(['mcp-server'])).calls).toEqual([['mcpServer', {}]]);
+    expect((await run(['mcp-server', '--prefer-ui'])).calls).toEqual([['mcpServer', { preferUi: true }]]);
   });
 
   it('telemetry takes an optional action from a fixed set', async () => {

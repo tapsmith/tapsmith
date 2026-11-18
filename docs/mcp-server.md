@@ -2,11 +2,79 @@
 
 Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI coding agents run tests, interact with devices, and inspect results through a standardized tool interface. Both modes expose the same **17 tools** for device interaction, test execution, result browsing, watch mode, and session info.
 
+## Quick start: UI mode and the plugin
+
+1. Once: install the Tapsmith plugin in your coding agent ([below](#install-the-plugin)).
+2. Whenever you want to watch the agent work: start UI mode in your project, `npx tapsmith test --ui`. Before or after the agent starts, either way works.
+3. Ask the agent to write or fix a test. While UI mode is running it works in the UI session you have open: its test runs and device actions show in the UI as they happen, on the device the session is mirroring. With no UI session running, it works [headless](#stdio-mode) on a device of its own.
+
+There is no URL to copy and nothing to register. The agent moves to a UI session you start later from its next tool call, with no restart ([how it follows UI mode](#one-server-that-follows-ui-mode)).
+
+## Install the plugin
+
+The Tapsmith plugin for Claude Code, Codex and Cursor does two things:
+
+- registers one MCP server, `tapsmith`, started from the Tapsmith installed in your project, never a global or `npx`-cached copy. It works in the project's running UI-mode session when there is one, and headless on a device of its own when there is not;
+- adds a `tapsmith` skill that walks the agent through finding locators, screen objects, running one test and reading a failed test's trace, and points it at the docs that ship with the installed version, in `node_modules/tapsmith/docs/`.
+
+The plugin's server runs the project's copy of Tapsmith (`npm install -D tapsmith`). Installing the plugin first is fine, and is the usual order when the agent sets Tapsmith up itself: until Tapsmith is installed, the server has one tool, `tapsmith_setup_status`, and it and every call say Tapsmith is not installed yet and how to install it. It checks again every second and on every call, and starts the project's Tapsmith as soon as it finds it, with no restart. Agents that re-read a server's tools when it says they changed then list the `tapsmith_*` tools straight away; if yours still shows only `tapsmith_setup_status`, reconnect the server (`/mcp` in Claude Code) or start a new session. Codex reads a server's tools only when the session starts, so in Codex start a new session after installing Tapsmith. `tapsmith init` lists the plugin install for each coding agent it finds in the project.
+
+Claude Code:
+
+```bash
+claude plugin marketplace add tapsmith/tapsmith
+claude plugin install tapsmith@tapsmith
+```
+
+In a session, the same is `/plugin marketplace add tapsmith/tapsmith`, then `/plugin install tapsmith@tapsmith`.
+
+Codex:
+
+```bash
+codex plugin marketplace add tapsmith/tapsmith
+codex plugin add tapsmith@tapsmith
+```
+
+Or add the marketplace, then pick **Tapsmith** in Codex's `/plugins` browser. Start a new session after installing.
+
+Cursor installs plugins from its plugin marketplace rather than a command. A team admin can import this repository (`https://github.com/tapsmith/tapsmith`) as a team marketplace, and the team then installs **Tapsmith** from it. To try it on your own, copy the plugin folder into Cursor's local plugins and reload the window:
+
+```bash
+git clone --depth 1 https://github.com/tapsmith/tapsmith.git tapsmith-plugin-src
+mkdir -p ~/.cursor/plugins/local
+cp -R tapsmith-plugin-src/plugins/tapsmith ~/.cursor/plugins/local/tapsmith
+```
+
+**Which project the server runs in.** In Claude Code, the project the session was opened in (`CLAUDE_PROJECT_DIR`); in Cursor, the workspace's first folder (`WORKSPACE_FOLDER_PATHS`); in Codex, the directory Codex was started in. The server runs there, with the Tapsmith installed in that folder or the nearest folder above it (the `node_modules/tapsmith` that `import "tapsmith"` would find), so start the agent from the folder that holds your `tapsmith.config.ts`. When the tests live in a folder one level below with its own Tapsmith config and `node_modules` (an `e2e/` package in a monorepo), that folder is used, as long as there is only one. Otherwise start the agent from the test project's folder, or set `TAPSMITH_PROJECT_DIR` to it in the environment you start the agent from. Codex passes only a few environment variables on to MCP servers, and not this one, so in Codex start it from the folder. When it cannot start Tapsmith (none installed, several candidate projects, a folder that does not exist), the server stays up and says why in every tool call, as above.
+
+If you registered `tapsmith-ui` or `tapsmith-headless` by hand before, remove those registrations (`claude mcp remove tapsmith-ui`, `codex mcp remove tapsmith-headless`, and so on), so the agent does not see every tool two or three times. Also remove one registered under the name `tapsmith` (`codex mcp remove tapsmith`): in Codex a server of that name in your own config replaces the plugin's.
+
+The plugin's version follows Tapsmith's releases. `claude plugin marketplace update tapsmith` or `codex plugin marketplace upgrade tapsmith` fetches a newer one.
+
+The server follows UI mode when the project's Tapsmith is a version that has `tapsmith mcp-server --prefer-ui`. With an older one the plugin still works, headless only.
+
+### One server that follows UI mode
+
+The plugin's server is `tapsmith mcp-server --prefer-ui`. It holds no session of its own: before each tool call it looks for a running `tapsmith test --ui` session of the same project and passes the call to it, or to a headless server it starts when there is none.
+
+- **Which UI session.** One started in the folder the server runs in, or with a config file in that folder (so `npx tapsmith test --ui -c e2e/tapsmith.config.ts` from a repo root is found by an agent working in `e2e/`). With several, the one on the server's own `--config` file, else the one started last. UI sessions of other projects are never used.
+- **A UI session started later** is used from the next call. The headless session is ended first, which stops its daemon and frees its device. If that headless session already holds the device the UI session wants, `tapsmith test --ui` asks it to hand over as it starts and waits up to 10 seconds; you will see a line saying so. Calls the agent makes while that UI session is still starting wait for it (up to 30 seconds) instead of starting a new headless session. (macOS and Linux. On Windows, restart the agent's MCP server to free the device.)
+- **A headless test run still going** when the UI session starts keeps running, and keeps its device. Calls made meanwhile (`tapsmith_stop_tests`, `tapsmith_suite_status`) go to that run. The first call after it ends moves to the UI session. A UI session that needs that same device cannot start while the run has it: after its 10-second wait it reports the device as in use, so start UI mode again once the run has ended.
+- **A UI session that ends** is noticed on the next call, which runs headless. If it ends while a call is running, that call fails with a message saying it may not have completed; the server does not send it again by itself.
+- **Each mode has its own state.** Results, the suite board and watches do not carry over, and the first tool result after a switch says that one happened. `tapsmith_session_info` ends with a `## Mode` section naming the mode, and when headless says how to start a UI session to watch the agent work. So do headless errors about a missing or held device.
+
+To use it without the plugin, register that command yourself:
+
+```bash
+claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
+codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
+```
+
 ## Modes
 
-The MCP server operates in two modes. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
+The server above chooses between two modes, and each can also be registered by hand, as this section shows: for an MCP client the plugin does not cover, to connect to a UI session of another project or machine, or to keep an agent headless whatever UI sessions are running. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. Registering a single mode by hand, prefer `tapsmith-ui` while a UI session is running: the agent then works in the session you can see.
 
-### HTTP mode (recommended)
+### HTTP mode
 
 When running `tapsmith test --ui`, a Streamable HTTP MCP endpoint is hosted alongside the UI. The agent shares the same daemon, device, and test session as the UI — test runs appear in the UI with full progress tracking, and both the agent and user share mutual exclusion (only one run at a time).
 
@@ -83,7 +151,7 @@ codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith
 claude mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
 ```
 
-If a UI server is already running, stdio mode will detect it and suggest connecting via HTTP instead. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session.
+If a UI server is already running when it starts, the plain stdio server stays headless and says so on stderr, pointing at the plugin or `--prefer-ui` to follow the UI session, and at the session's HTTP endpoint. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session. With `--prefer-ui` the server makes that choice itself, call by call: see [One server that follows UI mode](#one-server-that-follows-ui-mode).
 
 The session ends when the client closes the server's stdin or sends it SIGINT, SIGTERM or SIGHUP. Either way the server stops any run in progress, stops the daemon it started (and so that daemon's device agent) unless another MCP session in the project is still using it, and exits 0.
 
@@ -178,6 +246,8 @@ Returns a text representation of the accessibility tree with suggested locators 
 
 Each suggestion is checked by the device's automation agent, with the same matching a test resolves locators with, and is offered only when it resolves to exactly the element it is listed against. They are checked in a few short batches; if checking stops early (the agent errors, or a slow device is still being checked after about 20 seconds, when no further batch is started), the elements checked so far keep their suggestions and a note says why the rest have none or are pinned by position. When nothing else singles an element out, its suggestion ends in `.first()`, `.nth(i)` or `.last()`, counted in the order the agent matches elements, so it depends on what else is on screen. If the agent cannot check any suggestion, or none resolves to its element (the screen changed while it was checked), the tree is still returned, without suggestions, followed by a note that says why; elements that were no longer on screen when the agent checked them are counted in a note too. A character that does not survive copy-paste, such as the icon-font glyph in a React Navigation tab's name, is written as a `\uXXXX` escape: JavaScript and `tapsmith_test_locator` read it back to the same character.
 
+An app that is still launching has nothing on screen yet, so a screen with no elements is read again for up to 15 seconds before the result says `(empty screen)`.
+
 #### `tapsmith_screenshot`
 
 Capture a PNG screenshot of the device screen. Use when you need to visually verify what's on screen or when the accessibility tree is insufficient.
@@ -209,11 +279,11 @@ Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` i
 | `timeout` | number | No | How long the tap may take, waiting for the element included, in milliseconds (default 5000, at most 120000), as `tap({ timeout })` in a test (a tap on an element found just before it still gets up to a second). |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
-When nothing matches the locator, the error is the one a test gets, which can list locators that match the same words on screen (see [Locators that match nothing](locators.md#locators-that-match-nothing)), and it ends by asking you to check a locator with `tapsmith_test_locator` before acting on it. `tapsmith_type` answers a miss the same way.
+A tap answers with the [test line](#test-lines) that repeats it. When nothing matches the locator, the error is the one a test gets, which can list locators that match the same words on screen (see [Locators that match nothing](locators.md#locators-that-match-nothing)), and it ends by asking you to check a locator with `tapsmith_test_locator` before acting on it. `tapsmith_type` answers a miss the same way.
 
 #### `tapsmith_type`
 
-Type text into an element matching the locator, as `locator.type(text)` in a test would: it waits up to 5 seconds for the field to appear, then gives the typing a test's 30 seconds (a long string takes a while on iOS), which is also how long it waits for something covering the field, such as an open sheet, to go away. A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended.
+Type text into an element matching the locator, as `locator.type(text)` in a test would: it waits up to 5 seconds for the field to appear, then gives the typing a test's 30 seconds (a long string takes a while on iOS), which is also how long it waits for something covering the field, such as an open sheet, to go away. A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended. It answers with the [test line](#test-lines) that repeats it.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -251,6 +321,45 @@ Launch an app on the device.
 | `clear_data` | boolean | No | Clear app data before launching (default: false) |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
+#### `tapsmith_run_code`
+
+Run test statements on the device, written as a test body writes them, and see which pass. Use it to try an assertion before you write it into a test, or a step the other action tools do not have (a long press, a double tap, `scrollIntoView`, `dragTo`, a deep link, a coordinate tap): a wrong statement fails in seconds instead of costing a test run.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `code` | string | Yes | One or more statements, one per line or separated by `;` |
+| `timeout` | number | No | How long each statement may wait for its element or assertion, `webview.` ones included, in milliseconds (default 5000, at most 120000). A `{ timeout }` written in a statement wins for that statement. Once its field is there, typing gets up to 30 seconds, as with `tapsmith_type`. |
+| `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
+| `project` | string | No | Project whose device to use, as on the other device tools. |
+
+```
+await device.getByLabel("Full name").type("Grace Hopper");
+await expect(device.getByRole("button", { name: "Save" })).toBeEnabled();
+await device.getByText("Row 40").scrollIntoView();
+```
+
+The statements run in order, on the SDK's own objects, so each behaves as the same line in a test: auto-waiting, strict mode, and the same errors. The first one that fails stops the run, and the result says where it stopped, which statements passed, which failed and why, and which did not run:
+
+```
+Stopped at statement 2 of 3 (line 2): it failed. 1 passed, 1 not run.
+Statement 1 of 3 (line 1): OK
+Test line: await device.getByLabel("Full name").type("Grace Hopper");
+Statement 2 of 3 (line 2) failed: Expected element getByRole("button", { name: "Save" }) to be enabled, but it was not.
+Not run: statement 3 (line 3).
+```
+
+Each passing statement answers with its [test line](#test-lines). An action's locator is checked by the device agent as the action resolves its element, as for `tapsmith_tap`, so a `.first()`/`.nth()` locator is replaced by one that matches the element alone when there is one. An assertion, `scrollIntoView()` and `waitFor()` are written as they ran, and flagged position-dependent when their locator picks its element by position.
+
+**The code is parsed, never run as JavaScript.** Each statement must be one of:
+
+- `await <locator>.<action>(…);`, where the action is `tap`, `doubleTap`, `longPress`, `type`, `clearAndType`, `clear`, `scroll`, `scrollIntoView`, `dragTo`, `setChecked`, `selectOption`, `focus`, `blur`, `pinchIn`, `pinchOut` or `waitFor`, or `click` or `fill` on a `webview.` locator;
+- `await expect(<locator>).<matcher>(…);`, or `.not.<matcher>`, with any locator matcher (`toBeVisible`, `toBeHidden`, `toExist`, `toBeEnabled`, `toBeDisabled`, `toBeChecked`, `toBeEmpty`, `toBeFocused`, `toBeEditable`, `toBeInViewport`, `toHaveText`, `toContainText`, `toHaveCount`, `toHaveAttribute`, `toHaveAccessibleName`, `toHaveAccessibleDescription`, `toHaveRole`, `toHaveValue`; a `webview.` locator takes the WebView matchers);
+- `await device.<method>(…);`, where the method is `openDeepLink`, `tapXY`, `longPressXY`, `dragXY`, `swipe`, `pressKey`, `pressBack`, `pressHome`, `pressRecentApps`, `hideKeyboard`, `inputText`, `setOrientation`, `setColorScheme`, `launchApp`, `terminateApp` (with its package), `bringToForeground`, `sendToBackground`, `wake`, `unlock`, `openNotifications` or `openQuickSettings`.
+
+Locators are written as in the [locator format](#locator-format) (`page.`, `this.device.` and a bare getter work too, and are written `device.` in the lines). Arguments are literals: strings, numbers, booleans, RegExp literals, arrays of them where the method takes one (`toHaveText([…])`), option objects and nested locators (`dragTo(device.getByText("Done"))`). Anything else is refused before any statement runs, with its line and column: a variable or a declaration (`webview.` needs none), an assignment, a function, another identifier, a missing `await`, a query whose value would need a variable (`count()`, `getText()`, `isVisible()`: assert it instead, with `toHaveCount()`, `toHaveText()` or `toBeVisible()`), and a method not listed above.
+
+While a test run is in progress on the session, the tool is refused and nothing runs, because it would act on the device under the run; a run that starts between two statements stops it before the next one.
+
 #### `tapsmith_list_devices`
 
 List all connected mobile devices and emulators across all platforms. Returns serial numbers needed for the `device` parameter on other tools.
@@ -258,6 +367,38 @@ List all connected mobile devices and emulators across all platforms. Returns se
 No parameters.
 
 Returns a JSON array of device objects with `serial`, `model`, `platform` (android/ios), `os_version`, `is_emulator`, `state`, and `usable`. Usable devices come first. A device that is attached but cannot be used — an Android phone whose USB-debugging prompt was never accepted (`unauthorized`), an `offline` device, or one without USB permission on Linux (`no permissions (…)`) — is listed with `usable: false`, adb's state as `state`, and a `fix` with the same advice `tapsmith doctor` and `tapsmith list-devices` give. A device the session was using that has since disconnected (on either platform) is listed last with `usable: false` and `state: "Disconnected"`, or with adb's state and a `fix` when adb still lists it. In UI (HTTP) mode the list covers only the UI session's own devices, so an attached device the session is not using — usable or not — is not listed; use `tapsmith list-devices` for the whole machine.
+
+### Test lines
+
+Every action tool answers a successful action with `OK` and the test line that repeats it, as you would write it in the test with the `device` fixture. Write each line into the test file as you go:
+
+```
+OK
+Test line: await device.getByRole("button", { name: "Sign in" }).tap();
+```
+
+| Tool | Line |
+|---|---|
+| `tapsmith_tap` | `await <locator>.tap();` (`.click()` for a `webview.` locator) |
+| `tapsmith_type` | `await <locator>.type("…");`, or `.clearAndType("…")` with `clear` (`.fill("…")` for a `webview.` field, with the value the field ends up holding) |
+| `tapsmith_swipe` | `await device.swipe("up");` |
+| `tapsmith_press_key` | `await device.pressKey("back");` |
+| `tapsmith_launch_app` | `await device.launchApp("com.example.app");`, with `{ clearData: true }` when `clear_data` was set |
+| `tapsmith_run_code` | each passing statement, as a test writes it ([details](#tapsmith_run_code)) |
+
+**The locator in a tap or type line is checked by the device agent**, with the matching a test resolves locators with, against the screen the action started on. The check is the action's own wait for its element: a locator without a position must match exactly one element there (strict mode), so the line names exactly the element that was tapped or typed into. It is checked before the action runs, so a tap that opens another screen, or removes the element, still answers with a checked line. It costs no extra round trip to the device. The receiver is written `device.` (or `webview.`) whichever spelling the tool was given (`page.`, `this.device.`, a bare `getByText(…)`).
+
+A locator that picks its element by position (`.first()`, `.last()`, `.nth(n)`) is not unique by design. For one of those, before the action runs, the device agent checks the screen's candidate locators for that element (the ones `tapsmith_snapshot` would suggest), and:
+
+- when one matches that element alone, the line uses it instead, and says which positional locator it replaces;
+- when none does, the line keeps the position and is flagged `Test line (position-dependent):`, with a `// position-dependent` comment that goes into the test with it;
+- when the check cannot finish (the agent errors, or about 5 seconds pass), the action still runs, and the result says the line could not be verified and gives none. Check a locator with `tapsmith_test_locator` before writing that step.
+
+The check takes at most about 5 seconds, on top of the action's own `timeout`. If the action has to find its element again before it lands (the screen moved under it) and the position then picks a different element, the line is reported unverified too.
+
+A `webview.` locator is checked by the page, which is where a test's WebView locators are resolved too. A line that acts on one needs `const webview = await device.webview();` earlier in the test, and the result says so. A positional `webview.` locator is flagged as position-dependent, with a comment saying no alternative was looked for: find one with `tapsmith_test_locator`.
+
+A failed action gives no line. Lines use plain `device.` calls: if the test uses screen objects, move the locator into one.
 
 ### Response size
 
@@ -296,7 +437,9 @@ shown in detail, with each error cut to 2,000 characters; when their traces are
 long, fewer failures are shown in detail. The failures after those, up to the
 50th, get one line each, and any after that are counted. Screenshots are attached for up to the first 3 failures
 that have one, as many as fit the response limit. The report ends by pointing to `tapsmith_list_results`, which lists
-every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1.
+every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1. When more than one test ran, it also says how to try locators on the screen where a test failed: run just that test.
+
+When the run was one test and it failed, the report checks whether the device is still on the screen where it failed (`DEVICE HELD`), and for a locator that matched nothing it lists the elements on the device's screen closest to it, each with a locator the device agent checked finds it alone when there is one. See [Fix a failing test](#fix-a-failing-test).
 
 A file that dies before any test reports — a failed import, a crashed or
 timed-out worker — is reported as a single failure named
@@ -391,7 +534,7 @@ Get configuration and environment info for the current test session. Useful for 
 
 No parameters.
 
-Returns session details: the config file backing the session, device serial, platform, app package, timeout, retries, and per-project settings (name, platform, package, test file count, dependencies).
+Returns session details: the config file backing the session, device serial, platform, app package, timeout, retries (always 0 in UI mode, which [never retries](ui-mode.md#each-test-runs-once)), and per-project settings (name, platform, package, test file count, dependencies).
 
 Check the `Config:` line first — everything else is derived from it. A headless
 session started outside a project directory may pick up a config you did not
@@ -419,24 +562,45 @@ Returns a message indicating whether watch mode was enabled or disabled.
 
 ### UI-shared workflow
 
-1. **Start the UI:** `tapsmith test --ui`
-2. **Connect your agent** to the MCP endpoint shown in the MCP panel
+1. **Connect your agent** (once): [install the plugin](#install-the-plugin) or [register `--prefer-ui`](#one-server-that-follows-ui-mode), which follow the UI session from the next call. For a UI session of another project or machine, register the MCP URL shown in the MCP panel ([HTTP mode](#http-mode))
+2. **Start the UI:** `tapsmith test --ui`
 3. **Understand the environment:** call `tapsmith_session_info` to see platform, device, package, and project configuration
 4. **Discover tests:** call `tapsmith_list_tests` to see the full test tree with file paths and test names
 5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested locators, then `tapsmith_test_locator` on each locator you will use, until it counts exactly 1. Only then put it in test code
-6. **Run tests:** call `tapsmith_run_tests` with file paths and optional test name / project filters. On failure, the response includes error details, trace steps, and a screenshot
-7. **Review results:** use `tapsmith_list_results` to browse the latest run (pass `details: true` to see trace steps for failures), and `tapsmith_suite_status` to see the whole suite's accumulated status including tests that have not run yet
-8. **Debug failures:** use `tapsmith_read_trace` with the trace file path from the failure report for step-by-step debugging
-9. **Iterate:** toggle `tapsmith_watch` on files being actively developed for automatic re-runs on save
+6. **Write the test as you walk the flow:** each action tool answers with the [test line](#test-lines) that repeats it; write each line into the test file as you go. Check each assertion with [`tapsmith_run_code`](#tapsmith_run_code) before writing it
+7. **Run tests:** call `tapsmith_run_tests` with file paths and optional test name / project filters. On failure, the response includes error details, trace steps, and a screenshot
+8. **Review results:** use `tapsmith_list_results` to browse the latest run (pass `details: true` to see trace steps for failures), and `tapsmith_suite_status` to see the whole suite's accumulated status including tests that have not run yet
+9. **Debug failures:** use `tapsmith_read_trace` with the trace file path from the failure report for step-by-step debugging
+10. **Iterate:** toggle `tapsmith_watch` on files being actively developed for automatic re-runs on save
 
 ### Headless stdio workflow
 
-1. **Add the MCP server config:** `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
+1. **Add the MCP server:** [install the plugin](#install-the-plugin) or [register `--prefer-ui`](#one-server-that-follows-ui-mode), which run headless while no UI session is running. To stay headless even when one is, register the plain server: `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device, and put a locator in test code only once `tapsmith_test_locator` counts exactly 1
-5. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
-6. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
+5. **Write the test as you walk the flow:** write the [test line](#test-lines) each action tool answers with into the test file as you go, and check each assertion with [`tapsmith_run_code`](#tapsmith_run_code) before writing it
+6. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
+7. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
+
+### Fix a failing test
+
+A test that fails on a locator can be fixed against the live app: the device stays on the screen where it failed.
+
+1. **Run just that test:** call `tapsmith_run_tests` with its file and `test` set to its name (from `tapsmith_list_tests`), so the run is that one test
+2. **Read the report:** when it fails, the report says `DEVICE HELD` with the screen it is still on and, for a locator that matched nothing, lists the elements there closest to it, with checked locators
+3. **Try a fix on that screen:** check a replacement with `tapsmith_test_locator` until it counts exactly 1; `tapsmith_snapshot` shows the whole screen. Then run the fixed line itself, or the failed assertion, with [`tapsmith_run_code`](#tapsmith_run_code) on that screen: it fails in seconds with the error the test would get, or passes with the test line to write back
+4. **Change the test and run it again:** the next `tapsmith_run_tests` resets the app as usual, so the test starts from its normal starting point
+
+Nothing holds or pauses the device for this. The runner resets the app before a file or test, never after one, so after a failed run the device is normally left where the test stopped. The report says `DEVICE HELD` only when the device shows it: its screen now matches the one the failure's trace captured at the failed step, the last step whose error is the test's error, leaving out the test's `afterEach` and `afterAll` hooks. When no such step has a captured screen (for example, the test threw the error from its own code), there is nothing to compare, and the report says so. When the two differ, the report says so without claiming why. A step is captured when it starts, so the app may have moved on while the step waited; the test's own `afterEach` or `afterAll` hooks or a fixture's teardown may have moved it after the failure; or another device ran the test. For a locator that matched nothing it still lists the closest elements on the device's screen as it is now, to try once `tapsmith_snapshot` shows the screen the test failed on (`tapsmith_read_trace` shows the failure screen).
+
+There is no screen report:
+
+- **When more than one test ran.** A later test may have moved the screen. For a locator that matched nothing, the report says to run the one test that failed.
+- **Without a trace.** The check needs the failure's trace. UI mode always records one; a headless session records one when the config's `trace` is not `'off'` (for example `trace: 'retain-on-failure'`).
+- **For a device group.** A test on a [device group](#choosing-a-device) (`use.devices`) gets no screen report.
+
+It works the same in [UI mode](#ui-shared-workflow) and [headless](#headless-stdio-workflow) sessions. In UI mode, a failed run leaves its device alone until you prepare it or run again. With several UI workers for the project, leave `device` out of these calls (`tapsmith_run_tests` refuses it there): the screen is checked on the device the device tools use, and when that is not the one that ran the test, its screen normally differs and the report does not say `DEVICE HELD`.
 
 ## Locator format
 

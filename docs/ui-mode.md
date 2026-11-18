@@ -18,6 +18,8 @@ To set a specific port:
 npx tapsmith test --ui --ui-port 8080
 ```
 
+The UI server and its MCP endpoint listen on `127.0.0.1` only, and answer only requests addressed to `127.0.0.1`, `localhost` or `[::1]`. Only the UI's own page can open its WebSocket or send it commands, so another site open in your browser, or another local app's page, cannot drive the session or read its results. Open the UI at the printed address (or through a port forward to `localhost`). A refused request gets `403 Forbidden` (an HTTP request with the reason in the body), and a refused connection to the UI's WebSocket is reported in the terminal with the origin it came from.
+
 ## Features
 
 The UI provides:
@@ -28,6 +30,12 @@ The UI provides:
 - **Result browsing** -- after a run, browse results with error messages, stack traces, screenshots, and trace data inline.
 - **Watch mode toggle** -- toggle file-level watching from the UI. When a file's watch is enabled, it re-runs automatically on save (the same mechanism as `--watch` mode).
 - **Interactive device mirror** -- the UI streams the device screen and lets you drive it with your mouse and keyboard: click to tap, drag to swipe/scroll, click-and-hold to long-press, and type to enter text. See [Interacting with the device mirror](#interacting-with-the-device-mirror).
+
+### Each test runs once
+
+UI mode never retries a failed test, as in Playwright's UI mode: whatever `retries` is set to — at the root of the config, on a project, with `test.use({ retries })` or with `test.describe.configure({ retries })` — every run, whether started from the tree, by a watched file or by an MCP agent, runs each test once. A failed test's actions, screenshots, hierarchies and error stay in place for you to inspect until you run it again, and that run replaces them. `tapsmith test`, `--workers`, `--watch` and `tapsmith mcp-server` keep the configured retries.
+
+This only concerns retrying a test that failed. Waiting for a locator or assertion, and the recovery UI mode does when the device session fails under a file (it starts the session again and reruns the file), work as before. A trace mode that records only retries (`on-first-retry`, `on-all-retries`) records every test in UI mode, which needs the trace for its live view. A video mode that records only retries (`on-first-retry`, `on-all-retries`) records nothing in UI mode, and UI mode says so when it starts.
 
 ## Interacting with the device mirror
 
@@ -40,7 +48,7 @@ The live device mirror is interactive -- drive the device straight from the brow
 
 These drive the same coordinate gestures exposed in the SDK (`device.tapXY`, `device.dragXY`, `device.longPressXY`, `device.inputText` -- see the [API reference](api-reference.md)).
 
-**Lock toggle.** A lock control in the mirror header governs interactivity. It's unlocked (interactive) by default and **auto-locks while a run is active** so your input can't interfere with a running test. You can override it at any time -- an explicit lock sticks until you unlock, while an unlock during a run lasts only for that run.
+**Lock toggle.** A lock control in the mirror header governs interactivity. It's unlocked (interactive) by default and **auto-locks while a test runs on the device it shows** so your input can't interfere with a running test. With several devices, the lock follows the device the mirror shows, and in the "All" grid each device locks only while it runs a test. You can override it at any time -- an explicit lock sticks until you unlock, while an unlock during a run lasts only for that run.
 
 ### Picking locators from the mirror
 
@@ -56,13 +64,17 @@ The Locator tab has a **Trace | Live** toggle showing which hierarchy it is boun
 
 A recorded hierarchy has no device to ask, so the `Trace` source -- like the standalone trace viewer's Locator tab -- matches with a re-implementation of the agents' rules, and says so: its counts are approximate, and the device decides at run time. It takes one getter, optionally followed by `.first()`, `.last()` or `.nth(n)`; a chained call shows an error naming the call. For an answer you can rely on, use the Live source.
 
-Picking works even while the mirror is locked (it's read-only), and it works against whatever is on screen: drive the app to the screen you care about, then pick. In multi-device mode, the picker targets the device tab you're viewing (it's unavailable in the "All" grid view).
+Picking is read-only, so an explicit lock doesn't stop it, and it works against whatever is on screen: drive the app to the screen you care about, then pick. In multi-device mode, the picker targets the device tab you're viewing (it's unavailable in the "All" grid view).
+
+While a test runs on the mirrored device, the picker and the Live source leave the device alone, because each reads the screen through the same agent the test is driving. The pick button is disabled (an armed pick is cancelled, and a pick the device is still checking is dropped), and the Locator tab says its Live checks are paused. They resume when the run ends. To pick or check a locator mid-run anyway, unlock the mirror for that run, or pick from the trace's screenshot instead.
 
 ## MCP integration
 
 The UI server exposes a [Streamable HTTP](https://modelcontextprotocol.io/) MCP endpoint that AI coding agents (Claude Code, Cursor, Codex, etc.) can connect to. This gives agents 16 tools for test discovery, execution, result browsing, device interaction, and watch mode control -- all sharing the same session as the UI.
 
-The MCP endpoint listens on its own port, not the UI's: `http://127.0.0.1:9274/mcp` by default, or a free port when 9274 is taken (two UI sessions at once, say). The terminal prints the address as `MCP ready at …` when UI mode starts; the commands below use the default, so substitute the printed address if it differs. To connect an agent:
+With the [Tapsmith plugin](mcp-server.md#install-the-plugin) installed in the agent, there is nothing to connect: its server finds this project's UI session and works in it, including one started after the agent. With no UI session running, it works headless on a device of its own.
+
+The MCP endpoint listens on its own port, not the UI's: `http://127.0.0.1:9274/mcp` by default, or a free port when 9274 is taken (two UI sessions at once, say). The terminal prints the address as `MCP ready at …` when UI mode starts; the commands below use the default, so substitute the printed address if it differs. To connect an agent without the plugin:
 
 ```bash
 claude mcp add tapsmith-ui --transport http http://localhost:9274/mcp
@@ -123,11 +135,11 @@ npx tapsmith test --ui --workers 4
 
 ### The device is prepared before you click Run
 
-After a run finishes (and after startup), the worker resets the app in the background to the state the next run will need — the declared `appReset` policy of the file you have selected, or the file you last ran. When you click Run, the worker only verifies the session (well under a second) and the trace records the reset as **satisfied by background preparation** instead of paying for it inline. The run summary tells you what you got: *First action after 0.6s (device was prepared)* versus *(app reset ran inline)*.
+After a run finishes (and after startup), the worker resets the app in the background to the state the next run will need — the declared `appReset` policy of the file you have selected, or the file you last ran. When you click Run, the worker only verifies the session (well under a second) and the trace records the reset as **satisfied by background preparation** instead of paying for it inline.
 
-The device chip in the top rail shows the state: **ready** (prepared, with what it was prepared for and how long it took in the tooltip), **preparing…**, **stale** (something touched the device since — an MCP agent's tap, a gesture on the mirror — and it will be prepared again after a short pause), or nothing when preparation between runs is off. Preparation starts as soon as a run ends (a warm reset is sub-second, and the trace keeps every post-action screenshot), but holds off while you are interacting with the mirror so the screen is not yanked away under your finger. After a run you **stopped**, or one where a test **failed** on that device, the app is held as-is so you can inspect it — preparation re-arms when you select a different file, click **Prepare device now**, or start the next run.
+The device chip in the top rail shows the state: **ready** (prepared, with what it was prepared for and how long it took in the tooltip), **preparing…**, **stale** (the device is not prepared for the next run, and why), or nothing when preparation between runs is off. Preparation starts as soon as a run ends (a warm reset is sub-second, and the trace keeps every post-action screenshot), but holds off while you are interacting with the mirror so the screen is not yanked away under your finger. An MCP agent's device action (a tap, typing, a swipe, a key press, an app launch, or a `tapsmith_run_code` block) gets the same treatment: no preparation starts on its own while it runs, and one already resetting its device finishes before the action starts, so an agent never acts on a half-reset app. Clicking **Prepare device now** still resets the device straight away, even mid-action. Once something touches the device — a gesture on the mirror, or an MCP agent's tap, typing or app launch — the app is held on the screen it was driven to, so you can pick locators there and an agent's next step finds the screen it left; the next run resets it first. The same hold applies after a run you **stopped**, or one where a test **failed** on that device, so you can inspect it. A held device stays as it is — through selecting other tests and runs on other devices — until you click **Prepare device now** or run a test on it. One exception: when you have edited source files, the next run first restarts every worker to load the new code, and a device whose worker cannot reuse the session's original connection (a second device, or a session spanning platforms) is relaunched then.
 
-Right-click the chip for **Prepare device now**, **Cancel preparation**, and the **Prepare device between runs** toggle (remembered in this browser). Background preparations, mirror gestures and worker recycles all appear in the **Device activity** panel alongside MCP tool calls; a segmented filter (**All | Agent | Device**) narrows the feed to one stream, with a "N hidden" count so filtered rows are never mistaken for lost ones. The filter resets to All each session — the interleaved view is where cause meets effect (an agent's tap next to the re-preparation it triggered).
+Right-click the chip for **Prepare device now**, **Cancel preparation**, and the **Prepare device between runs** toggle (remembered in this browser). Background preparations, mirror gestures and worker recycles all appear in the **Device activity** panel alongside MCP tool calls; a segmented filter (**All | Agent | Device**) narrows the feed to one stream, with a "N hidden" count so filtered rows are never mistaken for lost ones. The filter resets to All each session — the interleaved view is where cause meets effect (an agent's tap next to the device going stale, or a run next to the preparation that follows it).
 
 Teams can set the session default in the config — `ui: { prepareBetweenRuns: false }`, or `ui: { prepareDelayMs: 5000 }` for a quiet period after each run (useful when `onReset` has backend side effects, or on personal physical devices). An explicit choice in the chip menu still wins for that person.
 

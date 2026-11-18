@@ -49,6 +49,8 @@ export interface ActionResponse {
   errorType: string;
   errorMessage: string;
   screenshot: Buffer;
+  /** StartAgent only: the agent launched the app afresh at this start (after the requested wipe). */
+  appLaunchedFresh?: boolean;
 }
 
 export interface FindElementResponse {
@@ -62,6 +64,32 @@ export interface FindElementsResponse {
   requestId: string;
   elements: ElementInfo[];
   errorMessage: string;
+}
+
+/** What one scrollIntoView() step did: see {@link TapsmithGrpcClient.scrollStep}. */
+export interface ScrollStepResponse {
+  requestId: string;
+  elements: ElementInfo[];
+  errorMessage: string;
+  /** Whether the list under the finger scrolled; `MOVED_UNSPECIFIED` when the device cannot tell. */
+  moved: 'MOVED_UNSPECIFIED' | 'MOVED_YES' | 'MOVED_NO';
+  /** The region the step dragged in, when it dragged in one. */
+  region?: { left: number; top: number; right: number; bottom: number };
+  /** False when `findFirst` found the element on screen and nothing was dragged. */
+  swiped: boolean;
+  /** The device cannot make a scroll step: nothing was done. */
+  unsupported: boolean;
+}
+
+export interface ScrollStepOptions {
+  /** The way the finger moves, as {@link TapsmithGrpcClient.swipe} takes it. */
+  direction: string;
+  /** The scroll container to drag in; without one the Android agent picks it. */
+  region?: { left: number; top: number; right: number; bottom: number };
+  /** The drag's length as a fraction of the region; below 0.5 a short nudge. */
+  distance: number;
+  /** Wait for quiet and find before dragging; no drag when the element shows. */
+  findFirst?: boolean;
 }
 
 /** One selector's matches from {@link TapsmithGrpcClient.evaluateSelectors},
@@ -81,8 +109,16 @@ export interface EvaluateSelectorsResponse {
 export interface ScreenshotResponse {
   requestId: string;
   success: boolean;
+  /** PNG, upright as the screen shows it. */
   data: Buffer;
   errorMessage: string;
+  /**
+   * iOS: how the device was turned ("portrait", "landscapeLeft",
+   * "landscapeRight", "portraitUpsideDown"); empty when unknown or on
+   * Android. iOS coordinate touches take native portrait points, so a point
+   * on the upright image is turned back with this (ui-mode/mirror-touch-point.ts).
+   */
+  orientation?: string;
 }
 
 export interface UiHierarchyResponse {
@@ -152,6 +188,14 @@ export interface GetAppStateResponse {
   state: string;
 }
 
+/** `WaitForAppReady`: whether the app drew real content in time. */
+export interface WaitForAppReadyResponse {
+  requestId: string;
+  ready: boolean;
+  /** False when the platform has no such wait; `ready` is then meaningless. */
+  supported: boolean;
+}
+
 export interface GetClipboardResponse {
   requestId: string;
   text: string;
@@ -165,6 +209,27 @@ export interface GetOrientationResponse {
 export interface IsKeyboardShownResponse {
   requestId: string;
   shown: boolean;
+}
+
+/** A system ANR / crash dialog the Android agent answered on its own. */
+export interface SystemDialogEvent {
+  /** The dialog's title, e.g. `Pixel Launcher isn't responding`; empty when unknown. */
+  title: string;
+  /** The owning process when the window list named exactly one (or it was the app's); empty otherwise. */
+  owner: string;
+  /** The app under test owns it: its own ANR, answered with Wait. */
+  ownedByTarget: boolean;
+  /** `anr` (isn't responding) or `crash` (keeps stopping). */
+  kind: string;
+  /** The button pressed: `Close app` or `Wait`. */
+  button: string;
+  /** When it was answered, device wall-clock ms since the epoch. */
+  timestampMs: number;
+}
+
+export interface TakeSystemDialogEventsResponse {
+  requestId: string;
+  events: SystemDialogEvent[];
 }
 
 export interface GetColorSchemeResponse {
@@ -282,6 +347,11 @@ export interface ResetAppRequestOptions {
    * `device.resetApp()` calls keep the gentler restart fallback.
    */
   fallbackToClear?: boolean;
+  /**
+   * Ask the in-app hook to keep the app's persisted data (reset in-memory
+   * state only). Set between tests that restore the same `appState`.
+   */
+  keepAppData?: boolean;
 }
 
 export interface ResetAppStep {
@@ -302,6 +372,13 @@ export interface ResetAppResponse extends ActionResponse {
   epochBefore: number;
   epochAfter: number;
   steps: ResetAppStep[];
+  /** The app ended on the requested `targetPath` (a hooks reset acknowledged there). */
+  targetReached: boolean;
+  /**
+   * A `keepAppData` request reached the in-app hook as a keep (the reset link
+   * carried the keep flag). False from a daemon that predates the field.
+   */
+  keptAppData?: boolean;
 }
 
 const APP_RESET_WIRE_MODE: Record<AppResetRequestMode, string> = {
@@ -336,6 +413,12 @@ export interface SwipeOptions {
   timeoutMs?: number;
   /** Swipe inside these screen bounds instead of across the whole screen. */
   region?: { left: number; top: number; right: number; bottom: number };
+  /**
+   * End without momentum and return as soon as the finger lifts:
+   * the Android agent rests at the end before it lifts, so nothing flings.
+   * Only for a region or screen swipe; the iOS agent ignores it.
+   */
+  drag?: boolean;
 }
 
 export interface ScrollOptions {
@@ -352,6 +435,27 @@ const PROTO_PATH = (() => {
   return path.resolve(import.meta.dirname, '../../../proto/tapsmith.proto');
 })();
 const DEFAULT_ADDRESS = 'localhost:50051';
+
+/** @internal — the channel options of every connection to the daemon. */
+export const DAEMON_CHANNEL_OPTIONS = {
+  'grpc.max_receive_message_length': 64 * 1024 * 1024,  // 64MB
+  'grpc.max_send_message_length': 64 * 1024 * 1024,     // 64MB
+  'grpc.keepalive_time_ms': 30_000,                      // ping every 30s
+  // How long a ping may go unanswered before the connection is dropped. The
+  // daemon is local, so an unanswered ping means a starved process, not a lost
+  // network: on a loaded CI runner the daemon or this process can stall past
+  // 10 s, and a call issued meanwhile then failed "14 UNAVAILABLE: Connection
+  // dropped" before the daemon saw it (PILOT-948). The daemon waits 30 s for
+  // its own pings; this side is no stricter.
+  'grpc.keepalive_timeout_ms': 30_000,
+  'grpc.keepalive_permit_without_calls': 1,              // ping even when idle
+  // The daemon is local, so a reconnect attempt costs next to nothing.
+  // grpc-js waits 1 s before its first one by default: every daemon
+  // start paid that second, because the first connect is refused
+  // until the daemon listens (~30 ms after it is spawned).
+  'grpc.initial_reconnect_backoff_ms': 50,
+  'grpc.max_reconnect_backoff_ms': 1_000,
+} as const;
 
 /**
  * Deadline for cleanup RPCs dispatched after the run has been aborted
@@ -433,13 +537,7 @@ export class TapsmithGrpcClient {
     this.client = new TapsmithService(
       this.address,
       grpc.credentials.createInsecure(),
-      {
-        'grpc.max_receive_message_length': 64 * 1024 * 1024,  // 64MB
-        'grpc.max_send_message_length': 64 * 1024 * 1024,     // 64MB
-        'grpc.keepalive_time_ms': 30_000,                      // ping every 30s
-        'grpc.keepalive_timeout_ms': 10_000,                   // 10s to respond
-        'grpc.keepalive_permit_without_calls': 1,              // ping even when idle
-      },
+      DAEMON_CHANNEL_OPTIONS,
     // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
     ) as grpc.Client & Record<string, Function>;
   }
@@ -578,11 +676,30 @@ export class TapsmithGrpcClient {
   }
 
   /**
+   * One scrollIntoView() step in one device call: drag the list,
+   * wait for it to stop changing, then find `selector` as
+   * {@link findElements} does. `timeoutMs` is the find's read budget; the
+   * drag and the quiet wait come on top of it.
+   */
+  async scrollStep(selector: Selector, timeoutMs: number, options: ScrollStepOptions): Promise<ScrollStepResponse> {
+    const request: Record<string, unknown> = {
+      requestId: requestId(),
+      selector: this.selectorProto(selector),
+      timeoutMs,
+      direction: options.direction,
+      distance: options.distance,
+    };
+    if (options.region) request.region = options.region;
+    if (options.findFirst) request.findFirst = true;
+    return this.call<ScrollStepResponse>('scrollStep', request);
+  }
+
+  /**
    * Evaluate several selectors against one UI snapshot, without waiting:
    * the agent's own matching decides every count, so locator
    * suggestions can't drift from what a test resolves.
    */
-  async evaluateSelectors(selectors: Selector[]): Promise<EvaluateSelectorsResponse> {
+  async evaluateSelectors(selectors: Selector[], deadlineMs?: number): Promise<EvaluateSelectorsResponse> {
     // Agents scope a find by a resolved parent element id, never by a nested
     // parent selector, so a scoped selector would be counted unscoped.
     if (selectors.some((s) => s.parent)) {
@@ -591,7 +708,7 @@ export class TapsmithGrpcClient {
     return this.call<EvaluateSelectorsResponse>('evaluateSelectors', {
       requestId: requestId(),
       selectors: selectors.map((s) => this.selectorProto(s)),
-    });
+    }, deadlineMs);
   }
 
   async tap(selector: Selector | undefined, timeoutMs?: number, elementId?: string): Promise<ActionResponse> {
@@ -648,6 +765,7 @@ export class TapsmithGrpcClient {
     };
     if (options?.timeoutMs != null) request.timeoutMs = options.timeoutMs;
     if (options?.region) request.region = options.region;
+    if (options?.drag) request.drag = true;
     return this.call<ActionResponse>('swipe', request);
   }
 
@@ -688,20 +806,35 @@ export class TapsmithGrpcClient {
   }
 
   async touchDown(x: number, y: number, tMs = 0): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchDown', { requestId: requestId(), x, y, tMs });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchDown', { requestId: requestId(), x, y, tMs }));
   }
 
   async touchMove(x: number, y: number, tMs = 0): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchMove', { requestId: requestId(), x, y, tMs });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchMove', { requestId: requestId(), x, y, tMs }));
   }
 
   async touchUp(x: number, y: number, tMs = 0): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchUp', { requestId: requestId(), x, y, tMs });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchUp', { requestId: requestId(), x, y, tMs }));
   }
 
   async touchCancel(): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchCancel', { requestId: requestId() });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchCancel', { requestId: requestId() }));
   }
+
+  /**
+   * Send a touch-stream call once the one before it has finished. Callers
+   * (the UI-mode mirror) fire a quick flick's start and end without awaiting
+   * either, and the daemon does not answer them in order: a touch-down first
+   * starts the iOS simulator's HID helper, so the up could reach the
+   * simulator before the down and leave a finger held down.
+   */
+  private _inTouchOrder<T>(send: () => Promise<T>): Promise<T> {
+    const result = (this._touchChain ?? Promise.resolve()).then(send);
+    this._touchChain = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private _touchChain: Promise<void> | undefined;
 
   async scroll(
     container: Selector | undefined,
@@ -785,6 +918,7 @@ export class TapsmithGrpcClient {
     networkTracingEnabled = false,
     networkHosts: string[] = [],
     passthroughHosts: string[] = [],
+    reduceMotion?: boolean,
   ): Promise<ActionResponse> {
     return this.call<ActionResponse>('setDevice', {
       requestId: requestId(),
@@ -792,6 +926,8 @@ export class TapsmithGrpcClient {
       networkTracingEnabled,
       networkHosts,
       passthroughHosts,
+      // Optional on the wire: unset tells the daemon to change nothing.
+      ...(reduceMotion !== undefined ? { reduceMotion } : {}),
     }, 120_000);
   }
 
@@ -802,6 +938,7 @@ export class TapsmithGrpcClient {
     iosXctestrunPath?: string,
     iosAppPath?: string,
     networkTracingEnabled = false,
+    clearAppDataFirst = false,
   ): Promise<ActionResponse> {
     return this.call<ActionResponse>('startAgent', {
       requestId: requestId(),
@@ -811,6 +948,7 @@ export class TapsmithGrpcClient {
       iosXctestrunPath: iosXctestrunPath ?? '',
       iosAppPath: iosAppPath ?? '',
       networkTracingEnabled,
+      clearAppDataFirst,
       // Must comfortably exceed the daemon's internal agent-launch wait (150s
       // in agent_launch.rs) plus simulator configuration around it, so the
       // daemon's clean, retryable failure text reaches us instead of a bare
@@ -930,6 +1068,7 @@ export class TapsmithGrpcClient {
       idleTimeoutMs: options.idleTimeoutMs ?? 0,
       targetPath: options.targetPath ?? '/',
       fallbackToClear: options.fallbackToClear ?? false,
+      keepAppData: options.keepAppData ?? false,
     }, 600_000);
   }
 
@@ -998,6 +1137,19 @@ export class TapsmithGrpcClient {
     }, deadlineMs);
   }
 
+  /**
+   * Wait up to `timeoutMs` for a just-(re)launched app to draw real content:
+   * a node of the package with text or a content description (Android).
+   * Rejects with gRPC `UNIMPLEMENTED` from a daemon that predates it.
+   */
+  async waitForAppReady(packageName: string, timeoutMs: number, deadlineMs?: number): Promise<WaitForAppReadyResponse> {
+    return this.call<WaitForAppReadyResponse>('waitForAppReady', {
+      requestId: requestId(),
+      packageName,
+      timeoutMs,
+    }, deadlineMs);
+  }
+
   async clearAppData(packageName: string): Promise<ActionResponse> {
     return this.call<ActionResponse>('clearAppData', {
       requestId: requestId(),
@@ -1053,6 +1205,13 @@ export class TapsmithGrpcClient {
     });
   }
 
+  /** The system dialogs the agent answered since the last call, oldest first. */
+  async takeSystemDialogEvents(deadlineMs?: number): Promise<TakeSystemDialogEventsResponse> {
+    return this.call<TakeSystemDialogEventsResponse>('takeSystemDialogEvents', {
+      requestId: requestId(),
+    }, deadlineMs);
+  }
+
   async hideKeyboard(): Promise<ActionResponse> {
     return this.call<ActionResponse>('hideKeyboard', {
       requestId: requestId(),
@@ -1104,13 +1263,18 @@ export class TapsmithGrpcClient {
     errorMessage: string;
     /** How traffic reaches the proxy; undefined on failure or from an older daemon. */
     route?: NetworkCaptureRoute;
+    /**
+     * The device does not trust Tapsmith's CA, so HTTPS passes through the
+     * proxy uncaptured. False from an older daemon.
+     */
+    httpsPassthrough?: boolean;
   }> {
-    const res = await this.call<{ success: boolean; proxyPort: number; errorMessage: string; route?: string }>('startNetworkCapture', {
+    const res = await this.call<{ success: boolean; proxyPort: number; errorMessage: string; route?: string; httpsPassthrough?: boolean }>('startNetworkCapture', {
       requestId: requestId(),
       requireIsolation: options?.requireIsolation ?? false,
       httpPorts: options?.httpPorts ?? [],
     });
-    return { ...res, route: networkCaptureRouteFromProto(res.route) };
+    return { ...res, route: networkCaptureRouteFromProto(res.route), httpsPassthrough: res.httpsPassthrough === true };
   }
 
   async stopNetworkCapture(options?: { keepRunning?: boolean }): Promise<{
@@ -1134,7 +1298,7 @@ export class TapsmithGrpcClient {
       captureId?: string;
       requestBodyOmitted?: boolean;
       responseBodyOmitted?: boolean;
-      /** A passthrough marker for a connection an OS service opened, not an app. */
+      /** The entry belongs to a connection an OS service opened, not an app. */
       osService?: boolean;
     }>;
     errorMessage: string;
@@ -1145,6 +1309,18 @@ export class TapsmithGrpcClient {
     tlsRejectedHosts?: string[];
     /** Hosts whose MITM certificate an OS service rejected; absent from older daemons. */
     osServiceTlsRejectedHosts?: string[];
+    /**
+     * Header- and body-less copies of the entries a capture start cleared
+     * since the previous stop (what the app sent between tests); absent from
+     * older daemons. Never part of the test's capture.
+     */
+    entriesBeforeStart?: Array<{
+      method: string;
+      url: string;
+      startTimeMs: number;
+      routeAction: string;
+      osService?: boolean;
+    }>;
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon
     // even when the run was stopped, or the proxy keeps capturing into a

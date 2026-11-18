@@ -109,8 +109,32 @@ const AGENT_PING_TIMEOUT: Duration = Duration::from_secs(3);
 /// before declaring it unreachable.
 const DEFAULT_CONNECT_READINESS: Duration = Duration::from_secs(8);
 
-/// Pause between handshake pings while waiting for an agent to answer.
-const CONNECT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+/// First pause between handshake pings while waiting for an agent to
+/// answer. Agent start-up usually takes a second or two, so a short first
+/// pause notices it within tens of milliseconds of its first pong instead
+/// of on a whole-second grid (PILOT-975).
+const CONNECT_RETRY_INTERVAL_MIN: Duration = Duration::from_millis(50);
+
+/// Longest pause between handshake pings. Each Android ping opens a new
+/// connection through `adb forward`; a cold software-GPU CI emulator can
+/// take most of the 60 s readiness window to start the agent, and pinging
+/// it every 50 ms throughout would add adb traffic to an already starved
+/// device.
+const CONNECT_RETRY_INTERVAL_MAX: Duration = Duration::from_millis(250);
+
+/// The pause after handshake ping number `attempt` (0-based) failed: starts
+/// at `CONNECT_RETRY_INTERVAL_MIN` and grows by half each time up to
+/// `CONNECT_RETRY_INTERVAL_MAX`.
+fn connect_retry_interval(attempt: u32) -> Duration {
+    let mut interval = CONNECT_RETRY_INTERVAL_MIN;
+    for _ in 0..attempt {
+        interval = interval.mul_f32(1.5);
+        if interval >= CONNECT_RETRY_INTERVAL_MAX {
+            return CONNECT_RETRY_INTERVAL_MAX;
+        }
+    }
+    interval
+}
 
 /// Sentinel string used by `try_send_command` to mark an empty-response
 /// failure. `anyhow::Error` does not preserve original error types across
@@ -153,20 +177,13 @@ pub(crate) async fn ping_agent_port(host_port: u16) -> Result<()> {
 /// a still-starting or dead Android agent "connected" and made the reuse
 /// check in StartAgent keep a dead agent forever.
 pub(crate) async fn ping_agent_port_with_timeout(host_port: u16, timeout: Duration) -> Result<()> {
-    let addr = format!("127.0.0.1:{host_port}");
-    let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&addr))
-        .await
-        .map_err(|_| anyhow!("Timed out connecting to agent"))?
-        .context("Agent socket not reachable")?;
+    let (mut reader, mut writer) = connect_authenticated(host_port, timeout).await?;
 
     let ping = r#"{"id":"ping","method":"ping","params":{}}"#;
-    stream.write_all(ping.as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    stream.flush().await?;
+    writer.write_all(format!("{ping}\n").as_bytes()).await?;
+    writer.flush().await?;
 
-    let mut reader = BufReader::new(&mut stream);
     let mut line = String::new();
-
     tokio::time::timeout(timeout, reader.read_line(&mut line))
         .await
         .map_err(|_| anyhow!("Agent did not respond to ping"))??;
@@ -177,9 +194,43 @@ pub(crate) async fn ping_agent_port_with_timeout(host_port: u16, timeout: Durati
              (not listening yet, or its process is gone)"
         );
     }
+    let reply: Value = serde_json::from_str(line.trim())
+        .map_err(|_| anyhow!("Unexpected answer to ping: {}", line.trim()))?;
+    if reply.get("id").and_then(Value::as_str) != Some("ping")
+        || reply.pointer("/result/pong").and_then(Value::as_bool) != Some(true)
+    {
+        bail!("Unexpected answer to ping: {}", line.trim());
+    }
 
     debug!(response = %line.trim(), "Agent ping successful");
     Ok(())
+}
+
+/// Open a connection to the agent behind `host_port` and authenticate it
+/// with this user's agent token (PILOT-969): an agent closes any connection
+/// whose first line is not the auth line. `timeout` bounds the connect and
+/// the handshake separately.
+///
+/// Every failure reads "…agent socket…", the wording the SDK already treats
+/// as a recoverable infrastructure failure: restarting the agent is also what
+/// cures an agent started with another token or from an older build.
+async fn connect_authenticated(
+    host_port: u16,
+    timeout: Duration,
+) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
+    let token = crate::agent_auth::agent_token().context("Failed to connect to agent socket")?;
+    let addr = format!("127.0.0.1:{host_port}");
+    let stream = tokio::time::timeout(timeout, TcpStream::connect(&addr))
+        .await
+        .map_err(|_| anyhow!("Timed out connecting to agent socket"))?
+        .context("Failed to connect to agent socket")?;
+    stream.set_nodelay(true).ok();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    crate::agent_auth::authenticate(&mut reader, &mut writer, token, timeout)
+        .await
+        .map_err(|e| anyhow!("Failed to connect to agent socket: {e:#}"))?;
+    Ok((reader, writer))
 }
 
 /// Categorizes a `try_send_command` failure so the caller can decide whether
@@ -220,16 +271,12 @@ pub(crate) async fn clear_stream_cache(cache: &AgentStreamCache) {
 }
 
 async fn connect_persistent(host_port: u16) -> Result<PersistentStream, SendError> {
-    let addr = format!("127.0.0.1:{}", host_port);
-    let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr))
+    let (reader, writer) = connect_authenticated(host_port, Duration::from_secs(5))
         .await
-        .map_err(|_| SendError::Connect(anyhow!("Timed out connecting to agent socket")))?
-        .map_err(|e| SendError::Connect(anyhow!(e).context("Failed to connect to agent socket")))?;
-    stream.set_nodelay(true).ok();
-    let (read_half, write_half) = stream.into_split();
+        .map_err(SendError::Connect)?;
     Ok(PersistentStream {
-        reader: BufReader::new(read_half),
-        writer: write_half,
+        reader,
+        writer,
         host_port,
     })
 }
@@ -410,6 +457,37 @@ pub enum AgentCommand {
         selector: Value,
         timeout_ms: Option<u64>,
     },
+    /// One scrollIntoView() step on the Android agent (PILOT-998): drag in
+    /// `region` (or a container the agent picks), wait for quiet, find
+    /// `selector`, and report whether the list under the finger scrolled.
+    ScrollStep {
+        selector: Value,
+        /// The way the finger moves.
+        direction: String,
+        /// `{"left","top","right","bottom"}`; None: the agent picks one.
+        region: Option<Value>,
+        distance: f32,
+        /// Wait for quiet and find first; drag only when it is not on screen.
+        find_first: bool,
+    },
+    /// An iOS scroll step's drag points (PILOT-998), in the app's interface
+    /// space, for the agent to map into the HID helper's native portrait
+    /// space, as it maps a tap's point. It answers `{"points": null}` when the
+    /// way the screen is turned cannot be told.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    ScrollStepPoints {
+        points: Vec<[f64; 2]>,
+    },
+    /// The find half of an iOS scroll step (PILOT-998), after the daemon's
+    /// HID drag: wait for `region` to stop changing (unless the element is
+    /// still far off), find `selector`, and report whether the tree inside
+    /// `region` changed since the agent's previous snapshot.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    ScrollStepFind {
+        selector: Value,
+        /// `{"left","top","right","bottom"}`, in points.
+        region: Value,
+    },
     /// Evaluate several selectors against one UI snapshot, without waiting
     /// and without caching the matches (PILOT-848).
     EvaluateSelectors {
@@ -430,6 +508,9 @@ pub enum AgentCommand {
         selector: Value,
         timeout_ms: Option<u64>,
         element_id: Option<String>,
+        /// The point is for a tap: plan it as the agent's own tap would, and
+        /// do the bookkeeping the agent's tap does after its touch.
+        for_tap: bool,
     },
     LongPress {
         selector: Value,
@@ -458,6 +539,9 @@ pub enum AgentCommand {
         /// Screen bounds to swipe inside instead of the whole screen:
         /// `{"left","top","right","bottom"}`.
         region: Option<Value>,
+        /// End without momentum: a drag that rests before it lifts, so
+        /// nothing flings (scrollIntoView, PILOT-973). Sent only when true.
+        drag: bool,
     },
     TapCoordinates {
         x: f32,
@@ -596,6 +680,9 @@ pub enum AgentCommand {
     },
     HideKeyboard {},
     IsKeyboardShown {},
+    /// Take the system ANR / crash dialogs the Android agent answered on its
+    /// own since the last call (PILOT-977).
+    TakeSystemDialogEvents {},
     SetOrientation {
         orientation: String,
     },
@@ -603,6 +690,13 @@ pub enum AgentCommand {
     GetColorScheme {},
     GetAppState {
         package: String,
+    },
+    /// Wait up to `timeout_ms` for the app to show text or a description
+    /// (Android agent, PILOT-976). Answers `{ready: bool}`; running out of
+    /// time is `ready: false`, not an error.
+    WaitForAppReady {
+        package: String,
+        timeout_ms: u64,
     },
     CaptureTraceState {
         screenshot: bool,
@@ -630,6 +724,9 @@ impl AgentCommand {
         match self {
             AgentCommand::FindElement { .. } => "findElement",
             AgentCommand::FindElements { .. } => "findElements",
+            AgentCommand::ScrollStep { .. } => "scrollStep",
+            AgentCommand::ScrollStepPoints { .. } => "scrollStepPoints",
+            AgentCommand::ScrollStepFind { .. } => "scrollStepFind",
             AgentCommand::EvaluateSelectors { .. } => "evaluateSelectors",
             AgentCommand::Tap { .. } => "tap",
             AgentCommand::ResolveActionPoint { .. } => "resolveActionPoint",
@@ -666,10 +763,12 @@ impl AgentCommand {
             AgentCommand::AcceptOpenInAppDialog { .. } => "acceptOpenInAppDialog",
             AgentCommand::HideKeyboard {} => "hideKeyboard",
             AgentCommand::IsKeyboardShown {} => "isKeyboardShown",
+            AgentCommand::TakeSystemDialogEvents {} => "takeSystemDialogEvents",
             AgentCommand::SetOrientation { .. } => "setOrientation",
             AgentCommand::GetOrientation {} => "getOrientation",
             AgentCommand::GetColorScheme {} => "getColorScheme",
             AgentCommand::GetAppState { .. } => "getAppState",
+            AgentCommand::WaitForAppReady { .. } => "waitForAppReady",
             AgentCommand::CaptureTraceState { .. } => "captureTraceState",
             AgentCommand::DismissSystemDialog => "dismissSystemDialogs",
         }
@@ -698,6 +797,33 @@ impl AgentCommand {
                 }
                 ("findElements", p)
             }
+            AgentCommand::ScrollStep {
+                selector,
+                direction,
+                region,
+                distance,
+                find_first,
+            } => {
+                let mut p = json!({
+                    "selector": selector,
+                    "direction": direction,
+                    "distance": distance,
+                });
+                if let Some(r) = region {
+                    p["region"] = r.clone();
+                }
+                if *find_first {
+                    p["findFirst"] = json!(true);
+                }
+                ("scrollStep", p)
+            }
+            AgentCommand::ScrollStepPoints { points } => {
+                ("scrollStepPoints", json!({ "points": points }))
+            }
+            AgentCommand::ScrollStepFind { selector, region } => (
+                "scrollStepFind",
+                json!({"selector": selector, "region": region}),
+            ),
             AgentCommand::EvaluateSelectors { selectors } => {
                 ("evaluateSelectors", json!({ "selectors": selectors }))
             }
@@ -717,12 +843,16 @@ impl AgentCommand {
                 selector,
                 timeout_ms,
                 element_id,
+                for_tap,
             } => {
                 let mut p = selector.clone();
                 if let Some(t) = timeout_ms {
                     p["timeout"] = json!(t);
                 }
                 add_element_id(&mut p, element_id);
+                if *for_tap {
+                    p["forTap"] = json!(true);
+                }
                 ("resolveActionPoint", p)
             }
             AgentCommand::LongPress {
@@ -778,8 +908,12 @@ impl AgentCommand {
                 distance,
                 timeout_ms,
                 region,
+                drag,
             } => {
                 let mut p = json!({"direction": direction});
+                if *drag {
+                    p["drag"] = json!(true);
+                }
                 if let Some(se) = start_element {
                     p["startElement"] = se.clone();
                 }
@@ -1037,6 +1171,7 @@ impl AgentCommand {
             }
             AgentCommand::HideKeyboard {} => ("hideKeyboard", json!({})),
             AgentCommand::IsKeyboardShown {} => ("isKeyboardShown", json!({})),
+            AgentCommand::TakeSystemDialogEvents {} => ("takeSystemDialogEvents", json!({})),
             AgentCommand::SetOrientation { orientation } => {
                 ("setOrientation", json!({ "orientation": orientation }))
             }
@@ -1045,6 +1180,13 @@ impl AgentCommand {
             AgentCommand::GetAppState { package } => {
                 ("getAppState", json!({ "bundleId": package }))
             }
+            AgentCommand::WaitForAppReady {
+                package,
+                timeout_ms,
+            } => (
+                "waitForAppReady",
+                json!({ "package": package, "timeout": timeout_ms }),
+            ),
             AgentCommand::CaptureTraceState {
                 screenshot,
                 hierarchy,
@@ -1210,6 +1352,17 @@ impl AgentConnection {
         }
     }
 
+    /// A connection already marked connected to an agent on `host_port`,
+    /// for tests that talk to a mock agent.
+    #[cfg(test)]
+    pub(crate) fn connected_for_test(host_port: u16) -> Self {
+        Self {
+            connected: true,
+            device_serial: Some("test-device".to_string()),
+            ..Self::with_port(host_port)
+        }
+    }
+
     /// Snapshot the connection params needed for TCP I/O. Returns an error if
     /// the agent is not connected. Designed to be called under a brief read
     /// lock so the caller can release the lock before doing the actual I/O.
@@ -1286,11 +1439,13 @@ impl AgentConnection {
                 }
                 Err(e) => {
                     debug!(serial, attempt, error = %e, "agent handshake ping failed");
-                    if tokio::time::Instant::now() >= deadline {
+                    let now = tokio::time::Instant::now();
+                    if now >= deadline {
                         break e;
                     }
+                    let pause = connect_retry_interval(attempt).min(deadline - now);
                     attempt += 1;
-                    tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
+                    tokio::time::sleep(pause).await;
                 }
             }
         };
@@ -1298,6 +1453,22 @@ impl AgentConnection {
             // Clean up the forwarding on failure
             let _ = adb::remove_forward(serial, self.host_port).await;
             self.forward.forget(serial, self.host_port);
+        }
+        if crate::agent_auth::predates_auth(&format!("{last_err:#}")) {
+            let fix = if ios {
+                "Rebuild the iOS agent for this Tapsmith version, then run again."
+            } else {
+                "Update @tapsmith/agent-android to this Tapsmith version, or point agentApk \
+                 and agentTestApk in your Tapsmith config at a current agent build, then run \
+                 again."
+            };
+            bail!(
+                "{}",
+                crate::agent_auth::stale_agent_message(
+                    &format!("The Tapsmith agent on device {serial}"),
+                    fix
+                )
+            );
         }
         bail!(
             "Agent is not responding on device {serial} after {}s: {last_err}. Is the agent app running?",
@@ -1378,13 +1549,10 @@ impl AgentConnection {
         command: &AgentCommand,
         timeout: Duration,
     ) -> std::result::Result<AgentResponse, SendError> {
-        let addr = format!("127.0.0.1:{}", self.host_port);
-        let mut stream = tokio::time::timeout(Duration::from_secs(5), async {
-            TcpStream::connect(&addr).await
-        })
-        .await
-        .map_err(|_| SendError::Connect(anyhow!("Timed out connecting to agent socket")))?
-        .map_err(|e| SendError::Connect(anyhow!(e).context("Failed to connect to agent socket")))?;
+        let (mut reader, mut writer) =
+            connect_authenticated(self.host_port, Duration::from_secs(5))
+                .await
+                .map_err(SendError::Connect)?;
 
         // Everything past the successful TCP connect normally counts as a
         // "post-send" failure: even if the write hasn't happened yet, we
@@ -1403,25 +1571,23 @@ impl AgentConnection {
             debug!(payload = %payload, "Sending command to agent");
 
             // Write the command as a newline-delimited JSON message
-            stream
+            writer
                 .write_all(payload.as_bytes())
                 .await
                 .context("Failed to write to agent socket")?;
-            stream
+            writer
                 .write_all(b"\n")
                 .await
                 .context("Failed to write newline to agent socket")?;
-            stream.flush().await?;
+            writer.flush().await?;
 
             // Read the response (newline-delimited JSON). Use the caller-
             // supplied timeout plus headroom so the agent's own work clock
             // always finishes first — see DEFAULT_READ_TIMEOUT_HEADROOM for the
             // rationale.
-            let reader = BufReader::new(&mut stream);
             let mut line = String::new();
 
             tokio::time::timeout(read_timeout, async {
-                let mut reader = reader;
                 reader
                     .read_line(&mut line)
                     .await
@@ -1523,6 +1689,54 @@ impl AgentConnection {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The nonce the mock agents challenge with.
+    const MOCK_CHALLENGE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn challenge_line() -> String {
+        format!("{{\"id\":\"auth\",\"challenge\":\"{MOCK_CHALLENGE}\"}}\n")
+    }
+
+    /// The agent's answer to the daemon's auth line, as both real agents
+    /// give it: the ack with the agent's own proof when the daemon proved it
+    /// holds this user's token, else the refusal.
+    fn agent_answer(auth_line: &str) -> (bool, String) {
+        let token = crate::agent_auth::agent_token().unwrap();
+        let v: Value = serde_json::from_str(auth_line.trim()).unwrap_or(Value::Null);
+        let expected = crate::agent_auth::proof(token, "daemon", MOCK_CHALLENGE);
+        if v["method"] == "auth" && v["params"]["proof"] == expected.as_str() {
+            let nonce = v["params"]["nonce"].as_str().unwrap_or_default();
+            let proof = crate::agent_auth::proof(token, "agent", nonce);
+            let ack = json!({"id": "auth", "result": {"authenticated": true, "proof": proof}});
+            (true, format!("{ack}\n"))
+        } else {
+            (
+                false,
+                "{\"id\":\"auth\",\"error\":{\"type\":\"UNAUTHORIZED\",\"message\":\"wrong token\"}}\n"
+                    .to_string(),
+            )
+        }
+    }
+
+    /// The agent's side of the auth handshake, as both real agents do it:
+    /// challenge first, then the daemon must prove it holds this user's
+    /// token. Hands back the connection after the ack, or closes it after
+    /// the refusal.
+    async fn agent_handshake(
+        stream: TcpStream,
+    ) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+        write_half
+            .write_all(challenge_line().as_bytes())
+            .await
+            .ok()?;
+        let mut line = String::new();
+        reader.read_line(&mut line).await.ok()?;
+        let (accepted, answer) = agent_answer(&line);
+        write_half.write_all(answer.as_bytes()).await.ok()?;
+        accepted.then_some((reader, write_half))
+    }
 
     // ─── Agent forward record (PILOT-550) ───
 
@@ -1650,6 +1864,18 @@ mod tests {
                 selector: json!({}),
                 timeout_ms: None,
             },
+            AgentCommand::ScrollStep {
+                selector: json!({}),
+                direction: "up".into(),
+                region: None,
+                distance: 0.8,
+                find_first: false,
+            },
+            AgentCommand::ScrollStepFind {
+                selector: json!({}),
+                region: json!({}),
+            },
+            AgentCommand::ScrollStepPoints { points: vec![] },
             AgentCommand::Tap {
                 selector: json!({}),
                 timeout_ms: None,
@@ -1706,9 +1932,14 @@ mod tests {
             AgentCommand::LaunchApp {
                 package: "p".into(),
             },
+            AgentCommand::WaitForAppReady {
+                package: "p".into(),
+                timeout_ms: 1,
+            },
             AgentCommand::AcceptOpenInAppDialog { timeout_ms: None },
             AgentCommand::GetClipboard {},
             AgentCommand::GetOrientation {},
+            AgentCommand::TakeSystemDialogEvents {},
             AgentCommand::CaptureTraceState {
                 screenshot: true,
                 hierarchy: true,
@@ -1723,6 +1954,19 @@ mod tests {
                 "method_name() disagrees with to_json for {cmd:?}"
             );
         }
+    }
+
+    #[test]
+    fn to_json_wait_for_app_ready() {
+        // PILOT-976: the Android agent reads `package` and `timeout`.
+        let j = AgentCommand::WaitForAppReady {
+            package: "com.example".into(),
+            timeout_ms: 7_500,
+        }
+        .to_json("r");
+        assert_eq!(j["method"], "waitForAppReady");
+        assert_eq!(j["params"]["package"], "com.example");
+        assert_eq!(j["params"]["timeout"], 7_500);
     }
 
     #[test]
@@ -1769,13 +2013,30 @@ mod tests {
             selector: json!({"text": "Item"}),
             timeout_ms: Some(4000),
             element_id: None,
+            for_tap: false,
         };
         let j = cmd.to_json("rap");
+        assert!(j["params"].get("forTap").is_none());
         assert_eq!(j["method"], "resolveActionPoint");
         assert_eq!(cmd.method_name(), "resolveActionPoint");
         assert_eq!(j["params"]["text"], "Item");
         assert_eq!(j["params"]["timeout"], 4000);
         assert!(j["params"].get("elementId").is_none());
+    }
+
+    #[test]
+    fn to_json_resolve_action_point_for_a_tap() {
+        // A HID tap asks the agent to plan the point as its own tap would and
+        // to do the tap's bookkeeping; other gestures send no flag.
+        let cmd = AgentCommand::ResolveActionPoint {
+            selector: json!({"text": "Item"}),
+            timeout_ms: Some(4000),
+            element_id: None,
+            for_tap: true,
+        };
+        let j = cmd.to_json("rap3");
+        assert_eq!(j["params"]["forTap"], true);
+        assert_eq!(j["params"]["text"], "Item");
     }
 
     #[test]
@@ -1787,6 +2048,7 @@ mod tests {
             selector: json!({}),
             timeout_ms: Some(4000),
             element_id: Some("el-7".into()),
+            for_tap: false,
         };
         let j = cmd.to_json("rap2");
         assert_eq!(j["method"], "resolveActionPoint");
@@ -1886,6 +2148,7 @@ mod tests {
             distance: Some(0.8),
             timeout_ms: Some(5000),
             region: None,
+            drag: false,
         };
         let j = cmd.to_json("sw1");
         assert_eq!(j["method"], "swipe");
@@ -1905,6 +2168,7 @@ mod tests {
             distance: None,
             timeout_ms: None,
             region: None,
+            drag: false,
         };
         let j = cmd.to_json("sw2");
         assert_eq!(j["params"]["direction"], "down");
@@ -1922,6 +2186,7 @@ mod tests {
             distance: Some(0.6),
             timeout_ms: None,
             region: Some(json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})),
+            drag: false,
         };
         let j = cmd.to_json("sw3");
         assert_eq!(j["method"], "swipe");
@@ -1929,6 +2194,67 @@ mod tests {
             j["params"]["region"],
             json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})
         );
+        assert!(j["params"].get("drag").is_none());
+    }
+
+    #[test]
+    fn to_json_scroll_step() {
+        // The selector travels nested, beside the step's own fields, so a
+        // selector key can never collide with them.
+        let cmd = AgentCommand::ScrollStep {
+            selector: json!({"text": "Row 60"}),
+            direction: "up".into(),
+            region: Some(json!({"left": 0, "top": 200, "right": 1080, "bottom": 1800})),
+            distance: 0.8,
+            find_first: true,
+        };
+        let j = cmd.to_json("ss1");
+        assert_eq!(j["method"], "scrollStep");
+        assert_eq!(j["params"]["selector"], json!({"text": "Row 60"}));
+        assert_eq!(j["params"]["direction"], "up");
+        assert_eq!(j["params"]["region"]["top"], 200);
+        assert!((j["params"]["distance"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+        assert_eq!(j["params"]["findFirst"], json!(true));
+
+        let bare = AgentCommand::ScrollStep {
+            selector: json!({}),
+            direction: "down".into(),
+            region: None,
+            distance: 0.3,
+            find_first: false,
+        }
+        .to_json("ss2");
+        assert!(bare["params"].get("region").is_none());
+        assert!(bare["params"].get("findFirst").is_none());
+    }
+
+    #[test]
+    fn to_json_scroll_step_find() {
+        let j = AgentCommand::ScrollStepFind {
+            selector: json!({"text": "Row 60"}),
+            region: json!({"left": 0, "top": 100, "right": 390, "bottom": 800}),
+        }
+        .to_json("sf1");
+        assert_eq!(j["method"], "scrollStepFind");
+        assert_eq!(j["params"]["selector"], json!({"text": "Row 60"}));
+        assert_eq!(j["params"]["region"]["bottom"], 800);
+    }
+
+    #[test]
+    fn to_json_swipe_drag() {
+        // scrollIntoView's drags (PILOT-973): sent only when asked for, so
+        // every other swipe keeps the agent's fling-and-settle swipe.
+        let cmd = AgentCommand::Swipe {
+            direction: "up".into(),
+            start_element: None,
+            speed: Some(2000.0),
+            distance: Some(0.6),
+            timeout_ms: None,
+            region: None,
+            drag: true,
+        };
+        let j = cmd.to_json("sw4");
+        assert_eq!(j["params"]["drag"], json!(true));
     }
 
     #[test]
@@ -2463,32 +2789,23 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            while let Ok((mut stream, _)) = listener.accept().await {
-                // Read the command bytes so the client's write_all
-                // completes successfully, then close the half-open
-                // stream without writing a response. The client's
-                // read_line will observe EOF → empty response.
-                let mut buf = Vec::new();
-                let mut chunk = [0u8; 1024];
-                while let Ok(n) = stream.read(&mut chunk).await {
-                    if n == 0 {
-                        break;
-                    }
-                    buf.extend_from_slice(&chunk[..n]);
-                    if buf.contains(&b'\n') {
-                        break;
-                    }
-                }
+            while let Ok((stream, _)) = listener.accept().await {
+                let Some((mut reader, mut writer)) = agent_handshake(stream).await else {
+                    continue;
+                };
+                // Read the command so the client's write completes, then
+                // close without a response: the client's read_line sees
+                // EOF → empty response.
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line).await;
                 // The liveness probe is a real ping: answer it so the
                 // mock reads as "alive", and drop every other command
                 // unanswered so it reads as an empty response.
-                if String::from_utf8_lossy(&buf).contains("\"method\":\"ping\"") {
-                    let _ = stream
+                if line.contains("\"method\":\"ping\"") {
+                    let _ = writer
                         .write_all(b"{\"id\":\"ping\",\"result\":{\"pong\":true}}\n")
                         .await;
                 }
-                drop(stream);
             }
         });
 
@@ -2527,7 +2844,13 @@ mod tests {
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
         tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
-                drop(stream); // close the client connection
+                // Authenticate and take the command, then close the
+                // connection unanswered: the agent died mid-command.
+                if let Some((mut reader, writer)) = agent_handshake(stream).await {
+                    let mut line = String::new();
+                    let _ = reader.read_line(&mut line).await;
+                    drop(writer);
+                }
             }
             drop(listener); // stop listening so the probe fails
             let _ = done_tx.send(());
@@ -2571,8 +2894,9 @@ mod tests {
     fn spawn_ping_answering_agent(listener: tokio::net::TcpListener) {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (read_half, mut write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
                 let mut line = String::new();
                 if reader.read_line(&mut line).await.is_ok() && !line.is_empty() {
                     let _ = write_half
@@ -2584,16 +2908,12 @@ mod tests {
     }
 
     /// Mock of `adb forward` with no agent on the device side: the connect
-    /// succeeds (the adb server accepts it), the request is consumed, then
-    /// the socket closes without a byte in reply — the reader sees EOF.
+    /// succeeds (the adb server accepts it), then the socket closes without
+    /// a byte in reply — the reader sees EOF.
     fn spawn_accept_then_close(listener: tokio::net::TcpListener) {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (read_half, write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line).await;
-                drop(write_half);
+                drop(stream);
             }
         });
     }
@@ -2653,9 +2973,325 @@ mod tests {
             .await
             .expect_err("EOF must not count as a pong");
         assert!(
-            err.to_string().contains("without answering the ping"),
+            err.to_string()
+                .contains("closed the connection without answering"),
             "unexpected error: {err}"
         );
+        // Worded so the SDK's recoverable-infrastructure check restarts the agent.
+        assert!(
+            err.to_string()
+                .contains("Failed to connect to agent socket"),
+            "{err}"
+        );
+    }
+
+    // ─── Agent authentication (PILOT-969) ───
+
+    /// Mock agent that challenges like the real ones, answers the daemon's
+    /// first line with `reply` and then whatever `then` says to the next line.
+    fn spawn_scripted_agent(
+        listener: tokio::net::TcpListener,
+        reply: &'static str,
+        then: Option<&'static str>,
+    ) {
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let _ = write_half.write_all(challenge_line().as_bytes()).await;
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line).await;
+                let _ = write_half.write_all(format!("{reply}\n").as_bytes()).await;
+                if let Some(then) = then {
+                    line.clear();
+                    let _ = reader.read_line(&mut line).await;
+                    let _ = write_half.write_all(format!("{then}\n").as_bytes()).await;
+                }
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn ping_says_when_the_agent_refuses_the_token() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_scripted_agent(
+            listener,
+            r#"{"id":"auth","error":{"type":"UNAUTHORIZED","message":"wrong token"}}"#,
+            None,
+        );
+        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        assert!(err.contains("refused this daemon's token"), "{err}");
+        assert!(err.contains("Failed to connect to agent socket"), "{err}");
+        assert!(!probe_agent_alive(port).await);
+    }
+
+    #[tokio::test]
+    async fn ping_says_when_the_agent_predates_authentication() {
+        // An agent from before PILOT-969 sends no challenge and waits for a
+        // command: it must not count as reachable, and the error says why.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_ping_answering_legacy_agent(listener);
+        let err = ping_agent_port_with_timeout(port, Duration::from_millis(300))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("older Tapsmith build"), "{err}");
+        assert!(err.contains("Failed to connect to agent socket"), "{err}");
+    }
+
+    /// An agent from before authentication: it answers every line with a pong.
+    fn spawn_ping_answering_legacy_agent(listener: tokio::net::TcpListener) {
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.is_ok_and(|n| n > 0) {
+                    let _ = write_half
+                        .write_all(b"{\"id\":\"ping\",\"result\":{\"pong\":true}}\n")
+                        .await;
+                    line.clear();
+                }
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn ping_refuses_a_listener_that_cannot_prove_it_holds_the_token() {
+        // A squatter on the agent port acks anything; it must neither be
+        // taken for the agent nor ever learn the token.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let _ = write_half.write_all(challenge_line().as_bytes()).await;
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.is_ok_and(|n| n > 0) {
+                    seen_tx.send(line.clone()).unwrap();
+                    let _ = write_half
+                        .write_all(b"{\"id\":\"auth\",\"result\":{\"authenticated\":true}}\n")
+                        .await;
+                    line.clear();
+                }
+            }
+        });
+        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        assert!(err.contains("did not prove it holds"), "{err}");
+        let token = crate::agent_auth::agent_token().unwrap();
+        let mut seen = Vec::new();
+        while let Ok(line) = seen_rx.try_recv() {
+            seen.push(line);
+        }
+        assert_eq!(seen.len(), 1, "only the auth line, no ping: {seen:?}");
+        assert!(
+            !seen[0].contains(token),
+            "the token crossed the wire: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ping_requires_a_pong() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                if let Some((mut reader, mut writer)) = agent_handshake(stream).await {
+                    let mut line = String::new();
+                    let _ = reader.read_line(&mut line).await;
+                    let _ = writer
+                        .write_all(
+                            b"{\"id\":\"ping\",\"error\":{\"type\":\"INTERNAL_ERROR\",\"message\":\"boom\"}}\n",
+                        )
+                        .await;
+                }
+            }
+        });
+        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        assert!(err.contains("Unexpected answer to ping"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn persistent_stream_authenticates_once_per_connection_before_any_command() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (lines_tx, mut lines_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let lines_tx = lines_tx.clone();
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let _ = write_half.write_all(challenge_line().as_bytes()).await;
+                tokio::spawn(async move {
+                    loop {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {
+                                let v: Value = serde_json::from_str(line.trim()).unwrap();
+                                lines_tx
+                                    .send(v["method"].as_str().unwrap().to_string())
+                                    .unwrap();
+                                let resp = if v["method"] == "auth" {
+                                    agent_answer(&line).1
+                                } else {
+                                    format!("{}\n", json!({"id": v["id"], "result": {"ok": true}}))
+                                };
+                                let _ = write_half.write_all(resp.as_bytes()).await;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        let cache = new_agent_stream_cache();
+        let params = ConnectionParams { host_port: port };
+        let cmd = AgentCommand::Screenshot {};
+        for _ in 0..2 {
+            send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2))
+                .await
+                .unwrap();
+        }
+        let mut seen = Vec::new();
+        while let Ok(m) = lines_rx.try_recv() {
+            seen.push(m);
+        }
+        assert_eq!(seen, vec!["auth", "screenshot", "screenshot"]);
+    }
+
+    #[tokio::test]
+    async fn persistent_stream_refused_token_is_a_connect_error_naming_the_cause() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_scripted_agent(
+            listener,
+            r#"{"id":"auth","error":{"type":"UNAUTHORIZED","message":"wrong token"}}"#,
+            None,
+        );
+        let cache = new_agent_stream_cache();
+        let params = ConnectionParams { host_port: port };
+        let err = send_with_persistent_cache(
+            &cache,
+            &params,
+            &AgentCommand::Screenshot {},
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("Failed to connect to agent socket"), "{err}");
+        assert!(err.contains("refused this daemon's token"), "{err}");
+    }
+
+    // ─── Handshake polling (PILOT-975) ───
+
+    #[test]
+    fn connect_retry_interval_starts_fast_and_backs_off_to_a_cap() {
+        assert_eq!(connect_retry_interval(0), Duration::from_millis(50));
+        let intervals: Vec<Duration> = (0..40).map(connect_retry_interval).collect();
+        for pair in intervals.windows(2) {
+            assert!(pair[1] >= pair[0], "never speeds back up: {intervals:?}");
+        }
+        assert_eq!(intervals[39], CONNECT_RETRY_INTERVAL_MAX);
+        assert!(CONNECT_RETRY_INTERVAL_MAX <= Duration::from_millis(250));
+        // A 60 s cold-CI readiness window stays at a bounded number of
+        // pings through `adb forward`, not one every 50 ms.
+        let mut elapsed = Duration::ZERO;
+        let mut pings = 0u32;
+        while elapsed < Duration::from_secs(60) {
+            elapsed += connect_retry_interval(pings);
+            pings += 1;
+        }
+        assert!(pings <= 250, "{pings} pings in 60 s");
+    }
+
+    /// Mock agent that is still starting for `starting_for` — the
+    /// adb-forward shape, every connect accepted then closed — and after
+    /// that authenticates and answers pings like a real agent. Returns the
+    /// time of every handshake attempt.
+    fn spawn_agent_ready_after(
+        listener: tokio::net::TcpListener,
+        starting_for: Duration,
+    ) -> Arc<std::sync::Mutex<Vec<tokio::time::Instant>>> {
+        let ready_at = tokio::time::Instant::now() + starting_for;
+        let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&attempts);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                recorded.lock().unwrap().push(tokio::time::Instant::now());
+                if tokio::time::Instant::now() < ready_at {
+                    drop(stream);
+                    continue;
+                }
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.is_ok() && !line.is_empty() {
+                    let _ = write_half
+                        .write_all(b"{\"id\":\"ping\",\"result\":{\"pong\":true}}\n")
+                        .await;
+                }
+            }
+        });
+        attempts
+    }
+
+    #[tokio::test]
+    async fn connect_notices_an_agent_soon_after_it_starts_answering() {
+        // The handshake used to retry on a 1 s grid, so an agent that came
+        // up 300 ms in was only seen at the 1 s ping. Judge the retry
+        // spacing rather than the total time: a stalled runner stretches
+        // some gaps, but not every one of them past the old 1 s grid.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let attempts = spawn_agent_ready_after(listener, Duration::from_millis(300));
+
+        let mut conn = AgentConnection::with_port(port);
+        conn.connect_ios("sim").await.expect("agent comes up");
+        let attempts = attempts.lock().unwrap().clone();
+        assert!(
+            attempts.len() >= 2,
+            "the agent was not ready at the first ping: {attempts:?}"
+        );
+        let shortest_gap = attempts
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .min()
+            .unwrap();
+        assert!(
+            shortest_gap < Duration::from_millis(500),
+            "retries {shortest_gap:?} apart at best; expected the fast backoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_gives_up_at_the_readiness_deadline() {
+        // An agent that never answers: the handshake keeps pinging for its
+        // whole readiness window, then fails with the unreachable error.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let attempts = spawn_agent_ready_after(listener, Duration::from_secs(3600));
+
+        let mut conn = AgentConnection::with_port(port);
+        let started = tokio::time::Instant::now();
+        let err = conn
+            .connect_for_platform("sim", true, Duration::from_millis(400))
+            .await
+            .expect_err("the agent never answers");
+        assert!(started.elapsed() >= Duration::from_millis(400));
+        assert!(
+            err.to_string()
+                .contains("Agent is not responding on device sim"),
+            "{err}"
+        );
+        assert!(!conn.connected);
+        assert!(attempts.lock().unwrap().len() >= 2, "it kept pinging");
     }
 
     #[test]
@@ -2770,8 +3406,9 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 accept_count_clone.fetch_add(1, Ordering::SeqCst);
-                let (read_half, mut write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
                 tokio::spawn(async move {
                     loop {
                         let mut line = String::new();
@@ -2821,14 +3458,20 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 accept_count_clone.fetch_add(1, Ordering::SeqCst);
-                let (read_half, mut write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
                 let mut line = String::new();
                 if reader.read_line(&mut line).await.is_ok() && !line.is_empty() {
                     let parsed: Value = serde_json::from_str(line.trim()).unwrap();
-                    let id = parsed["id"].as_str().unwrap_or("null");
-                    let resp = format!(r#"{{"id":"{}","result":{{"ok":true}}}}"#, id);
-                    let _ = write_half.write_all(format!("{}\n", resp).as_bytes()).await;
+                    // The liveness probe is a real ping, answered as the agents do.
+                    let result = if parsed["method"] == "ping" {
+                        json!({"pong": true})
+                    } else {
+                        json!({"ok": true})
+                    };
+                    let resp = json!({"id": parsed["id"], "result": result});
+                    let _ = write_half.write_all(format!("{resp}\n").as_bytes()).await;
                     let _ = write_half.flush().await;
                 }
                 drop(write_half);
@@ -2864,8 +3507,9 @@ mod tests {
         fn spawn_echo_agent(listener: tokio::net::TcpListener) {
             tokio::spawn(async move {
                 while let Ok((stream, _)) = listener.accept().await {
-                    let (read_half, mut write_half) = stream.into_split();
-                    let mut reader = BufReader::new(read_half);
+                    let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                        continue;
+                    };
                     tokio::spawn(async move {
                         loop {
                             let mut line = String::new();

@@ -39,6 +39,25 @@ test.describe("Timeline filmstrip", () => {
     within2px(selected?.width, thumbBox?.width)
   })
 
+  for (const [what, width, height] of [["landscape", 195, 90], ["tablet", 150, 200]] as const) {
+    test(`sizes a placeholder frame like its ${what} neighbours, not like a portrait phone`, async ({ viewer, filmstrip }) => {
+      await viewer.open({
+        events: [
+          actionEvent({ actionIndex: 0, action: "appReset" }),
+          actionEvent({ actionIndex: 1, action: "tap", screenshots: { before: true } }),
+        ],
+        screenshots: { "screenshots/action-001-before.png": solidPng(width, height) },
+      })
+      await expect(filmstrip.placeholders).toHaveCount(1)
+      const thumb = filmstrip.frames.nth(1).locator("img")
+      await expect.poll(async () => {
+        const p = await filmstrip.placeholders.first().boundingBox()
+        const t = await thumb.boundingBox()
+        return !!p && !!t && Math.abs(p.width - t.width) <= 3 && Math.abs(p.height - t.height) <= 3
+      }).toBe(true)
+    })
+  }
+
   test("measures offsets from the earliest frame when setup predates the test start", async ({ viewer, filmstrip }) => {
     // The runner replays inherited scope setup (file-entry app reset,
     // beforeAll) into every test's trace; for the second test onwards that

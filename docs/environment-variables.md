@@ -12,6 +12,7 @@ Most users will never need to set any of these. They are primarily useful for de
 | `TAPSMITH_DAEMON_LOG` | Path to a file for daemon stdout/stderr. When set, the CLI redirects the spawned daemon's output to this file. `tapsmith mcp-server` appends its daemons' output here too, instead of to its default `~/.tapsmith/daemons/mcp-daemon-<project-hash>.log`. Useful for debugging daemon-side behavior (MITM proxy, agent startup, etc.). |
 | `TAPSMITH_REUSE_DAEMON` | When set (any truthy value), the CLI connects to an existing daemon without killing it. Used internally by the MCP server's `tapsmith_run_tests` tool to avoid destroying a daemon owned by UI mode. |
 | `TAPSMITH_AGENT_READ_HEADROOM_MS` | Milliseconds the daemon waits for an on-device agent to answer a command, *on top of* the caller's timeout (default `5000`). This is effectively the ceiling on a single UIAutomator hierarchy dump, which the agent runs uninterruptibly regardless of the caller timeout. Raise it on slow/CPU-starved CI emulators where a dump can exceed 5s and surface as `Agent command timed out`; do not lower it, as that turns a slow-but-completing dump into a hard timeout. |
+| `TAPSMITH_FORCE_AGENT_INSTALL` | When set to a truthy value (anything but empty, `0`, `false`, `no` or `off`), the daemon reinstalls the Android agent APKs on every agent start. By default it skips an agent APK whose installed copy matches the configured one (compared by content hash) and installs it otherwise, including when the device can't report the installed copy's hash, so a rebuilt agent is still deployed automatically; use this if an installed agent is suspected to be broken in a way its bytes don't show. Read by the daemon from the environment it was started with, so set it in the environment the CLI, UI mode or the MCP server starts from. A daemon that is already running (a UI-mode or MCP session's, which `tapsmith_run_tests` reuses) keeps its original setting: restart that session with the variable set. |
 
 ## Debugging
 
@@ -46,6 +47,13 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 | `CI` | When set (and not `"false"`), Tapsmith skips the Android device-health preflight and disables interactive progress output. It also lets the daemon use the host-wide iOS system-proxy capture fallback (for the daemon, `0` and any casing of `false` also count as unset; override with `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK`). Most CI providers set this automatically. Reporter selection is no longer affected — `list` is the default everywhere; set `reporter: 'dot'` explicitly for compact CI output. |
 | `GITHUB_ACTIONS` | When set (GitHub Actions sets it automatically), Tapsmith auto-adds the `github` reporter for inline annotations on test failures. |
 | `GITHUB_STEP_SUMMARY` | Path to the GitHub Actions step summary file. The GitHub reporter writes a Markdown summary table when this is set. |
+
+## Coding-agent plugin
+
+| Variable | Description |
+|---|---|
+| `TAPSMITH_MCP_PREFER_UI` | `1` makes `tapsmith mcp-server` work in the project's running UI-mode session when there is one, and headless otherwise, as its `--prefer-ui` flag does ([One server that follows UI mode](mcp-server.md#one-server-that-follows-ui-mode)). The [coding-agent plugin](mcp-server.md#install-the-plugin) sets it. Set it to `0` in the environment you start the agent from to keep the plugin's server headless. |
+| `TAPSMITH_PROJECT_DIR` | The folder whose Tapsmith the [coding-agent plugin](mcp-server.md#install-the-plugin) starts as its MCP server, when the agent's own project folder is not it (several Tapsmith projects below it, say). Read by the plugin's server command, so set it in the environment you start the agent from. Codex does not pass it on to MCP servers: in Codex, start the agent from that folder instead. |
 
 ## Android
 

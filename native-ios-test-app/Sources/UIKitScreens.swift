@@ -138,14 +138,28 @@ final class UIKitTableViewController: UITableViewController {
             done.isEnabled = false
             done.sizeToFit()
             cell.accessoryView = done
+        case let text where Self.hasDetailButton(text):
+            // Many rows with the same "More Info" detail button, to tell
+            // which row's button a tap reached (PILOT-952).
+            cell.accessoryType = .detailDisclosureButton
         default: cell.accessoryType = .disclosureIndicator
         }
         return cell
     }
 
+    /// Rows 50 to 100 have a detail button.
+    private static func hasDetailButton(_ text: String) -> Bool {
+        guard let n = Int(text.dropFirst("Row ".count)) else { return false }
+        return n >= 50
+    }
+
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         selection.text = "Selected: \(rows[indexPath.row])"
+    }
+
+    override func tableView(_ tableView: UITableView, accessoryButtonTappedForRowWith indexPath: IndexPath) {
+        selection.text = "Info: \(rows[indexPath.row])"
     }
 
     override func tableView(
@@ -313,5 +327,55 @@ final class UIKitGesturesViewController: UIViewController {
 
     @objc private func longPressed(_ recognizer: UILongPressGestureRecognizer) {
         if recognizer.state == .began { status.text = "Status: Long pressed" }
+    }
+}
+
+// ─── Back key ───
+
+/// A UINavigationController of its own (PILOT-1225): its root has an Edit
+/// button on the leading side and no back button; the pushed screen has
+/// UIKit's back button.
+struct UIKitBackKeyStack: UIViewControllerRepresentable {
+    let close: () -> Void
+    func makeUIViewController(context: Context) -> UINavigationController {
+        UINavigationController(rootViewController: UIKitBackKeyRootViewController(close: close))
+    }
+    func updateUIViewController(_ controller: UINavigationController, context: Context) {}
+}
+
+final class UIKitBackKeyRootViewController: UIViewController {
+    private let close: () -> Void
+    private let editingStatus = makeLabel("Editing: off")
+
+    init(close: @escaping () -> Void) {
+        self.close = close
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        title = "UIKit Root"
+        navigationItem.leftBarButtonItem = editButtonItem
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "Close", primaryAction: UIAction { [weak self] _ in self?.close() }
+        )
+        let push = UIButton(type: .system)
+        push.setTitle("Open UIKit Detail", for: .normal)
+        push.addAction(UIAction { [weak self] _ in
+            let detail = UIViewController()
+            detail.view.backgroundColor = .systemBackground
+            detail.title = "UIKit Detail"
+            pin(makeLabel("UIKit detail content"), in: detail.view)
+            self?.navigationController?.pushViewController(detail, animated: true)
+        }, for: .touchUpInside)
+        pin(makeStack([editingStatus, push]), in: view)
+    }
+
+    override func setEditing(_ editing: Bool, animated: Bool) {
+        super.setEditing(editing, animated: animated)
+        editingStatus.text = "Editing: \(editing ? "on" : "off")"
     }
 }

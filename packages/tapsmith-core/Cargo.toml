@@ -1,6 +1,6 @@
 [package]
 name = "tapsmith-core"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 description = "Tapsmith mobile testing framework - core daemon"
 license = "Apache-2.0"
@@ -31,6 +31,10 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+# OS CSPRNG for the agent auth token (PILOT-969); already in the tree via uuid.
+getrandom = "0.4"
+# HMAC-SHA256 for the agent challenge-response (PILOT-969); already built for rustls.
+ring = "0.17"
 base64 = "0.23"
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 x509-parser = "0.18"
@@ -57,6 +61,8 @@ tokio-util = { version = "0.7", features = ["codec"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 [dev-dependencies]
+# Paused time in tests that wait out multi-second bounds.
+tokio = { version = "1", features = ["test-util"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3"

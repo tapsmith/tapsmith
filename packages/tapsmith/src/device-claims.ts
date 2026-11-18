@@ -57,6 +57,13 @@ export interface SessionIdentity {
   project: string
   /** ISO time the session started. */
   startedAt: string
+  /**
+   * The session gives its devices up to a UI-mode session starting in the
+   * same project, when asked: its root process handles the yield signal
+   * (`ui-yield.ts`). Set by `tapsmith mcp-server --prefer-ui`, whose requests
+   * go to that UI session once it is up.
+   */
+  yieldsToUi?: boolean
 }
 
 /** One device held by one session. */
@@ -155,7 +162,8 @@ function isSessionIdentity(value: unknown): value is SessionIdentity {
     && typeof v.command === 'string'
     && typeof v.project === 'string'
     && typeof v.startedAt === 'string'
-    && (v.startToken === undefined || typeof v.startToken === 'string');
+    && (v.startToken === undefined || typeof v.startToken === 'string')
+    && (v.yieldsToUi === undefined || typeof v.yieldsToUi === 'boolean');
 }
 
 function readSessionEnv(env: NodeJS.ProcessEnv): SessionIdentity | undefined {
@@ -263,6 +271,20 @@ export function ensureClaimSession(
  */
 export function currentSession(env: NodeJS.ProcessEnv = process.env): SessionIdentity {
   return readSessionEnv(env) ?? ensureClaimSession('tapsmith', { env });
+}
+
+/**
+ * Record that this session yields its devices to a UI-mode session
+ * ({@link SessionIdentity.yieldsToUi}), for the claims its processes make from
+ * here on. Only for a session rooted in this process: the yield signal goes to
+ * the root, and a root that does not handle it would be killed by it. Returns
+ * whether it was recorded.
+ */
+export function markSessionYieldsToUi(env: NodeJS.ProcessEnv = process.env): boolean {
+  const session = readSessionEnv(env);
+  if (!session || session.pid !== process.pid) return false;
+  env[SESSION_ENV] = JSON.stringify({ ...session, yieldsToUi: true });
+  return true;
 }
 
 // ─── Liveness ───
@@ -511,6 +533,30 @@ export function listDeviceClaims(opts: ClaimOptions = {}): ListedDeviceClaim[] {
     claims.push({ ...claim, live: isLive });
   }
   return claims.sort((a, b) => a.device.localeCompare(b.device));
+}
+
+/**
+ * The live claims of other sessions that yield to a UI-mode session
+ * ({@link SessionIdentity.yieldsToUi}) and whose root process, the one that
+ * takes the yield signal, is confirmed to be running.
+ */
+export function yieldingClaimsElsewhere(
+  session: SessionIdentity = currentSession(),
+  opts: ClaimOptions = {},
+): DeviceClaim[] {
+  return [...heldElsewhere(session, opts).values()]
+    .filter((claim) => claim.session.yieldsToUi === true && processIsConfirmed(claim.session));
+}
+
+/**
+ * Whether `ref` is certainly still the process it was when recorded: its
+ * start time was recorded and is the same now. Stricter than
+ * {@link processIsLive}, which trusts a running pid whose start time cannot
+ * be read. That is right for leaving a device alone, and wrong for sending
+ * the process a signal: one that does not handle it is killed by it.
+ */
+function processIsConfirmed(ref: ProcessRef): boolean {
+  return ref.startToken !== undefined && pidAlive(ref.pid) && processStartToken(ref.pid) === ref.startToken;
 }
 
 /** Live claims held by sessions other than `session`, by device. */

@@ -344,6 +344,17 @@ Error: 14 UNAVAILABLE: failed to connect to all addresses
 3. Check that no other process is using port 50051 (the default daemon port)
 4. If using a custom `daemonAddress`, verify the daemon is running at that address
 
+### The agent refused the connection
+
+```
+Failed to connect to agent socket: the agent refused this daemon's token (wrong token)
+The Tapsmith agent on device emulator-5554 is from an older Tapsmith build: it never sent the authentication challenge this Tapsmith version requires, so it cannot be used. Update @tapsmith/agent-android to this Tapsmith version, or point agentApk …
+```
+
+**What happened:** The on-device agent only listens on the device's loopback interface, and every connection starts with a challenge that only a holder of your agent token can answer. Tapsmith keeps that token in `~/.tapsmith/agent-token` (readable only by you) and hands it to the agent when it starts it. The token itself is never sent over the connection, so other apps on the device and other machines on the network can neither drive your device nor learn the token. The first message means the agent was started with a different token, by another user on this machine or before the token file was replaced. The second means the agent on the device, or the iOS agent build Tapsmith found, is from a Tapsmith version that predates the token (or the agent is hung).
+
+**Fixes:** Tapsmith restarts the agent when it cannot connect, which resolves a token mismatch. An older agent build has to be replaced, as the message says: update `@tapsmith/agent-android` to your Tapsmith version or point `agentApk` and `agentTestApk` at a current build, or rebuild the iOS agent for your Tapsmith version. If you build Tapsmith from source, the iOS simulator agent cache in `~/.tapsmith/ios-simulator-agent/<version>` is kept per version, not per source change, so delete that version's directory once and the next run rebuilds it. Do not delete `~/.tapsmith/agent-token` while sessions are running: Tapsmith creates a new one, and agents started with the old one then refuse the daemon until they are restarted.
+
 ### Device is unresponsive or not connected (Android)
 
 ```
@@ -388,6 +399,25 @@ The affected test's result carries a warning, even when the test then passes. In
 ```
 
 The warning is in the result's `warnings` (the JSON reporter, `merge-reports` and MCP `run_tests`/`list_results` show it too) and in the test's trace as a `systemDialog` step. Another package's dialog is not a warning on the test. It appears only as a `systemDialog` step in the trace, beside the `Dismissing system dialog …` log line.
+
+#### When the dialog comes up during a test
+
+A dialog can also come up while a test runs, for example a launcher that stops responding on a freshly booted CI emulator. It takes focus and covers the app: while it is up, locators cannot find the app's elements, and typed keys would go to the dialog. So before each action that touches the screen or sends a key (taps, typing, swipes, scrolls, key presses) and each locator lookup, and while either waits for its element, the Android agent checks for such a dialog and answers it:
+
+| Whose dialog | What Tapsmith does | Reported as |
+|---|---|---|
+| Another app's | Presses **Close app**. The system restarts that app clean, where **Wait** would leave it hung | A `systemDialog` step in the trace |
+| The app under test's "isn't responding" | Presses **Wait**, since the app may only be slow | A warning on the test, and a `systemDialog` step |
+| The app under test's "keeps stopping" | Nothing: the app has crashed. The action fails because its element is not found, and the next test's preflight relaunches the app | The test's failure; the failure screenshot and the trace show the dialog |
+| The system's own ("Process system isn't responding") | Presses **Wait**. **Close app** would restart the whole runtime | A `systemDialog` step |
+| One whose owner Tapsmith cannot read | Nothing, since it may be the app's own | The action fails (usually because its element is not found while the dialog is up); the failure screenshot and the trace show the dialog |
+
+The owner comes from the dialog's window title in `dumpsys window`, as in the preflight. Tapsmith answers at most three dialogs per action, so one that keeps coming back does not hold the test. Screenshots, hierarchy dumps and locator suggestions (the trace's captures, MCP and UI-mode snapshots, the element picker) never answer a dialog, so they show it. A dialog answered outside a test (by a tap or a locator check in UI mode or MCP, in an `afterAll` hook, or in a run you stopped) shows up on the next test that runs; its trace step's log says when it was answered.
+
+```
+  ✓ [2] › tests/login.test.ts › signs in (8.1s)
+        ⚠ The app under test (com.example.app) stopped responding and showed "Example isn't responding"; Tapsmith pressed Wait. Check the app's logs (adb logcat) for what blocked its main thread.
+```
 
 ### "SpringBoard quit unexpectedly" (iOS simulator)
 

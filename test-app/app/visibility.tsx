@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native"
 
 export default function VisibilityScreen() {
@@ -7,6 +7,10 @@ export default function VisibilityScreen() {
   const [items, setItems] = useState(["Item A", "Item B", "Item C"])
   const [loading, setLoading] = useState(false)
   const [errorVisible, setErrorVisible] = useState(false)
+  // Each start replaces the pending stop, so a timer from an earlier start
+  // can't end a later one early (PILOT-1127).
+  const loadingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(loadingTimer.current), [])
 
   const handleDelete = (item: string) => {
     setItems((prev) => prev.filter((i) => i !== item))
@@ -18,7 +22,8 @@ export default function VisibilityScreen() {
 
   const handleToggleLoading = () => {
     setLoading(true)
-    setTimeout(() => setLoading(false), 2000)
+    clearTimeout(loadingTimer.current)
+    loadingTimer.current = setTimeout(() => setLoading(false), 2000)
   }
 
   return (

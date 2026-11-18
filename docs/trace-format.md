@@ -54,7 +54,7 @@ Rules for readers:
 |---|---|---|
 | `metadata.json` | JSON object | Always |
 | `trace.json` | NDJSON, one event per line, in recording order | Always |
-| `screenshots/action-NNN-{before,after}.png` | PNG at the device's native resolution | When the screenshots channel is on |
+| `screenshots/action-NNN-{before,after}.png` | PNG at the device's native resolution, upright as the screen showed it: on a device turned to landscape it is wider than tall, like the element bounds recorded beside it. (Older iOS traces store a landscape screen's pixels in the device's portrait layout, with a PNG `eXIf` orientation tag to turn them; an upright frame's tag, if it has one, is 1, the normal orientation.) | When the screenshots channel is on |
 | `hierarchy/action-NNN-{before,after}.xml` | View hierarchy dump. Android emits `<node …>`; iOS emits `XCUIElementType…` elements | When the snapshots channel is on |
 | `sources.json` | JSON object: `{ [path]: fileContents }` | When the sources channel is on and a source was readable (each file is capped at 2 MiB) |
 | `network.json` | NDJSON, one request per line | When at least one request was captured |
@@ -118,6 +118,7 @@ A **device** has these fields:
   - `screenResolution`: `{ width, height }`
   - `packageName`
   - `devicePixelRatio`: element bounds are in logical points and screenshots are in pixels
+  - `networkHttpsPassthrough`: `true` when the device did not trust Tapsmith's CA, so its HTTPS passed through the network proxy uncaptured. Those connections appear in `network.json` only as `passthrough` entries, and routes and network waits could not see them
 
 ## `trace.json` events
 

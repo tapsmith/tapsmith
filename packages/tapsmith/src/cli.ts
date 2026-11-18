@@ -26,6 +26,7 @@ import {
   openDeviceGroup,
   openDeviceSession,
   recoverDeviceSessions,
+  resolveAgentArtifacts,
   resolveDaemonBin,
   startDaemon,
   type DeviceSession,
@@ -41,7 +42,7 @@ import {
   isNetworkTracingEnabled,
 } from './trace/types.js';
 import { resolveVideoConfig } from './video/types.js';
-import { recordsOnlyOnRetry } from './trace/trace-mode.js';
+import { retryOnlyModeWarning } from './trace/trace-mode.js';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 
 import {
@@ -54,6 +55,7 @@ import {
   resolveEmulatorLaunchSettings,
   prefilterDevicesForStrategy,
   probeDeviceHealth,
+  probeDeviceHealthIfSettled,
   provisionEmulators,
   type DeviceHealthResult,
   type LaunchedEmulator,
@@ -62,7 +64,7 @@ import {
   ensureAdbRoot,
 } from './emulator.js';
 import { isRecoverableInfrastructureError, serializeConfig } from './worker-protocol.js';
-import { DEFAULT_AGENT_PORT, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, pickFreePort } from './port-utils.js';
+import { connectionRefused, DEFAULT_AGENT_PORT, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, pickFreePort } from './port-utils.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, planDaemonPort, spawnDaemonBinary } from './daemon-start.js';
 import { splitHeadline } from './error-detail.js';
@@ -220,6 +222,7 @@ async function checkDeviceHealth(serial: string, progress?: LaunchProgressSink):
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }),
+    probeIfSettled: async (s) => probeDeviceHealthIfSettled(s),
     waitForStable: (s) => waitForDeviceStability(s, 20_000, probeDeviceHealth),
     heldElsewhere: () => {
       const session = currentSession();
@@ -381,7 +384,10 @@ async function ensureDaemonRunning(
     else console.log(dim(`Daemon ${why}; starting on ${address}`));
   };
   let answered = false;
-  try {
+  // Nothing listening is the usual case (no other session): a refused connect
+  // says so at once, where the gRPC wait would retry for its whole second.
+  const refused = await connectionRefused(address);
+  if (!refused) try {
     const probe = new TapsmithGrpcClient(address);
     answered = await probe.waitForReady(1_000);
     probe.close();
@@ -391,7 +397,7 @@ async function ensureDaemonRunning(
   const portPlan = planDaemonPort({
     port: requestedPort,
     answered,
-    listeners: answered ? [] : findPidsOnPort(port),
+    listeners: answered || refused ? [] : findPidsOnPort(port),
     ownDaemons: stoppedOwnDaemons,
   });
   if (portPlan.kind === 'move') {
@@ -623,6 +629,8 @@ async function setupSequentialDeviceClaimed(
   cfg: TapsmithConfig,
   forceInstall: boolean,
   signature: string,
+  /** The run's test files use the network APIs: start the proxy before the app launches (PILOT-1013). */
+  networkApisInRun: boolean,
   progress?: LaunchProgressSink,
   /** The group to open (`sharedDeviceGroup` of the target's projects); defaults to what `cfg` declares. */
   deviceGroup?: DeviceGroupEntry[],
@@ -671,22 +679,37 @@ async function setupSequentialDeviceClaimed(
     // already installed (i.e. second-and-subsequent runs on the device)
     // — on a fresh device the probe returns 'runner-not-installed' and
     // we proceed silently so xcodebuild can install it via the normal
-    // path and trigger the iOS trust prompt.
-    const { probeCertTrust } = await import('./ios-trust-probe.js');
-    const trust = await probeCertTrust(deviceSerial);
-    if (trust.state === 'untrusted') {
-      progress?.fail('primary-device', 'developer certificate is not trusted');
+    // path and trigger the iOS trust prompt. A runner that is refused may
+    // be a stale one from an older build, profile or team: it is replaced
+    // with the local build and probed again before the run fails.
+    const { checkRunnerTrust, describeRunnerTrustFailure } = await import('./ios-trust-probe.js');
+    const trust = await checkRunnerTrust(
+      deviceSerial,
+      async () => {
+        // requireXctestrun throws the "build the agent" error when there is no build.
+        const { iosXctestrunPath } = await resolveAgentArtifacts(cfg, deviceSerial, undefined, { requireXctestrun: true });
+        if (!iosXctestrunPath) throw new Error(`No iOS agent build found for ${deviceSerial}. Run \`tapsmith ios build-agent\` first.`);
+        return iosXctestrunPath;
+      },
+      undefined,
+      (message) => {
+        if (progress) progress.update('primary-device', { state: 'running', detail: message });
+        else console.log(dim(`${message[0].toUpperCase()}${message.slice(1)}…`));
+      },
+    );
+    const failure = describeRunnerTrustFailure(trust);
+    if (failure) {
+      progress?.fail('primary-device', failure.error);
       console.error();
-      console.error('\x1b[31m✗ Tapsmith runner is installed but the developer certificate is not trusted.\x1b[0m');
+      console.error(`\x1b[31m✗ ${failure.lines[0]}\x1b[0m`);
+      for (const line of failure.lines.slice(1)) console.error(`  ${line}`);
       console.error();
-      console.error('  On the phone, open \x1b[1mSettings → General → VPN & Device Management\x1b[0m,');
-      console.error('  find \x1b[1mApple Development: <your name>\x1b[0m, and tap \x1b[1mTrust\x1b[0m.');
-      console.error();
-      console.error(dim('  Free Apple Developer accounts re-roll the profile every 7 days,'));
-      console.error(dim('  so this step recurs weekly. Re-run `tapsmith ios build-agent`'));
-      console.error(dim('  before trusting so the profile on the phone matches.'));
-      console.error();
-      throw new Error('iOS developer certificate not trusted on device');
+      throw new Error(failure.error);
+    }
+    if (trust.outcome === 'ok' && trust.replaced) {
+      const note = 'Replaced a Tapsmith runner on the device that could not launch with the local build.';
+      if (progress) progress.note(note);
+      else console.log(dim(note));
     }
     // Host-IP drift when tracing is enabled. A stale sidecar means the
     // mobileconfig points at the Mac's old LAN IP and the device will
@@ -755,6 +778,7 @@ async function setupSequentialDeviceClaimed(
       cfg,
       {
         claimSession: currentSession(),
+        startNetworkProxy: networkApisInRun && { multiDevice: group.length > 1 },
         label: 'Device',
         client,
         forceInstall,
@@ -831,7 +855,7 @@ async function setupSequentialDeviceClaimed(
   if (group.length > 1) {
     device._traceDeviceId = group[0].name;
     try {
-      const members = await openSequentialGroupMembers(cfg, group, launchedEmulators, forceInstall, progress);
+      const members = await openSequentialGroupMembers(cfg, group, launchedEmulators, forceInstall, networkApisInRun, progress);
       sessions = [primarySession, ...members];
     } catch (err) {
       // The primary is up; a group that cannot complete is a failed setup.
@@ -879,12 +903,13 @@ async function openSequentialGroupMembers(
   group: DeviceGroupEntry[],
   launchedEmulators: LaunchedEmulator[],
   forceInstall: boolean,
+  networkApisInRun: boolean,
   progress?: LaunchProgressSink,
 ): Promise<DeviceSession[]> {
   const members = group.slice(1);
   progress?.start('worker-devices', `preparing ${members.length} more device(s) for the group`);
   try {
-    return await openGroupMembersOnFreshDaemons(cfg, group, launchedEmulators, forceInstall, progress);
+    return await openGroupMembersOnFreshDaemons(cfg, group, launchedEmulators, forceInstall, networkApisInRun, progress);
   } catch (err) {
     // Whatever failed — provisioning, a daemon, a session — it is this step's
     // failure. The caller marks the primary failed only when the primary is;
@@ -900,6 +925,7 @@ async function openGroupMembersOnFreshDaemons(
   group: DeviceGroupEntry[],
   launchedEmulators: LaunchedEmulator[],
   forceInstall: boolean,
+  networkApisInRun: boolean,
   progress?: LaunchProgressSink,
 ): Promise<DeviceSession[]> {
   const members = group.slice(1);
@@ -962,6 +988,8 @@ async function openGroupMembersOnFreshDaemons(
 
     const sessions = await openDeviceGroup(specs, cfg, {
       claimSession: currentSession(),
+      // Members only, but always of a group.
+      startNetworkProxy: networkApisInRun && { multiDevice: true },
       label: 'Device',
       forceInstall,
       launchPhase: 'startup launch',
@@ -1087,7 +1115,7 @@ async function ensureSequentialTargetDevice(
 
   // ─── iOS: use simulator instead of ADB device ───
   if (config.platform === 'ios') {
-    const { listBootedSimulators, provisionSimulator, cleanupStaleSimulators, installAppIfAbsent } = await import('./ios-simulator.js');
+    const { listSimulators, provisionSimulator, cleanupStaleSimulators, installAppIfAbsent } = await import('./ios-simulator.js');
     // If no simulator is configured, try to auto-resolve a single paired
     // physical device. Mirrors how simulators are picked by name — the
     // user should not have to hand-parse `devicectl` JSON in their config.
@@ -1124,7 +1152,7 @@ async function ensureSequentialTargetDevice(
     // provisionSimulator below passes over those too.
     // Claimed as it is picked, so a session starting at the same moment
     // takes another one rather than this one.
-    const booted = listBootedSimulators();
+    const booted = (staleResult.simulators ?? listSimulators()).filter((s) => s.state === 'Booted');
     const matchingUdid = claimFirstFree(
       booted.filter((s) => s.name === simulatorName || s.udid === simulatorName).map((s) => s.udid),
     );
@@ -1551,7 +1579,7 @@ async function provisionDevicesForBucketUnclaimed(
         );
       }
     }
-    const { provisionSimulators, listBootedSimulators, cleanupStaleSimulators } =
+    const { provisionSimulators, listSimulators, cleanupStaleSimulators } =
       await import('./ios-simulator.js');
 
     const stale = cleanupStaleSimulators(effectiveConfig.simulator);
@@ -1565,8 +1593,9 @@ async function provisionDevicesForBucketUnclaimed(
 
     // Find any already-booted matching simulators (no primary required)
     // Not one another live Tapsmith session holds (PILOT-381).
-    const heldElsewhere = new Set(withoutHeldDevices(listBootedSimulators().map((s) => s.udid)).held.map((c) => c.device));
-    const booted = listBootedSimulators().filter(
+    const bootedNow = (stale.simulators ?? listSimulators()).filter((s) => s.state === 'Booted');
+    const heldElsewhere = new Set(withoutHeldDevices(bootedNow.map((s) => s.udid)).held.map((c) => c.device));
+    const booted = bootedNow.filter(
       (s) => (s.name === effectiveConfig.simulator || s.udid === effectiveConfig.simulator) && !heldElsewhere.has(s.udid),
     );
     const existing = booted.map((s) => s.udid).slice(0, desiredWorkers);
@@ -1901,7 +1930,14 @@ const cliHandlers: CliHandlers = {
   init: async (opts) => (await import('./init.js')).runInit(opts),
   verify: async (opts) => (await import('./verify.js')).runVerify(opts),
   doctor: async (opts) => (await import('./doctor.js')).runDoctor(opts),
-  mcpServer: async ({ config }) => (await import('./mcp/index.js')).runMcpServer({ configFile: config }),
+  mcpServer: async ({ config, preferUi }) => {
+    // The flag, or the variable the Tapsmith plugin sets: a Tapsmith too old
+    // to know the variable then simply runs headless, where an unknown flag
+    // would stop it.
+    const { PREFER_UI_ENV, runMcpBridge } = await import('./mcp/bridge.js');
+    if (preferUi || ['1', 'true'].includes(process.env[PREFER_UI_ENV] ?? '')) return runMcpBridge({ configFile: config });
+    return (await import('./mcp/index.js')).runMcpServer({ configFile: config });
+  },
   telemetry: async (opts) => (await import('./telemetry-cli.js')).runTelemetryCommand(opts),
 };
 
@@ -1934,7 +1970,7 @@ async function main(): Promise<void> {
  */
 function claimSessionCommand(argv: readonly string[]): string {
   const subcommand = argv.find((a) => !a.startsWith('-'));
-  const modes = argv.filter((a) => a === '--ui' || a === '--watch' || a === '--workers' || a.startsWith('--workers='));
+  const modes = argv.filter((a) => a === '--ui' || a === '--watch' || a === '--prefer-ui' || a === '--workers' || a.startsWith('--workers='));
   return ['tapsmith', ...(subcommand ? [subcommand] : []), ...modes.map((m) => (m.startsWith('--workers') ? '--workers' : m))].join(' ');
 }
 
@@ -2230,6 +2266,18 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     return;
   }
 
+  // A coding agent's MCP server that follows this project's UI session
+  // (`mcp-server --prefer-ui`) may be holding the device this session is about
+  // to pick, from before there was a UI session to work in: ask it to let go
+  // (PILOT-1164). After the tsx re-exec, so it is asked once.
+  if (args.ui) {
+    const { requestHeadlessYield } = await import('./ui-yield.js');
+    await requestHeadlessYield(
+      { cwd: process.cwd(), rootDir: config.rootDir, configPath },
+      { log: (line) => { console.error(dim(line)); } },
+    );
+  }
+
   // An x64 Node under Rosetta (PILOT-559) runs, translated, but should not
   // pass unremarked. After the tsx re-exec, so it prints once.
   const rosettaWarning = rosettaNodeWarning();
@@ -2303,19 +2351,17 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // the run silently record nothing (PILOT-240; same caveat Playwright
   // documents for its `on-first-retry` video mode). Placed after the tsx
   // re-exec so each warning prints exactly once.
+  // UI mode never retries, and records a retry-only trace mode as `on`
+  // (PILOT-1175): `retryOnlyModeWarning` knows both.
   for (const project of projects) {
     const cfg = project.effectiveConfig;
-    if (cfg.retries > 0) continue;
     const scope = projects.length > 1 ? ` in project "${project.name}"` : '';
     for (const [artifact, mode] of [
       ['video', resolveVideoConfig(cfg.video).mode],
       ['trace', resolveTraceConfig(cfg.trace).mode],
     ] as const) {
-      if (recordsOnlyOnRetry(mode)) {
-        console.error(yellow(
-          `Warning: ${artifact} mode '${mode}' only records retry attempts, but retries is 0${scope} — no ${artifact} will ever be recorded. Set retries to 1 or more to get ${artifact}s.`,
-        ));
-      }
+      const warning = retryOnlyModeWarning(artifact, mode, cfg.retries, !!args.ui, scope);
+      if (warning) console.error(yellow(warning));
     }
   }
 
@@ -2460,6 +2506,13 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       process.exit(1);
     }
   }
+  // Whether any file this session can run uses route(), waitForRequest(),
+  // waitForResponse() or on('request' | 'response'): if so every device
+  // session starts the network proxy before the app launches (PILOT-1013).
+  // UI and watch scan every discovered file, since any of them may run in
+  // the session, and scan again for each run.
+  const { testFilesUseNetworkApis } = await import('./network-api-scan.js');
+  const networkApisInRun = await testFilesUseNetworkApis(testFiles);
   printTapsmithBanner();
   // After the tsx re-exec, so it prints exactly once, and before any worker
   // is forked, so no child ever races it (PILOT-330).
@@ -2478,6 +2531,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       mode: args.ui ? 'ui' : 'test',
       projects: hasProjects ? projects : undefined,
       workerPlanWarning,
+      networkApisInRun,
     }), {
       title: args.ui ? 'UI mode' : '',
     })
@@ -2519,6 +2573,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
           testFiles,
           workers: totalWorkers,
           forceInstall: args.forceInstall,
+          networkApisInRun,
           workerCap: budgetCap,
           projects: hasProjects ? projects : undefined,
           projectWaves: hasProjects ? projectWaves : undefined,
@@ -2633,6 +2688,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
           candidate.effectiveConfig,
           args.forceInstall,
           candidate.deviceSignature,
+          networkApisInRun,
           launchProgress,
           bucketGroup(candidate.deviceSignature),
         );
@@ -2767,6 +2823,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         screenshotDir: uiScreenshotDir,
         launchedEmulators,
         forceInstall: args.forceInstall,
+        networkApisInRun,
         projects: hasProjects ? projects : undefined,
         projectWaves: hasProjects ? projectWaves : undefined,
         workers: uiWorkersOverride,
@@ -2857,6 +2914,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         screenshotDir: watchScreenshotDir,
         launchedEmulators,
         forceInstall: args.forceInstall,
+        networkApisInRun,
         // The startup launch already probed for in-app hooks into this shared
         // object; watch-run children seed from it and report back, so warm
         // per-policy resets survive the fresh-child-per-run boundary.
@@ -2983,6 +3041,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
               project.effectiveConfig,
               args.forceInstall,
               project.deviceSignature,
+              networkApisInRun,
               undefined,
               bucketGroup(project.deviceSignature),
             );
@@ -3026,6 +3085,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
             // The state holds the target's largest group; this project runs
             // on the first N of it (the runner checks the count).
             sessions: sessionsForRun(currentSequentialState!.sessions, project.effectiveConfig),
+            networkApisInRun,
             screenshotDir,
             reporter,
             projectUseOptions: project.use,
@@ -3109,6 +3169,8 @@ async function runTestFileWithRecovery(
     config: TapsmithConfig
     /** The device group, primary first. */
     sessions: DeviceSession[]
+    /** `RunOptions.networkApisInRun`. */
+    networkApisInRun: boolean
     screenshotDir: string | undefined
     reporter: ReporterDispatcher
     projectUseOptions?: Record<string, unknown>
@@ -3165,6 +3227,7 @@ async function runTestFileWithRecovery(
         abortFileOnError: isRecoverableInfrastructureError,
         resetCapabilities: sessions[0].capabilities,
         runMode: 'test',
+        networkApisInRun: opts.networkApisInRun,
         // In-process retries need the same ESM cache busting as worker
         // retries; otherwise import() returns the cached module and the
         // retry registers no tests.

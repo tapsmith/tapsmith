@@ -130,12 +130,24 @@ describe('createUiLaunchSteps', () => {
     expect(detail({ trace: 'on-first-retry' })).toContain('network: on demand');
   });
 
+  // PILOT-1013: a run whose tests use the network APIs starts the proxy with the session.
+  it('says at session start when the run uses network APIs and no trace captures every test', () => {
+    const detail = (config: Partial<TapsmithConfig>) =>
+      createUiLaunchSteps({ config: baseConfig(config), testFileCount: 1, workerCount: 1, mode: 'test', networkApisInRun: true })[0]!.detail;
+    expect(detail({})).toContain('network: at session start');
+    expect(detail({ trace: 'on-first-retry' })).toContain('network: at session start');
+    expect(detail({ trace: 'retain-on-failure' })).toContain('network: captured');
+  });
+
   it('says captured in UI mode, whose workers turn a missing or off trace on', () => {
     const detail = (config: Partial<TapsmithConfig>) =>
       createUiLaunchSteps({ config: baseConfig(config), testFileCount: 1, workerCount: 1, mode: 'ui' })[0]!.detail;
     expect(detail({})).toContain('network: captured');
     expect(detail({ trace: 'off' })).toContain('network: captured');
     expect(detail({ trace: { mode: 'on', network: false } })).toContain('network: on demand');
+    // UI mode never retries, so it records a retry-only mode as 'on' (PILOT-1175).
+    expect(detail({ trace: 'on-first-retry' })).toContain('network: captured');
+    expect(detail({ trace: { mode: 'on-all-retries' } })).toContain('network: captured');
   });
 
   it('lists each network state once across projects', () => {

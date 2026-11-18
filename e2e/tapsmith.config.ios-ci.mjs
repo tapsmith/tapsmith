@@ -6,6 +6,9 @@ export default defineConfig({
   app: "./fixtures/TapsmithTestApp.app",
   package: "dev.tapsmith.testapp",
   timeout: 30_000,
+  // Speeds UIKit animations up on the simulator, and exercises Tapsmith's
+  // setting and restore on every run (reduced-motion.ios.test.ts checks the setting).
+  reducedMotion: "reduce",
   typingDelay: 10,
   // Two retries (Playwright's CI convention): runner-scoped outages
   // (compositor stalls, input-injection drops) can outlast a single retry
@@ -13,8 +16,11 @@ export default defineConfig({
   retries: 2,
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
+  // Record every attempt, keep failures and retries: a flaky test keeps its
+  // failing first attempt next to the passing retry, so the flake itself is
+  // in the report, not only the attempt that recovered from it.
   trace: {
-    mode: "retain-on-failure",
+    mode: "retain-on-failure-and-retries",
     daemonLogs: true,
     networkHosts: ["jsonplaceholder.typicode.com", "127.0.0.1"],
   },

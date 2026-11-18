@@ -45,7 +45,7 @@ export interface Candidate {
 }
 
 export type ReadinessEvent =
-  | { type: 'worker-ready'; initialPolicy?: AppResetPolicy }
+  | { type: 'worker-ready'; initialPolicy?: AppResetPolicy; /** A hold the worker's previous process was in (a respawn that kept the device as it was). */ hold?: StaleReason }
   | { type: 'dispatch'; file: string; want: AppResetPolicy }
   | { type: 'file-done' }
   | { type: 'run-ended'; stopped: boolean; failed?: boolean }
@@ -79,6 +79,29 @@ export interface ReadinessEnv {
   /** Someone is poking the mirror right now — hold off. */
   recentlyInteracted(): boolean;
 }
+
+/**
+ * Stale reasons that hold the device as-is instead of re-preparing after the
+ * grace period: someone drove the app there on purpose (a mirror gesture or
+ * an MCP agent's action), or a stopped/failed run left it for inspection.
+ * Re-preparing would reset it out from under them. A hold ends by an
+ * explicit act on that device: Prepare now, or a run on that worker (which
+ * resets inline). Selection changes, runs on other workers and preference
+ * re-sends leave it alone. (A run that must first reload changed source
+ * restarts every worker; one that cannot adopt the CLI's device relaunches
+ * the app, which ends its hold — fresh code wins. See `ensureWorkersReady`.)
+ */
+const HOLDING_REASONS: ReadonlySet<StaleReason> = new Set(['mirror-gesture', 'mcp-tool', 'run-stopped', 'run-failed']);
+
+function isHold(s: ReadinessState): s is Extract<ReadinessState, { kind: 'stale' }> {
+  return s.kind === 'stale' && HOLDING_REASONS.has(s.reason);
+}
+
+/** The reason a worker's device is held as-is, or undefined when it is not held. */
+export function holdReason(s: ReadinessState | undefined): StaleReason | undefined {
+  return s && isHold(s) ? s.reason : undefined;
+}
+
 
 export const DEFAULT_GRACE_MS = 5_000;
 export const INTERACTION_HOLD_MS = 2_000;
@@ -115,6 +138,11 @@ export class DeviceReadiness {
     switch (event.type) {
       case 'worker-ready': {
         this._errorAttempts = 0;
+        if (event.hold && HOLDING_REASONS.has(event.hold)) {
+          // A respawn (fresh code) that kept the device as it was keeps it held.
+          this._state = { kind: 'stale', reason: event.hold, since: this.env.now() };
+          return [{ type: 'broadcast' }];
+        }
         if (event.initialPolicy) {
           this._state = {
             kind: 'ready', policy: event.initialPolicy, preparedAt: this.env.now(), durationMs: 0, prepareId: this.nextId(), source: 'startup launch',
@@ -144,13 +172,14 @@ export class DeviceReadiness {
         // file touched its device (dispatch moved it to `running`). A worker
         // still `ready` or mid-`preparing` sat the run out — its preparation
         // is as valid as it was, so keep it rather than discard it and redo
-        // the same reset after the grace period.
-        if (s.kind === 'ready' || s.kind === 'preparing') return [];
+        // the same reset after the grace period. A held worker that sat it out
+        // stays held: nothing touched its device.
+        if (s.kind === 'ready' || s.kind === 'preparing' || isHold(s)) return [];
         if (event.stopped || event.failed) {
           // The user stopped the run, or a test on this device failed — either
           // way the state on the device is worth inspecting. Don't yank it
-          // into a background reset; preparation re-arms on the next normal
-          // trigger (selection change, prepare-now, a later run).
+          // into a background reset; it stays held until Prepare now or this
+          // worker's next run.
           this._state = { kind: 'stale', reason: event.stopped ? 'run-stopped' : 'run-failed', since: this.env.now() };
           return [{ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' }];
         }
@@ -161,6 +190,8 @@ export class DeviceReadiness {
       case 'grace-elapsed': {
         if (event.timerId !== this._timerId) return [];
         if (s.kind === 'running' || s.kind === 'preparing' || s.kind === 'ready' || s.kind === 'retired' || s.kind === 'initializing') return [];
+        // A timer that fired just before a hold cleared it must not arm.
+        if (isHold(s)) return [];
         return this.arm();
       }
 
@@ -209,16 +240,19 @@ export class DeviceReadiness {
         if (s.kind === 'preparing') cmds.push({ type: 'send-cancel-prepare', prepareId: s.prepareId });
         const previous = s.kind === 'ready' ? s.policy : undefined;
         this._state = { kind: 'stale', reason: event.reason, since: this.env.now(), previous };
-        cmds.push({ type: 'broadcast' }, { type: 'start-timer', timerId: this._timerId, ms: this.env.graceMs() });
+        if (HOLDING_REASONS.has(event.reason)) {
+          cmds.push({ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' });
+        } else {
+          cmds.push({ type: 'broadcast' }, { type: 'start-timer', timerId: this._timerId, ms: this.env.graceMs() });
+        }
         return cmds;
       }
 
       case 'candidate-changed': {
         if (s.kind === 'ready') return this.reconcileCandidate();
         if (s.kind === 'unprepared' && s.reason !== 'grace') return this.arm();
-        // A stop- or failure-induced hold has no pending timer (unlike other
-        // stale states); picking a new target is the user moving on — re-arm.
-        if (s.kind === 'stale' && (s.reason === 'run-stopped' || s.reason === 'run-failed')) return this.arm();
+        // A hold (stop, failure, touch) stays until Prepare now or the
+        // worker's own run: a selection says nothing about this device.
         return [];
       }
 
@@ -228,13 +262,18 @@ export class DeviceReadiness {
             this._state = { kind: 'unprepared', reason: 'speculation-off' };
             return [{ type: 'send-cancel-prepare', prepareId: s.prepareId }, { type: 'broadcast' }];
           }
-          if (s.kind === 'unprepared' || s.kind === 'stale' || s.kind === 'error') {
+          // A hold stays a hold: it is about the device, not the preference
+          // (and the browser re-sends a stored "off" on every reconnect).
+          if (s.kind === 'unprepared' || (s.kind === 'stale' && !isHold(s)) || s.kind === 'error') {
             this._state = { kind: 'unprepared', reason: 'speculation-off' };
             return [{ type: 'clear-timer', timerId: this._timerId }, { type: 'broadcast' }];
           }
           return []; // a valid `ready` is kept; it just won't be re-armed later
         }
-        if (s.kind === 'unprepared' || s.kind === 'stale' || s.kind === 'error') return this.arm();
+        // A hold stays held: the browser re-sends unchanged preferences on
+        // every reconnect, and turning preparation on is no reason to reset a
+        // device someone is using.
+        if (s.kind === 'unprepared' || (s.kind === 'stale' && !isHold(s)) || s.kind === 'error') return this.arm();
         return [];
       }
 
@@ -296,6 +335,84 @@ export class DeviceReadiness {
       { type: 'send-prepare', prepareId, target: cand.policy, forFile: cand.file, projectName: cand.projectName },
       { type: 'broadcast' },
     ];
+  }
+}
+
+// ─── MCP tool targeting ───
+
+/** What `mcpToolWorkers` needs to know about one live worker. */
+export interface McpTargetWorker {
+  id: number
+  /** The worker's devices, primary first: serial and group name (`alice`). */
+  devices: Array<{ serial: string; name?: string }>
+}
+
+/**
+ * The workers a mutating MCP device tool touched, so only their devices are
+ * invalidated — each invalidation costs a real reset on the next
+ * preparation. `resolved` is the serial the MCP connection actually acted on
+ * (the tool-call event's `device`); without it, an explicit `device`
+ * argument (serial or group name) is used. Undefined means "every worker":
+ * a call the session cannot place is not narrowed, since missing the touched
+ * device would let a stale prepared state through. Re-deriving the MCP's
+ * own default or project choice here is not attempted — it drifts from the
+ * connection pool's order. A call that failed without resolving a device was
+ * refused before it reached one (every mutating tool resolves first), so it
+ * touched nothing.
+ */
+export function mcpToolWorkers(
+  resolved: string | undefined,
+  args: Record<string, unknown> | undefined,
+  workers: McpTargetWorker[],
+  status: 'completed' | 'error' = 'completed',
+): number[] | undefined {
+  if (status === 'error' && !resolved) return [];
+  const device = resolved || (typeof args?.device === 'string' && args.device ? args.device : undefined);
+  if (!device) return undefined;
+  const hit = workers.filter((w) => w.devices.some((d) => d.serial === device || d.name === device));
+  return hit.length > 0 ? hit.map((w) => w.id) : undefined;
+}
+
+/** MCP tools that act on a device (a preparation must not reset it under them). */
+export const MUTATING_MCP_TOOLS: ReadonlySet<string> = new Set([
+  'tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key', 'tapsmith_launch_app', 'tapsmith_run_code',
+]);
+
+/**
+ * Mutating MCP calls in flight. While any is, no background preparation
+ * starts (the readiness env's `recentlyInteracted`): a reset in the middle of
+ * a call would leave its later steps (tapsmith_run_code runs several
+ * statements) acting on a different app state than its earlier ones. A
+ * preparation already running when a call starts is not cut short (that
+ * would leave the app half reset); the call waits for it once it knows its
+ * device ({@link McpCallsInFlight.preparingFor}).
+ */
+export class McpCallsInFlight {
+  private readonly ids = new Set<string>();
+
+  /** Records a call; true when the tool is a mutating one. */
+  start(id: string, tool: string): boolean {
+    if (!MUTATING_MCP_TOOLS.has(tool)) return false;
+    this.ids.add(id);
+    return true;
+  }
+
+  end(id: string): void {
+    this.ids.delete(id);
+  }
+
+  get active(): boolean {
+    return this.ids.size > 0;
+  }
+
+  /**
+   * Of the workers now preparing, the ones a call that resolved `device`
+   * must wait for: the worker holding that device, or every one when no
+   * worker is known to hold it.
+   */
+  static preparingFor(device: string, workers: McpTargetWorker[], preparing: number[]): number[] {
+    const targets = mcpToolWorkers(device, undefined, workers);
+    return preparing.filter((id) => !targets || targets.includes(id));
   }
 }
 

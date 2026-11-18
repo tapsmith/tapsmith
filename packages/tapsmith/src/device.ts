@@ -35,7 +35,7 @@ import { ElementHandle, locatorOptionsToSelector, type LocatorOptions } from './
 import type { DeviceKey, SwipeDirection } from './input-names.js';
 import type { Role } from './roles.js';
 import { withActionProgress } from './action-progress.js';
-import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
+import { DEFAULT_APP_RESET_COLD_EVERY, reduceMotionFlag, type TapsmithConfig } from './config.js';
 import { Tracing } from './trace/tracing.js';
 import { type TraceCollector, getActiveTraceCollector, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory, ConsoleLevel, NetworkCaptureRoute } from './trace/types.js';
@@ -68,6 +68,18 @@ const WEBVIEW_CONNECT_ATTEMPT_TIMEOUT_MS = 5_000;
 const WEBVIEW_CONNECT_LOG_LIMIT = 80;
 
 // ─── Pending network waiters (PILOT-543) ───
+
+/**
+ * @internal — One successful `route()` call, as the runner's unfired-route
+ * warning reads it.
+ */
+export interface RouteRegistrationRecord {
+  /** The pattern as the trace shows it. */
+  pattern: string;
+  /** When the route took effect (host clock, like captured entries' start times). */
+  registeredAtMs: number;
+  matches: (url: string) => boolean;
+}
 
 /** A waitForRequest/waitForResponse still waiting, and how to end it early. */
 interface PendingWaiter {
@@ -158,6 +170,16 @@ export interface SwipeOptions {
   timeoutMs?: number;
 }
 
+
+/** Warnings a successful StartAgent carried, printed once per process. */
+const _printedStartAgentWarnings = new Set<string>();
+
+function warnStartAgentOnce(message: string): void {
+  if (_printedStartAgentWarnings.has(message)) return;
+  _printedStartAgentWarnings.add(message);
+  console.warn(`[tapsmith] ${message}`);
+}
+
 /**
  * The device under test: the `device` fixture every test receives.
  * Locators come from its `getBy*()` methods and auto-wait when acted on;
@@ -207,6 +229,11 @@ export class Device {
   /** Successful `route()` calls since the runner last took the count. */
   private _routeRegistrations = 0;
   /**
+   * The same calls' patterns and when each took effect, for the runner's
+   * unfired-route warning.
+   */
+  private _routeRegistrationLog: RouteRegistrationRecord[] = [];
+  /**
    * The runner's starter for network capture on demand: a
    * route(), waitForRequest() or waitForResponse() made while capture is not
    * running calls it, so mocking needs no config. Null outside a test file.
@@ -218,6 +245,22 @@ export class Device {
   private _onDemandStart: Promise<void> | null = null;
   /** The proxy came up through an on-demand start since the runner last asked. */
   private _proxyStartedOnDemand = false;
+  /** Whether the session-start proxy start was already tried. */
+  private _sessionNetworkStartTried = false;
+  /**
+   * @internal — The proxy came up through the runner's start at a file, after
+   * the app had been launched without it, so connections the app opened
+   * before may bypass it (a reason the runner gives for unfired routes).
+   * Cleared once the app's process is recreated behind the proxy.
+   */
+  _proxyStartedAfterLaunch = false;
+  /**
+   * @internal — The app was launched with the proxy already up: the session
+   * that launched the app this Device adopted started it first, or this
+   * Device recreated the app's process while its proxy ran. A later start at
+   * a file is then not a late one.
+   */
+  _launchedBehindProxy = false;
   /** waitForRequest/waitForResponse calls still waiting. */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
@@ -226,6 +269,13 @@ export class Device {
    * is not running or the daemon predates route reporting.
    */
   _networkCaptureRoute: NetworkCaptureRoute | undefined;
+  /**
+   * @internal — The last successful capture start passed this device's HTTPS
+   * through uncaptured: the device does not trust Tapsmith's CA (an iOS
+   * simulator whose CA install failed, an Android Play image). Recorded in
+   * trace metadata and named by network waiters that time out.
+   */
+  _networkHttpsPassthrough = false;
   /** Set by the runner on retry attempts — see _setForceColdDeepLinks. */
   private _forceColdDeepLinks = false;
 
@@ -244,9 +294,12 @@ export class Device {
 
   private _typingDelayMs: number;
   private _doubleTapIntervalMs: number;
+  /** The config's `reducedMotion`, sent with every device selection. */
+  private _reducedMotion: TapsmithConfig['reducedMotion'];
 
-  constructor(client: TapsmithGrpcClient, config?: Partial<Pick<TapsmithConfig, 'timeout' | 'package' | 'platform' | 'simulator' | 'typingDelay' | 'doubleTapInterval' | 'appResetColdEvery'>>) {
+  constructor(client: TapsmithGrpcClient, config?: Partial<Pick<TapsmithConfig, 'timeout' | 'package' | 'platform' | 'simulator' | 'typingDelay' | 'doubleTapInterval' | 'appResetColdEvery' | 'reducedMotion'>>) {
     this._client = client;
+    this._reducedMotion = config?.reducedMotion;
     this._defaultTimeoutMs = config?.timeout ?? 30_000;
     this._appResetColdEvery = config?.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY;
     this._typingDelayMs = config?.typingDelay ?? 0;
@@ -612,8 +665,10 @@ export class Device {
   /**
    * Give the app's UI a moment to settle. On Android it waits for the
    * accessibility events to go quiet, up to `timeoutMs` (default: the device
-   * timeout); on iOS it pauses briefly (a quarter of a second at most). It does
-   * not prove the screen is idle: wait for what you need with an assertion.
+   * timeout); on iOS it waits until two screenshots taken a couple of frames
+   * apart match, up to `timeoutMs` or a quarter of a second, whichever is
+   * shorter. It does not prove the screen is idle: wait for what you need with
+   * an assertion.
    */
   async waitForIdle(timeoutMs?: number): Promise<void> {
     const res = await this._client.waitForIdle(timeoutMs ?? this._defaultTimeoutMs);
@@ -654,6 +709,7 @@ export class Device {
       networkTracingEnabled,
       networkHosts,
       passthroughHosts,
+      reduceMotionFlag(this._reducedMotion),
     );
     if (!res.success) {
       throw new Error(res.errorMessage || 'Set device failed');
@@ -683,18 +739,43 @@ export class Device {
     iosAppPath?: string,
     networkTracingEnabled = false,
   ): Promise<void> {
-    return withActionProgress('startAgent', targetPackage || undefined, async () => {
+    await this._startAgent({
+      targetPackage, agentApkPath, agentTestApkPath, iosXctestrunPath, iosAppPath, networkTracingEnabled,
+    });
+  }
+
+  /**
+   * @internal — {@link Device.startAgent} for the session opener: it may ask
+   * for the app's data to be wiped before the agent launches it, and learns
+   * whether that launch can stand as the session's clean startup launch.
+   */
+  async _startAgent(opts: {
+    targetPackage: string
+    agentApkPath?: string
+    agentTestApkPath?: string
+    iosXctestrunPath?: string
+    iosAppPath?: string
+    networkTracingEnabled?: boolean
+    /** iOS simulators: wipe the app's data before the agent launches it. */
+    clearAppDataFirst?: boolean
+  }): Promise<{ appLaunchedFresh: boolean }> {
+    return withActionProgress('startAgent', opts.targetPackage || undefined, async () => {
       const res = await this._client.startAgent(
-        targetPackage,
-        agentApkPath,
-        agentTestApkPath,
-        iosXctestrunPath,
-        iosAppPath,
-        networkTracingEnabled,
+        opts.targetPackage,
+        opts.agentApkPath,
+        opts.agentTestApkPath,
+        opts.iosXctestrunPath,
+        opts.iosAppPath,
+        opts.networkTracingEnabled ?? false,
+        opts.clearAppDataFirst ?? false,
       );
       if (!res.success) {
         throw new Error(res.errorMessage || 'Start agent failed');
       }
+      // A successful start can carry a warning for the run, such as a
+      // reducedMotion speed-up the daemon could not apply (PILOT-1073).
+      if (res.errorMessage) warnStartAgentOnce(res.errorMessage);
+      return { appLaunchedFresh: res.appLaunchedFresh === true };
     });
   }
 
@@ -731,7 +812,7 @@ export class Device {
     return withActionProgress('restartApp', pkg,
       () => this._tracedAction('restartApp', 'device', undefined,
         () => this._client.restartApp(pkg, options?.waitForIdle ?? true),
-        'Restart app failed'));
+        'Restart app failed').then(() => this._appProcessRecreated()));
   }
 
   /**
@@ -742,7 +823,7 @@ export class Device {
     return withActionProgress('launchApp', packageName,
       () => this._tracedAction('launchApp', 'navigation', undefined,
         () => this._client.launchApp(packageName, options),
-        'Launch app failed'));
+        'Launch app failed').then(() => { if (options?.clearData) this._appProcessRecreated(); }));
   }
 
   /**
@@ -756,7 +837,7 @@ export class Device {
   }
 
   /** @internal — runner/preflight entry point with policy inputs. */
-  async _resetApp(packageName: string, options: InternalAppResetOptions): Promise<AppResetResult> {
+  async _resetApp(packageName: string, options: InternalAppResetOptions): Promise<InternalAppResetResult> {
     const mode = options.mode ?? 'warm';
     let response: ResetAppResponse | undefined;
     const request: ResetAppRequestOptions = {
@@ -775,6 +856,7 @@ export class Device {
       waitForIdle: options.waitForIdle,
       targetPath: options.target,
       fallbackToClear: options.fallbackToClear,
+      keepAppData: options.keepAppData,
     };
     if (mode !== 'warm') await this._disposeWebViewManager();
     await withActionProgress('resetApp', packageName,
@@ -785,14 +867,41 @@ export class Device {
             // The process was recreated after all — drop cached WebView state.
             await this._disposeWebViewManager();
           }
-          return response;
+          // A caller that recovers from a failure itself records the attempt
+          // as handled (its detail still says it failed), not as an error.
+          return options.recoverable && !response.success ? { ...response, success: true } : response;
         },
         'App reset failed',
         {
-          detail: () => (response ? describeAppResetResponse(mode, response) : undefined),
+          detail: () => (response ? describeAppResetResponse(mode, response, options.target) : undefined),
           skipBeforeCapture: options.skipTraceCapture,
         }));
-    return toAppResetResult(mode, response!);
+    if (options.recoverable && !response!.success) {
+      throw new Error(response!.errorMessage || 'App reset failed');
+    }
+    const result: InternalAppResetResult = toAppResetResult(mode, response!);
+    if (result.coldLaunch) this._appProcessRecreated();
+    if (options.keepAppData) result.keptAppData = response!.success && response!.keptAppData === true;
+    return result;
+  }
+
+  /**
+   * The app's process was stopped or recreated: whatever connections it held
+   * are gone, so a proxy that started after it launched no longer misses them.
+   */
+  private _appProcessRecreated(): void {
+    this._proxyStartedAfterLaunch = false;
+    if (this._networkProxyRunning) this._launchedBehindProxy = true;
+  }
+
+  /**
+   * @internal — Whether the app runs behind this device's proxy, for a
+   * watch-run or MCP child to hand back to its parent, whose next child
+   * adopts the same app. Undefined when this Device never started the proxy,
+   * so it cannot tell.
+   */
+  get _appBehindProxy(): boolean | undefined {
+    return this._networkProxyRunning ? this._launchedBehindProxy : undefined;
   }
 
   /**
@@ -851,7 +960,7 @@ export class Device {
     return withActionProgress('terminateApp', pkg,
       () => this._tracedAction('terminateApp', 'device', undefined,
         () => this._client.terminateApp(pkg),
-        'Terminate app failed'));
+        'Terminate app failed').then(() => this._appProcessRecreated()));
   }
 
   /**
@@ -920,7 +1029,7 @@ export class Device {
     return withActionProgress('clearAppData', packageName,
       () => this._tracedAction('clearAppData', 'device', undefined,
         () => this._client.clearAppData(packageName),
-        'Clear app data failed'));
+        'Clear app data failed').then(() => this._appProcessRecreated()));
   }
 
   /** Programmatically grant a permission (Android runtime permission; iOS simulator `simctl privacy` service). */
@@ -975,7 +1084,8 @@ export class Device {
 
   /**
    * Dismiss the soft keyboard if it is showing; resolves at once when it is not.
-   * On Android it presses BACK. On iOS it tries each way of dismissing it and
+   * On Android it presses BACK, and throws without pressing it if the keyboard
+   * or the app stays unresponsive. On iOS it tries each way of dismissing it and
    * throws if the keyboard is still up after all of them.
    */
   async hideKeyboard(): Promise<void> {
@@ -1070,6 +1180,7 @@ export class Device {
     // Kept across the stop that ends the test: the trace metadata is written
     // after capture has been drained.
     this._networkCaptureRoute = res.success ? res.route : undefined;
+    this._networkHttpsPassthrough = res.success && res.httpsPassthrough === true;
     if (res.success) {
       this._networkCaptureActive = true;
       this._networkCaptureEverStarted = true;
@@ -1095,6 +1206,40 @@ export class Device {
   _setOnDemandNetworkCapture(start: (() => Promise<void>) | null): void {
     this._onDemandCapture = start;
     this._onDemandTried = false;
+  }
+
+  /**
+   * @internal — Claim this device's one session-start proxy start:
+   * true the first time, when the proxy is not already up, so
+   * the caller starts it now; false after that. The session open (before the
+   * app launches) and the runner's first file (for a session that adopted a
+   * running app) both ask, and whichever asks first starts it. One try: a
+   * start that failed is left to the on-demand start of a test that needs it.
+   */
+  _claimSessionNetworkStart(): boolean {
+    if (this._sessionNetworkStartTried || this._networkProxyRunning) return false;
+    this._sessionNetworkStartTried = true;
+    return true;
+  }
+
+  /**
+   * @internal — Start the network proxy for the session, as the
+   * device session opens or before the runner's first file, unless a start
+   * was already tried. Never throws, and says nothing: outside a test there
+   * is no one to tell on every run path (a UI worker's or MCP child's stderr
+   * reaches no user). What the start warns about is told by the start at
+   * each test's beginning — the daemon repeats a running proxy's first-start
+   * warnings — and a start that failed is tried again, and reported, by the
+   * on-demand start of a test that needs the proxy.
+   */
+  async _startNetworkProxyForSession(options: { requireIsolation: boolean; httpPorts?: number[]; appRunning?: boolean }): Promise<void> {
+    if (!this._claimSessionNetworkStart()) return;
+    try {
+      const res = await this._startNetworkCapture({ requireIsolation: options.requireIsolation, httpPorts: options.httpPorts });
+      if (res.success && options.appRunning && !this._launchedBehindProxy) this._proxyStartedAfterLaunch = true;
+    } catch {
+      // Recorded as `_networkCaptureError`; see above.
+    }
   }
 
   /**
@@ -1314,11 +1459,13 @@ export class Device {
    * `Route` object that can `abort()`, `continue()`, `fulfill()`, or `fetch()`
    * the request.
    *
-   * Routes run on Tapsmith's network proxy. The test runner starts it for a
-   * test whose trace records network traffic, and otherwise on the first
-   * `route()`, `waitForRequest()` or `waitForResponse()` of a test;
-   * it then stays up for the rest of the session. Connections
-   * the app opened before the proxy started bypass it, so register routes
+   * Routes run on Tapsmith's network proxy. The test runner starts it as
+   * the device session starts when the run's test files call `route()`,
+   * `waitForRequest()`, `waitForResponse()` or `on('request' | 'response')`,
+   * for a test whose trace records network traffic, and otherwise on the
+   * first such call of a test; it then stays up for the rest of the session.
+   * Connections the app opened before the proxy started bypass it, and a
+   * route sees only requests made after it is registered, so register routes
    * before the app sends the requests they mock. Outside the test runner
    * nothing starts the proxy, route handlers never fire, and the runner
    * warns at the end of a test whose routes could not fire.
@@ -1342,6 +1489,11 @@ export class Device {
     }
     await this._ensureRouteManager().addRoute(url, handler, options);
     this._routeRegistrations++;
+    this._routeRegistrationLog.push({
+      pattern: formatPattern(url),
+      registeredAtMs: Date.now(),
+      matches: (requestUrl) => matchUrlPattern(requestUrl, url),
+    });
     this._emitNetworkAction('route', formatPattern(url), start, true, undefined, source, stack);
   }
 
@@ -1354,6 +1506,18 @@ export class Device {
     const n = this._routeRegistrations;
     this._routeRegistrations = 0;
     return n;
+  }
+
+  /**
+   * @internal — The routes registered since the last call (pattern, when it
+   * took effect, and its URL matcher), then reset. The runner reads it after
+   * a test whose routes never fired, to name a matching request the app sent
+   * before its route existed.
+   */
+  _takeRouteRegistrationLog(): RouteRegistrationRecord[] {
+    const log = this._routeRegistrationLog;
+    this._routeRegistrationLog = [];
+    return log;
   }
 
   /**
@@ -1498,15 +1662,26 @@ export class Device {
 
   /**
    * Why a network waiter may have timed out, when that is down to capture
-   * rather than the app: nothing was capturing, or the proxy only
-   * came up with this wait, after the app may have opened its connections.
+   * rather than the app: nothing was capturing, the proxy only came up
+   * with this wait, after the app may have opened its connections, or the
+   * device's HTTPS passes through uncaptured.
    */
   private _networkWaiterHint(proxyWasRunning: boolean): string {
+    const passthrough = this._networkHttpsPassthrough
+      ? '. HTTPS on this device is passed through the network proxy uncaptured because the device does not ' +
+        'trust Tapsmith\'s CA (see the "Network capture warning" printed when capture started), so ' +
+        'waitForRequest() and waitForResponse() can see only plain-HTTP requests'
+      : '';
+    return this._networkCaptureHint(proxyWasRunning) + passthrough;
+  }
+
+  private _networkCaptureHint(proxyWasRunning: boolean): string {
     if (!this._networkProxyRunning) {
       return '. No network capture was running on this device, so no request could be seen: ' +
         'waitForRequest() and waitForResponse() see traffic only through Tapsmith\'s network proxy, ' +
-        'which the test runner starts for a test (on its first route() or network wait, or when its ' +
-        'trace records network). See https://tapsmith.dev/guides/network/#prerequisites';
+        'which the test runner starts with the session when the run\'s test files use these calls, ' +
+        'or for a test (on its first route() or network wait, or when its trace records network). ' +
+        'See https://tapsmith.dev/guides/network/#prerequisites';
     }
     if (!proxyWasRunning) {
       return '. The network proxy started on demand with this wait, and connections the app had ' +
@@ -2258,6 +2433,29 @@ export interface InternalAppResetOptions extends AppResetOptions {
    * public `device.resetApp()` keeps the gentler restart fallback.
    */
   fallbackToClear?: boolean;
+  /**
+   * Keep the app's persisted data: the in-app hook resets in-memory state
+   * only (its `onReload`). Set by the runner between tests that restore the
+   * same `appState`, once the hook reports no writes since the restore.
+   */
+  keepAppData?: boolean;
+  /**
+   * The caller falls back on its own when the reset fails (the runner
+   * restores the archive after a failed keep-data reset): the trace records
+   * the failed attempt as a handled step rather than an error, and the call
+   * still throws.
+   */
+  recoverable?: boolean;
+}
+
+/** @internal — `_resetApp`'s result: the public one plus what only the runner needs. */
+export interface InternalAppResetResult extends AppResetResult {
+  /**
+   * Set for a `keepAppData` request: the in-app hook reset the app keeping
+   * its data. False when the daemon could not pass the request on (one that
+   * predates it runs the hook's full, data-clearing reset instead).
+   */
+  keptAppData?: boolean;
 }
 
 /** What `device.resetApp()` did: the rung that ran, why, and how long it took. */
@@ -2282,6 +2480,13 @@ export interface AppResetResult {
   epochAfter?: number;
   /** Each rung tried, with its timing and outcome. */
   steps: Array<{ name: string; durationMs: number; ok: boolean; detail?: string }>;
+  /**
+   * The app ended on `target`: the in-app reset was acknowledged on that
+   * route. False when a restart or clear rung ran (the app is at its launch
+   * route), and when the target screen hid the hooks marker so the reset was
+   * confirmed on `/` instead — navigate yourself then if the route matters.
+   */
+  targetReached: boolean;
 }
 
 function toAppResetResult(requested: 'warm' | 'restart' | 'clear', r: ResetAppResponse): AppResetResult {
@@ -2293,6 +2498,7 @@ function toAppResetResult(requested: 'warm' | 'restart' | 'clear', r: ResetAppRe
     ...(r.reason ? { reason: r.reason } : {}),
     durationMs: r.durationMs,
     hooksDetected: r.hooksDetected,
+    targetReached: r.success && r.targetReached,
     ...(r.hooksDetected ? { epochBefore: r.epochBefore, epochAfter: r.epochAfter } : {}),
     steps: (r.steps ?? []).map((st) => ({
       name: st.name,
@@ -2303,11 +2509,12 @@ function toAppResetResult(requested: 'warm' | 'restart' | 'clear', r: ResetAppRe
   };
 }
 
-function describeAppResetResponse(requested: 'warm' | 'restart' | 'clear', r: ResetAppResponse): string {
+function describeAppResetResponse(requested: 'warm' | 'restart' | 'clear', r: ResetAppResponse, target?: string): string {
   const used = appResetModeFromWire(r.modeUsed) ?? requested;
+  const landed = r.targetReached && target !== undefined && target !== '/' ? ` → ${target}` : '';
   const via = used === 'warm'
     ? (r.hooksDetected
-      ? `warm reset via @tapsmith/react-native (epoch ${r.epochBefore}→${r.epochAfter})`
+      ? `warm reset via @tapsmith/react-native (epoch ${r.epochBefore}→${r.epochAfter})${landed}`
       : 'warm reset via resetAppDeepLink')
     : used === 'restart' ? 'terminated and relaunched (data kept)' : 'cleared app data and relaunched';
   const secs = `${(r.durationMs / 1000).toFixed(1)}s`;

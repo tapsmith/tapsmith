@@ -2207,6 +2207,34 @@ describe("wrapAssertionWithTrace", () => {
     vitestExpect(event.soft).toBe(false);
   });
 
+  it("counts attempts from the first read, not from the before-capture (PILOT-972)", async () => {
+    // A slow before-capture (screenshot + hierarchy) followed by a read that
+    // passes at once is one attempt, however long the capture took.
+    vi.useFakeTimers();
+    try {
+      const collector = makeMockCollector();
+      collector.captureBeforeAction.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 400));
+        return { actionIndex: 0, captures: {} };
+      });
+      const client = makeMockClient(async () => ({
+        requestId: "1",
+        found: true,
+        element: makeElementInfo({ visible: true }),
+        errorMessage: "",
+      }));
+      const handle = makeTracedHandle(client, collector);
+      const done = tapsmithExpect(handle).toBeVisible({ timeout: 5000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      await done;
+      const event = collector.addAssertionEvent.mock.calls[0][0];
+      vitestExpect(event.duration).toBeGreaterThanOrEqual(400);
+      vitestExpect(event.attempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits a failing assertion event when tracing is active", async () => {
     const collector = makeMockCollector();
     const client = makeMockClient(async () => ({

@@ -43,6 +43,8 @@ pilot-report/
 
 # Claude
 .mcp.json
+# ...except the coding-agent plugin's, which plugins/source/sync.mjs generates.
+!/plugins/tapsmith/.mcp.json
 *-session-prompt.md
 # Personal settings, state and worktrees stay local, at any depth; only the root
 # project skills are shared.
@@ -64,3 +66,6 @@ tapsmith-promo.mp4
 
 # Experimental promo video (keep locally for future edits)
 tools/promo-experimental/
+
+# Docs pages the SDK build bundles into the package (scripts/docs-bundle.mjs)
+packages/tapsmith/docs/

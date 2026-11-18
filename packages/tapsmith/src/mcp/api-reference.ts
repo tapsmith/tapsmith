@@ -2,8 +2,8 @@
  * The `tapsmith://api-reference` MCP resource: docs/api-reference.md, served
  * to agents so they read the API rather than guess it (docs/agents.md).
  *
- * The npm package ships only dist/, so the build copies the doc into
- * dist/docs/ — the proto file's precedent (grpc-client.ts PROTO_PATH). The
+ * The build bundles every docs page into the package's docs/ directory
+ * (scripts/docs-bundle.mjs), which the npm package ships beside dist/. The
  * bundled copy is looked for first, then the repo's docs/ for a checkout
  * running from src/ under tsx.
  */
@@ -17,9 +17,13 @@ const MIME_TYPE = 'text/markdown';
 
 /** Where the doc may be, relative to this module's directory (dist/mcp or src/mcp). */
 function candidatePaths(fromDir: string): string[] {
-  // dist/mcp -> dist/docs: the copy `npm run build` bundles, and the only one
-  // an installed package has.
-  const candidates = [path.resolve(fromDir, '../docs/api-reference.md')];
+  const candidates: string[] = [];
+  // dist/mcp -> <package>/docs: the copy `npm run build` bundles, and the only
+  // one an installed package has. From src/mcp the same directory is a build's
+  // leftover, so a checkout under tsx reads the repo's own page below instead.
+  if (path.basename(path.resolve(fromDir, '..')) === 'dist') {
+    candidates.push(path.resolve(fromDir, '../../docs/api-reference.md'));
+  }
   // src/mcp or dist/mcp -> the repo root's docs/, but only inside the repo's
   // packages/tapsmith. From node_modules/tapsmith the same four levels up is
   // the user's project, whose docs/api-reference.md is not Tapsmith's.

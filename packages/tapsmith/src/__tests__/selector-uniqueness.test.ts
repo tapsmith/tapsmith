@@ -360,6 +360,37 @@ describe('iOS tab bars in the playground (PILOT-514)', () => {
   });
 });
 
+describe("iOS 27's empty Toolbar host (PILOT-1219)", () => {
+  // iOS 27 lays a container-sized Toolbar over every navigation screen. The
+  // agent marks the empty one `tapsmith-empty-bar-host` and reports no role
+  // for it; one holding a bottom toolbar's items is the toolbar.
+  const hostAttrs = { type: 'XCUIElementTypeToolbar', label: 'Toolbar', identifier: 'Toolbar', bounds: '[0,0][402,874]' };
+  function screen(host: HierarchyNode): HierarchyNode[] {
+    const content = makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther', bounds: '[0,0][402,874]' }, [
+      makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', 'tapsmith-role': 'textfield', bounds: '[36,183][366,205]' }),
+    ]);
+    return [makeNode('XCUIElementTypeWindow', { type: 'XCUIElementTypeWindow', bounds: '[0,0][402,874]' }, [content, host])];
+  }
+  const blank = () => makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther', bounds: '[0,0][402,874]' });
+
+  it('does not match an empty host as a toolbar, by role or by name', () => {
+    const roots = screen(makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-empty-bar-host': 'true' }, [blank()]));
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("toolbar")')!)).toEqual([]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("toolbar", { name: "Toolbar" })')!)).toEqual([]);
+  });
+
+  it('matches a host holding items as the one toolbar', () => {
+    const archive = makeNode('XCUIElementTypeButton', { type: 'XCUIElementTypeButton', 'tapsmith-role': 'button', label: 'Archive', bounds: '[33,804][114,840]' });
+    const host = makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-role': 'toolbar' }, [archive]);
+    expect(findMatchingNodes(screen(host), parseSelectorString('device.getByRole("toolbar")')!)).toEqual([host]);
+  });
+
+  it('still matches the host in a trace recorded before the agent marked it', () => {
+    const host = makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-role': 'toolbar' }, [blank()]);
+    expect(findMatchingNodes(screen(host), parseSelectorString('device.getByRole("toolbar")')!)).toEqual([host]);
+  });
+});
+
 describe('React Native generic-view roles in the playground (PILOT-664)', () => {
   // RN's accessibilityRole="menu"/"menuitem"/"timer" on Android: generic Views
   // whose only role signal is the role description the dump reports.

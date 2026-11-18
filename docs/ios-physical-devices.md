@@ -35,7 +35,7 @@ tapsmith ios setup-device
    tapsmith ios build-agent
    ```
 
-   This auto-detects the Apple Developer team from Xcode's Accounts preferences, runs `xcodebuild build-for-testing` with automatic signing, and writes the resulting `.xctestrun` under `.build-device/` in the agent source directory: `ios-agent/.build-device/` in your checkout, or `~/.tapsmith/ios-agent/.build-device/` when Tapsmith is installed from npm. `tapsmith test` finds that build on its own, so you don't need to set `iosXctestrun`, and the command says so. (For a checkout build it also prints an absolute `iosXctestrun:` line, in case you want to pin it; it offers none for the npm build, which an upgrade replaces.) First run takes 60–120s; incremental rebuilds are <10s. If you have multiple teams, pass `--team-id XXXXXXXXXX` to skip the prompt.
+   This auto-detects the Apple Developer team from the accounts signed in to Xcode (Xcode → Settings → Accounts), runs `xcodebuild build-for-testing` with automatic signing, and writes the resulting `.xctestrun` under `.build-device/` in the agent source directory: `ios-agent/.build-device/` in your checkout, or `~/.tapsmith/ios-agent/.build-device/` when Tapsmith is installed from npm. `tapsmith test` finds that build on its own, so you don't need to set `iosXctestrun`, and the command says so. (For a checkout build it also prints an absolute `iosXctestrun:` line, in case you want to pin it; it offers none for the npm build, which an upgrade replaces.) First run takes 60–120s; incremental rebuilds are <10s. If you have multiple teams, pass `--team-id XXXXXXXXXX` to skip the prompt.
 
    Rebuild when you upgrade Tapsmith, switch teams/devices, or your profile expires. With an npm install, upgrading Tapsmith makes the old build unusable: `tapsmith test` and `tapsmith ios setup-device` then say it was built by the previous version and ask you to run `tapsmith ios build-agent` again. **Free Apple Developer accounts expire provisioning profiles every 7 days** — Tapsmith will warn you when you're within three days of expiry.
 
@@ -52,6 +52,8 @@ tapsmith ios setup-device
 10. **Re-run `tapsmith test`.** From now on, installs and launches are automatic.
 
 On every subsequent run, Tapsmith checks whether the dev cert is still trusted *before* launching the test suite. If trust has rolled (free account expiry, cert rotation), you get an immediate, actionable error with the Settings path — no more 60-second mid-test hangs.
+
+A runner left on the phone by an older build, a profile that has since expired, or another team fails that check in the same way, and Settings has nothing to trust for it. So before reporting a trust problem, Tapsmith uninstalls that runner, installs the one from your current build and checks again. The run then carries on, or, if the device refuses the new runner too, the error says what to fix: trust the developer in Settings, rebuild because the build's profile has expired, or the reason the install failed.
 
 ## Running tests
 
@@ -162,13 +164,15 @@ Other caveats:
 
 Run `tapsmith ios setup-device` first — it surfaces most setup issues with actionable fix instructions. Common failure modes:
 
-**"No Account for Team 'XXXXXXXXXX'"** — Xcode doesn't have the Apple ID that owns that team signed in. Open Xcode → Settings → Accounts and sign in.
+**"No Accounts" or "No Account for Team 'XXXXXXXXXX'"** — none of the Apple IDs signed in to Xcode owns the team the build asked for. Xcode 27 can report this as "No Accounts" even when you are signed in. If Xcode is signed in to a different team, `tapsmith ios build-agent` names it: re-run with `--team-id` and that team. If no Apple ID is signed in, open Xcode → Settings → Accounts, click + and sign in.
 
-**"No profiles for 'dev.tapsmith.agent.xctrunner' were found"** — Your device isn't registered under the selected team. Open Xcode → Window → Devices and Simulators and wait for auto-registration.
+**"No profiles for 'dev.tapsmith.agent.xctrunner' were found"** — when it appears alongside one of the account errors above, fix that first; this one follows from it. On its own, it means your device isn't registered under the selected team. Open Xcode → Window → Devices and Simulators and wait for auto-registration.
 
 **"Developer Mode off" in `tapsmith ios setup-device`** — Settings → Privacy & Security → Developer Mode → On, then confirm after the device restarts.
 
 **"Unable to install TapsmithAgentUITests-Runner"** — the developer profile isn't trusted on the device. Settings → General → VPN & Device Management → trust it.
+
+**"The device does not trust the developer that signed the Tapsmith runner"** — Tapsmith has just installed the runner from your current build and the device still refuses it. Settings → General → VPN & Device Management → tap the Apple Development entry for your Apple ID → **Trust**. If you see *"The provisioning profile of the local agent build expired"* instead, run `tapsmith ios build-agent` again.
 
 **"iproxy not found"** — `brew install libimobiledevice`.
 

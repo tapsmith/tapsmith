@@ -181,6 +181,8 @@ export class UIKitTableScreen {
   chevron(n: number) { return this.row(n).getByRole("button", { name: "chevron", exact: true }) }
   checkmark(n: number) { return this.row(n).getByRole("button", { name: "checkmark", exact: true }) }
   moreInfo(n: number) { return this.row(n).getByRole("button", { name: "More Info", exact: true }) }
+  /** The "Delete" swipe action, shown once the row is swiped left. */
+  delete(n: number) { return this.row(n).getByRole("button", { name: "Delete", exact: true }) }
   /** Row 8's custom accessory: a UIButton that really is disabled. */
   get buy() { return this.device.getByRole("button", { name: "Buy", exact: true }) }
   /** Row 9's custom accessory: a disabled image-only button showing a checkmark. */
@@ -222,4 +224,33 @@ export class UIKitGesturesScreen {
   get doubleTapTarget() { return this.device.getByRole("button", { name: "Double tap me" }) }
   get longPressTarget() { return this.device.getByRole("button", { name: "Long press me" }) }
   get pinchTarget() { return this.device.getByRole("button", { name: "Pinch me" }) }
+}
+
+export class NativeToolbarScreen {
+  constructor(private device: Device) {}
+
+  /** A bottom-toolbar item, or a list row (both buttons). */
+  button(name: string) { return this.device.getByRole("button", { name, exact: true }) }
+  /** Every toolbar on screen, by role alone (PILOT-1219). */
+  get toolbars() { return this.device.getByRole("toolbar") }
+  lastAction(name: string) { return this.device.getByText(`Last action: ${name}`, { exact: true }) }
+}
+
+/** Stacks presented full screen from the "Back Key" screen (PILOT-1225). */
+export class NativeBackKeyScreen {
+  constructor(private device: Device) {}
+
+  get openSwiftUIStack() { return this.device.getByRole("button", { name: "Open SwiftUI Stack" }) }
+  get openUIKitStack() { return this.device.getByRole("button", { name: "Open UIKit Stack" }) }
+  /** Each stack's root has a leading Edit button and no back button. */
+  get edit() { return this.device.getByRole("button", { name: "Edit", exact: true }) }
+  get done() { return this.device.getByRole("button", { name: "Done", exact: true }) }
+
+  get swiftUIRoot() { return this.device.getByRole("heading", { name: "SwiftUI Root" }) }
+  get openSwiftUIDetail() { return this.device.getByRole("button", { name: "Open SwiftUI Detail" }) }
+  get swiftUIDetail() { return this.device.getByText("SwiftUI detail content", { exact: true }) }
+
+  get uikitEditing() { return this.device.getByText("Editing: off", { exact: true }) }
+  get openUIKitDetail() { return this.device.getByRole("button", { name: "Open UIKit Detail" }) }
+  get uikitDetail() { return this.device.getByText("UIKit detail content", { exact: true }) }
 }

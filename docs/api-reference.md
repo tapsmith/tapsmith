@@ -263,7 +263,7 @@ import type { DeviceKey, Role, SwipeDirection } from "tapsmith";
 | `SwipeDirection` | `device.swipe()`, `scroll()`, `scrollIntoView({ direction })` | `"up"`, `"down"`, `"left"`, `"right"` |
 | `DeviceKey` | `device.pressKey()` | `BACK`, `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `FORWARD_DELETE`, `ESCAPE` / `ESC`, `MENU`, `SEARCH`, `VOLUME_UP`, `VOLUME_DOWN`, `POWER`, `CAMERA`, `DPAD_UP`, `DPAD_DOWN`, `DPAD_LEFT`, `DPAD_RIGHT`, `DPAD_CENTER`, `SPACE`, `RECENTS` / `APP_SWITCH` |
 
-All names are case-insensitive. `scroll()` and `scrollIntoView()` take the way the view scrolls (`"down"` reveals what is below), while `device.swipe()` takes the way the finger moves (`"up"` reveals what is below). Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK` (which taps the navigation bar's back button), and types any single character.
+All names are case-insensitive. `scroll()` and `scrollIntoView()` take the way the view scrolls (`"down"` reveals what is below), while `device.swipe()` takes the way the finger moves (`"up"` reveals what is below). Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK`, and types any single character. iOS has no back key: `BACK` taps the navigation stack's own back button, and on a screen without one (a stack's first screen, a sheet, a dialog) it throws rather than tap another button in the bar.
 
 ### `device.pressBack(): Promise<void>` *(Android only)*
 
@@ -275,7 +275,7 @@ await device.pressBack();
 
 ### `device.tapXY(x: number, y: number): Promise<void>`
 
-Tap at raw screen coordinates in logical points (Android pixels; iOS points). Prefer locator-based `tap()` in tests; use this for coordinate-driven interaction (e.g., device mirror gestures).
+Tap at raw screen coordinates in logical points (Android pixels; iOS points). Prefer locator-based `tap()` in tests; use this for coordinate-driven interaction (e.g., device mirror gestures). On iOS what is at the point is unknown, so the touch is held 20 ms, one display frame: shorter than a control such as a switch is held through a locator, so tap controls through locators (see [Touch hold](api-reference.md#elementhandletapoptions-promisevoid)).
 
 ```typescript
 await device.tapXY(120, 340);
@@ -283,7 +283,7 @@ await device.tapXY(120, 340);
 
 ### `device.longPressXY(x: number, y: number, options?: { duration?: number }): Promise<void>`
 
-Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000).
+Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap.
 
 ```typescript
 await device.longPressXY(120, 340, { duration: 800 });
@@ -297,7 +297,7 @@ Drag/swipe from one point to another in logical points. `options.duration` speci
 await device.dragXY({ x: 50, y: 200 }, { x: 50, y: 600 }, { duration: 400 });
 ```
 
-> **Platform note:** `duration` is honored on Android (it scales the gesture's step count). On iOS the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
+> **Platform note:** on Android the drag takes `duration`, at least 25 ms (then waits for any scroll it started to come to rest, as `swipe()` does). On iOS, the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
 
 ### `device.inputText(text: string): Promise<void>`
 
@@ -309,7 +309,7 @@ await device.inputText("hello world");
 
 ### `device.takeScreenshot(): Promise<ScreenshotResponse>`
 
-Capture a screenshot of the current device screen. Returns an object with `success`, `data` (PNG bytes), and `errorMessage` fields.
+Capture a screenshot of the current device screen. Returns an object with `success`, `data` (PNG bytes), and `errorMessage` fields. The image is upright, as the screen shows it: on a device turned to landscape it is wider than tall. On iOS, `orientation` says how the device was turned (`"portrait"`, `"landscapeLeft"`, `"landscapeRight"` or `"portraitUpsideDown"`); it is empty on Android.
 
 ```typescript
 const screenshot = await device.takeScreenshot();
@@ -317,7 +317,7 @@ const screenshot = await device.takeScreenshot();
 
 ### `device.waitForIdle(timeoutMs?: number): Promise<void>`
 
-Give the app's UI a moment to settle. On Android it waits for accessibility events to go quiet, up to `timeoutMs` (the configured default timeout if none is specified); on iOS it pauses briefly (a quarter of a second at most). It does not prove the screen is idle, so wait for what you need with an assertion.
+Give the app's UI a moment to settle. On Android it waits for accessibility events to go quiet, up to `timeoutMs` (the configured default timeout if none is specified); on iOS it waits until two screenshots taken a couple of frames apart match, up to `timeoutMs` or a quarter of a second, whichever is shorter. It does not prove the screen is idle, so wait for what you need with an assertion.
 
 ```typescript
 await device.waitForIdle();
@@ -473,7 +473,7 @@ await device.resetApp({ target: "/settings" })                 // warm reset lan
 |---|---|---|---|
 | `mode` | `'warm' \| 'restart' \| 'clear'` | `'warm'` | How far to reset |
 | `fallback` | `boolean` | `true` | Escalate warm → restart → clear when a rung fails |
-| `target` | `string` | `'/'` | Route to land on after an in-app (warm) reset — it is the reset deep link's path. A `restart`/`clear` rung leaves the app at its launch route; check `modeUsed` and navigate if needed. |
+| `target` | `string` | `'/'` | Route to land on after an in-app (warm) reset — it is the reset deep link's path. A `restart`/`clear` rung leaves the app at its launch route; check `targetReached` and navigate if needed. |
 
 **`AppResetResult`**
 
@@ -486,6 +486,7 @@ await device.resetApp({ target: "/settings" })                 // warm reset lan
 | `durationMs` | `number` | Wall time of the whole ladder |
 | `hooksDetected` | `boolean` | `@tapsmith/react-native` hooks were found in the app |
 | `epochBefore` / `epochAfter` | `number?` | In-app reset counter (hooks only) |
+| `targetReached` | `boolean` | The app ended on `target`: an in-app reset was acknowledged on that route. `false` after a `restart`/`clear` rung (the app is at its launch route), and when the target screen hid the hooks marker, so the reset was confirmed on `/` instead |
 | `steps` | `{ name, durationMs, ok, detail? }[]` | Per-rung timings |
 
 The call is recorded in the trace as a `resetApp` action whose detail line names the rung and reason. Throws when the ladder is exhausted (or `fallback: false` and the requested rung failed).
@@ -519,7 +520,7 @@ await device.clearAppData("com.example.myapp");
 ```
 
 - **Android**: `pm clear` — wipes all persisted state, including the app's Android Keystore keys.
-- **iOS simulator**: clears the app's data container **and the simulator's keychain**, so keychain-backed state (e.g. native Firebase Auth sessions, `expo-secure-store` items) doesn't survive a "full" clear. The simulator keychain is device-global, so this clears keychain items for *every* app on the simulator — fine for test-owned simulators. Set `TAPSMITH_NO_KEYCHAIN_STATE=1` to skip the keychain wipe.
+- **iOS simulator**: clears the app's data container **and the simulator's keychain**, so keychain-backed state (e.g. native Firebase Auth sessions, `expo-secure-store` items) doesn't survive a "full" clear. The simulator keychain is device-global, so this clears keychain items for *every* app on the simulator — fine for test-owned simulators. A keychain that holds no items beyond the two `securityd` creates with it (so nothing any app or system service has stored since the last clear) is left as it is. Any other keychain is emptied in place with `simctl keychain reset` (`securityd` keeps running); only if that reset fails are the keychain files deleted and `securityd` restarted. Set `TAPSMITH_NO_KEYCHAIN_STATE=1` to skip the keychain wipe.
 - **iOS physical device**: uninstalls and reinstalls the app bundle (iOS deletes the app's keychain entries on uninstall).
 
 ### `device.saveAppState(packageName: string, path: string): Promise<void>`
@@ -540,7 +541,7 @@ await device.saveAppState("com.example.myapp", "./auth-state.tar.gz");
 Restore a previously saved app state archive. Clears the app's data first, then extracts the archive.
 
 - **Android**: clears the app's data directory **in place** (rather than `pm clear`) so the app's Android Keystore keys survive — this is what lets Keystore-backed values (e.g. native auth tokens) decrypt after a restore on the same device. Then extracts the archive, fixing file ownership and SELinux contexts when running as root. See [`saveAppState`](#devicesaveappstatepackagename-string-path-string-promisevoid) for the cross-device limitation.
-- **iOS simulator**: clears and re-extracts the data container; if the archive contains keychain state, the simulator's keychain is swapped to match and `securityd` is restarted so the change takes effect. The simulator keychain is device-global, so restoring swaps keychain state for every app on the simulator. Archives saved by older Tapsmith versions (without keychain state) restore exactly as before. Set `TAPSMITH_NO_KEYCHAIN_STATE=1` to skip the keychain swap.
+- **iOS simulator**: clears and re-extracts the data container; if the archive contains keychain state, the simulator's keychain is swapped to match and `securityd` is restarted so the change takes effect. An archived keychain that holds no items is restored by clearing the simulator's keychain instead, as `clearAppData` does. The simulator keychain is device-global, so restoring swaps keychain state for every app on the simulator. Archives saved by older Tapsmith versions (without keychain state) restore exactly as before. Set `TAPSMITH_NO_KEYCHAIN_STATE=1` to skip the keychain swap.
 - **iOS physical device**: reinstalls the app and pushes the archived container contents (keychain state is not restored — see `saveAppState`).
 
 ```typescript
@@ -617,13 +618,13 @@ Hide the soft keyboard if it is visible. Resolves at once when no keyboard is sh
 await device.hideKeyboard();
 ```
 
-On Android this presses BACK, which normally dismisses the soft keyboard.
+On Android this presses BACK, which normally dismisses the soft keyboard. A BACK that the keyboard doesn't answer goes on to the app and navigates back, so `hideKeyboard()` first checks that the keyboard and the app respond, and waits while they don't. If they still don't after about 15 s, it throws without pressing BACK.
 
 iOS has no API that puts the keyboard away, so `hideKeyboard()` does what a user would. It tries these in order and stops as soon as the keyboard is gone:
 
 1. **Drag the scroll view the focused field is in** a few points, if it shows above the keyboard. The drag only starts from a spot clear of the scroll view's controls. A scroll view beside the field (a list under a search bar) is not dragged, and neither is a web view.
 2. **Tap the keyboard's own dismiss key**, where it has one (iPad).
-3. **Tap a blank spot** beside the focused field, above the keyboard, where no control, text, or image is drawn. The spot is inside the field's own container, so a sheet's backdrop is not tapped. This works on screens that dismiss the keyboard when you tap outside the field.
+3. **Tap a blank spot** beside the focused field, above the keyboard, where no control, text, or image is drawn. An image covering at least half the screen counts as the screen's background (React Native's `ImageBackground`, for example), so the spot can be on it. The spot is inside the field's own container, so a sheet's backdrop is not tapped. This works on screens that dismiss the keyboard when you tap outside the field.
 4. **Press the return key**, but only in a single-line field whose return key reads "return" or "done". This also submits the field, as it would for a user (React Native's `onSubmitEditing` fires). An action key such as "go", "send", "search" or "next" is never pressed, and neither is return in a multi-line field, where it would type a new line.
 
 If the keyboard is still up after all of them, `hideKeyboard()` throws instead of reporting success. The error lists what it tried and why each step failed. Dismiss the keyboard the way your screen allows: tap its own Done or close button, or call `device.pressKey("enter")` if submitting the field is fine.
@@ -705,7 +706,7 @@ Tapsmith supports Playwright-style network interception. Route handlers let you 
 
 #### `device.route(url, handler, options?): Promise<void>`
 
-Intercept network requests matching a URL pattern. Routes run on Tapsmith's network proxy, which needs no config: the test runner starts it on the first `route()`, `waitForRequest()` or `waitForResponse()` a test or hook makes (or with the test, when its trace records network), and keeps it up for the rest of the session. The proxy only sees connections the app opens after it starts, so register routes before the app sends the requests they mock — at the top of the test or in a `beforeEach`, before navigating. If the proxy cannot start, `route()` throws `Network capture disabled: …` with the reason. When a test's routes never fired and the capture shows why (HTTPS passed through uncaptured, or a proxy that only started mid-test), Tapsmith prints a warning naming the test; outside the test runner nothing starts the proxy, and the runner warns that the routes could not fire (see [Network prerequisites](network.md#prerequisites)). Route handlers only see traffic Tapsmith can decrypt; hosts that are configured for passthrough, or dynamically tunneled because an HTTP/2-capable client rejects the generated MITM certificate, cannot be matched.
+Intercept network requests matching a URL pattern. Routes run on Tapsmith's network proxy, which needs no config: when the run's test files (or the local modules they import) call `route()`, `waitForRequest()`, `waitForResponse()` or `on('request' | 'response')`, the test runner starts it as each device session starts, before the app launches, and keeps it up for the rest of the session. A call it does not find in the files (one inside an npm package, say) starts it on demand, at the first such call a test or hook makes; a trace that records network starts it with each test. A route only sees requests made after it is registered, so register routes before the app sends the requests they mock — at the top of the test or in a `beforeEach`, before navigating. If the proxy cannot start, `route()` throws `Network capture disabled: …` with the reason. When a test's routes never fired and the capture shows why (HTTPS passed through uncaptured, or a proxy that started after the app had opened its connections), Tapsmith prints a warning naming the test; outside the test runner nothing starts the proxy, and the runner warns that the routes could not fire (see [Network prerequisites](network.md#prerequisites)). Route handlers only see traffic Tapsmith can decrypt; hosts that are configured for passthrough, or dynamically tunneled because an HTTP/2-capable client rejects the generated MITM certificate, cannot be matched.
 
 See also: [`device.unroute()`](#deviceunrouteurl-handler-promisevoid), [`device.unrouteAll()`](#deviceunrouteall-promisevoid).
 
@@ -731,14 +732,14 @@ Remove all registered route handlers, including those registered in `beforeAll`.
 
 #### `device.waitForRequest(urlOrPredicate, options?): Promise<TapsmithRequest>`
 
-Wait for a network request matching the pattern. Starts the network proxy on demand, as `device.route()` does; start waiting before the action that sends the request. Rejects at once with `Network capture disabled: …` when the proxy cannot start, and a timeout says when no capture was running or the proxy only started with the wait.
+Wait for a network request matching the pattern. Needs the network proxy, which starts as it does for `device.route()`; start waiting before the action that sends the request. Rejects at once with `Network capture disabled: …` when the proxy cannot start, and a timeout says when no capture was running or the proxy only started with the wait.
 
 - `urlOrPredicate`: `string | RegExp | ((request: TapsmithRequest) => boolean)`
 - `options.timeout?`: `number` — timeout in ms (default: device timeout)
 
 #### `device.waitForResponse(urlOrPredicate, options?): Promise<NetworkResponseEventData>`
 
-Wait for a network response matching the pattern. Starts the network proxy on demand and reports a failed start, or a timeout that capture likely caused, as `device.waitForRequest()` does.
+Wait for a network response matching the pattern. Needs the network proxy, as `device.route()` does, and reports a failed start, or a timeout that capture likely caused, as `device.waitForRequest()` does.
 
 Resolves with a `NetworkResponseEventData`: `method`, `url`, `status`, `headers`, `body` (`Buffer | null`) and `routeAction`. `body` is decoded, as Playwright's `response.body()` is: chunked framing is removed and a `gzip`, `deflate` or `br` `Content-Encoding` is decompressed, so `JSON.parse(resp.body!.toString())` works against a compressing server. `headers` stay as sent, so `content-encoding` and `transfer-encoding` describe the wire bytes, not `body`. A body in another coding (such as `zstd`) is left as received. The `postData` of a request from `device.waitForRequest()` or `device.on('request')` is decoded the same way.
 
@@ -746,7 +747,7 @@ A waiter belongs to the test that creates it. If the test ends first (say, a ste
 
 #### `device.on(event, handler): void`
 
-Subscribe to network events: `'request'` or `'response'`. Starts the network proxy on demand, as `device.route()` does. A listener lasts as long as a route registered in the same place would ([Route lifetime](network.md#route-lifetime)).
+Subscribe to network events: `'request'` or `'response'`. Needs the network proxy, which starts as it does for `device.route()`. A listener lasts as long as a route registered in the same place would ([Route lifetime](network.md#route-lifetime)).
 
 ```ts
 device.on('request', (req) => console.log(req.url))
@@ -1157,7 +1158,9 @@ await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
 
 **Fixed chrome over a list row.** When the element is in a vertical list and is covered by something that stays put while the list scrolls (a sticky section header that is not itself a control, a footer bar with a button, a tab bar or toolbar), the tap does not wait: like a Playwright click whose target another element intercepts, it scrolls the list just far enough to bring the element out from under the cover (a slow drag through the list's uncovered part, at most twice), then checks the element again and taps it. The keyboard, other windows, presented alerts, action sheets and popovers, and loading overlays (and any control inside one) are never scrolled away from; they are waited out as above. If scrolling cannot clear the element (the list is at its end, or the cover leaves no room), the tap waits and fails as above. On iOS the element must be one the agent can find again after the list moves: one with a unique `testID` or a unique name. An element picked by position among same-named ones (`nth()`, `first()`), or one with neither a name nor a `testID`, is waited out instead. This is the one case where a tap scrolls; it never scrolls an element that is off screen into view (see [Off-screen elements](#elementhandletapoptions-promisevoid)).
 
-**Moving elements.** Like a Playwright click, a tap on iOS waits for the element to be stable before touching it, so a button in a menu, popover or action sheet that is still animating in is not tapped mid-animation (such a tap highlights the button without running its action). It waits for what the element shows on screen to stop changing, since iOS reports an animating element's final frame from the start. The wait lasts up to a second: an element that keeps changing (a spinner inside a button) is tapped after that rather than failing. `doubleTap()` and `longPress()` wait the same way.
+**Moving elements.** Like a Playwright click, a tap on iOS waits for the element to be stable before touching it, so a button in a menu, popover or action sheet that is still animating in is not tapped mid-animation (such a tap highlights the button without running its action). It waits for what the element shows on screen to stop changing, since iOS reports an animating element's final frame from the start. Before that, it waits for the app's UIKit animations to finish, because iOS drops touches while a screen or modal is being presented or dismissed: a tap on a button in a modal that is still fading in would do nothing. Each of these waits lasts up to a second: an element that keeps changing (a spinner inside a button) is tapped after that rather than failing. React Native's own animations (`Animated`, an `ActivityIndicator`) are not UIKit animations, so a screen that never stops animating doesn't hold taps up. `doubleTap()` and `longPress()` wait the same way. On Android, `tap()` touches the element its auto-wait found (the one strict mode and the enabled check passed), and waits for its position to hold still across two display frames: its bounds are read again at least 34 ms after the read that found it, and if they moved, the tap waits until two reads 50 ms apart agree, for up to a second. If that element has gone in the meantime (the app re-rendered it), the tap looks the locator up again.
+
+**Touch hold.** A tap presses and lifts at once on Android, and within one display frame (10 ms) on iOS. React Native cancels a press when a scroll view beside the element moves while the finger is down (a carousel paging itself, a list still settling), so a longer press could report a tap the app never received. On iOS, UIKit controls that only register a touch that spans a display frame are held 50 ms, so the touch still spans one when it reaches the app late (as the first touch after a launch does): switches, checkboxes, sliders, steppers, segmented controls, pickers and other control types, and anything inside one of them (a segment, a stepper's increment button) or inside an alert or action sheet. A touch whose target is unknown is held 20 ms. Buttons, texts, cells, images, links, text inputs and plain views (which is what most React Native components are, including their checkboxes) are held 10 ms. `doubleTap()`, `setChecked()`, `selectOption()`, `device.tapXY()` and the MCP and UI-mode tap tools hold their touches the same way. On an iOS simulator, `tap()` (and so `setChecked()`) presses as a real touch through the simulator's input system, as `doubleTap()` and `longPress()` already do, which is a few hundred milliseconds faster a tap than XCTest's touches; on a physical iPhone it goes through XCTest. Such a touch reaches the app as it happens, so a scroll event could arrive inside even a 10 ms hold: there, a `tap()`, and each tap of a `doubleTap()`, that would be held 10 ms is pressed and lifted back to back instead, and a longer hold is kept.
 
 **The keyboard.** A React Native `ScrollView` (or `FlatList`) with the default `keyboardShouldPersistTaps` spends the first touch after typing on closing the keyboard, and the button under the finger never gets it. So when the software keyboard is up and the element is in a React Native scroll view (a `ScrollView` on Android, a `.scrollView` on iOS; native lists, tables and web content don't count), `tap()` puts the keyboard away first, then taps the element where it has moved to. `doubleTap()` and `longPress()` do the same. A text input, or a control inside one such as its clear button, is tapped with the keyboard left up, so tapping the next field just moves the focus. An element outside a scroll view, such as a row of a native suggestion list, is tapped with the keyboard up too: if the keyboard covers it, the rules above apply. If the keyboard can't be put away, the tap goes ahead as before.
 
@@ -1200,7 +1203,7 @@ await device.getByText("Zoom here").doubleTap({ intervalMs: 150 });
 
 Long press this element.
 
-- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
+- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap. With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
 
 ```typescript
 await device.getByText("Item 1", { exact: true }).longPress(2000);
@@ -1211,7 +1214,7 @@ await device.getByText("Item 1", { exact: true }).longPress({ duration: 2000, ti
 
 Type text into this element.
 
-- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay).
+- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay). On iOS a delay above `0` also checks what arrived (see [`typingDelay`](configuration.md)). iOS empties a secure (password) field that already holds text when it is typed into after taking focus. On iOS, `type()` with a delay then fails rather than leave the field holding something else. Appending to a secure field that still has focus works. Use `clearAndType()` to replace a password.
 - `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
@@ -1269,11 +1272,11 @@ The device agents don't apply `distance` yet: each call scrolls by a fixed step 
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
-Swipes, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts, or sooner, as soon as a swipe changes nothing on screen: then the content has reached its end (or the swipe missed the list), and the error says `reached the end of the scrollable content without finding …`, with the direction to try instead. To tell, it reads the screen's hierarchy once per swipe. On a screen whose content keeps changing by itself (a running timer, an animation), every swipe looks like progress, so there it swipes up to `maxScrolls` times as before. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen.
+Swipes, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts, or sooner, as soon as a swipe changes nothing on screen: then the content has reached its end (or the swipe missed the list), and the error says `reached the end of the scrollable content without finding …`, with the direction to try instead. To tell, it reads the screen's hierarchy after a swipe, unless the device saw the list under the finger move (below); on the iOS simulator two scroll steps in a row that saw the list hold still also end it. On a screen whose content keeps changing by itself (a running timer, an animation), every swipe looks like progress, so there it swipes up to `maxScrolls` times as before. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen.
 
-`direction` is the way the view scrolls, as [`scroll()`](#elementhandlescrolldirection-swipedirection-options-promisevoid) takes it: `"down"` reveals what is below and `"up"` what is above (each swipe moves the finger the opposite way). Without a `direction`, it scrolls the way the element lies, when the device reports where it is: `"up"` for an element above the screen, `"left"` for one to its left, and `"down"` otherwise. The position is re-read before every swipe, so a swipe that carries the element past the screen is followed by one back. iOS lists off-screen elements with their positions, so there a plain `scrollIntoView()` reaches a row above the screen, such as one the list was scrolled past. Android lists only the elements on screen, so there the position of an off-screen element is not known. Then, and on iOS for a row a lazy list has not created yet, it keeps the direction it last used, starting with `"down"`, which reveals what is below. So on Android, pass `{ direction: "up" }` for an element above the screen. A below-the-screen element and one to its right look the same without the screen's size, so both get `"down"`: pass `{ direction: "right" }` for one to the right. Every swipe runs inside the scroll container that holds the element, so it cannot start outside a dialog or bottom sheet (which would dismiss it), on a header above the list, or on the keyboard. Where the device reports the element's position (iOS), that is the element's nearest scrollable ancestor on screen. Where it does not (Android, or a row a lazy list has not created yet), it is the largest scrollable on screen, taken from the topmost window on Android, where a dialog or bottom sheet has a window of its own over the screen's. Only when nothing on screen scrolls does the swipe cross the middle of the screen, and the error then says so. Scrolling is still done with swipes, so in a bottom sheet that closes when dragged down, a swipe that reaches the top of the sheet's content can go on to drag the sheet, as a user's swipe would. Without the element's position, a horizontal list inside a vertical one is not the largest scrollable, so for an element in a horizontal list on Android, [`scroll()`](#elementhandlescrolldirection-swipedirection-options-promisevoid) that list.
+`direction` is the way the view scrolls, as [`scroll()`](#elementhandlescrolldirection-swipedirection-options-promisevoid) takes it: `"down"` reveals what is below and `"up"` what is above (each swipe moves the finger the opposite way). Without a `direction`, it scrolls the way the element lies, when the device reports where it is: `"up"` for an element above the screen, `"left"` for one to its left, and `"down"` otherwise. The position is re-read before every swipe, so a swipe that carries the element past the screen is followed by one back. iOS lists off-screen elements with their positions, so there a plain `scrollIntoView()` reaches a row above the screen, such as one the list was scrolled past. Android lists only the elements on screen, so there the position of an off-screen element is not known. Then, and on iOS for a row a lazy list has not created yet, it keeps the direction it last used, starting with `"down"`, which reveals what is below. So on Android, pass `{ direction: "up" }` for an element above the screen. A below-the-screen element and one to its right look the same without the screen's size, so both get `"down"`: pass `{ direction: "right" }` for one to the right. Every swipe runs inside the scroll container that holds the element, so it cannot start outside a dialog or bottom sheet (which would dismiss it), on a header above the list, or on the keyboard. Where the device reports the element's position (iOS), that is the element's nearest scrollable ancestor on screen. Where it does not (Android, or a row a lazy list has not created yet), it is the largest scrollable on screen, taken from the topmost window on Android, where a dialog or bottom sheet has a window of its own over the screen's. Only when nothing on screen scrolls does the swipe cross the middle of the screen, and the error then says so. Scrolling is still done with swipes, so in a bottom sheet that closes when dragged down, a swipe that reaches the top of the sheet's content can go on to drag the sheet, as a user's swipe would. Without the element's position, a horizontal list inside a vertical one is not the largest scrollable, so for an element in a horizontal list on Android, or one a lazy horizontal list has not created yet on iOS, [`scroll()`](#elementhandlescrolldirection-swipedirection-options-promisevoid) that list.
 
-A list can keep moving after the swipe ends (momentum), so `scrollIntoView()` looks for the element while it moves, then waits until the element's position stops changing. If the list carried the element off screen before it stopped, it scrolls back for it. If an edge of the scroll container cuts the element, it moves it inside, so a `tap()` that follows lands on it: when the element reaches past the edge, when it was seen whole and the edge now hides part of it, or when only a sliver of it shows. A row that stopped partly in view at the edge it came in from, and was never seen whole, is left as it is (the tap still lands on its visible part). These swipes are shorter and slower, so the list does not overshoot again, and they count toward `maxScrolls`. When `maxScrolls` runs out before the element is found, the error says so: raise it to let the call scroll further. When it runs out with the element on screen but cut, the call returns.
+Each swipe is one call to the device, a *scroll step*: it drags most of the list (0.8 of it on Android; on iOS it starts a quarter in, clear of bars drawn over the list, and drags up to 0.73), waits for the list to stop changing, looks for the element, and says whether the list under the finger moved, so no further read is needed while the list keeps moving. On Android this is every vertical swipe of a locator without `filter()`, `and()`/`or()`, scoping or `first()`/`nth()`/`last()`: a quick drag that is cancelled at its end rather than lifted, so nothing flings and nothing under the finger is tapped (a React Native list that snaps to pages is left where the finger stopped). The first step also makes the first check described below, and picks the scroll container itself. On the iOS simulator it is every swipe of such a locator inside a scroll container (sideways only inside the scrollable nearest the element in the screen's tree, as a slow sideways drag elsewhere can be taken for the swipe back to the previous screen): a drag through the simulator's touch input that holds still before it lifts, so nothing flings; while the element is still more than a list's height away, a step does not wait for the list to stop. Swipes that are not steps are as before: sideways on Android a swipe still flings, so a pager turns its page, and on a physical iPhone, for a modified locator on iOS, sideways on iOS when the scrollable holding the element is not known, or when nothing on screen scrolls, a swipe is a fling whose momentum `scrollIntoView()` watches, looking for the element while the list moves. Once the element is on screen, it waits until the element's position stops changing (a list that snaps to a page can still move after a drag). If the list carried the element off screen before it stopped, it scrolls back for it. If an edge of the scroll container cuts the element, it moves it inside, so a `tap()` that follows lands on it: when the element reaches past the edge, when it was seen whole and the edge now hides part of it, or when only a sliver of it shows. A row that stopped partly in view at the edge it came in from, and was never seen whole, is left as it is (the tap still lands on its visible part). These swipes are shorter and slower, so the list does not overshoot again, and they count toward `maxScrolls`. When `maxScrolls` runs out before the element is found, the error says so: raise it to let the call scroll further. When it runs out with the element on screen but cut, the call returns.
 
 If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. A handle from `all()` is a live `.nth(i)` locator, so on a virtualised list the scroll stops on whatever row is at index `i` in the scrolled window — see the [`all()`](#elementhandleall-promiseelementhandle) section.
 
@@ -1282,8 +1285,8 @@ The visibility check honours every modifier on the locator — `filter()`, `and(
 | Option | Default | Description |
 |---|---|---|
 | `direction` | from the element's position, else `"down"` | The way the view scrolls, as `scroll()` takes it: `"down"` reveals content below, `"up"` content above, `"left"` and `"right"` likewise. Case-insensitive; any other value throws. Given, it is used for every swipe that searches for the element, wherever the element is; a swipe back for an element the list carried past, or one that moves it inside its container, goes the way the element is. |
-| `maxScrolls` | `5` | Maximum swipe attempts before throwing (fewer if the content reaches its end first), counting any swipe back for an element the list carried past |
-| `speed` | `2000` | Swipe speed in pixels/second |
+| `maxScrolls` | `10` (`5` when the platform is not known) | Maximum swipe attempts before throwing (fewer if the content reaches its end first), counting any swipe back for an element the list carried past. A drag moves the list only about as far as the finger, where a fling carried it further, so this allows as many drags as it takes to go as far |
+| `speed` | `2000` | Swipe speed in pixels/second, for the swipes that are not scroll steps |
 
 ```typescript
 // Scroll down until the "Settings" card is visible, then tap it
@@ -1509,7 +1512,7 @@ const box = await device.getByText("Header", { exact: true }).boundingBox();
 
 ## Assertions
 
-The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires.
+The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires. As in Playwright, an assertion reads the screen at once, then backs off: it reads again after 100, 250 and 500 ms, then once a second.
 
 ### `expect(elementHandle: ElementHandle): TapsmithAssertions`
 
@@ -1560,7 +1563,7 @@ await expect.poll(() => fetchStatus(), { timeout: 10000 }).toBe("ready");
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `timeout` | `number` | 5000 | How long to poll before failing |
-| `intervals` | `number[]` | `[250]` | Polling intervals in milliseconds |
+| `intervals` | `number[]` | `[100, 250, 500, 1000]` | Milliseconds to wait between tries, in order; the last one repeats. The default is Playwright's. |
 
 ### `flushSoftErrors(): Error[]`
 
@@ -1592,6 +1595,8 @@ All locator assertions accept an optional `options` object:
 | `ratio` | `number` | `0` | (toBeInViewport only) Minimum fraction of element visible in viewport |
 
 An option the assertion does not support (a misspelling, or a Playwright option Tapsmith does not have yet, such as `toBeEnabled({ enabled: false })` or `toHaveText(text, { ignoreCase: true })`) throws a `TypeError` at once, naming the supported options, rather than being ignored — so the assertion never silently checks something other than what you wrote. So does an options argument that is not an object (`toBeVisible(5000)`).
+
+**A locator that matches nothing.** As in Playwright, an assertion about the element's state or value needs the element to exist, with or without `.not`. `expect(locator).not.toBeChecked()` on a locator that matches nothing (say, a control that was renamed) waits out its timeout and fails with `Expected element … NOT to be checked, but no element matched`, rather than passing because a missing element is not checked. The same goes for `toBeEnabled`, `toBeDisabled`, `toBeEditable`, `toBeEmpty`, `toBeFocused`, `toBeInViewport` (without `.not`), `toHaveValue`, `toHaveAttribute`, `toHaveRole`, `toHaveAccessibleName`, `toHaveAccessibleDescription`, and the single-text forms of `toHaveText` and `toContainText`. The assertions about absence accept an empty match set as their answer: `toBeHidden()`, `.not.toBeVisible()`, `.not.toExist()`, `.not.toBeInViewport()`, `toHaveCount(0)`, and the array forms of `toHaveText` and `toContainText`.
 
 #### `.toBeVisible(options?): Promise<void>`
 
@@ -1650,7 +1655,7 @@ await expect(device.getByText("Loading...", { exact: true })).toBeHidden();
 
 Assert that the element has no text content or is an empty input field. The agents normalize text-input fields so a placeholder/hint is not reported as text — `toBeEmpty()` after `clear()` passes even when the placeholder is still drawn.
 
-> **Android API < 26 limitation.** The precise placeholder-vs-value distinction uses `AccessibilityNodeInfo.isShowingHintText()` and `getHintText()`, both of which are only available from API 26 (Android 8.0). On API 23–25 we cannot tell whether a textfield is displaying its placeholder or a real typed value, so `toBeEmpty()` after `clear()` may incorrectly report the field as non-empty (it sees the placeholder text). Bump `minSdk` to 26 if your tests rely on this behavior. iOS is unaffected.
+> **Android API < 26 limitation.** The precise placeholder-vs-value distinction uses `AccessibilityNodeInfo.isShowingHintText()` and `getHintText()`, both of which are only available from API 26 (Android 8.0). On API 24–25 we cannot tell whether a textfield is displaying its placeholder or a real typed value, so `toBeEmpty()` after `clear()` may incorrectly report the field as non-empty (it sees the placeholder text). Bump `minSdk` to 26 if your tests rely on this behavior. iOS is unaffected.
 
 ```typescript
 await expect(device.getByRole("textfield", { name: "Search" })).toBeEmpty();
@@ -1903,12 +1908,13 @@ describe("custom config", () => {
 | ------------ | ------------------------------------------- | -------------------------------------------- |
 | `timeout`    | `number`                                    | Action/assertion timeout (ms)                |
 | `screenshot` | `'always' \| 'only-on-failure' \| 'never'` | Screenshot capture mode                      |
-| `retries`    | `number`                                    | Retry count for failed tests. A retry starts from a reset app ([details](writing-tests.md#retries-start-from-a-fresh-app)) |
+| `retries`    | `number`                                    | Retry count for failed tests. A retry starts from a reset app ([details](writing-tests.md#retries-start-from-a-fresh-app)). [UI mode](ui-mode.md#each-test-runs-once) never retries |
 | `trace`      | `TraceMode \| Partial<TraceConfig>`         | Trace recording configuration. See [configuration.md](./configuration.md#traceconfig) for the full `TraceConfig` shape (includes `network`, `networkHttpPorts`, `networkHosts`, `networkIgnoreHosts`, `networkPassthroughHosts`, `screenshots`, etc.). |
 | `video`      | `VideoMode \| Partial<VideoConfig>`         | Video recording configuration. See the [Video recording](#video-recording) section below. |
-| `appState`   | `string`                                    | Path to saved app state archive to restore; `""` means clear |
+| `appState`   | `string`                                    | Path to saved app state archive to restore at each reset of the scope (cold, or warm while the app's hooks report no writes since the restore: see [Keeping restored app state between tests](warm-reset.md#keeping-restored-app-state-between-tests)); `""` means clear |
 | `appReset`   | `'auto' \| 'clear' \| 'restart' \| 'warm' \| 'none'` | How the app is reset before tests in this scope. See [Test isolation](./writing-tests.md#test-isolation). |
 | `appResetScope` | `'auto' \| 'file' \| 'test'`            | Reset once per file or before every test (`auto` resolves to per file; opt into per-test with `'test'`) |
+| `appResetRoute` | `string`                                   | Screen the declared reset leaves the app on: a path (`'/settings'`) resolved against the hooks' URL prefix, or a full deep link. See [Starting on a screen](writing-tests.md#starting-on-a-screen). |
 | `appResetColdEvery` | `number`                               | Cold-relaunch every N warm resets (default 10; 0 = off) |
 
 The following device-shaping fields may **only** be set on a project's
@@ -1934,7 +1940,9 @@ worker before any test runs:
 | `resetAppDeepLink`| `string`                              | Warm-reset deep link (makes `appReset: 'auto'` → `warm`) |
 | `resetAppWaitMs`  | `number`                              | Wait after the reset deep link           |
 
-**Reusable auth state** — mirrors Playwright's `storageState`:
+#### Reusable auth state
+
+Mirrors Playwright's `storageState`:
 
 ```typescript
 // Setup: authenticate once and save state
@@ -2084,7 +2092,7 @@ test.describe.configure({ mode: "serial", retries: 1 });
 | Option | Type | Description |
 |---|---|---|
 | `mode` | `'default' \| 'serial' \| 'parallel'` | `'serial'` makes the scope a serial group (see `test.describe.serial`); `'default'` turns that off for a describe declared with `test.describe.serial`. A serial group covers everything nested inside it, so a nested describe cannot leave its enclosing group with `'default'` or `'parallel'`. `'parallel'` is accepted for Playwright compatibility and runs the tests in order: Tapsmith runs the tests of a file one after another on one device, and runs files in parallel with `--workers`. |
-| `retries` | `number` | Retry count for failed tests in the scope. Same as `test.use({ retries })`. |
+| `retries` | `number` | Retry count for failed tests in the scope. Same as `test.use({ retries })`, so [UI mode](ui-mode.md#each-test-runs-once) ignores it too. |
 | `timeout` | `number` | Same as `test.use({ timeout })`: the action and assertion timeout for the scope (ms), which also raises each test's safety timeout. |
 
 Any other option throws.
@@ -2292,6 +2300,14 @@ emulators it boots for `avd`. Mirrors Playwright's `launchOptions`.
 | `args`     | `string[]` | `[]`    | Extra `emulator` arguments, after Tapsmith's own. `-avd`, `@name`, `-port`, `-ports` and `-read-only` are refused. |
 
 See [How Tapsmith launches emulators](configuration.md#how-tapsmith-launches-emulators).
+
+### `ReducedMotion`
+
+The type of the root config's `reducedMotion`: `'reduce' | 'no-preference'`, as in Playwright.
+`'reduce'` turns the Android animation scales off for the session, or makes UIKit animations ten
+times faster on an iOS simulator, and restores the device's own values when it ends;
+`'no-preference'` (the default) leaves them alone. Not applied on physical iOS devices. See
+[`reducedMotion`](configuration.md#all-options).
 
 ### Projects
 
@@ -2602,7 +2618,7 @@ interface TestResult {
   workerIndex?: number; // set in parallel mode — index of the worker that ran this test
   retry?: number; // zero-based attempt number this result was recorded on (omitted for a first-attempt pass)
   filePath?: string; // path to the test file this result belongs to
-  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed
+  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed, or one Tapsmith waited out during the test
   fileLevelFailure?: boolean; // the result stands for a whole file that failed to load, not a test in it
 }
 ```
@@ -2940,7 +2956,7 @@ npx tapsmith test --config=./configs/ios.config.mjs
 
 ### `tapsmith test --force-install`
 
-Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
+Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag: its APKs are compared the same way and reinstalled unless the device's copy is known to match (one whose hash the device can't report is reinstalled), and [`TAPSMITH_FORCE_AGENT_INSTALL`](environment-variables.md) forces them to be reinstalled every time. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
 
 ```bash
 npx tapsmith test --force-install
@@ -2978,7 +2994,7 @@ Pass `--yes` or any setup flag below (every flag but `--json`) to run non-intera
 | `--simulator <name>` | iOS simulator name (default: a booted iOS simulator, else the newest available iPhone, preferring stock names such as `iPhone 16` to simulators you renamed; a renamed one exists only on your Mac, so when init writes one anyway, the config says so in a comment and init warns) |
 | `--device-type <type>` | `emulator`, `physical` or `both` (default: `emulator`) |
 | `--network-capture` | Record HTTP(S) traffic in traces: writes `trace: { mode: 'retain-on-failure' }`. The default, as in the wizard, unless the only device set up is an Android emulator on a Google Play image |
-| `--no-network-capture` | Write no `trace` setting. Network mocking still works: the proxy starts on demand ([Network prerequisites](network.md#prerequisites)) |
+| `--no-network-capture` | Write no `trace` setting. Network mocking still works: the proxy starts when the tests need it ([Network prerequisites](network.md#prerequisites)) |
 | `--no-example-test` | Skip scaffolding `tests/example.tapsmith.ts` |
 | `--no-agents-md` | Skip scaffolding the `AGENTS.md` section |
 | `--force` | Overwrite an existing `tapsmith.config.*` |
@@ -3031,13 +3047,16 @@ npx tapsmith telemetry enable
 npx tapsmith telemetry status --json
 ```
 
-### `tapsmith mcp-server [-c <path>]`
+### `tapsmith mcp-server [-c <path>] [--prefer-ui]`
 
 Run the MCP server on stdio, for an AI coding agent to launch as a subprocess. It runs its own headless test session, with its own daemon and device. `-c` / `--config` uses a specific config file. Stdout carries the MCP protocol, so messages and usage errors go to stderr. See the [MCP Server Guide](mcp-server.md) for setup.
+
+`--prefer-ui` (or `TAPSMITH_MCP_PREFER_UI=1`) makes it work in the project's running `tapsmith test --ui` session when there is one, and headless when there is not, checking before every tool call. The Tapsmith plugin for coding agents starts the server this way. [One server that follows UI mode](mcp-server.md#one-server-that-follows-ui-mode) has the rules for moving between the two.
 
 ```bash
 claude mcp add tapsmith-headless -- npx tapsmith mcp-server
 codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
 ```
 
 ### `tapsmith create-avd [--api <level>] [--name <name>] [--device <profile>] [--abi <abi>] [--force] [--install-tools]`
@@ -3212,7 +3231,8 @@ for the device, `tapsmith ios network setup-simulator` for a simulator.
 
 Build the signed `TapsmithAgent` XCUITest runner for physical devices with
 your provisioning profile. Auto-detects the Apple Developer team ID from
-Xcode's preferences (or keychain) if `--team-id` is omitted. `-v` /
+the accounts signed in to Xcode if `--team-id` is omitted (when Xcode has none, from
+the team of your keychain's signing certificate). `-v` /
 `--verbose` streams the raw `xcodebuild` output.
 
 The agent source comes from `<cwd>/ios-agent/` in a Tapsmith checkout (`--cwd`
@@ -3340,7 +3360,8 @@ afterwards. `on-first-retry` starts no recorder at all on the first attempt,
 eliminating encode load on healthy runs while still producing a video for
 any test flaky or broken enough to be retried. The trade-off: it requires
 `retries >= 1` to ever produce a video (the runner warns at startup if
-`retries` is 0), and the recorded retry won't show first-attempt-only
+`retries` is 0, and in [UI mode](ui-mode.md#each-test-runs-once), which never
+retries, whatever `retries` is), and the recorded retry won't show first-attempt-only
 failures. This mirrors Playwright's `on-first-retry` caveat.
 
 ### Implementation
@@ -3545,6 +3566,8 @@ await expect(webview.locator("a")).toHaveAttribute("href", "/about")
 
 All assertions support `.not` and a `{ timeout }` option; `toBeVisible` also takes `{ visible: false }`, which asserts the element is hidden, like `toBeHidden()`. Any other option throws a `TypeError`, as for native locator assertions.
 
+As for native locators, `toHaveText`, `toContainText`, `toHaveValue` and `toHaveAttribute` need the element to exist, with or without `.not`: on a locator that matches nothing they wait out the timeout and fail with `… but no element matched`.
+
 ```typescript
 await expect(webview.locator(".spinner")).not.toBeVisible()
 await expect(webview.locator(".loaded")).toBeVisible({ timeout: 10_000 })
@@ -3556,6 +3579,8 @@ Tapsmith includes a built-in MCP server that lets AI coding agents interact with
 
 - **SSE mode** (via `tapsmith test --ui`) -- agent shares the UI session with full test tree, results, watch mode, and mutual exclusion. 16 tools available.
 - **Stdio mode** (client-launched `tapsmith mcp-server`) -- standalone agent with its own headless test session, daemon, and device. Includes test discovery, results, watch mode, stop, and session info. 16 tools available.
+
+`tapsmith mcp-server --prefer-ui`, which the Tapsmith plugin for coding agents registers, chooses between the two for each tool call: the project's running UI session when there is one, a headless session otherwise.
 
 See the [MCP Server Guide](mcp-server.md) for setup instructions, the full tool reference, and the recommended workflow.
 

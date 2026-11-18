@@ -25,5 +25,10 @@ export function formatToolArgs(tool: string, args: Record<string, unknown>): str
     // the older key stays readable rather than rendering a blank row.
     return String(args.locator ?? args.selector ?? '');
   }
+  if (tool === 'tapsmith_run_code' && typeof args.code === 'string') {
+    // The first statement; the feed row is one line.
+    const lines = args.code.split('\n').map((l) => l.trim()).filter(Boolean);
+    return lines.length > 1 ? `${lines[0]} (+${lines.length - 1} more lines)` : lines[0] ?? '';
+  }
   return '';
 }

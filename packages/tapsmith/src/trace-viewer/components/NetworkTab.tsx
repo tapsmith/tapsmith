@@ -167,6 +167,21 @@ interface Props {
    * localhost are missing.
    */
   hostWideCapture?: boolean
+  /**
+   * The device did not trust Tapsmith's CA, so its HTTPS passed through the
+   * proxy uncaptured.
+   */
+  httpsPassthrough?: boolean
+}
+
+function HttpsPassthroughNotice() {
+  return (
+    <div class="net-host-wide" data-testid="network-https-passthrough-notice" role="note">
+      HTTPS was passed through uncaptured because the device did not trust Tapsmith's CA: HTTPS requests appear
+      only as passthrough entries, without their content, and routes and network waits could not see them.
+      Plain HTTP was captured as usual.
+    </div>
+  );
 }
 
 function HostWideCaptureNotice() {
@@ -344,7 +359,7 @@ function routeBadge(routeAction?: string): preact.JSX.Element | null {
 
 // ─── Component ───
 
-export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled, hostWideCapture }: Props) {
+export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled, hostWideCapture, httpsPassthrough }: Props) {
   injectStyles();
 
   const showDevices = !!deviceNames && deviceNames.length > 1;
@@ -439,6 +454,7 @@ export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled
     return (
       <>
         {hostWideCapture && <HostWideCaptureNotice />}
+        {httpsPassthrough && <HttpsPassthroughNotice />}
         <div class="no-content" data-testid="no-content">
           No network requests captured
           {networkCaptureEnabled === false && <div class="no-content-note">Enable network capture in your trace config to record HTTP requests.</div>}
@@ -470,6 +486,7 @@ export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled
   return (
     <div class="net-container">
       {hostWideCapture && <HostWideCaptureNotice />}
+      {httpsPassthrough && <HttpsPassthroughNotice />}
       <div class="net-toolbar">
         <input
           class="net-search"

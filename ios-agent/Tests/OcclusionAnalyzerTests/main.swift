@@ -270,6 +270,148 @@ checkPoint("a sheet's header button over the presenter's nav bar is not clipped"
            analyzer(sheetRows).analyze(button("Cancel", R(16, 72, 80, 40)), isHittable: true),
            CGPoint(x: 56, y: 92))
 
+// ─── iOS 27 full-window toolbar host (PILOT-1207) ───
+
+// Recorded from an iPhone 17 Pro / iOS 27.2 simulator: every app window gets a
+// last child `Toolbar` ("Toolbar"/"Toolbar") the size of the window, with one
+// empty `.other` in it, painted after all content.
+let ios27Form: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .navigationBar, "", "Login Form", R(0, 62, 402, 106)),
+    (4, .button, "Native Screens", "BackButton", R(16, 62, 44, 44)),
+    (3, .other, "", "", screen),
+    (4, .collectionView, "", "", screen),
+    (5, .cell, "", "", R(20, 172, 362, 44)),
+    (6, .textField, "", "", R(36, 183, 330, 22)),
+]
+let ios27Placeholder: [Row] = [
+    (3, .toolbar, "Toolbar", "Toolbar", screen),
+    (4, .other, "", "", screen),
+]
+let email = OcclusionAnalyzer.Target(frame: R(36, 183, 330, 22), elementType: .textField, label: "", identifier: "")
+for hittable in [true, false] {
+    check("iOS 27's empty full-window toolbar does not cover a text field (hittable: \(hittable))",
+          analyzer(ios27Form + ios27Placeholder).analyze(email, isHittable: hittable),
+          .clear(point: CGPoint(x: 201, y: 194), visible: R(36, 183, 330, 22)))
+}
+
+// A real bottom toolbar on iOS 27: the same full-window host, now holding the
+// items as floating capsules near the bottom. The host's frame is not the
+// bar; the items are what is drawn over the content.
+let ios27BottomBar: [Row] = [
+    (3, .toolbar, "Toolbar", "Toolbar", screen),
+    (4, .other, "", "", screen),
+    (5, .other, "", "", R(0, 62, 402, 812)),
+    (6, .other, "", "", R(28, 798, 91, 48)),
+    (7, .button, "Archive", "", R(33, 804, 81, 36)),
+    (6, .other, "", "", R(267, 798, 107, 48)),
+    (7, .button, "Compose", "", R(272, 804, 97, 36)),
+]
+let rowUnderArchive = OcclusionAnalyzer.Target(frame: R(16, 796, 120, 52), elementType: .cell, label: "", identifier: "")
+let bottomBarScreen = ios27Form + [(5, .cell, "", "", R(16, 796, 120, 52))] + ios27BottomBar
+check("iOS 27: a row under a bottom-toolbar item is covered by the item, not by the host",
+      analyzer(bottomBarScreen).analyze(rowUnderArchive, isHittable: false),
+      // In a list, so one the list can scroll clear of it (PILOT-980).
+      .coveredInList(by: "button \"Archive\"", cover: R(28, 798, 91, 48), list: screen))
+check("iOS 27: a text field above a bottom toolbar is not covered by its host",
+      analyzer(ios27Form + ios27BottomBar).analyze(email, isHittable: true),
+      .clear(point: CGPoint(x: 201, y: 194), visible: R(36, 183, 330, 22)))
+checkPoint("iOS 27: a bottom-toolbar item is touched where it is",
+           analyzer(ios27Form + ios27BottomBar).analyze(button("Compose", R(272, 804, 97, 36)), isHittable: true),
+           CGPoint(x: 320.5, y: 822))
+// A bar of bar size still covers what is under it, on any runtime.
+check("a row fully under a bar-sized bottom toolbar is covered by it",
+      analyzer(ios27Form + [(5, .cell, "", "", R(16, 800, 370, 40)), (3, .toolbar, "", "", R(0, 790, 402, 84))])
+          .analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      .coveredInList(by: "toolbar", cover: R(0, 790, 402, 84), list: screen))
+// The host spans its own window, which need not be the screen (an iPad
+// split view, a Stage Manager window).
+let halfWindow = R(0, 0, 201, 874)
+check("a toolbar spanning its window narrower than the screen is a host too",
+      analyzer([
+          (0, .application, "App", "", screen),
+          (1, .window, "", "", halfWindow),
+          (2, .other, "", "", halfWindow),
+          (3, .textField, "", "", R(20, 183, 160, 22)),
+          (2, .toolbar, "Toolbar", "Toolbar", halfWindow),
+      ]).analyze(.init(frame: R(20, 183, 160, 22), elementType: .textField, label: "", identifier: ""), isHittable: true),
+      .clear(point: CGPoint(x: 100, y: 194), visible: R(20, 183, 160, 22)))
+
+// A sheet on iOS 27 gets its own host, the size of the sheet's container
+// (below the status bar), laid over the sheet's nav bar and content.
+let ios27Sheet: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .other, "", "", R(0, 62, 402, 812)),
+    (4, .navigationBar, "", "Sheet", R(0, 78, 402, 106)),
+    (5, .other, "", "", R(316, 82, 66, 36)),
+    (6, .button, "Done", "", R(316, 82, 66, 36)),
+    (5, .staticText, "Sheet", "", R(16, 135, 93, 41)),
+    (4, .other, "", "", R(0, 62, 402, 812)),
+    (5, .staticText, "Sheet content", "", R(147, 501, 107, 21)),
+    (4, .toolbar, "Toolbar", "Toolbar", R(0, 62, 402, 812)),
+    (5, .other, "", "", R(0, 62, 402, 812)),
+]
+for hittable in [true, false] {
+    checkPoint("iOS 27: a sheet's own toolbar host does not cover its Done button (hittable: \(hittable))",
+               analyzer(ios27Sheet).analyze(button("Done", R(316, 82, 66, 36)), isHittable: hittable),
+               CGPoint(x: 349, y: 100))
+}
+// A real bar wrapped in a view of its own size (a UIViewRepresentable host)
+// fills its container too, but is laid over nothing in it: still a bar.
+check("a bar alone in a wrapper of its own size still covers what is under it",
+      analyzer(ios27Form + [
+          (5, .cell, "", "", R(16, 800, 370, 40)),
+          (3, .other, "", "", R(0, 790, 402, 84)),
+          (4, .toolbar, "", "", R(0, 790, 402, 84)),
+      ]).analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      .coveredInList(by: "toolbar", cover: R(0, 790, 402, 84), list: screen))
+
+// ... and so does one in a bar-sized wrapper with something smaller laid out
+// before it (a badge before a custom React Native tab bar): it is not laid
+// over content that fills the wrapper, so it is not a host.
+checkPoint("a bar in a bar-sized wrapper after a sibling still clips a row half under it",
+           analyzer(ios27Form + [
+               (5, .cell, "", "", R(16, 770, 370, 60)),
+               (3, .other, "", "", R(0, 790, 402, 84)),
+               (4, .staticText, "3", "", R(300, 792, 16, 16)),
+               (4, .tabBar, "", "", R(0, 790, 402, 84)),
+               (5, .button, "Home", "", R(20, 795, 80, 50)),
+           ]).analyze(.init(frame: R(16, 770, 370, 60), elementType: .cell, label: "", identifier: ""), isHittable: true),
+           CGPoint(x: 201, y: 780))
+
+// A sheet at a small detent (or an iPad popover) gets the same host, however
+// short: a host is told by what it is laid over, not by its size.
+let shortSheet: [Row] = [
+    (0, .application, "Tapsmith Native", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .other, "", "", R(0, 624, 402, 250)),
+    (4, .navigationBar, "", "Sheet", R(0, 640, 402, 54)),
+    (4, .other, "", "", R(0, 624, 402, 250)),
+    (5, .button, "Save", "", R(150, 760, 102, 44)),
+    (4, .toolbar, "Toolbar", "Toolbar", R(0, 624, 402, 250)),
+    (5, .other, "", "", R(0, 624, 402, 250)),
+]
+checkPoint("iOS 27: a short sheet's toolbar host does not cover its button",
+           analyzer(shortSheet).analyze(button("Save", R(150, 760, 102, 44)), isHittable: true),
+           CGPoint(x: 201, y: 782))
+// A full-height bar whose earlier sibling is smaller than the container
+// (a side rail after a badge) is still a bar.
+check("a bar filling a tall wrapper after a smaller sibling still covers what is under it",
+      analyzer(ios27Form + [
+          (5, .cell, "", "", R(16, 300, 40, 40)),
+          (3, .other, "", "", R(0, 0, 80, 874)),
+          (4, .staticText, "3", "", R(60, 300, 16, 16)),
+          (4, .toolbar, "", "", R(0, 0, 80, 874)),
+      ]).analyze(.init(frame: R(16, 300, 40, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
+      // A rail as tall as the list leaves nothing to scroll into:
+      // CoverClearance makes no drag, and it is waited out.
+      .coveredInList(by: "toolbar", cover: R(0, 0, 80, 874), list: screen))
+
 // ─── Scroll viewports ───
 
 // A row scrolled half out of its scroll view, under a JS header (an unlabeled
@@ -900,6 +1042,83 @@ if map.interactiveCover(of: lostTarget, at: [CGPoint(x: 350, y: 150)]) == nil {
 } else {
     failures += 1; print("FAIL an unplaced target names no cover")
 }
+
+// A button's containers decide its hold (TapTiming): an alert's, an action
+// sheet's and a segmented control's buttons are UIKit controls.
+let alertRows: [Row] = [
+    (0, .application, "", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .button, "Behind", "", R(16, 100, 370, 56)),
+    (3, .segmentedControl, "", "", R(16, 170, 370, 32)),
+    (4, .button, "Large", "", R(200, 170, 186, 32)),
+    (2, .alert, "Delete?", "", R(40, 250, 322, 200)),
+    (3, .other, "", "", R(40, 250, 322, 200)),
+    (4, .button, "Delete", "", R(40, 400, 161, 50)),
+    (2, .sheet, "Share", "", R(0, 600, 402, 274)),
+    (3, .button, "Copy", "", R(16, 700, 370, 56)),
+]
+let alerts = analyzer(alertRows)
+let containerCases: [(String, OcclusionAnalyzer.Target, [XCUIElement.ElementType])] = [
+    ("a button in an alert sits in the alert", button("Delete", R(40, 400, 161, 50)), [.other, .alert, .window, .application]),
+    ("a button in an action sheet sits in the sheet", button("Copy", R(16, 700, 370, 56)), [.sheet, .window, .application]),
+    ("a segment sits in its segmented control", button("Large", R(200, 170, 186, 32)),
+     [.segmentedControl, .other, .window, .application]),
+    ("a button beside them sits in plain views", button("Behind", R(16, 100, 370, 56)), [.other, .window, .application]),
+    ("an unplaced target has no known containers", button("Gone", R(5, 5, 10, 10)), []),
+]
+for (name, target, want) in containerCases {
+    let got = alerts.ancestorTypes(of: target)
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got.map(\.rawValue))") }
+}
+
+// A dropdown's option is the first uncovered copy of its text, leaving out
+// what showed it before the dropdown opened, touched where `analyze` says.
+let optionRows: [Row] = [
+    (0, .application, "", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .staticText, "Medium", "", R(16, 100, 370, 20)),
+    (3, .other, "", "", R(16, 300, 370, 140)),
+    (4, .staticText, "Medium", "", R(16, 340, 370, 20)),
+    (4, .staticText, "Gone", "", R(16, 2000, 370, 20)),
+    (4, .staticText, "Under", "", R(16, 380, 370, 20)),
+    (4, .staticText, "Medium", "", R(16, 420, 370, 15)),
+    (3, .scrollView, "", "", R(16, 450, 370, 100)),
+    (4, .staticText, "Clipped", "", R(16, 560, 370, 20)),
+    (4, .staticText, "Half", "", R(16, 540, 370, 20)),
+    (3, .staticText, "Low", "", R(16, 590, 370, 30)),
+    (3, .button, "Cover", "", R(0, 370, 402, 40)),
+    (2, .sheet, "", "", R(0, 640, 402, 160)),
+    (3, .staticText, "Large", "", R(16, 700, 370, 20)),
+    (2, .toolbar, "", "", R(0, 600, 402, 40)),
+]
+let options = analyzer(optionRows)
+func touch(_ result: OcclusionAnalyzer.OptionText) -> CGPoint? {
+    if case .touchable(let point, _) = result { return point }
+    return nil
+}
+let optionCases: [(String, Bool)] = [
+    ("the first copy is the one picked", touch(options.optionText("Medium")) == CGPoint(x: 201, y: 110)),
+    ("a text shown before the dropdown opened is left out, not a later copy",
+     touch(options.optionText("Medium", excluding: [R(16, 100, 370, 20)])) == CGPoint(x: 201, y: 350)),
+    ("every copy there before leaves nothing",
+     options.optionText("Medium", excluding: options.textFrames("Medium")) == .absent),
+    ("a copy off screen before the open is left out, so it is not taken for the option",
+     options.optionText("Gone", excluding: options.textFrames("Gone")) == .absent),
+    ("an option a control covers is present but not touched", options.optionText("Under") == .present),
+    ("an option scrolled out of its list is present but not touched", options.optionText("Clipped") == .present),
+    ("an option off screen is present but not touched", options.optionText("Gone") == .present),
+    ("a missing option is absent", options.optionText("Missing") == .absent),
+    ("a half-shown option is touched in its shown part", touch(options.optionText("Half")) == CGPoint(x: 201, y: 545)),
+    ("an option half under a toolbar is touched clear of it", touch(options.optionText("Low")) == CGPoint(x: 201, y: 595)),
+]
+for (name, ok) in optionCases {
+    if ok { print("ok   \(name)") } else { failures += 1; print("FAIL \(name)") }
+}
+if case .touchable(_, let types) = options.optionText("Large"), types.contains(.sheet) {
+    print("ok   an option in a sheet sits in the sheet")
+} else { failures += 1; print("FAIL an option in a sheet sits in the sheet") }
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

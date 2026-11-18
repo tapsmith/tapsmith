@@ -12,7 +12,8 @@ import type { RefObject } from 'preact';
 import { useRef, useEffect } from 'preact/hooks';
 import { Lock, LockOpen, Focus } from 'lucide-preact';
 import type { WorkerInfo, WorkerDeviceInfo, ClientMessage, DevicePlatform } from '../ui-protocol.js';
-import { inferDevicePlatform, inferDeviceFormFactor } from '../ui-protocol.js';
+import { inferDevicePlatform } from '../ui-protocol.js';
+import { useCanvasAspect } from '../hooks/use-canvas-aspect.js';
 import type { Bounds } from '../../trace-viewer/components/hierarchy-utils.js';
 import { DeviceMirror } from './DeviceMirror.js';
 import { DeviceFrame } from './DeviceFrame.js';
@@ -34,14 +35,19 @@ interface DevicePaneProps {
   mirrorLoading: boolean
   platform?: 'android' | 'ios'
   interactive: boolean
+  /** The mirrored device's lock (the header toggle; the single view). */
   locked: boolean
   force: boolean
+  /** One "All" grid tile's lock: each follows its own worker's run (PILOT-1179). */
+  tileLock: (workerId: number) => { interactive: boolean, force: boolean }
   onToggleLock: () => void
   send: (msg: ClientMessage) => void
   /** Element pick mode on the live mirror (single-mirror view only). */
   pickMode: boolean
   onTogglePick: () => void
   pickAvailable: boolean
+  /** A test runs on the mirrored device and the mirror is locked: picking waits for it. */
+  pickPaused: boolean
   pickDpr: number
   pickHoverBounds: Bounds | null
   pickMatchBounds: Bounds[]
@@ -66,6 +72,8 @@ export interface DeviceView {
   deviceIndex: number
   /** Tab / tile label: the worker's display name, plus the member name for groups. */
   label: string
+  /** This device's own name (a group member's, not the worker's) — picks its bezel. */
+  deviceName: string
   deviceSerial: string
   platform?: DevicePlatform
   devicePixelRatio?: number
@@ -85,6 +93,7 @@ export function deviceViewsOf(workers: WorkerInfo[]): DeviceView[] {
         workerId: w.workerId,
         deviceIndex: d.index,
         label: group ? `${w.displayName} · ${d.name}` : w.displayName,
+        deviceName: d.displayName,
         deviceSerial: d.deviceSerial,
         platform: d.platform ?? w.platform,
         devicePixelRatio: d.devicePixelRatio ?? w.devicePixelRatio,
@@ -96,10 +105,11 @@ export function deviceViewsOf(workers: WorkerInfo[]): DeviceView[] {
 }
 
 /** Canvas ref callback for the "All" grid — registers/unregisters with multi-mirror hook. */
-function WorkerCanvas({ workerId, deviceIndex, label, deviceSerial, connected, registerCanvas, unregisterCanvas, platform, interactive, force, send }: {
+function WorkerCanvas({ workerId, deviceIndex, label, deviceName, deviceSerial, connected, registerCanvas, unregisterCanvas, platform, interactive, force, send }: {
   workerId: number
   deviceIndex: number
   label: string
+  deviceName: string
   deviceSerial: string
   connected: boolean
   registerCanvas: (id: number, canvas: HTMLCanvasElement, deviceIndex?: number) => void
@@ -111,7 +121,7 @@ function WorkerCanvas({ workerId, deviceIndex, label, deviceSerial, connected, r
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const framePlatform = platform ?? inferDevicePlatform(label, deviceSerial);
-  const frameFormFactor = inferDeviceFormFactor({ hints: [label, deviceSerial] });
+  const frameAspect = useCanvasAspect(ref);
   const interaction = useDeviceInteraction({ send, enabled: interactive, force, workerId, deviceIndex });
 
   // Register this tile's canvas with the screenshot mirror.
@@ -144,7 +154,10 @@ function WorkerCanvas({ workerId, deviceIndex, label, deviceSerial, connected, r
             </div>
           </div>
         )}
-        <DeviceFrame platform={framePlatform} formFactor={frameFormFactor}>
+        {/* The device's own name, not the tile label: a group's label is the
+            primary's name plus a user-chosen member name, which says nothing
+            about this member's hardware. */}
+        <DeviceFrame platform={framePlatform} hints={[deviceName, deviceSerial]} contentAspect={frameAspect}>
           <canvas
             ref={ref}
             aria-label={`Device screen mirror — ${label}`}
@@ -177,11 +190,13 @@ export function DevicePane({
   interactive,
   locked,
   force,
+  tileLock,
   onToggleLock,
   send,
   pickMode,
   onTogglePick,
   pickAvailable,
+  pickPaused,
   pickDpr,
   pickHoverBounds,
   pickMatchBounds,
@@ -196,9 +211,7 @@ export function DevicePane({
   const mirrorPlatform = selectedView
     ? (selectedView.platform ?? inferDevicePlatform(selectedView.label, selectedView.deviceSerial) ?? platform)
     : platform;
-  const mirrorFormFactor = inferDeviceFormFactor({
-    hints: selectedView ? [selectedView.label, selectedView.deviceSerial] : [],
-  });
+  const mirrorHints = selectedView ? [selectedView.deviceName, selectedView.deviceSerial] : [];
 
   // Left/Right move between the All tab and the per-device tabs; Home/End jump
   // to the ends. Additive: these are real buttons and stay individually
@@ -246,7 +259,9 @@ export function DevicePane({
           aria-label={pickMode ? 'Picking element — click to cancel' : 'Pick an element to get a locator'}
           title={!pickAvailable && deviceViewMode === 'all' && workers.length > 1
             ? 'Select a device tab to pick'
-            : pickMode ? 'Picking element — click to cancel' : 'Pick an element to get a locator'}
+            : pickPaused
+              ? 'Locked while a test runs on this device. Unlock it to pick anyway, or pick from the trace\'s screenshot.'
+              : pickMode ? 'Picking element — click to cancel' : 'Pick an element to get a locator'}
         >
           <Focus size={15} aria-hidden="true" />
         </button>
@@ -300,13 +315,13 @@ export function DevicePane({
                 workerId={v.workerId}
                 deviceIndex={v.deviceIndex}
                 label={v.label}
+                deviceName={v.deviceName}
                 deviceSerial={v.deviceSerial}
                 connected={connected}
                 registerCanvas={registerCanvas}
                 unregisterCanvas={unregisterCanvas}
                 platform={v.platform}
-                interactive={interactive}
-                force={force}
+                {...tileLock(v.workerId)}
                 send={send}
               />
             ))}
@@ -317,7 +332,7 @@ export function DevicePane({
             connected={connected}
             loading={mirrorLoading}
             platform={mirrorPlatform}
-            formFactor={mirrorFormFactor}
+            deviceHints={mirrorHints}
             interactive={interactive}
             force={force}
             workerId={mirroredWorkerId}

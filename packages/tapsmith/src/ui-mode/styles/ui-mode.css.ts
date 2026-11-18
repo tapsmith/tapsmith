@@ -152,10 +152,6 @@ html, body, #app {
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-@keyframes flash-fail {
-  0% { background: oklch(0.68 0.2 25 / 0.3); }
-  100% { background: transparent; }
-}
 @keyframes ringPulse {
   0% { box-shadow: 0 0 0 0 oklch(0.78 0.15 var(--accent-h) / 0.4); }
   70% { box-shadow: 0 0 0 6px oklch(0.78 0.15 var(--accent-h) / 0); }
@@ -710,7 +706,6 @@ html, body, #app {
 .te-node:hover { background: var(--bg-hover); }
 .te-node.selected { background: var(--bg-active); border-left-color: var(--fg-dim); }
 .te-node.te-status-running { border-left-color: var(--run); }
-.te-node.te-status-flash-failed { animation: flash-fail 0.6s ease-out; }
 .te-node.te-node-project {
   margin-top: 4px;
   padding-top: 6px;
@@ -799,7 +794,6 @@ html, body, #app {
 .te-deps { font-size: 10px; color: var(--fg-muted); font-style: italic; flex-shrink: 0; margin-right: 4px; }
 
 .te-duration { font-size: 10px; color: var(--fg-muted); font-family: var(--font-mono); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.te-isolation { font-size: 9.5px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; margin-right: 6px; flex-shrink: 0; letter-spacing: 0.02em; line-height: 14px; }
 .te-devices { display: inline-flex; align-items: center; gap: 3px; font-size: 9.5px; color: var(--fg-muted); margin-right: 6px; flex-shrink: 0; letter-spacing: 0.02em; line-height: 14px; }
 .te-devices svg { flex-shrink: 0; opacity: 0.8; }
 
@@ -1072,6 +1066,11 @@ html, body, #app {
 
 /* Device column (v2) */
 .device-col {
+  /* Fill the device pane rather than size to the mirror: the mirror fits
+   * itself to this height (DeviceFrame), so a content-sized column would
+   * shrink with a short or landscape frame and never grow back. */
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1262,6 +1261,11 @@ html, body, #app {
 .dm-frame {
   display: contents;
 }
+/* The CSS bezel keeps the image bezel's wrapper elements (so switching bezels
+ * never remounts the canvas) but lays the canvas out as the skin's own child. */
+.dm-frame-passthrough {
+  display: contents;
+}
 
 /* ─── Image bezels (photographic frames from bezel.fit) ─── */
 
@@ -1346,6 +1350,18 @@ html, body, #app {
   border: none;
   border-radius: 0;
   display: block;
+}
+/* The single mirror fits its CSS bezel in JS (DeviceFrame sets --dm-canvas-w
+ * from the container's width and height); the height follows the canvas's
+ * own aspect ratio, so the box always has the frame's shape. */
+.dm-frame:not(.dm-frame-img) .dm-canvas {
+  width: var(--dm-canvas-w, auto);
+}
+/* No notch / punch-hole / side buttons where they would cover the screen
+ * (a rotated phone, or an older phone shape). See DeviceFrame. */
+.dm-frame.dm-skin-bare::after,
+.dm-frame.dm-skin-bare::before {
+  display: none;
 }
 
 .screenshot-device-frame {
@@ -1485,6 +1501,55 @@ html, body, #app {
   background: oklch(0.12 0 0);
   border: 1px solid oklch(0.28 0 0);
   border-radius: 50%;
+}
+
+/* A landscape photographic frame is the portrait PNG turned 90°
+ * counter-clockwise (assets/bezels/frames.ts): sized to the frame box's
+ * swapped sides, centred, then turned. Percent widths resolve against the box
+ * width and heights against its height, and --dm-fa is the box's aspect. */
+.dm-frame-img .dm-frame-png.dm-frame-png-ccw {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  width: calc(100% / var(--dm-fa));
+  height: calc(100% * var(--dm-fa));
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
+/* Landscape phones (CSS fallback, if a frame image fails to load): the phone
+ * turned counter-clockwise like the frames — camera on the left short edge,
+ * side buttons on the top edge. Sizes are in cqi (the box's width), so they
+ * shrink to match the now much wider box. */
+.dm-skin-phone.dm-skin-landscape {
+  --bezel: 1.4cqi;
+  --bezel-radius: 5.5cqi;
+  padding: var(--bezel);
+}
+.dm-skin-ios.dm-skin-phone.dm-skin-landscape::after {
+  top: 50%;
+  left: calc(var(--bezel) + 1cqi);
+  transform: translateY(-50%);
+  width: 2.8cqi;
+  height: 10cqi;
+  border-radius: 1.4cqi;
+}
+.dm-skin-android.dm-skin-phone.dm-skin-landscape {
+  padding-left: calc(var(--bezel) * 1.25);
+}
+.dm-skin-android.dm-skin-phone.dm-skin-landscape::after {
+  top: 50%;
+  left: calc(var(--bezel) + 0.7cqi);
+  transform: translateY(-50%);
+  width: 1.2cqi;
+  height: 1.2cqi;
+}
+.dm-skin-phone.dm-skin-landscape::before {
+  right: auto;
+  top: -0.5cqi;
+  left: 20%;
+  width: 6.5cqi;
+  height: 0.5cqi;
+  border-radius: 0.5cqi 0.5cqi 0 0;
 }
 
 /* ─── Trace Viewer Components (ActionsPanel, DetailTabs, etc.) ─── */

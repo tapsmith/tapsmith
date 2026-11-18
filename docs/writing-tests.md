@@ -121,12 +121,13 @@ The reset is **declared**, not written by hand: it runs as fixture setup, appear
 
 ### Declaring the reset policy
 
-Two options control it, at any level — config, `projects[].use`, or `test.use()`:
+These options control it, at any level — config, `projects[].use`, or `test.use()`:
 
 | Option | Values | Default |
 |---|---|---|
 | `appReset` | `'auto'` \| `'clear'` \| `'restart'` \| `'warm'` \| `'none'` | `'auto'` |
 | `appResetScope` | `'auto'` \| `'file'` \| `'test'` | `'auto'` |
+| `appResetRoute` | a path (`'/settings'`) or a full deep link (`'myapp:///settings'`) | the app's launch route |
 
 | Mode | What happens | Typical cost |
 |---|---|---|
@@ -154,6 +155,20 @@ test("first launch shows onboarding", async ({ device }) => { /* … */ })
 test("skipping onboarding lands on home", async ({ device }) => { /* … */ })
 ```
 
+### Starting on a screen
+
+When every test in a scope starts on the same screen, declare it with `appResetRoute` instead of opening it from a `beforeEach`. With [`@tapsmith/react-native`](warm-reset.md), the warm reset's own deep link carries the route, so the app is reset and on the screen in one delivery rather than two:
+
+```typescript
+describe("settings", () => {
+  test.use({ appResetScope: "test", appResetRoute: "/settings" })
+
+  test("dark mode starts off", async ({ device }) => { /* already on /settings */ })
+})
+```
+
+A path is resolved against the URL prefix the hooks publish (the `urlPrefix`/`scheme` you gave `<TapsmithTestHooks />`). An app without the hooks gives the full deep link instead (`appResetRoute: "myapp:///settings"`); a path there fails the reset with a message saying so. Whenever the reset itself cannot land on the route — a `clear`, `restart` or restored `appState`, a warm reset that fell back, or a device that was already prepared — Tapsmith opens the route as a deep link right after it, so the test starts on the screen either way. A warm reset that lands on the screen the previous test left open keeps that screen mounted, so the screen's own React state (counters, form fields, scroll offset) is only fresh if the screen resets it when the reset epoch changes; see [What a warm reset does not clear](warm-reset.md#what-a-warm-reset-does-not-clear). In the trace's **APP RESET** section, a warm reset that landed on the route says so (`warm reset via @tapsmith/react-native (epoch 4→5) → /settings`); any other reset is followed by an `openDeepLink` row for the route. The route is opened where the reset runs: with the default file scope that is once per file, so pair it with `appResetScope: "test"` when every test must start on the screen. `appResetRoute` has no effect with `appReset: "none"`, since no reset runs to land anywhere.
+
 ```typescript
 // tests that deliberately share state across the file
 describe("multi-step wizard", () => {
@@ -179,6 +194,8 @@ describe("authenticated tests", () => {
 })
 ```
 
+Every reset in the scope restores the archive, not just the first one: with `appResetScope: "test"`, that is a restore and a cold relaunch before every test. An app that mounts [`@tapsmith/react-native`](warm-reset.md) does not change that on its own — a plain warm reset would clear the restored data. Give its hooks `track` and `onReload`, and resets after the first become warm whenever the previous test wrote nothing, keeping the restored data instead of restoring it again ([Keeping restored app state between tests](warm-reset.md#keeping-restored-app-state-between-tests)). The trace's **APP RESET** row says which happened and why.
+
 To opt out of restored state in a nested scope, pass an empty string — it means "clear":
 
 ```typescript
@@ -200,7 +217,7 @@ With `retries` set, a failed test is retried from the state its first attempt st
 - **Per-test scope.** The test's own reset runs before every attempt (cold-launched on a retry on iOS simulators).
 - **Exceptions.** A test whose own scope has `appReset: "none"`, and a test in a [serial group](api-reference.md#testdescribeserialname-fn--testdescribeserialonlyname-fn), retry in place, without a reset or a replay of the setup in their trace. A serial group's later tests depend on the state its earlier tests built, which a reset would wipe.
 
-A retry's trace shows only what ran before that attempt: under per-file scope, the **APP RESET** and **BEFORE ALL** sections it just ran; under per-test scope, its own reset. A retry in place shows neither, since nothing ran. Worker-scoped fixtures are set up once per file and are not set up again for a retry.
+A retry's trace shows only what ran before that attempt: under per-file scope, the **APP RESET** and **BEFORE ALL** sections it just ran; under per-test scope, its own reset. A retry in place shows neither, since nothing ran. Worker-scoped fixtures are set up once per file and are not set up again for a retry. [UI mode](ui-mode.md#each-test-runs-once) never retries a failed test.
 
 ### A failure starts the rest of the file fresh
 
@@ -478,7 +495,7 @@ await device.waitForIdle()
 
 ### Network-dependent flows
 
-For flows that depend on network responses, use `waitForRequest()` or `waitForResponse()` instead of arbitrary timeouts. Start waiting before the action that sends the request (the network proxy starts on demand; see [Network prerequisites](network.md#prerequisites)):
+For flows that depend on network responses, use `waitForRequest()` or `waitForResponse()` instead of arbitrary timeouts. Start waiting before the action that sends the request (see [Network prerequisites](network.md#prerequisites) for when the network proxy starts):
 
 ```typescript
 // Wait for a specific API call to complete
@@ -713,7 +730,7 @@ describe("App", () => {
 |---|---|---|
 | `beforeAll` | Once per `describe` | Navigating to a screen, one-time setup |
 | `afterAll` | Once per `describe` | Cleaning up shared resources |
-| `beforeEach` | Before every test | Navigating to the test's starting screen (reset the app with `appResetScope: "test"` instead) |
+| `beforeEach` | Before every test | Bringing each test to its starting point (reset the app with `appResetScope: "test"`, and land on a screen with `appResetRoute`, instead) |
 | `afterEach` | After every test | Cleaning up test-specific side effects |
 
 **Caution:** `beforeAll` runs once, so all tests in that block share whatever state it creates. If one test modifies the screen, subsequent tests see that modification. When in doubt, use `beforeEach`.

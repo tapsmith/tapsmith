@@ -8,8 +8,8 @@ Simulators go through a macOS Network Extension (no on-device configuration need
 
 Tapsmith's daemon (`tapsmith-core`) runs a local MITM proxy for each worker. On Android the daemon uses `adb reverse` to forward the proxy port onto the device and configures the device's HTTP proxy setting. **On iOS**, it uses a different mechanism because simulators share the host's network stack:
 
-- The daemon spawns **`Mitmproxy Redirector.app`**, a small signed launcher that ships with [mitmproxy](https://mitmproxy.org) and manages a macOS **Network Extension** (NE). The NE intercepts TCP flows from specific PIDs on the host and redirects them over a per-worker Unix socket into Tapsmith's MITM proxy.
-- The daemon resolves the booted simulator's process tree (`launchd_sim` and descendants) and sends the resulting PID list to the NE as an `InterceptConf`. The NE filters traffic per-PID, so each worker daemon only sees its own simulator's flows — **parallel iOS workers don't collide**, and the user's host browser traffic is never touched.
+- The daemon spawns **`Mitmproxy Redirector.app`**, a small signed launcher that ships with [mitmproxy](https://mitmproxy.org) and manages a macOS **Network Extension** (NE). The NE intercepts TCP flows from specific processes on the host and redirects them over a per-worker Unix socket into Tapsmith's MITM proxy.
+- The daemon sends the NE an `InterceptConf` naming the simulator's processes: every app installed in it, matched by its executable's path inside that simulator's data directory (`…/<UDID>/data/…`), so an app is intercepted from its first connection after a launch; and the PIDs of the simulator's process tree (`launchd_sim` and descendants), re-read every two seconds, for the runtime's own processes such as a WebView's networking process. Each worker daemon only sees its own simulator's flows — **parallel iOS workers don't collide**, and the user's host browser traffic is never touched.
 - The MITM proxy reads the real hostname from the client's TLS ClientHello SNI extension (not the resolved IP the NE reports), dials upstream with that hostname as SNI, mints a per-host certificate signed by the Tapsmith CA, and captures the decrypted request/response pair into the trace when the client trusts that CA. If an HTTP/2-capable client rejects the generated certificate, Tapsmith tunnels later connections for that host so the app keeps working.
 
 The CA is installed into the simulator's trust store automatically via `xcrun simctl keychain add-root-cert` at the start of each capture session. That is enough for normal system-trust clients, but not for SDKs that bring their own root store or pin certificates.
@@ -153,6 +153,25 @@ Check the daemon logs — run `tapsmith test` with `RUST_LOG=tapsmith_core=debug
 - **`failed reading TLS ClientHello`** — the app closed the connection before sending the handshake. Usually a transient issue; rerun the test.
 - **`upstream TLS handshake failed for <host>: UnknownIssuer`** — the upstream server uses a certificate chain not in Tapsmith's webpki roots. This affects some Apple-internal services; it does not affect standard public HTTPS endpoints.
 - **`simulator_processes returned 0 PIDs`** — the simulator isn't booted, or `ps` parsing couldn't find it. Check `xcrun simctl list devices booted`.
+
+### When the CA certificate can't be installed
+
+`xcrun simctl keychain add-root-cert` goes through CoreSimulator, which can stall on a loaded machine (most often a CI runner booting several simulators). Tapsmith tries the install up to three times, for at most about 40 seconds in all. When every attempt fails, it checks the simulator's trust store on disk, since an earlier run (or an attempt that timed out) may already have installed the CA. If the CA is there, capture carries on as usual.
+
+If it isn't, the simulator would reject every certificate the proxy presents, so Tapsmith stops decrypting HTTPS for the rest of the session instead of breaking the app's requests. It passes HTTPS through to the real servers and prints a warning:
+
+```text
+[tapsmith] Network capture warning: Could not install Tapsmith's CA certificate on the simulator (tried 2 times): simctl keychain add-root-cert timed out after 6s (CoreSimulatorService may be wedged). HTTPS is passed through to its servers uncaptured, …
+```
+
+What that means for the run:
+
+- The app's HTTPS requests still work.
+- Each HTTPS connection appears in the trace's Network tab only as a `passthrough` entry, and the tab and the Metadata tab say HTTPS was passed through. The trace's `metadata.json` records `"networkHttpsPassthrough": true` for the device.
+- `device.route()`, `waitForRequest()` and `waitForResponse()` cannot see HTTPS. A network wait that times out says why, and so does the warning for a test whose routes never fired.
+- Plain HTTP is still captured, mocked and waited on as usual.
+
+Passthrough lasts until Tapsmith exits. To recover, run the tests again. UI mode, watch mode and the MCP server keep one session (and print the warning once), so quit and restart them. If it keeps happening, shut the simulator down (`xcrun simctl shutdown <udid>`) or restart CoreSimulator (`killall -9 com.apple.CoreSimulator.CoreSimulatorService`, which stops every running simulator) before the next run.
 
 ### My host's web browser traffic went through Tapsmith's proxy
 

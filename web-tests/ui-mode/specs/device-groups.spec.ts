@@ -181,6 +181,83 @@ test.describe("Device groups", () => {
     await expect(device.mirrorFor(BOB)).toHaveAttribute("width", "200")
   })
 
+  test("each All-view tile picks its bezel from its own frame's shape and keeps painting after a rotation", async ({ ui, device }) => {
+    await openWithGroup(ui)
+    await device.selectWorkerView("All")
+    await expect(device.mirrorFor(ALICE)).toBeVisible()
+
+    // Alice is a phone (≈0.45), bob a tablet-shaped screen behind an opaque serial.
+    ui.sendFrame({ ...screenFrame(540, 1200, 1), workerId: 0, deviceIndex: 0 })
+    ui.sendFrame({ ...screenFrame(800, 1280, 2), workerId: 0, deviceIndex: 1 })
+    await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
+    await expect(device.mirrorFor(BOB)).toHaveAttribute("width", "800")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-frame", "tablet")
+
+    // Alice rotates: her tile switches frame, bob's is untouched.
+    ui.sendFrame({ ...screenFrame(1200, 540, 3), workerId: 0, deviceIndex: 0 })
+    await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "1200")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo-landscape")
+    await expect(device.bezelFor(BOB)).toHaveAttribute("data-frame", "tablet")
+    expect(await device.frameImageFillsBezel(device.mirrorFor(ALICE))).toBe(true)
+    await expect.poll(async () => {
+      const fill = await device.canvasFill(device.mirrorFor(ALICE))
+      return Math.min(fill.width, fill.height) > 0.9 && Math.abs(fill.shape - 1) < 0.02
+    }).toBe(true)
+
+    // The tile's canvas survived the switch: it is still the one registered
+    // for alice's frames, so the next frame lands on it.
+    ui.sendFrame({ ...screenFrame(540, 1200, 4), workerId: 0, deviceIndex: 0 })
+    await expect(device.mirrorFor(ALICE)).toHaveAttribute("width", "540")
+    await expect(device.bezelFor(ALICE)).toHaveAttribute("data-frame", "photo")
+  })
+
+  test("frames each member by its own device name, not the primary's", async ({ ui, device }) => {
+    // An iPhone primary with an iPad member, and a Pixel Fold primary with an
+    // iPhone member: the tile label carries the primary's name, which must not
+    // decide the member's frame.
+    ui.seed([
+      ...idleSeed(singleFileTree()),
+      {
+        type: "workers-info",
+        workers: [
+          {
+            workerId: 0, deviceSerial: "SIM-A", displayName: "iPhone 17 Pro", platform: "ios",
+            devices: [
+              { index: 0, name: "alice", deviceSerial: "SIM-A", displayName: "iPhone 17 Pro", platform: "ios" },
+              { index: 1, name: "bob", deviceSerial: "SIM-B", displayName: "iPad Air 11-inch (M2)", platform: "ios" },
+            ],
+          },
+          {
+            workerId: 1, deviceSerial: "emulator-5554", displayName: "Pixel_9_Pro_Fold", platform: "android",
+            devices: [
+              { index: 0, name: "carol", deviceSerial: "emulator-5554", displayName: "Pixel_9_Pro_Fold", platform: "android" },
+              { index: 1, name: "dave", deviceSerial: "SIM-D", displayName: "iPhone 17 Pro", platform: "ios" },
+            ],
+          },
+        ],
+      },
+    ])
+    await ui.open()
+    await device.selectWorkerView("All")
+    const bobTile = "iPhone 17 Pro · bob"
+    const daveTile = "Pixel_9_Pro_Fold · dave"
+    await expect(device.mirrorFor(bobTile)).toBeVisible()
+    // bob's iPad at a phone-like 16:9 shape is still an iPad; dave's iPhone is a modern phone.
+    ui.sendFrame({ ...screenFrame(720, 1280, 1), workerId: 0, deviceIndex: 1 })
+    ui.sendFrame({ ...screenFrame(590, 1278, 2), workerId: 1, deviceIndex: 1 })
+    await expect(device.mirrorFor(bobTile)).toHaveAttribute("width", "720")
+    await expect(device.mirrorFor(daveTile)).toHaveAttribute("width", "590")
+    await expect(device.bezelFor(bobTile)).toHaveAttribute("data-frame", "tablet")
+    await expect(device.bezelFor(daveTile)).toHaveAttribute("data-frame", "photo")
+
+    // The member's own tab picks the same way.
+    await device.selectWorkerView(bobTile)
+    ui.sendFrame({ ...screenFrame(720, 1280, 3), workerId: 0, deviceIndex: 1 })
+    await expect(device.canvas).toHaveAttribute("width", "720")
+    await expect(device.bezel).toHaveAttribute("data-frame", "tablet")
+  })
+
   test("gestures and picks on a member's tab name that device", async ({ ui, device }) => {
     await openWithGroup(ui)
     await device.selectWorkerView(BOB)
@@ -228,8 +305,6 @@ test.describe("Device group badge", () => {
 
     await expect(explorer.devicesFor("[pair]")).toHaveText(/alice · bob/)
     await expect(explorer.devicesFor("[pair]")).toHaveAttribute("title", /Each test drives 2 devices: alice, bob \(use\.devices\)/)
-    // Not an isolation policy: it does not share the isolation badge.
-    await expect(explorer.isolationFor("[pair]")).toHaveCount(0)
     await expect(explorer.devicesFor("gestures.test.ts")).toHaveCount(0)
     await expect(explorer.devicesFor("Gestures screen")).toHaveCount(0)
     await expect(explorer.devicesFor("double tap registers double tap gesture")).toHaveCount(0)
@@ -240,21 +315,5 @@ test.describe("Device group badge", () => {
     ui.seed(idleSeed([projectNode("pair", singleFileTree(), { use: { devices: 2 } })]))
     await ui.open()
     await expect(explorer.devicesFor("[pair]")).toHaveText(/2 devices/)
-  })
-
-  test("a project-level reset policy is badged on the project row only", async ({ ui, explorer }) => {
-    // Same rule for isolation: the project declares it, the rows under it
-    // inherit it without repeating it. A suite's own test.use() still shows.
-    const files = singleFileTree()
-    const suite = files[0].children!.find((n) => n.type === "suite")!
-    suite.use = { appResetScope: "test" }
-    ui.seed(idleSeed([projectNode("android", files, { use: { appReset: "restart" } })]))
-    await ui.open()
-    await explorer.expandAllButton.click()
-
-    await expect(explorer.isolationFor("[android]")).toHaveText("restart")
-    await expect(explorer.isolationFor("gestures.test.ts")).toHaveCount(0)
-    await expect(explorer.isolationFor("Gestures screen")).toHaveText("per test")
-    await expect(explorer.isolationFor("smoke")).toHaveCount(0)
   })
 })

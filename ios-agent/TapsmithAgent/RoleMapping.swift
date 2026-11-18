@@ -142,9 +142,17 @@ enum RoleMapping {
     /// a trait bit (e.g. UIAccessibilityTraitHeader for `accessibilityRole="header"`),
     /// and the trait carries semantic intent that the element type doesn't.
     /// `inTabBar` is whether the element has a `.tabBar` ancestor: a button
-    /// there is a tab (`isTabBarItem`).
-    static func resolveRole(for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool) -> String {
+    /// there is a tab (`isTabBarItem`). `isEmptyBarHost`: whether it is the
+    /// empty host iOS 27 lays over a screen with no toolbar
+    /// (`BarHost.markEmptyHosts`, PILOT-1219), which is nothing a user can
+    /// see and has no role. A live element can't tell; its callers pass what
+    /// was found with it.
+    static func resolveRole(
+        for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool, isEmptyBarHost: Bool = false
+    ) -> String {
         typealias Trait = AccessibilityTrait
+
+        if isEmptyBarHost { return "" }
 
         // Trait-derived semantic roles take priority — these are the ones an
         // app explicitly declares via `accessibilityRole`.
@@ -313,6 +321,9 @@ enum RoleMapping {
     ///   `.alert` (`inAlert`: the element has an `.alert` ancestor), so a
     ///   named query finds the alert, not also its title text (PILOT-919).
     /// - every other role: its element types, or its trait.
+    /// - no role at all: iOS 27's empty toolbar host (`isEmptyBarHost`,
+    ///   `BarHost.markEmptyHosts`, PILOT-1219). A host holding a toolbar's
+    ///   items is the toolbar.
     static func matches(
         role: String,
         elementType: XCUIElement.ElementType,
@@ -320,8 +331,10 @@ enum RoleMapping {
         value: String?,
         hasNameFilter: Bool,
         inTabBar: Bool,
-        inAlert: Bool
+        inAlert: Bool,
+        isEmptyBarHost: Bool = false
     ) -> Bool {
+        if isEmptyBarHost { return false }
         let canonical = normalize(role)
         if canonical == "alert" && inAlert && elementType != .alert {
             return false

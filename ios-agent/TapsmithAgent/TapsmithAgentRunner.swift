@@ -15,6 +15,8 @@ class TapsmithAgentRunner: XCTestCase {
     private static let envTargetBundleId = "TAPSMITH_TARGET_BUNDLE_ID"
     private static let envPort = "TAPSMITH_AGENT_PORT"
     private static let envAttachToRunningApp = "TAPSMITH_ATTACH_TO_RUNNING_APP"
+    /// The daemon's agent token (PILOT-969), from the patched xctestrun.
+    private static let envToken = "TAPSMITH_AGENT_TOKEN"
 
     private var socketServer: SocketServer?
 
@@ -27,6 +29,10 @@ class TapsmithAgentRunner: XCTestCase {
         let attachToRunningApp = ProcessInfo.processInfo.environment[Self.envAttachToRunningApp] == "1"
 
         NSLog("[TapsmithAgent] Starting with target bundle: \(bundleId), port: \(port)")
+
+        // A short accessibility timeout, so a request stuck on a busy app
+        // gives way and is retried inside the command's deadline (PILOT-978).
+        NSLog("[TapsmithAgent] \(AccessibilityTimeout.describe(AccessibilityTimeout.apply()))")
 
         // Create the XCUIApplication for the target app
         let app: XCUIApplication
@@ -96,6 +102,11 @@ class TapsmithAgentRunner: XCTestCase {
             // Xcode 26 restoring stale navigation state during restartApp().
             app.activate()
         } else {
+            // On a cold simulator start the daemon terminates (and may wipe)
+            // the app while xcodebuild starts; wait for it before launching.
+            if let gate = ProcessInfo.processInfo.environment[LaunchGate.environmentKey], !gate.isEmpty {
+                NSLog("[TapsmithAgent] Launch gate: \(LaunchGate.wait(path: gate))")
+            }
             // launch() implicitly terminates a running instance first, and on
             // a busy SpringBoard that terminate+relaunch handshake is the
             // classic "Timed out attempting to launch app" trigger. Terminate
@@ -126,12 +137,17 @@ class TapsmithAgentRunner: XCTestCase {
             hierarchyDumper: hierarchyDumper
         )
 
-        socketServer = SocketServer(port: port, commandHandler: commandHandler)
+        let token = ProcessInfo.processInfo.environment[Self.envToken]
+        if (token ?? "").isEmpty {
+            NSLog("[TapsmithAgent] Started without a token: every connection will be refused")
+        }
+        socketServer = SocketServer(port: port, auth: AgentAuth(token: token), commandHandler: commandHandler)
 
         NSLog("[TapsmithAgent] Agent started on port \(port)")
 
         // Block forever — the socket server runs on its own dispatch queue
         // and this test method must not return to keep the XCTest runner alive.
+        XCTestIssueRelay.serving = true
         socketServer?.start()
     }
 
@@ -172,6 +188,17 @@ class TapsmithAgentRunner: XCTestCase {
         case .unreachable:
             NSLog("[TapsmithAgent] \(bundleId) is still not reachable through accessibility after "
                 + "\(LaunchAccessibilityCheck.maxRelaunches) relaunches; continuing startup")
+        }
+    }
+
+    /// XCTest records an automation failure inside its own calls ("Failed to
+    /// get matching snapshot", `kAXErrorIPCTimeout`) through here. Recorded,
+    /// it leaves the test marked interrupted and a later issue ends the test,
+    /// and with it the agent; XCTestIssueRelay fails the command instead
+    /// (PILOT-978).
+    override func record(_ issue: XCTIssue) {
+        if XCTestIssueRelay.handle(issue.compactDescription) == .record {
+            super.record(issue)
         }
     }
 

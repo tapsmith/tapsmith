@@ -47,8 +47,8 @@ export function DeviceActivityPanel({ mcpUrl, clientName, clientVersion, clients
   const feedRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Deliberately not persisted: the panel's value is the causal, interleaved
-  // view (an agent tap followed by the re-prepare it caused), so every
-  // session starts back at 'all'.
+  // view (an agent tap next to the device going stale, a run next to the
+  // preparation that follows it), so every session starts back at 'all'.
   const [filter, setFilter] = useState<FeedFilter>('all');
 
   useEffect(() => {

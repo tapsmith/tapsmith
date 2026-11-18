@@ -3,6 +3,8 @@ import { AccessibilityScreen } from "./screens/accessibility.screen.js"
 import { AnimatingScreen } from "./screens/animating.screen.js"
 import { CoversScreen } from "./screens/covers.screen.js"
 import { ApiCallsScreen } from "./screens/api-calls.screen.js"
+import { CarouselScreen } from "./screens/carousel.screen.js"
+import { StackScreen } from "./screens/stack.screen.js"
 import { DialogsScreen } from "./screens/dialogs.screen.js"
 import { GesturesScreen } from "./screens/gestures.screen.js"
 import { HomeScreen } from "./screens/home.screen.js"
@@ -11,11 +13,13 @@ import { ListScreen } from "./screens/list.screen.js"
 import { LoginScreen } from "./screens/login.screen.js"
 import { NativeTabsScreen } from "./screens/native-tabs.screen.js"
 import { OcclusionScreen } from "./screens/occlusion.screen.js"
+import { ProfileScreen } from "./screens/profile.screen.js"
 import { RolesScreen } from "./screens/roles.screen.js"
 import { ScrollScreen } from "./screens/scroll.screen.js"
 import { SlowLoadScreen } from "./screens/slow-load.screen.js"
 import { SpinnerScreen } from "./screens/spinner.screen.js"
 import { TogglesScreen } from "./screens/toggles.screen.js"
+import { TypingScreen } from "./screens/typing.screen.js"
 import { VisibilityScreen } from "./screens/visibility.screen.js"
 
 type ScreenFixtures = {
@@ -23,6 +27,8 @@ type ScreenFixtures = {
   animatingScreen: AnimatingScreen
   apiCallsScreen: ApiCallsScreen
   coversScreen: CoversScreen
+  carouselScreen: CarouselScreen
+  stackScreen: StackScreen
   dialogsScreen: DialogsScreen
   gesturesScreen: GesturesScreen
   homeScreen: HomeScreen
@@ -31,11 +37,13 @@ type ScreenFixtures = {
   loginScreen: LoginScreen
   nativeTabsScreen: NativeTabsScreen
   occlusionScreen: OcclusionScreen
+  profileScreen: ProfileScreen
   rolesScreen: RolesScreen
   scrollScreen: ScrollScreen
   slowLoadScreen: SlowLoadScreen
   spinnerScreen: SpinnerScreen
   togglesScreen: TogglesScreen
+  typingScreen: TypingScreen
   visibilityScreen: VisibilityScreen
 }
 
@@ -51,6 +59,12 @@ export const test = base.extend<ScreenFixtures>({
   },
   coversScreen: async ({ device }, use) => {
     await use(new CoversScreen(device))
+  },
+  carouselScreen: async ({ device }, use) => {
+    await use(new CarouselScreen(device))
+  },
+  stackScreen: async ({ device }, use) => {
+    await use(new StackScreen(device))
   },
   dialogsScreen: async ({ device }, use) => {
     await use(new DialogsScreen(device))
@@ -76,6 +90,9 @@ export const test = base.extend<ScreenFixtures>({
   occlusionScreen: async ({ device }, use) => {
     await use(new OcclusionScreen(device))
   },
+  profileScreen: async ({ device }, use) => {
+    await use(new ProfileScreen(device))
+  },
   rolesScreen: async ({ device }, use) => {
     await use(new RolesScreen(device))
   },
@@ -90,6 +107,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   togglesScreen: async ({ device }, use) => {
     await use(new TogglesScreen(device))
+  },
+  typingScreen: async ({ device }, use) => {
+    await use(new TypingScreen(device))
   },
   visibilityScreen: async ({ device }, use) => {
     await use(new VisibilityScreen(device))

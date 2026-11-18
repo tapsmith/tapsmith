@@ -7,16 +7,11 @@
  * no-break space, a line break and a run of spaces
  * (test-app/app/text-matching.tsx).
  */
-import { beforeEach, describe, expect, test } from "tapsmith"
-import { openScreen } from "../utils/app-reset.js"
+import { describe, expect, test } from "tapsmith"
 
 describe("RegExp locators (PILOT-520)", () => {
   // Tests tap counters on one screen, so each needs a fresh app state.
-  test.use({ appResetScope: "test" })
-
-  beforeEach(async ({ device }) => {
-    await openScreen(device, "/text-matching")
-  })
+  test.use({ appResetScope: "test", appResetRoute: "/text-matching" })
 
   test("getByText(RegExp): \\s matches a non-breaking space", async ({ device }) => {
     await expect(device.getByText(/Welcome to\sExpo/)).toBeVisible()
@@ -61,11 +56,7 @@ describe("RegExp locators (PILOT-520)", () => {
 })
 
 describe("toHaveText / toContainText with RegExp and arrays (PILOT-548)", () => {
-  test.use({ appResetScope: "test" })
-
-  beforeEach(async ({ device }) => {
-    await openScreen(device, "/text-matching")
-  })
+  test.use({ appResetScope: "test", appResetRoute: "/text-matching" })
 
   test("toHaveText(RegExp) tests the element's text", async ({ device }) => {
     await expect(device.getByTestId("text-matching-counts")).toHaveText(/^welcome=0 save=\d$/)

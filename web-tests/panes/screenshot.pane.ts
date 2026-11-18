@@ -64,6 +64,41 @@ export class ScreenshotPane {
     return this.pane(device).getByTestId("screenshot-pane-role")
   }
 
+  // ─── Device frames ───
+
+  /**
+   * The bezel around the screenshot. `data-frame` names the frame (`photo`,
+   * `photo-landscape`, `phone`, `compact`, `tablet`, `foldable-outer`,
+   * `foldable-inner`) or `css` for the CSS skin.
+   */
+  get bezel() {
+    return this.page.getByTestId("screenshot-bezel")
+  }
+
+  paneBezel(device: string) {
+    return this.pane(device).getByTestId("screenshot-bezel")
+  }
+
+  /**
+   * How the screenshot sits in its frame: how much of the frame's screen
+   * window it covers per axis (0–1), and whether the frame image covers the
+   * whole frame box (a turned landscape photo must, once turned).
+   */
+  async frameFit(bezel = this.bezel): Promise<{ width: number; height: number; imageFillsBox: boolean }> {
+    return bezel.evaluate((el) => {
+      const win = el.querySelector(".dm-frame-screen-rect")!.getBoundingClientRect()
+      const shot = el.querySelector(".dm-frame-screen-rect > img")!.getBoundingClientRect()
+      const box = el.getBoundingClientRect()
+      const png = el.querySelector(".dm-frame-png")!.getBoundingClientRect()
+      const near = (a: number, b: number) => Math.abs(a - b) < 1
+      return {
+        width: shot.width / win.width,
+        height: shot.height / win.height,
+        imageFillsBox: near(png.left, box.left) && near(png.top, box.top) && near(png.width, box.width) && near(png.height, box.height),
+      }
+    })
+  }
+
   // ─── Flows ───
 
   async selectStage(name: ScreenshotStage) {

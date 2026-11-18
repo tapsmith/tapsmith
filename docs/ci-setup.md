@@ -468,6 +468,34 @@ until it times out.
 If your tests do not need network capture, disable it in your tapsmith config
 (`trace: { network: false }`).
 
+A loaded runner can stall CoreSimulator while Tapsmith installs its CA certificate in the
+simulator. Tapsmith retries the install; if it still fails, it passes HTTPS through uncaptured for
+the rest of the session and warns that routes and network waits can't see HTTPS. See
+[When the CA certificate can't be installed](./ios-network-capture.md#when-the-ca-certificate-cant-be-installed).
+
+#### The first HTTPS request stalls on a fresh simulator
+
+On each boot, a simulator downloads an update to `trustd`'s certificate-pinning data from Apple's
+MobileAsset servers. When the update lands, 8 to 15 minutes after boot depending on Apple's servers,
+`trustd` stops answering certificate checks for about 2 minutes while it applies it. Every HTTPS
+request in that window waits, so the first network assertion that falls in it times out with the
+request still pending (an in-flight row in the trace's Network tab), and a retry usually passes.
+It happens with or without network capture, and only once per boot.
+
+Tapsmith's own iOS workflows avoid it by making Apple's catalog hosts unreachable before booting
+the simulator. The simulator resolves names through the host, so `/etc/hosts` covers it:
+
+```yaml
+- name: Block the simulator's MobileAsset catalog hosts
+  run: |
+    printf '0.0.0.0 mesu.apple.com\n0.0.0.0 gdmf.apple.com\n' | sudo tee -a /etc/hosts
+    sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+```
+
+We recommend this step on GitHub-hosted macOS runners and other runners that are thrown away after
+the job. Don't add it to a developer Mac or a long-lived self-hosted runner: the same hosts serve the
+Mac's own software updates and asset downloads.
+
 See [iOS network capture](./ios-network-capture.md) for the full first-run walkthrough and troubleshooting.
 
 ## General CI Tips
@@ -497,6 +525,45 @@ npx tapsmith test
 ```
 
 See [Android emulator image requirements](network.md#android-emulator-image-requirements) for details on why the system image type matters for network capture.
+
+### Turning animations off
+
+Set `reducedMotion: "reduce"` in the config to run Android tests with the system animations off,
+and iOS simulator tests with UIKit animations ten times faster:
+
+```typescript
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  apk: "./app/build/outputs/apk/release/app-release.apk",
+  reducedMotion: "reduce",
+});
+```
+
+Tapsmith sets the window, transition and animator duration scales to 0 when it selects the
+device, and puts the device's own values back when the session ends (or, after a run that was
+killed, when the next session selects that device). Screen transitions then finish at once, so
+tests wait less, and fewer taps land on an element that is still moving. You no longer need
+`adb shell settings put global …_animation_scale 0` steps in the workflow.
+
+It is opt-in because apps see it as the system's "Remove animations" setting: an app that reads
+that setting (React Native's `AccessibilityInfo.isReduceMotionEnabled()`, for example) or relies on
+animator callbacks can behave differently from a user's device.
+
+On an iOS simulator, Tapsmith turns on UIKit's `UIAnimationDragCoefficient` (at 0.1) when it
+selects the simulator: it sets the `UIKit/UIPreferences` feature flag in the simulator's launchd
+environment and the coefficient in its global defaults, so every app launched from then on runs
+its UIKit and Core Animation animations ten times faster, however it is launched (including the
+cold deep-link resets). It puts the simulator back the same way when the session ends. Apps do
+not see this as the Reduce Motion setting, and the keyboard's and the Home screen's animations are
+not affected, so the gain is smaller than on Android: on a test-app screen push and back, about
+10%. An app that is already running keeps its speed until it is next launched, which Tapsmith does
+when it starts. If the simulator's launchd environment already has a `FEATUREFLAGS_ENABLED` value
+of its own, Tapsmith leaves it alone and does not speed animations up (the daemon log says so). On
+a loaded runner a freshly booted simulator can be slow to answer: Tapsmith tries again before the
+agent launches the app, and if the simulator still does not answer, the run prints a
+`reducedMotion could not be applied` warning and tries again at the next agent start. It is not
+applied on physical iOS devices.
 
 ### ADB Setup
 

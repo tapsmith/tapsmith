@@ -59,7 +59,7 @@ class ActionExecutor {
             sample: { () -> SettleSample? in
                 let frame = element.frame
                 guard !frame.isEmpty,
-                      let pixels = Self.pixels(of: element.screenshot().image, in: nil) else { return nil }
+                      let pixels = Self.pixels(of: element.screenshot().image) else { return nil }
                 return SettleSample(frame: frame, pixels: pixels)
             }
         )
@@ -69,21 +69,112 @@ class ActionExecutor {
 
     /// `waitUntilSettled(_:deadline:)` for a touch planned at a fixed point:
     /// watches the screen region the touch lands in (the element's uncovered
-    /// part) — one full-screen screenshot per sample.
+    /// part). Each sample is a screenshot of just that region
+    /// (`RegionScreenshot`, ~10 ms on a simulator), or, where XCTest can't
+    /// take one, a whole-screen screenshot cropped to it (~120 ms).
+    ///
+    /// `region` is in the device's native portrait space
+    /// (`HidTouch.nativeRect`), which both captures read: on a rotated screen
+    /// a rect in the app's interface space lies elsewhere, or off the screen
+    /// (a landscape region screenshot of it came back all black, so the
+    /// settle never saw the target move).
     @discardableResult
     func waitUntilSettled(region: CGRect, deadline: Date) -> TouchSettle.Outcome {
         guard !region.isEmpty else { return .unreadable }
+        var sampler = RegionSampler.forRegion(region)
         let outcome = TouchSettle.wait(
             deadline: deadline,
             now: Date.init,
             sleep: Thread.sleep(forTimeInterval:),
             sample: { () -> SettleSample? in
-                Self.pixels(of: XCUIScreen.main.screenshot().image, in: region)
-                    .map { SettleSample(frame: region, pixels: $0) }
+                sampler.sample().map { SettleSample(frame: region, pixels: $0) }
             }
         )
         Self.logUnsettled(outcome, "region \(region)")
         return outcome
+    }
+
+    /// Wait until the pixels of `region` (native portrait space, as for
+    /// `waitUntilSettled(region:deadline:)`) have not changed for
+    /// `ScrollStepWatch.holdSeconds`, or `deadline` passes: a scroll step's
+    /// wait for its list to stop re-laying out (PILOT-998).
+    @discardableResult
+    func waitUntilStill(region: CGRect, deadline: Date) -> ScrollStepWatch.Outcome {
+        guard !region.isEmpty else { return .unreadable }
+        var sampler = RegionSampler.forRegion(region)
+        return ScrollStepWatch.waitUntilStill(
+            deadline: deadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            sample: { sampler.sample() }
+        )
+    }
+
+    /// Takes one settle wait's samples of a screen region. All of a wait's
+    /// samples come from the same kind of capture, so two of them never
+    /// differ only in how they were taken — except once, when a region
+    /// screenshot fails partway through and the rest of the wait falls back
+    /// to the whole screen. That one difference reads as a change: it costs
+    /// a sample and a fresh touch plan (`sawChange`), never a touch on a
+    /// moving target.
+    private struct RegionSampler {
+        let region: CGRect
+        var useRegionScreenshot: Bool
+
+        static func forRegion(_ region: CGRect) -> RegionSampler {
+            RegionSampler(region: region, useRegionScreenshot: ActionExecutor.regionScreenshotUsable())
+        }
+
+        mutating func sample() -> [UInt8]? {
+            if useRegionScreenshot {
+                if let image = RegionScreenshot.capture(region, of: XCUIScreen.main) {
+                    return ActionExecutor.pixels(of: image, drawnAt: region.size)
+                }
+                useRegionScreenshot = false
+                ActionExecutor.logRegionScreenshotFailedOnce(region)
+            }
+            // The bitmap is in native portrait however the device is turned
+            // (the image's orientation turns it for display), as `region` is:
+            // its scale comes from the native width, the short side of a
+            // turned image.
+            let screen = XCUIScreen.main.screenshot().image
+            guard let cgImage = screen.cgImage else { return nil }
+            let sideways: Set<UIImage.Orientation> = [.left, .right, .leftMirrored, .rightMirrored]
+            let nativeWidth = sideways.contains(screen.imageOrientation) ? screen.size.height : screen.size.width
+            guard nativeWidth > 0 else { return nil }
+            let scale = CGFloat(cgImage.width) / nativeWidth
+            let pixelRect = CGRect(
+                x: region.minX * scale,
+                y: region.minY * scale,
+                width: region.width * scale,
+                height: region.height * scale
+            ).integral
+            guard let cropped = cgImage.cropping(to: pixelRect) else { return nil }
+            return ActionExecutor.pixels(of: cropped, drawnAt: region.size)
+        }
+    }
+
+    private static var loggedRegionScreenshotUnavailable = false
+    private static var loggedRegionScreenshotFailed = false
+
+    /// Whether `RegionScreenshot` can be used; says once why not.
+    private static func regionScreenshotUsable() -> Bool {
+        switch RegionScreenshot.api {
+        case .success:
+            return true
+        case .failure(let why):
+            if !loggedRegionScreenshotUnavailable {
+                loggedRegionScreenshotUnavailable = true
+                NSLog("[ActionExecutor] XCTest's region screenshot is unavailable (\(why)); settling touches on whole-screen screenshots, ~10x slower")
+            }
+            return false
+        }
+    }
+
+    private static func logRegionScreenshotFailedOnce(_ region: CGRect) {
+        guard !loggedRegionScreenshotFailed else { return }
+        loggedRegionScreenshotFailed = true
+        NSLog("[ActionExecutor] XCTest's region screenshot of \(region) failed; using a whole-screen screenshot (logged once)")
     }
 
     private static func logUnsettled(_ outcome: TouchSettle.Outcome, _ what: String) {
@@ -92,23 +183,19 @@ class ActionExecutor {
         }
     }
 
-    /// RGBA pixels of `image` (or of `rect` within it, in points), drawn at
-    /// point resolution so two samples compare by value. Drawn, not read
-    /// from the data provider: a cropped CGImage can share its parent's
-    /// whole buffer.
-    private static func pixels(of image: UIImage, in rect: CGRect?) -> [UInt8]? {
+    /// RGBA pixels of `image`, drawn at point resolution so two samples
+    /// compare by value.
+    private static func pixels(of image: UIImage) -> [UInt8]? {
         guard let cgImage = image.cgImage, image.size.width > 0 else { return nil }
-        let scale = CGFloat(cgImage.width) / image.size.width
-        let pointRect = rect ?? CGRect(origin: .zero, size: image.size)
-        let pixelRect = CGRect(
-            x: pointRect.minX * scale,
-            y: pointRect.minY * scale,
-            width: pointRect.width * scale,
-            height: pointRect.height * scale
-        ).integral
-        guard let source = rect == nil ? cgImage : cgImage.cropping(to: pixelRect) else { return nil }
-        let width = max(1, Int(pointRect.width.rounded()))
-        let height = max(1, Int(pointRect.height.rounded()))
+        return pixels(of: cgImage, drawnAt: image.size)
+    }
+
+    /// RGBA pixels of `image` drawn at `size` (points), so samples taken at
+    /// any pixel scale compare by value. Drawn, not read from the data
+    /// provider: a cropped CGImage can share its parent's whole buffer.
+    fileprivate static func pixels(of image: CGImage, drawnAt size: CGSize) -> [UInt8]? {
+        let width = max(1, Int(size.width.rounded()))
+        let height = max(1, Int(size.height.rounded()))
         var buffer = [UInt8](repeating: 0, count: width * height * 4)
         let drawn = buffer.withUnsafeMutableBytes { bytes -> Bool in
             guard let context = CGContext(
@@ -121,15 +208,16 @@ class ActionExecutor {
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             ) else { return false }
             context.interpolationQuality = .low
-            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
         return drawn ? buffer : nil
     }
 
-    /// Tap at specific screen coordinates using event synthesis.
-    func tapCoordinates(x: Int, y: Int) {
-        if !EventSynthesizer.tap(at: CGPoint(x: x, y: y)) {
+    /// Tap at specific screen coordinates using event synthesis, holding the
+    /// touch `hold` seconds (`TapTiming.hold(for:)`, by what the tap lands on).
+    func tapCoordinates(x: Int, y: Int, hold: TimeInterval) {
+        if !EventSynthesizer.tap(at: CGPoint(x: x, y: y), hold: hold) {
             NSLog("[ActionExecutor] Event synthesis failed, falling back to XCUICoordinate.tap()")
             let normalized = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
             let point = normalized.withOffset(CGVector(dx: CGFloat(x), dy: CGFloat(y)))
@@ -151,10 +239,10 @@ class ActionExecutor {
     /// under CI load. Falls back to XCUICoordinate when synthesis is
     /// unavailable, completing a partially-delivered gesture with exactly one
     /// more tap rather than re-tapping twice (which would deliver three).
-    func doubleTapCoordinates(x: Int, y: Int, intervalMs: Int = 0) {
+    func doubleTapCoordinates(x: Int, y: Int, intervalMs: Int = 0, hold: TimeInterval) {
         let normalized = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         let point = normalized.withOffset(CGVector(dx: CGFloat(x), dy: CGFloat(y)))
-        switch EventSynthesizer.doubleTap(at: CGPoint(x: x, y: y), intervalMs: intervalMs) {
+        switch EventSynthesizer.doubleTap(at: CGPoint(x: x, y: y), intervalMs: intervalMs, hold: hold) {
         case .done:
             return
         case .firstTapOnly:
@@ -393,7 +481,7 @@ class ActionExecutor {
 
         // Fallback to a simple release on the source point instead of attempting
         // the XCUI drag APIs, which are what poison the XCTest session on Xcode 26.
-        tapCoordinates(x: Int(start.x), y: Int(start.y))
+        tapCoordinates(x: Int(start.x), y: Int(start.y), hold: TapTiming.hold(for: nil))
     }
 
     /// Drag between two element frames, biasing the path away from system-edge gestures.
@@ -419,29 +507,52 @@ class ActionExecutor {
 
     // MARK: - Select Option
 
-    /// Select an option from a picker/dropdown by text.
-    func selectOption(_ element: XCUIElement, optionText: String) throws {
-        element.tap()
+    /// Pick an option by text from a dropdown the caller has just opened.
+    /// `shownBefore`: the frames of the texts that showed it before the
+    /// dropdown opened (its trigger, the screen behind), which are not the
+    /// option.
+    func selectOption(_ optionText: String, shownBefore: [CGRect]) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
-        // Look for the option text in the app
-        let option = app.staticTexts[optionText]
-        if option.waitForExistence(timeout: 3) {
-            option.tap()
+        // The option's text, uncovered: more than one text can carry it (React
+        // Native can expose a text and the view around it).
+        // Wait only while it is not in the tree at all.
+        let deadline = Date().addingTimeInterval(3)
+        var option = findOption(optionText, excluding: shownBefore)
+        while option == .absent, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+            option = findOption(optionText, excluding: shownBefore)
+        }
+        if case .touchable(let point, let ancestorTypes) = option {
+            tapCoordinates(
+                x: Int(point.x.rounded()),
+                y: Int(point.y.rounded()),
+                hold: TapTiming.hold(for: .staticText, within: ancestorTypes)
+            )
+            return
+        }
+        // Not touchable where it is (below the fold of a scrolling list):
+        // XCUIElement.tap() scrolls it into view. The first copy but those
+        // shown before, as for a touchable one.
+        let unshown = app.staticTexts.matching(identifier: optionText).allElementsBoundByIndex.first { text in
+            guard let frame = try? text.snapshot().frame else { return false }
+            return !shownBefore.contains { OcclusionAnalyzer.framesMatch($0, frame) }
+        }
+        if let unshown {
+            unshown.tap()
+            return
+        }
+        // Try in picker wheels
+        let pickerWheel = app.pickerWheels.firstMatch
+        if pickerWheel.exists {
+            pickerWheel.adjust(toPickerWheelValue: optionText)
         } else {
-            // Try in picker wheels
-            let pickerWheel = app.pickerWheels.firstMatch
-            if pickerWheel.exists {
-                pickerWheel.adjust(toPickerWheelValue: optionText)
-            } else {
-                throw AgentError.elementNotFound("Option '\(optionText)' not found in dropdown")
-            }
+            throw AgentError.elementNotFound("Option '\(optionText)' not found in dropdown")
         }
     }
 
-    /// Select an option from a picker/dropdown by index.
-    func selectOptionByIndex(_ element: XCUIElement, index: Int) throws {
-        element.tap()
+    /// Pick an option by index from a dropdown the caller has just opened.
+    func selectOptionByIndex(_ index: Int) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
         // On iOS, pickers work differently. Try to find options in an action sheet or popup.
@@ -453,7 +564,48 @@ class ActionExecutor {
         guard index >= 0 && index < count else {
             throw AgentError.actionFailed("Index \(index) out of range (0..\(count - 1))")
         }
-        cells.element(boundBy: index).tap()
+        try tapOption(cells.element(boundBy: index))
+    }
+
+    private func optionAnalyzer() -> OcclusionAnalyzer? {
+        guard let snapshot = try? app.snapshot() else { return nil }
+        return OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+    }
+
+    private func findOption(_ text: String, excluding: [CGRect]) -> OcclusionAnalyzer.OptionText {
+        optionAnalyzer()?.optionText(text, excluding: excluding) ?? .absent
+    }
+
+    /// The frames of the texts on screen that show `text` now.
+    func textFrames(_ text: String) -> [CGRect] {
+        optionAnalyzer()?.textFrames(text) ?? []
+    }
+
+    /// Tap a dropdown's option (a cell picked by index) at the uncovered
+    /// point the analyzer picks, held as its type and containers need
+    /// (`TapTiming`), rather than through `XCUIElement.tap()`, whose hold
+    /// XCTest picks. An option that cannot be touched where it is (below the
+    /// fold, scrolled out of its list, covered) or is not found in the tree is
+    /// left to `XCUIElement.tap()`, which scrolls it into view or fails.
+    private func tapOption(_ option: XCUIElement) throws {
+        guard let snap = try? option.snapshot(),
+              let appSnapshot = try? app.snapshot() else {
+            option.tap()
+            return
+        }
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: cachedScreenSize ?? appSnapshot.frame.size)
+        let target = OcclusionAnalyzer.Target(
+            frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier
+        )
+        guard let point = analyzer.touchPoint(target) else {
+            option.tap()
+            return
+        }
+        tapCoordinates(
+            x: Int(point.x.rounded()),
+            y: Int(point.y.rounded()),
+            hold: TapTiming.hold(for: snap.elementType, within: analyzer.ancestorTypes(of: target))
+        )
     }
 
     // MARK: - Pinch Zoom
@@ -536,7 +688,8 @@ class ActionExecutor {
             tapY = 1
         }
 
-        tapCoordinates(x: Int(tapX), y: Int(tapY))
+        // Whatever is outside the element: an unknown target.
+        tapCoordinates(x: Int(tapX), y: Int(tapY), hold: TapTiming.hold(for: nil))
         Thread.sleep(forTimeInterval: Self.focusIdleTimeout)
     }
 
@@ -548,8 +701,9 @@ class ActionExecutor {
 
     // MARK: - Key Press
 
-    /// Send a key press event.
-    func pressKey(_ key: String) throws {
+    /// Send a key press event. `readScreen` reads the app's tree for the back
+    /// key, `deadline` is when the daemon stops waiting for the command.
+    func pressKey(_ key: String, readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
         switch key.lowercased() {
         case "home":
             XCUIDevice.shared.press(.home)
@@ -569,19 +723,7 @@ class ActionExecutor {
         case "space":
             typeTextWithoutFocus(" ")
         case "back":
-            // iOS has no hardware back button. Find the navigation back button
-            // via snapshot and tap it using event synthesis (no quiescence wait).
-            let backButton = app.navigationBars.buttons.firstMatch
-            if backButton.exists {
-                let frame = backButton.frame
-                if frame.width > 0 && frame.height > 0 {
-                    tapCoordinates(x: Int(frame.midX), y: Int(frame.midY))
-                } else {
-                    throw AgentError.actionFailed("Back button found but has zero frame")
-                }
-            } else {
-                throw AgentError.actionFailed("No back button found. iOS does not have a hardware back button.")
-            }
+            try pressBack(readScreen: readScreen, deadline: deadline)
         default:
             // Try typing the key as a character
             if key.count == 1 {
@@ -589,6 +731,50 @@ class ActionExecutor {
             } else {
                 throw AgentError.actionFailed(
                     "Unknown key: '\(key)'. Use named keys (home, enter, delete, etc.) or single characters."
+                )
+            }
+        }
+    }
+
+    /// iOS has no hardware back button: tap the navigation stack's own back
+    /// button (`BackButton` picks it from the tree), with event synthesis (no
+    /// quiescence wait). A screen without one refuses — never another bar
+    /// button in its place (PILOT-1225). `readScreen` waits out a push or pop
+    /// in progress; a screen with no back button (or a covered one) is read
+    /// again for a moment before refusing, as a push just tapped may not have
+    /// begun.
+    private func pressBack(readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
+        let started = Date()
+        while true {
+            let snapshot: XCUIElementSnapshot
+            do {
+                snapshot = try readScreen()
+            } catch {
+                let cause = (error as? AgentError)?.message ?? error.localizedDescription
+                throw AgentError.actionFailed("Could not read the screen to find its back button: \(cause)")
+            }
+            let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+            let resolution = BackButton.resolve(in: analyzer)
+            if case .tap(let point, let ancestorTypes) = resolution {
+                tapCoordinates(
+                    x: Int(point.x.rounded()),
+                    y: Int(point.y.rounded()),
+                    hold: TapTiming.hold(for: .button, within: ancestorTypes)
+                )
+                return
+            }
+            if BackButton.shouldReadAgain(started: started, now: Date(), deadline: deadline) {
+                Thread.sleep(forTimeInterval: BackButton.pollSeconds)
+                continue
+            }
+            switch resolution {
+            case .covered(let by):
+                throw AgentError.actionFailed("The back button is covered by \(by). Dismiss it first.")
+            default:
+                throw AgentError.actionFailed(
+                    "No back button found. iOS does not have a hardware back button: BACK taps the "
+                        + "navigation bar's back button, and this screen has none (a stack's first screen, "
+                        + "a sheet or a dialog). Tap the control that closes it instead."
                 )
             }
         }

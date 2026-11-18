@@ -95,15 +95,17 @@ function makeOpts(d: ReturnType<typeof makeDevice>, config: TapsmithConfig, extr
     device: d.device as unknown as SessionPreflightContext['device'],
     client: d.client as unknown as SessionPreflightContext['client'],
     notices: [],
+    relaunches: { count: 0 },
   };
   return {
     config,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner double
     devices: [{ name: 'device-1', device: d.device as any, sessionContext }],
     resetCapabilities: {},
-    runMode: 'test',
+    runMode: 'test', networkApisInRun: false,
     // runTestFile creates this per file; these tests drive runSuiteContext directly.
     _applied: {},
+    _startRoute: {},
     ...extra,
   };
 }
@@ -219,6 +221,169 @@ describe('runner app reset (declared isolation)', () => {
     expect(d.device._setForceColdDeepLinks).toHaveBeenCalledWith(true);
     // The retry attempt asks for a cold delivery explicitly.
     expect(d.device._resetApp.mock.calls.map((c) => c[1].forceCold)).toEqual([false, true, false]);
+  });
+
+  it('appState with hooks: restores once, then keeps the archive warm while no test writes, and the trace says which ran', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-kept-restore-'));
+    fs.writeFileSync(path.join(tempRoot, 'auth.tar.gz'), 'archive');
+    const d = makeDevice();
+    const app = { boot: 'b0', writes: 0 };
+    d.client.getUiHierarchy.mockImplementation(async () => ({
+      requestId: '1',
+      hierarchyXml: `<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;boot=${app.boot};url=app:///;writes=${app.writes}" /></hierarchy>`,
+      errorMessage: '',
+    }));
+    d.device.restartApp.mockImplementation(async () => { d.calls.push('restartApp'); app.boot = `p${d.calls.length}`; app.writes = 0; });
+    d.device._resetApp.mockImplementation(async (_pkg: string, opts: { mode?: 'warm' | 'restart' | 'clear'; keepAppData?: boolean }) => {
+      d.calls.push(`resetApp:${opts.mode ?? 'warm'}${opts.keepAppData ? ':keep' : ''}`);
+      return { modeRequested: 'warm', modeUsed: 'warm', fellBack: false, coldLaunch: false, durationMs: 5, hooksDetected: true, steps: [{ name: 'warm' as const, durationMs: 5, ok: true }], ...(opts.keepAppData ? { keptAppData: true } : {}) };
+    });
+    try {
+      pushContext();
+      tapsmithTest.use({ appState: './auth.tar.gz', appResetScope: 'test' });
+      tapsmithTest('reads', async () => {});
+      tapsmithTest('writes', async () => { app.writes += 1; });
+      tapsmithTest('after a write', async () => {});
+      const ctx = popContext();
+      const caps = { hooksDetected: true, hooksUrlPrefix: 'app:///' };
+      const opts = makeOpts(d, makeConfig({
+        rootDir: tempRoot,
+        trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+      }), { resetCapabilities: caps });
+      opts.devices[0].sessionContext!.capabilities = caps;
+
+      const result = await runSuiteContext(ctx, '', [], [], opts);
+
+      const tests = collectResults(result);
+      expect(tests.map((t) => t.status)).toEqual(['passed', 'passed', 'passed']);
+      expect(resetCalls(d)).toEqual([
+        'restoreAppState', 'restartApp', // first restore: cold
+        'resetApp:warm:keep', // nothing written: kept warm
+        'restoreAppState', 'restartApp', // the previous test wrote: cold again
+      ]);
+      const detail = (t: (typeof tests)[number]) => traceEvents(t.tracePath!)
+        .find((e) => e.type === 'action' && e.action === 'appReset')?.detail;
+      expect(detail(tests[0])).toMatch(/^warm skipped: no earlier restore of auth\.tar\.gz to compare against/);
+      expect(detail(tests[1])).toBe('kept auth.tar.gz: no persisted writes since the restore');
+      expect(detail(tests[2])).toBe('warm skipped: the app wrote persisted data since the restore (1 write)');
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  describe('a readiness check that relaunches the app after a routed reset (appResetRoute)', () => {
+    // The embedder's beforeEachTest readiness check runs after the reset and
+    // can relaunch the app (an iOS app launched out of process by simctl
+    // openurl reads as not running), putting it back on its launch screen.
+    function routedRun(relaunchIn: (fullName: string) => boolean) {
+      const d = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => { d.calls.push('body:first'); });
+      tapsmithTest('second', async () => { d.calls.push('body:second'); });
+      const ctx = popContext();
+      const opts = makeOpts(d, makeConfig({ appReset: 'restart', appResetScope: 'test', appResetRoute: 'app:///settings' }));
+      const session = opts.devices[0].sessionContext!;
+      opts.beforeEachTest = async (fullName) => {
+        d.calls.push('beforeEachTest');
+        if (relaunchIn(fullName)) session.relaunches.count++;
+      };
+      return { d, run: () => runSuiteContext(ctx, '', [], [], opts) };
+    }
+
+    it('opens the route again before the test runs', async () => {
+      const { d, run } = routedRun((name) => name === 'first');
+      const result = await run();
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed', 'passed']);
+      const seq = d.calls.filter((c) => ['resetApp:restart', 'openDeepLink', 'beforeEachTest', 'body:first', 'body:second'].includes(c));
+      expect(seq).toEqual([
+        'resetApp:restart', 'openDeepLink', 'beforeEachTest', 'openDeepLink', 'body:first',
+        'resetApp:restart', 'openDeepLink', 'beforeEachTest', 'body:second',
+      ]);
+      expect(d.device.openDeepLink).toHaveBeenCalledWith('app:///settings');
+    });
+
+    it('leaves the app alone when the check did not relaunch it', async () => {
+      const { d, run } = routedRun(() => false);
+      await run();
+
+      expect(d.device.openDeepLink).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('the pre-test idle wait after the embedder\'s readiness check', () => {
+    // On Android the readiness check (ensureSessionReady) settles the app
+    // itself, so a second settle right after it only doubled the wait on a
+    // screen that never goes idle. iOS's readiness check does not settle.
+    function readinessRun(platform: 'android' | 'ios', relaunch: boolean) {
+      const d = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => {});
+      const ctx = popContext();
+      const opts = makeOpts(d, makeConfig({ platform, appReset: 'none' }));
+      const session = opts.devices[0].sessionContext!;
+      opts.beforeEachTest = async () => {
+        d.calls.push('beforeEachTest');
+        if (relaunch) session.relaunches.count++;
+      };
+      d.device.waitForIdle.mockImplementation(async () => { d.calls.push('waitForIdle'); });
+      return { d, run: () => runSuiteContext(ctx, '', [], [], opts) };
+    }
+    /** The idle waits after the readiness check (the scope-entry reset settles too). */
+    const idleAfterCheck = (d: ReturnType<typeof makeDevice>) =>
+      d.calls.slice(d.calls.indexOf('beforeEachTest')).filter((c) => c === 'waitForIdle');
+
+    it('skips it on Android when the check did not relaunch the app', async () => {
+      const { d, run } = readinessRun('android', false);
+      const result = await run();
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed']);
+      expect(idleAfterCheck(d)).toEqual([]);
+    });
+
+    it('keeps it on Android when the check relaunched the app', async () => {
+      const { d, run } = readinessRun('android', true);
+      await run();
+      expect(idleAfterCheck(d)).toEqual(['waitForIdle']);
+    });
+
+    it('keeps it on iOS, whose readiness check does not settle', async () => {
+      const { d, run } = readinessRun('ios', false);
+      await run();
+      expect(idleAfterCheck(d)).toEqual(['waitForIdle']);
+    });
+
+    it('decides per device in a group: skips the settled one, keeps the relaunched one', async () => {
+      const alice = makeDevice();
+      const bob = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => {});
+      const ctx = popContext();
+      const config = makeConfig({ appReset: 'none' });
+      const opts = makeOpts(alice, config);
+      const bobOpts = makeOpts(bob, config);
+      opts.devices = [{ ...opts.devices[0], name: 'alice' }, { ...bobOpts.devices[0], name: 'bob' }];
+      const bobSession = opts.devices[1].sessionContext!;
+      opts.beforeEachTest = async () => {
+        alice.calls.push('beforeEachTest');
+        bob.calls.push('beforeEachTest');
+        bobSession.relaunches.count++;
+      };
+      for (const d of [alice, bob]) d.device.waitForIdle.mockImplementation(async () => { d.calls.push('waitForIdle'); });
+      await runSuiteContext(ctx, '', [], [], opts);
+      const after = (d: ReturnType<typeof makeDevice>) =>
+        d.calls.slice(d.calls.indexOf('beforeEachTest')).filter((c) => c === 'waitForIdle');
+      expect(after(alice)).toEqual([]);
+      expect(after(bob)).toEqual(['waitForIdle']);
+    });
+
+    it('keeps it without a readiness check', async () => {
+      const d = makeDevice();
+      pushContext();
+      tapsmithTest('first', async () => {});
+      const ctx = popContext();
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+      expect(d.device.waitForIdle).toHaveBeenCalledWith(1_000);
+    });
   });
 
   describe('retries under a file-scoped policy (PILOT-715)', () => {
@@ -1858,6 +2023,110 @@ describe('runner app reset (declared isolation)', () => {
       } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
       }
+    });
+
+    describe('dialogs the agent answered mid-test (PILOT-977)', () => {
+      const answered = (overrides: Record<string, unknown> = {}) => ({
+        title: 'Pixel Launcher isn\'t responding', owner: 'com.google.android.apps.nexuslauncher', ownedByTarget: false,
+        kind: 'anr', button: 'Close app', timestampMs: 1_793_463_831_403, ...overrides,
+      });
+      const withEvents = (d: ReturnType<typeof makeDevice>) => {
+        const take = vi.fn(async () => ({ requestId: '1', events: [] as ReturnType<typeof answered>[] }));
+        (d.client as unknown as { takeSystemDialogEvents: typeof take }).takeSystemDialogEvents = take;
+        return take;
+      };
+
+      it('warns on the test during which the app under test\'s own ANR was waited out, and on no other', async () => {
+        const d = makeDevice();
+        const take = withEvents(d);
+        pushContext();
+        tapsmithTest('one', async () => {});
+        tapsmithTest('two', async () => {
+          take.mockResolvedValueOnce({
+            requestId: '1',
+            events: [answered({ title: 'Example isn\'t responding', owner: 'com.example.app', ownedByTarget: true, button: 'Wait' })],
+          });
+        });
+        tapsmithTest('three', async () => {});
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+
+        const [one, two, three] = collectResults(result);
+        expect(one.warnings).toBeUndefined();
+        expect(two.warnings).toEqual([
+          'The app under test (com.example.app) stopped responding and showed "Example isn\'t responding"; '
+          + 'Tapsmith pressed Wait. Check the app\'s logs (adb logcat) for what blocked its main thread.',
+        ]);
+        expect(three.warnings).toBeUndefined();
+        // Asked once per test.
+        expect(take).toHaveBeenCalledTimes(3);
+      });
+
+      it('another app\'s dialog is a trace row, not a warning', async () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-dialog-'));
+        try {
+          const d = makeDevice();
+          const take = withEvents(d);
+          pushContext();
+          tapsmithTest('one', async () => {
+            take.mockResolvedValueOnce({ requestId: '1', events: [answered()] });
+          });
+          const ctx = popContext();
+
+          const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+            appReset: 'none',
+            rootDir: tempRoot,
+            trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+          })));
+
+          expect(result.tests[0].warnings).toBeUndefined();
+          const zip = unzipSync(fs.readFileSync(result.tests[0].tracePath!));
+          const rows = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+            .filter((e) => e.type === 'action' && e.action === 'systemDialog');
+          expect(rows.map((r) => r.detail)).toEqual([
+            'A system dialog from another app came up: '
+            + '"Pixel Launcher isn\'t responding" (com.google.android.apps.nexuslauncher). Tapsmith pressed Close app.',
+          ]);
+          expect(rows[0].log).toEqual([`handled at ${new Date(1_793_463_831_403).toISOString()}`]);
+        } finally {
+          fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+      });
+
+      it('a failing test still reports what was answered during it', async () => {
+        const d = makeDevice();
+        const take = withEvents(d);
+        pushContext();
+        tapsmithTest('one', async () => {
+          take.mockResolvedValueOnce({
+            requestId: '1',
+            events: [answered({ title: 'Example isn\'t responding', owner: 'com.example.app', ownedByTarget: true, button: 'Wait' })],
+          });
+          throw new Error('boom');
+        });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+
+        const [one] = collectResults(result);
+        expect(one.status).toBe('failed');
+        expect(one.warnings).toHaveLength(1);
+      });
+
+      it('an agent that cannot say adds nothing and fails nothing', async () => {
+        const d = makeDevice();
+        withEvents(d).mockRejectedValue(new Error('12 UNIMPLEMENTED'));
+        pushContext();
+        tapsmithTest('one', async () => {});
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+
+        const [one] = collectResults(result);
+        expect(one.status).toBe('passed');
+        expect(one.warnings).toBeUndefined();
+      });
     });
   });
 });

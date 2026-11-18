@@ -192,6 +192,8 @@ export interface DispatcherOptions {
   workers: number
   /** `--force-install`, handed to every worker (see `InitMessage.forceInstall`). */
   forceInstall: boolean
+  /** Whether the run's test files use the network APIs (see `InitMessage.networkApisInRun`). */
+  networkApisInRun: boolean
   /** Resolved projects for wave-based execution. When set, files are dispatched per-wave. */
   projects?: import('./project.js').ResolvedProject[]
   /** Pre-sorted project waves from topologicalSort(). Required when `projects` is set. */
@@ -1692,6 +1694,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
             : EXISTING_DEVICE_INIT_TIMEOUT_MS,
           freshEmulator: isFresh,
           forceInstall: opts.forceInstall,
+          networkApisInRun: opts.networkApisInRun,
           tsxBin,
           daemonPortOverride: slot.daemonPort,
           agentPortOverride: slot.agentPort,
@@ -2265,6 +2268,7 @@ interface InitializeWorkerOptions {
   initializationTimeoutMs: number
   freshEmulator: boolean
   forceInstall: boolean
+  networkApisInRun: boolean
   tsxBin?: string
   /** Override the daemon port instead of computing baseDaemonPort + 1 + workerId. */
   daemonPortOverride?: number
@@ -2465,6 +2469,7 @@ async function initializeWorker(opts: InitializeWorkerOptions): Promise<WorkerHa
         config: serializedConfig,
         freshEmulator: opts.freshEmulator === true ? true : undefined,
         forceInstall: opts.forceInstall,
+        networkApisInRun: opts.networkApisInRun,
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({
             name: m.name,

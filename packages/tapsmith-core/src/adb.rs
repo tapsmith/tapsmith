@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
@@ -47,26 +47,95 @@ impl AdbDevice {
     }
 }
 
+/// An adb command did not finish within its timeout. Callers can tell this
+/// apart from a command that failed with `downcast_ref`.
+#[derive(Debug)]
+pub struct AdbTimeout(pub Duration);
+
+impl std::fmt::Display for AdbTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "adb command timed out after {:?}", self.0)
+    }
+}
+
+impl std::error::Error for AdbTimeout {}
+
+/// Run `cmd` to completion within `timeout`.
+async fn output_within(cmd: &mut Command, timeout: Duration) -> Result<std::process::Output> {
+    tokio::time::timeout(timeout, cmd.output())
+        .await
+        .map_err(|_| anyhow::Error::new(AdbTimeout(timeout)))?
+        .context("Failed to execute adb")
+}
+
 /// Run an adb command targeting a specific device, returning stdout bytes.
 async fn run_adb(serial: Option<&str>, args: &[&str], timeout: Duration) -> Result<Vec<u8>> {
-    let mut cmd = Command::new("adb");
+    run_adb_with_input(serial, args, None, timeout).await
+}
 
+/// [`run_adb`], writing `input` to adb's stdin first (and then closing it).
+async fn run_adb_with_input(
+    serial: Option<&str>,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let mut all: Vec<&str> = Vec::with_capacity(args.len() + 2);
     if let Some(s) = serial {
-        cmd.arg("-s").arg(s);
+        all.extend(["-s", s]);
     }
-
-    cmd.args(args);
-
+    all.extend_from_slice(args);
     debug!(serial = serial, args = ?args, "Running adb command");
+    run_with_input("adb", &all, input, timeout).await
+}
 
-    let output = tokio::time::timeout(timeout, cmd.output())
+/// Run `program`, feeding it `input` on stdin (none: stdin is closed, as
+/// `Command::output` does), and return its stdout; a non-zero exit is an
+/// error carrying its stderr, and running past `timeout` is an [`AdbTimeout`].
+async fn run_with_input(
+    program: &str,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let run = async {
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("Failed to execute {program}"))?;
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            stdin
+                .write_all(input)
+                .await
+                .with_context(|| format!("Failed to write {program}'s stdin"))?;
+        }
+        child
+            .wait_with_output()
+            .await
+            .with_context(|| format!("Failed to execute {program}"))
+    };
+    let output = tokio::time::timeout(timeout, run)
         .await
-        .map_err(|_| anyhow!("adb command timed out after {timeout:?}"))?
-        .context("Failed to execute adb")?;
+        .map_err(|_| anyhow::Error::new(AdbTimeout(timeout)))??;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("adb command failed (exit {}): {stderr}", output.status);
+        bail!(
+            "{program} command failed (exit {}): {stderr}",
+            output.status
+        );
     }
 
     Ok(output.stdout)
@@ -345,6 +414,35 @@ pub async fn remove_reverse_with_timeout(
     Ok(())
 }
 
+/// Run `command` in a device shell with `secret` in the shell variable `var`,
+/// read from adb's stdin rather than passed on its command line, where any
+/// local user could see it with `ps` (PILOT-969). `command` refers to it as
+/// `"$<var>"`.
+#[instrument(skip(secret))]
+pub async fn shell_with_secret(
+    serial: &str,
+    var: &str,
+    secret: &str,
+    command: &str,
+) -> Result<String> {
+    let script = secret_shell_script(var, command);
+    let stdout = run_adb_with_transport_recovery_input(
+        serial,
+        &["shell", &script],
+        Some(format!("{secret}\n").as_bytes()),
+        DEFAULT_TIMEOUT,
+        "adb shell",
+    )
+    .await?;
+    Ok(String::from_utf8_lossy(&stdout).to_string())
+}
+
+/// The device-side script for [`shell_with_secret`]: read the secret from
+/// stdin into `var`, then run `command`.
+fn secret_shell_script(var: &str, command: &str) -> String {
+    format!("IFS= read -r {var}; {command}")
+}
+
 /// Execute a shell command on the device, returning stdout as a String.
 #[instrument]
 pub async fn shell(serial: &str, command: &str) -> Result<String> {
@@ -601,8 +699,18 @@ async fn run_adb_with_transport_recovery(
     timeout: Duration,
     operation: &str,
 ) -> Result<Vec<u8>> {
+    run_adb_with_transport_recovery_input(serial, args, None, timeout, operation).await
+}
+
+async fn run_adb_with_transport_recovery_input(
+    serial: &str,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+    operation: &str,
+) -> Result<Vec<u8>> {
     for attempt in 1..=ADB_TRANSPORT_RETRY_ATTEMPTS {
-        match run_adb(Some(serial), args, timeout).await {
+        match run_adb_with_input(Some(serial), args, input, timeout).await {
             Ok(stdout) => return Ok(stdout),
             Err(e) => {
                 let message = e.to_string();
@@ -731,11 +839,16 @@ pub async fn install_ca_cert(
         // Push cert to a temp location
         push_file(serial, ca_pem_path, &tmp_cert).await?;
 
-        // Try the system CA store first (works on rooted emulators where
-        // `/system/etc/security/cacerts` is both writable and the effective
-        // runtime trust store — pre-Android-14, and CI's cold-booted images).
+        // Try the system CA store first where it is the runtime trust store
+        // (before Android 14, on rooted emulators where `adb remount` makes
+        // `/system/etc/security/cacerts` writable). From Android 14 apps read
+        // the APEX store below instead, so the remount and the writes there
+        // cost time and change nothing an app trusts.
+        let sdk = device_sdk_int(serial).await;
         let system_path = format!("{SYSTEM_CA_CERT_DIR}/{cert_filename}");
-        if try_install_system_ca(serial, cert_filename, &system_path, &tmp_cert).await {
+        if system_store_is_runtime_trust_store(sdk)
+            && try_install_system_ca(serial, cert_filename, &system_path, &tmp_cert).await
+        {
             return Ok(system_path);
         }
 
@@ -744,7 +857,7 @@ pub async fn install_ca_cert(
         // silently has no effect there. Overlay the APEX cacerts dir inside the
         // zygote mount namespace instead, so apps launched afterwards trust the
         // cert without needing a per-app network_security_config.xml.
-        if device_sdk_int(serial).await.map(|v| v >= 34).unwrap_or(false)
+        if !system_store_is_runtime_trust_store(sdk)
             && try_install_apex_ca(serial, cert_filename, &tmp_cert).await
         {
             // The APEX overlays live in the per-zygote mount namespaces and are
@@ -1093,6 +1206,14 @@ async fn try_install_system_ca(
     true
 }
 
+/// Whether `/system/etc/security/cacerts` is what apps trust at runtime:
+/// before Android 14 (API 34). From 14 on the Conscrypt APEX store is. An
+/// unreadable API level counts as before 14, which tries the system store
+/// first as every level used to.
+fn system_store_is_runtime_trust_store(sdk: Option<u32>) -> bool {
+    !matches!(sdk, Some(v) if v >= 34)
+}
+
 /// Read the device's API level (`ro.build.version.sdk`), if parseable.
 async fn device_sdk_int(serial: &str) -> Option<u32> {
     shell_lenient(serial, "getprop ro.build.version.sdk")
@@ -1254,10 +1375,7 @@ async fn run_adb_lenient(serial: &str, args: &[&str]) -> Result<Vec<u8>> {
 
     debug!(serial = serial, args = ?args, "Running adb command (lenient)");
 
-    let output = tokio::time::timeout(DEFAULT_TIMEOUT, cmd.output())
-        .await
-        .map_err(|_| anyhow!("adb command timed out after {DEFAULT_TIMEOUT:?}"))?
-        .context("Failed to execute adb")?;
+    let output = output_within(&mut cmd, DEFAULT_TIMEOUT).await?;
 
     let mut combined = output.stdout;
     if !output.stderr.is_empty() {
@@ -1290,6 +1408,25 @@ pub fn parse_keyguard_showing(dump: &str) -> Option<bool> {
         }
     }
     seen.then_some(false)
+}
+
+/// Whether the screen is on, from the output of `dumpsys power`:
+/// `mWakefulness=Awake` is on; `Asleep`, `Dozing` (always-on display) and
+/// `Dreaming` (a screen saver) all need the wake key. `None` when the dump
+/// has no `mWakefulness=` field (a failed command), so callers wake anyway.
+/// The first field decides: on multi-display builds the global state comes
+/// before the per-group ones.
+pub fn parse_screen_awake(dump: &str) -> Option<bool> {
+    dump.split_whitespace()
+        .find_map(|token| token.strip_prefix("mWakefulness="))
+        .map(|state| state == "Awake")
+}
+
+/// Ask the device whether its screen is on. See [`parse_screen_awake`] for
+/// the `None` case.
+pub async fn screen_awake(serial: &str) -> Option<bool> {
+    let dump = shell_lenient(serial, "dumpsys power").await.ok()?;
+    parse_screen_awake(&dump)
 }
 
 /// Ask the device whether its lock screen is showing. See
@@ -1325,10 +1462,7 @@ pub async fn shell_lenient_with_timeout(
         "Running adb shell (lenient)"
     );
 
-    let output = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .map_err(|_| anyhow!("adb command timed out after {timeout:?}"))?
-        .context("Failed to execute adb")?;
+    let output = output_within(&mut cmd, timeout).await?;
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -1728,6 +1862,77 @@ pub async fn cleanup_iptables_redirect(serial: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    #[test]
+    fn secret_shell_script_reads_the_secret_from_stdin() {
+        assert_eq!(
+            super::secret_shell_script("T", r#"echo "$T""#),
+            r#"IFS= read -r T; echo "$T""#
+        );
+    }
+
+    #[tokio::test]
+    async fn run_with_input_feeds_stdin_and_reports_failures() {
+        let out = super::run_with_input("cat", &[], Some(b"s3cret\n"), Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(out, b"s3cret\n");
+        // Without input, stdin is closed rather than inherited.
+        let out = super::run_with_input("cat", &[], None, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(out.is_empty());
+        let err = super::run_with_input(
+            "sh",
+            &["-c", "echo nope >&2; exit 3"],
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("sh command failed") && err.contains("nope"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_secret_shell_script_hands_the_secret_to_the_command() {
+        // The same script a device shell runs, run by the host's sh.
+        let script = super::secret_shell_script("T", r#"echo "got:$T""#);
+        let out = super::run_with_input(
+            "sh",
+            &["-c", &script],
+            Some(b"s3cret\n"),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, b"got:s3cret\n");
+    }
+
+    #[tokio::test]
+    async fn run_with_input_times_out_as_a_typed_adb_timeout() {
+        let err = super::run_with_input("sleep", &["1"], None, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<super::AdbTimeout>().is_some(), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_command_is_a_typed_timeout() {
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg("30").kill_on_drop(true);
+
+        let err = output_within(&mut cmd, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<AdbTimeout>().is_some());
+        assert_eq!(err.to_string(), "adb command timed out after 50ms");
+    }
+
     #[test]
     fn capture_ports_keep_defaults_and_loopback_exclusion() {
         let commands = super::iptables_redirect_commands(45678, &[8080, 9099, 8080, 80], None);
@@ -1837,6 +2042,47 @@ mod tests {
             parse_keyguard_showing("WINDOW MANAGER POLICY STATE\n  mAwake=true\n"),
             None
         );
+    }
+
+    // ─── CA trust store ───
+
+    #[test]
+    fn system_ca_store_is_the_trust_store_only_before_android_14() {
+        assert!(system_store_is_runtime_trust_store(Some(33)));
+        assert!(system_store_is_runtime_trust_store(Some(29)));
+        assert!(!system_store_is_runtime_trust_store(Some(34)));
+        assert!(!system_store_is_runtime_trust_store(Some(36)));
+        // Unknown level: try the system store first, as before.
+        assert!(system_store_is_runtime_trust_store(None));
+    }
+
+    // ─── Screen wakefulness ───
+
+    #[test]
+    fn screen_awake_only_when_wakefulness_is_awake() {
+        let dump = "POWER MANAGER (dumpsys power)\n\nPower Manager State:\n  mDirty=0x0\n  mWakefulness=Awake\n  mWakefulnessChanging=false\n";
+        assert_eq!(parse_screen_awake(dump), Some(true));
+        for state in ["Asleep", "Dozing", "Dreaming"] {
+            assert_eq!(
+                parse_screen_awake(&format!("  mWakefulness={state}\n")),
+                Some(false),
+                "{state} needs the wake key"
+            );
+        }
+    }
+
+    #[test]
+    fn screen_awake_reads_the_first_wakefulness_field() {
+        // `mWakefulnessChanging=` and `mWakefulnessRaw=` are other fields,
+        // and the global state comes before any per-group one.
+        let dump = "  mWakefulnessChanging=false\n  mWakefulnessRaw=Awake\n  mWakefulness=Asleep\n  groupId=0 mWakefulness=Awake\n";
+        assert_eq!(parse_screen_awake(dump), Some(false));
+    }
+
+    #[test]
+    fn screen_state_unknown_without_the_field() {
+        assert_eq!(parse_screen_awake(""), None);
+        assert_eq!(parse_screen_awake("Can't find service: power\n"), None);
     }
 
     // ─── IPv6 default-route detection ───

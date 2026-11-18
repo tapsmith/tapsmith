@@ -39,7 +39,7 @@ function makeConfig(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
 }
 
 function makeOpts(overrides: Partial<RunOptions> = {}): RunOptions {
-  return { config: makeConfig(), devices: [], resetCapabilities: {}, runMode: 'test', ...overrides };
+  return { config: makeConfig(), devices: [], resetCapabilities: {}, runMode: 'test', networkApisInRun: false, ...overrides };
 }
 
 function statuses(result: SuiteResult): Record<string, string> {

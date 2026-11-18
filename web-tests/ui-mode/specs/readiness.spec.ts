@@ -153,10 +153,26 @@ test.describe("Device readiness", () => {
     expect(msg.filePath).toBe(GESTURES_FILE)
   })
 
-  test("the run summary reports time to first action", async ({ app, runControls }) => {
-    const ui = app
-    ui.send({ type: "run-start", fileCount: 1 })
-    ui.send({ type: "run-end", status: "passed", duration: 4_200, passed: 1, failed: 0, skipped: 0, timeToFirstActionMs: 640, preflight: { origin: "prepared" } })
-    await expect(runControls.notification).toHaveText("First action after 0.6s (device was prepared)")
-  })
+  // A finished run reports its results in the tree and the status counts, not in a
+  // banner. The legacy timing fields an older server sent must not bring back the
+  // removed "First action after …" notice.
+  for (const status of ["passed", "failed"] as const) {
+    test(`a ${status} run ends without a notification banner`, async ({ app, explorer, runControls }) => {
+      const ui = app
+      ui.send({ type: "run-start", fileCount: 1 })
+      await expect(explorer.runAllButton).toBeDisabled()
+      ui.send({
+        type: "run-end",
+        status,
+        duration: 4_200,
+        passed: status === "passed" ? 1 : 0,
+        failed: status === "failed" ? 1 : 0,
+        skipped: 0,
+        timeToFirstActionMs: 640,
+        preflight: { origin: "prepared" },
+      } as ServerMessage)
+      await expect(explorer.runAllButton).toBeEnabled()
+      await expect(runControls.notification).toHaveCount(0)
+    })
+  }
 })

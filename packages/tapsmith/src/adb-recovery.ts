@@ -28,6 +28,13 @@ import { platformOfSerial } from './project.js';
 export interface PinnedDeviceHealthDeps {
   /** Runs `adb <args>` and returns its stdout; throws when adb fails or times out. */
   adb: (args: readonly string[], timeoutMs: number) => string;
+  /**
+   * One health probe, for a device that has been up long enough not to be
+   * mid-boot (`probeDeviceHealthIfSettled`); undefined when it is not. Only
+   * the first look uses it: a device just recovered by a reconnect or an
+   * ADB server restart keeps its uptime, but needs the consecutive probes.
+   */
+  probeIfSettled: (serial: string) => Promise<DeviceHealthResult | undefined>;
   /** Waits for the device to pass consecutive health probes (`waitForDeviceStability`). */
   waitForStable: (serial: string) => Promise<DeviceHealthResult>;
   /** Live device claims of Tapsmith sessions other than this one (`device-claims.ts`). */
@@ -114,6 +121,10 @@ export async function checkPinnedDeviceHealth(serial: string, deps: PinnedDevice
     throw new Error(pinnedDeviceNotListedMessage(serial, before));
   }
 
+  // A settled device that answers one probe healthy is healthy: the second
+  // probe two seconds later is for one that just booted or is flapping.
+  const settled = await deps.probeIfSettled(serial);
+  if (settled?.healthy) return;
   const stable = await deps.waitForStable(serial);
   if (stable.healthy) return;
   if (stable.reason && !stable.reason.includes('ADB shell')) {

@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export interface McpToolCallEvent {
   id: string
   tool: string
@@ -9,6 +11,13 @@ export interface McpToolCallEvent {
   error?: string
   durationMs?: number
   timestamp: number
+  /**
+   * Serial of the device the call acted on, as the connection resolved it —
+   * set on `completed`/`error` once a device tool picked its target. UI mode
+   * invalidates that device's worker's prepared state; `args` alone cannot
+   * say which device a call with no `device` landed on.
+   */
+  device?: string
 }
 
 export interface McpClientInfo {
@@ -113,7 +122,14 @@ export function summarizeResult(tool: string, result: string): string {
     case 'tapsmith_swipe':
     case 'tapsmith_press_key':
     case 'tapsmith_launch_app':
-      return result === 'OK' ? 'OK' : result.slice(0, 60);
+      // A success is `OK`, then the test line that repeats it (PILOT-1239).
+      return result === 'OK' || result.startsWith('OK\n') ? 'OK' : result.slice(0, 60);
+    case 'tapsmith_run_code': {
+      // One `Statement i of n (line l): OK` per passing statement (PILOT-1240).
+      const passed = result.match(/^Statement \d+ of \d+ \(line \d+\): OK$/gm)?.length ?? 0;
+      const total = result.match(/^Statement \d+ of (\d+) /m)?.[1];
+      return total ? `${passed}/${total} passed` : result.slice(0, 60);
+    }
     case 'tapsmith_read_trace':
       return result.includes('## Steps')
         ? result.match(/## Steps \((\d+) events\)/)?.[0] ?? result.slice(0, 60)
@@ -142,4 +158,53 @@ export function summarizeResult(tool: string, result: string): string {
     default:
       return result.slice(0, 60);
   }
+}
+
+/** The running tool call: its name, and the device it resolves (see {@link noteToolDevice}). */
+interface ToolCallSlot { tool?: string; device?: string }
+
+const toolCallDevice = new AsyncLocalStorage<ToolCallSlot>();
+
+/** Run a tool callback with a slot for the device it resolves (see {@link noteToolDevice}). */
+export function runWithToolDevice<T>(slot: ToolCallSlot, fn: () => T): T {
+  return toolCallDevice.run(slot, fn);
+}
+
+/** Record the device the current tool call acts on, for its tool-call event. */
+export function noteToolDevice(serial: string | undefined): void {
+  const slot = toolCallDevice.getStore();
+  if (slot && serial) slot.device = serial;
+}
+
+/**
+ * The current tool call was refused before it acted on the device it
+ * resolved (an invalid locator or statement): its event names no device, so
+ * UI mode does not treat that device as touched.
+ */
+export function forgetToolDevice(): void {
+  const slot = toolCallDevice.getStore();
+  if (slot) slot.device = undefined;
+}
+
+type ToolActGate = (tool: string, device: string) => Promise<void>;
+let toolActGate: ToolActGate | undefined;
+
+/**
+ * Install what a tool call waits on once it has resolved its device and
+ * before it acts (UI mode: a background preparation still resetting that
+ * device). Returns the uninstaller.
+ */
+export function setToolActGate(gate: ToolActGate): () => void {
+  toolActGate = gate;
+  return () => {
+    if (toolActGate === gate) toolActGate = undefined;
+  };
+}
+
+/** Wait on the installed gate for the current tool call's device, if any. */
+export async function beforeToolActs(): Promise<void> {
+  const slot = toolCallDevice.getStore();
+  const gate = toolActGate;
+  if (!gate || !slot?.tool || !slot.device) return;
+  await gate(slot.tool, slot.device);
 }

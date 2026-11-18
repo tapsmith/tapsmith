@@ -14,6 +14,13 @@ function projectHash(): string {
 const UI_PORT_PREFIX = 'ui-port-';
 
 /**
+ * Set for the headless server that `tapsmith mcp-server --prefer-ui` starts
+ * as its child (`bridge.ts`): the agent connected to the parent, so the child
+ * does not print how to connect one.
+ */
+export const BRIDGED_ENV = 'TAPSMITH_MCP_BRIDGED';
+
+/**
  * Where a UI server publishes its MCP port.
  *
  * Beside the daemon registry, and for the same reason: `os.tmpdir()` reads

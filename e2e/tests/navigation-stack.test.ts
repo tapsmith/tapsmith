@@ -1,0 +1,73 @@
+import { describe, expect, test } from "../fixtures.js"
+import { openScreen } from "../utils/app-reset.js"
+
+/**
+ * Regression (PILOT-985): an action straight after a push resolves against
+ * the screen that was pushed.
+ *
+ * While a native stack animates, iOS keeps both screens in the accessibility
+ * tree, with the outgoing one's controls at frames that can be on screen. So a
+ * control every screen has matched twice for that half second: a strict-mode
+ * violation; `.last()` then missed in the live query, which by then saw one;
+ * and `.first()` meant the outgoing screen's control. Each test acts with no
+ * wait after the push, and checks the level it ends on.
+ */
+describe("Navigation stack: a control that every screen has", () => {
+  test.beforeEach(async ({ device, stackScreen }) => {
+    await openScreen(device, "/stack/1")
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
+  test("a plain locator taps the pushed screen's control", async ({ stackScreen }) => {
+    await stackScreen.push.tap()
+    await stackScreen.back.tap()
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
+  test("last() taps the pushed screen's control", async ({ stackScreen }) => {
+    await stackScreen.push.tap()
+    await stackScreen.back.last().tap()
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
+  test("first() taps the pushed screen's control", async ({ stackScreen }) => {
+    await stackScreen.push.tap()
+    await stackScreen.back.first().tap()
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
+  test("count() never sees both screens", async ({ stackScreen }) => {
+    await stackScreen.push.tap()
+    // Android's tree can briefly hold neither screen's control during the swap.
+    expect(await stackScreen.back.count()).toBeLessThanOrEqual(1)
+    await expect(stackScreen.level).toHaveText("Level 2")
+  })
+
+  // PILOT-1225: on iOS, BACK taps the native header's back button, not the
+  // first button in the header.
+  test("pressKey('BACK') pops the pushed screen", async ({ device, stackScreen }) => {
+    await stackScreen.push.tap()
+    await expect(stackScreen.level).toHaveText("Level 2")
+    await device.pressKey("BACK")
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
+  test("pressKey('BACK') twice with no wait pops two screens", async ({ device, stackScreen }) => {
+    await stackScreen.push.tap()
+    await stackScreen.push.tap()
+    await expect(stackScreen.level).toHaveText("Level 3")
+    await device.pressKey("BACK")
+    await device.pressKey("BACK")
+    await expect(stackScreen.level).toHaveText("Level 1")
+  })
+
+  test("pushes and pops can follow each other with no wait", async ({ stackScreen }) => {
+    await stackScreen.push.tap()
+    await stackScreen.push.tap()
+    await stackScreen.push.tap()
+    await expect(stackScreen.level).toHaveText("Level 4")
+    await stackScreen.back.tap()
+    await stackScreen.back.tap()
+    await expect(stackScreen.level).toHaveText("Level 2")
+  })
+})

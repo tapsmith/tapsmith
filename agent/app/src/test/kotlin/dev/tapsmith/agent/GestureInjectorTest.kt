@@ -59,13 +59,15 @@ class GestureInjectorTest {
     // ─── click ───
 
     @Test
-    fun `click presses, holds and releases at one point, waiting for the app`() {
+    fun `click presses and releases at one point with no hold, waiting for the app`() {
+        // A tap is DOWN then UP with nothing between, as adb's `input tap`
+        // sends it (PILOT-974): a hold only makes each tap slower.
         val sink = FakeSink(clock)
         assertTrue(injector(sink).click(10, 20))
         assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())
         val (downAt, down) = sink.touches[0]
         val (upAt, up) = sink.touches[1]
-        assertEquals(GestureInjector.CLICK_PRESS_MS, upAt - downAt)
+        assertEquals(0L, upAt - downAt)
         assertEquals(down.downTime, up.downTime)
         assertEquals(listOf(PointerState(0, 10, 20)), up.pointers)
         assertTrue(down.sync && up.sync)
@@ -90,6 +92,287 @@ class GestureInjectorTest {
         val sink = FakeSink(clock, refuse = { it.action == TouchAction.DOWN })
         assertFalse(injector(sink).click(5, 5))
         assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())
+    }
+
+    // ─── longPress / timedSwipe (PILOT-970) ───
+
+    @Test
+    fun `a long press holds for its duration in real time, not one frame per step`() {
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).longPress(10, 20, holdMs = 1000))
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())
+        assertEquals(1000L, sink.touches[1].first - sink.touches[0].first)
+        assertEquals(0, clock.frames)
+        assertTrue(sink.touches.all { it.second.pointers.single() == PointerState(0, 10, 20) })
+    }
+
+    @Test
+    fun `a long press is held for its duration after a slow press is delivered`() {
+        // A sync DOWN can block (window animations on API 30, a busy app):
+        // the hold starts once the app has the press, not before it was sent.
+        val sink =
+            object : InputSink {
+                val times = mutableListOf<Long>()
+
+                override fun touch(event: TouchEvent): Boolean {
+                    if (event.action == TouchAction.DOWN) clock.nowMs += 400
+                    times += clock.nowMs
+                    return true
+                }
+
+                override fun key(event: KeyPress) = true
+            }
+        assertTrue(GestureInjector(sink, clock) { 8L }.longPress(5, 5, holdMs = 800))
+        assertTrue("held ${sink.times[1] - sink.times[0]} ms", sink.times[1] - sink.times[0] >= 800)
+    }
+
+    @Test
+    fun `a refused long press release is cancelled so no pointer stays down`() {
+        val sink = FakeSink(clock, refuse = { it.action == TouchAction.UP })
+        assertFalse(injector(sink).longPress(5, 5, holdMs = 500))
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.UP, TouchAction.CANCEL), sink.actions())
+    }
+
+    @Test
+    fun `a timed swipe lasts its duration whatever the distance, and ends at its end point`() {
+        for ((distance, duration) in listOf(1000 to 300L, 20 to 1000L, 600 to 2000L)) {
+            val clock = FakeClock()
+            val sink = FakeSink(clock)
+            GestureInjector(sink, clock) { 8L }.timedSwipe(0, 0, distance, 0, durationMs = duration)
+            val events = sink.touches.map { it.second }
+            assertEquals(TouchAction.DOWN, events.first().action)
+            assertEquals(PointerState(0, 0, 0), events.first().pointers.single())
+            assertEquals(TouchAction.UP, events.last().action)
+            assertTrue(events.any { it.action == TouchAction.MOVE })
+            assertEquals(PointerState(0, distance, 0), events.last().pointers.single())
+            // Released on the first tick past the duration.
+            val took = sink.touches.last().first - sink.touches.first().first
+            assertTrue("$distance px in $duration ms took $took ms", took in duration..duration + 8)
+            assertEquals(0, clock.frames)
+            val xs = events.map { it.pointers.single().x }
+            assertEquals(xs.sorted(), xs)
+        }
+    }
+
+    @Test
+    fun `a timed gesture keeps to its duration when the clock's sleeps overrun`() {
+        // On a loaded device an 8 ms sleep takes longer, and injecting takes
+        // time too: the gesture is paced by the clock, not by counting ticks.
+        val slow =
+            object : GestureClock {
+                var nowMs = 0L
+
+                override fun now(): Long = nowMs
+
+                override fun sleep(ms: Long) {
+                    nowMs += ms + 4
+                }
+
+                override fun waitForNextFrame() {
+                    nowMs += 16
+                }
+            }
+        val times = mutableListOf<Long>()
+        val events = mutableListOf<TouchEvent>()
+        val sink =
+            object : InputSink {
+                override fun touch(event: TouchEvent): Boolean {
+                    times += slow.nowMs
+                    events += event
+                    return true
+                }
+
+                override fun key(event: KeyPress) = true
+            }
+        GestureInjector(sink, slow) { 8L }.timedSwipe(0, 0, 300, 0, durationMs = 300)
+        val took = times.last() - times.first()
+        assertTrue("took $took ms", took in 300L..312L)
+        assertEquals(PointerState(0, 300, 0), events.last().pointers.single())
+    }
+
+    @Test
+    fun `a short swipe whose first sleep overruns its duration still moves before it releases`() {
+        // A drag is recognised from MOVE events: an UP at the end point with
+        // no MOVE before it would read as a tap where the press went down.
+        val sink = FakeSink(clock)
+        val overrun =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms + 50
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        GestureInjector(sink, overrun) { 8L }.timedSwipe(0, 0, 100, 0, durationMs = 25)
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.MOVE, TouchAction.UP), sink.actions())
+        assertEquals(
+            PointerState(0, 100, 0),
+            sink.touches[1]
+                .second.pointers
+                .single(),
+        )
+        assertEquals(
+            PointerState(0, 100, 0),
+            sink.touches[2]
+                .second.pointers
+                .single(),
+        )
+    }
+
+    @Test
+    fun `a stall that carries a moving pointer past its end still moves it to the end before the release`() {
+        // The pointer has moved (here, held in place) but a stall skips the
+        // whole move: the last MOVE must reach the end point before the UP.
+        val sink = FakeSink(clock)
+        var sleeps = 0
+        val stalling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    sleeps++
+                    clock.nowMs += if (sleeps == 13) ms + 200 else ms
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        GestureInjector(sink, stalling) { 8L }.perform(
+            PointerPath(ScreenPoint(0, 0)).pause(100).travelTo(ScreenPoint(300, 0), 100),
+            pacedByClock = true,
+        )
+        val events = sink.touches.map { it.second }
+        assertEquals(TouchAction.UP, events.last().action)
+        val beforeUp = events[events.size - 2]
+        assertEquals(TouchAction.MOVE, beforeUp.action)
+        assertEquals(PointerState(0, 300, 0), beforeUp.pointers.single())
+    }
+
+    @Test
+    fun `a timed gesture stops when its command is cancelled, cancelling the pointers it holds`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    if (clock.nowMs >= 1_500L) token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        val start = clock.nowMs
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.perform(
+                    PointerPath(ScreenPoint(0, 0)).travelTo(ScreenPoint(1000, 0), durationMs = 10_000),
+                    PointerPath(ScreenPoint(0, 50)).travelTo(ScreenPoint(1000, 50), durationMs = 10_000),
+                )
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertEquals(
+            2,
+            sink.touches
+                .last()
+                .second.pointers.size,
+        )
+        assertTrue(sink.touches.last().first - start < 1_000)
+    }
+
+    @Test
+    fun `a long press stops when its command is cancelled, cancelling its pointer`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    if (clock.nowMs >= 1_500L) token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        val start = clock.nowMs
+        try {
+            CommandCancellation.runWith(token) { GestureInjector(sink, cancelling) { 8L }.longPress(5, 5, holdMs = 10_000) }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.CANCEL), sink.actions())
+        assertTrue(sink.touches.last().first - start < 1_000)
+    }
+
+    @Test
+    fun `a speed-based gesture visits every tick's position however long the sleeps take`() {
+        // Element swipe/drag/pinch are paced by counting ticks, as before
+        // PILOT-970: a pinch whose first two-finger move is already near its
+        // end is not recognised as a pinch, so no part of the path is skipped.
+        val sink = FakeSink(clock)
+        val overrun =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms + 50
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        GestureInjector(sink, overrun) { 8L }.perform(
+            PointerPath(ScreenPoint(0, 0)).moveTo(ScreenPoint(1000, 0), speedPxPerSec = 10_000),
+            PointerPath(ScreenPoint(0, 50)).moveTo(ScreenPoint(1000, 50), speedPxPerSec = 10_000),
+        )
+        val moves = sink.touches.map { it.second }.filter { it.action == TouchAction.MOVE }
+        // One move per 8 ms tick of the 100 ms path, then one to the end point.
+        val xs = moves.map { it.pointers.first().x }
+        assertEquals((1..12).map { it * 80 } + 1000, xs)
+    }
+
+    @Test
+    fun `an injected press is stamped with its own down time`() {
+        // React Native keys a gesture on the DOWN's event time and drops a
+        // CANCEL whose down time does not match it.
+        val down = TouchEvent(TouchAction.DOWN, 1_000, listOf(PointerState(0, 1, 1)), sync = true)
+        assertEquals(1_000L, motionEventTime(down, now = 1_003))
+        assertEquals(1_003L, motionEventTime(down.copy(action = TouchAction.MOVE), now = 1_003))
+        assertEquals(1_003L, motionEventTime(down.copy(action = TouchAction.CANCEL), now = 1_003))
+    }
+
+    @Test
+    fun `a timed swipe from a point to itself holds there for its duration`() {
+        val sink = FakeSink(clock)
+        injector(sink).timedSwipe(7, 9, 7, 9, durationMs = 400)
+        assertTrue(sink.touches.all { it.second.pointers.single() == PointerState(0, 7, 9) })
+        assertEquals(TouchAction.UP, sink.actions().last())
+        assertTrue(sink.touches.last().first - sink.touches.first().first in 400L..408L)
+    }
+
+    @Test
+    fun `a path that travels over a duration moves at the speed that takes`() {
+        val path = PointerPath(ScreenPoint(0, 0)).travelTo(ScreenPoint(100, 0), durationMs = 400)
+        assertEquals(400L, path.durationMs)
+        assertEquals(ScreenPoint(25, 0), path.pointAt(100))
+        assertEquals(ScreenPoint(100, 0), path.pointAt(400))
     }
 
     // ─── stepSwipe (UiDevice.swipe) ───
@@ -152,6 +435,300 @@ class GestureInjectorTest {
         val sink = FakeSink(clock, refuse = { it.action == TouchAction.DOWN })
         assertFalse(injector(sink).stepSwipe(0, 0, 50, 0, steps = 5))
         assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())
+    }
+
+    // ─── stepDrag (scrollIntoView's drags, PILOT-973) ───
+
+    @Test
+    fun `a drag moves along the line one frame apart, then rests at its end before it lifts`() {
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).stepDrag(0, 0, 40, 80, steps = 4))
+        val actions = sink.actions()
+        assertEquals(TouchAction.DOWN, actions.first())
+        assertEquals(TouchAction.UP, actions.last())
+        assertTrue(actions.subList(1, actions.size - 1).all { it == TouchAction.MOVE })
+        val points =
+            sink.touches.map {
+                it.second.pointers
+                    .single()
+                    .let { p -> p.x to p.y }
+            }
+        assertEquals(listOf(0 to 0, 10 to 20, 20 to 40, 30 to 60, 40 to 80), points.take(5))
+        assertTrue(points.drop(4).all { it == (40 to 80) })
+        assertTrue(sink.touches.all { it.second.sync })
+        assertEquals(
+            1,
+            sink.touches
+                .map { it.second.downTime }
+                .toSet()
+                .size,
+        )
+    }
+
+    @Test
+    fun `a drag's last velocity window holds only stationary samples, so nothing flings`() {
+        // VelocityTracker reads the samples of the last 100 ms (its horizon):
+        // when all of them sit at one point, the velocity at the lift is zero.
+        val sink = FakeSink(clock)
+        injector(sink).stepDrag(0, 1000, 0, 200, steps = 20)
+        val upAt = sink.touches.last().first
+        val reachedEnd =
+            sink.touches
+                .first {
+                    it.second.pointers
+                        .single()
+                        .y == 200
+                }.first
+        assertTrue("rested ${upAt - reachedEnd} ms", upAt - reachedEnd >= GestureInjector.DRAG_REST_MS)
+        assertTrue(GestureInjector.DRAG_REST_MS > 100)
+        val window = sink.touches.filter { it.first >= upAt - 100 && it.second.action == TouchAction.MOVE }
+        assertTrue("stationary samples in the window: ${window.size}", window.size >= 3)
+        assertTrue(window.all { it.second.pointers.single() == PointerState(0, 0, 200) })
+    }
+
+    @Test
+    fun `a drag waits for a display frame only until it has started the scroll, then paces its moves by the clock`() {
+        // Every move is synchronous, so the app has handled it (on its next
+        // frame) before the next one goes; a frame wait on top of that made
+        // each step two frames long. Only the press and the first two moves,
+        // which take the touch past slop, also wait for a frame.
+        val sink = FakeSink(clock)
+        injector(sink).stepDrag(0, 1000, 0, 0, steps = 20)
+        assertEquals(3, clock.frames)
+        val moveTimes = sink.touches.filter { it.second.action == TouchAction.MOVE }.map { it.first }
+        val gaps = moveTimes.zipWithNext { a, b -> b - a }
+        assertTrue("gaps $gaps", gaps.all { it >= 16 })
+        assertTrue("gaps $gaps", gaps.drop(2).all { it == 16L })
+    }
+
+    @Test
+    fun `a drag's rest is timed by the clock, however long a frame takes`() {
+        val slowFrames =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 45
+                }
+            }
+        val sink = FakeSink(clock)
+        GestureInjector(sink, slowFrames) { 8L }.stepDrag(0, 0, 0, 100, steps = 2)
+        val upAt = sink.touches.last().first
+        val reachedEnd =
+            sink.touches
+                .first {
+                    it.second.pointers
+                        .single()
+                        .y == 100
+                }.first
+        assertTrue(upAt - reachedEnd >= GestureInjector.DRAG_REST_MS)
+        assertTrue("rested ${upAt - reachedEnd} ms", upAt - reachedEnd < GestureInjector.DRAG_REST_MS + 45)
+    }
+
+    @Test
+    fun `a drag stops when its command is cancelled, cancelling its pointer instead of lifting it`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    if (clock.nowMs >= 1_100L) token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                    if (clock.nowMs >= 1_100L) token.cancel("the daemon closed the connection")
+                }
+            }
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.stepDrag(0, 0, 0, 500, steps = 20)
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+    }
+
+    @Test
+    fun `a drag cancelled during its last rest move cancels its pointer instead of lifting it`() {
+        // DOWN at 1000, two moves a frame apart, the last at 1032: the rest
+        // runs from 1032. Cancel on the wait that ends the rest, after the
+        // loop's last checkpoint.
+        val restEnds = 1_032L + GestureInjector.DRAG_REST_MS
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    if (clock.nowMs >= restEnds) token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.stepDrag(0, 0, 0, 100, steps = 2)
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertTrue("the rest had begun", sink.actions().count { it == TouchAction.MOVE } > 2)
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+    }
+
+    @Test
+    fun `a refused move stops a drag's moves but still lifts, and a refused lift is cancelled`() {
+        var moves = 0
+        val refusedMove = FakeSink(clock, refuse = { it.action == TouchAction.MOVE && ++moves == 2 })
+        assertFalse(injector(refusedMove).stepDrag(0, 0, 50, 0, steps = 5))
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.MOVE, TouchAction.MOVE, TouchAction.UP), refusedMove.actions())
+
+        val refusedUp = FakeSink(clock, refuse = { it.action == TouchAction.UP })
+        assertFalse(injector(refusedUp).stepDrag(0, 0, 50, 0, steps = 5))
+        assertEquals(listOf(TouchAction.UP, TouchAction.CANCEL), refusedUp.actions().takeLast(2))
+    }
+
+    // ─── scrollStepDrag (scrollIntoView's step drags, PILOT-998) ───
+
+    private fun eventTimes(sink: FakeSink) = sink.touches.map { (sentAt, e) -> motionEventTime(e, sentAt) }
+
+    @Test
+    fun `a step drag moves to its end and cancels instead of lifting`() {
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20))
+        val actions = sink.actions()
+        assertEquals(TouchAction.DOWN, actions.first())
+        assertEquals(TouchAction.CANCEL, actions.last())
+        assertFalse(TouchAction.UP in actions)
+        val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }
+        // At most STEP_DRAG_MAX_MOVES moving samples, then the two still ones.
+        assertEquals(GestureInjector.STEP_DRAG_MAX_MOVES + 2, moves.size)
+        assertTrue(moves.takeLast(3).all { it.second.pointers.single() == PointerState(0, 0, 200) })
+        assertEquals(
+            1,
+            sink.touches
+                .map { it.second.downTime }
+                .toSet()
+                .size,
+        )
+    }
+
+    @Test
+    fun `a step drag is quick, as only its first moves wait for a frame`() {
+        val sink = FakeSink(clock)
+        val start = clock.nowMs
+        injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20)
+        // The press and the two moves past slop wait a frame each.
+        assertEquals(1 + GestureInjector.DRAG_FRAME_MOVES, clock.frames)
+        assertTrue("took ${clock.nowMs - start} ms", clock.nowMs - start < 150)
+        // The moves after them are not synchronous, except the last.
+        val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }.map { it.second }
+        assertTrue(moves.take(GestureInjector.DRAG_FRAME_MOVES).all { it.sync })
+        assertFalse(moves[GestureInjector.DRAG_FRAME_MOVES].sync)
+        assertTrue(moves[GestureInjector.STEP_DRAG_MAX_MOVES - 1].sync)
+    }
+
+    @Test
+    fun `a step drag's event times run forward and are never later than when each event is sent`() {
+        val sink = FakeSink(clock)
+        injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20)
+        val times = eventTimes(sink)
+        assertTrue("times $times", times.zipWithNext().all { (a, b) -> b >= a })
+        sink.touches.zip(times).forEach { (sent, t) -> assertTrue("$t sent at ${sent.first}", t <= sent.first) }
+        // The moves span STEP_DRAG_MOVE_MS of event time from the press.
+        val down = times.first()
+        val moving =
+            sink.touches.indexOfLast {
+                it.second.pointers
+                    .single()
+                    .y != 200
+            }
+        assertTrue(times[moving + 1] - down <= GestureInjector.STEP_DRAG_MOVE_MS)
+    }
+
+    @Test
+    fun `a step drag's still samples clear the velocity tracker before the cancel`() {
+        val sink = FakeSink(clock)
+        injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20)
+        val times = eventTimes(sink)
+        val moves = sink.touches.withIndex().filter { it.value.second.action == TouchAction.MOVE }
+        val lastMoving = moves[moves.size - 3].index
+        val firstStill = moves[moves.size - 2].index
+        val lastStill = moves[moves.size - 1].index
+        assertTrue(times[firstStill] - times[lastMoving] > 40)
+        assertTrue(times[lastStill] - times[firstStill] > 100)
+    }
+
+    @Test
+    fun `a step drag makes at least enough moves to pass slop`() {
+        val sink = FakeSink(clock)
+        injector(sink).scrollStepDrag(0, 0, 0, 300, steps = 1)
+        val moving = sink.touches.count { it.second.action == TouchAction.MOVE } - 2
+        assertEquals(GestureInjector.STEP_DRAG_MIN_MOVES, moving)
+    }
+
+    @Test
+    fun `a refused move stops a step drag's moves, and its pointer is still cancelled`() {
+        var moves = 0
+        val sink = FakeSink(clock, refuse = { it.action == TouchAction.MOVE && ++moves == 2 })
+        assertFalse(injector(sink).scrollStepDrag(0, 0, 0, 500, steps = 20))
+        assertEquals(
+            listOf(TouchAction.DOWN, TouchAction.MOVE, TouchAction.MOVE, TouchAction.CANCEL),
+            sink.actions(),
+        )
+    }
+
+    @Test
+    fun `a cancelled command cancels a step drag's pointer and throws`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.scrollStepDrag(0, 0, 0, 500, steps = 20)
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+    }
+
+    @Test
+    fun `an event with its own time is injected with it`() {
+        val move = TouchEvent(TouchAction.MOVE, 1_000, listOf(PointerState(0, 1, 1)), sync = true, eventTime = 1_020)
+        assertEquals(1_020L, motionEventTime(move, now = 1_100))
+        assertEquals(1_000L, motionEventTime(move.copy(action = TouchAction.DOWN), now = 1_100))
     }
 
     // ─── perform (UiObject2 gestures) ───

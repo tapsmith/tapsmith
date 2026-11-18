@@ -150,11 +150,6 @@ export class TestExplorerPane {
     return this.node(name).getByTitle(/^Depends on:/)
   }
 
-  /** The declared-isolation badge on a row (only when the row itself declares one). */
-  isolationFor(name: string) {
-    return this.node(name).getByTestId("node-isolation")
-  }
-
   /** The device-group badge on a project row (`use.devices`), named by member. */
   devicesFor(name: string) {
     return this.node(name).getByTestId("node-devices")

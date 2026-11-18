@@ -864,6 +864,10 @@ const ANDROID_DESCRIPTION_ONLY_ROLES = new Set(['heading', 'link']);
 function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean {
   // A Compose role carrier: its parent has the role (PILOT-828).
   if (isComposeRoleCarrier(node)) return false;
+  // iOS 27's empty Toolbar host, the size of its screen or sheet, which the
+  // agent marks: nothing a user can see, so no role (PILOT-1219). One holding
+  // a toolbar's items is the toolbar.
+  if (node.attributes.get('tapsmith-empty-bar-host') === 'true') return false;
   const reported = getNodeRole(node);
   if (reported && normalizeRole(reported) === role) return true;
   const className = node.attributes.get('class');

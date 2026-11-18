@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Check, X, Type, Clock, Play, ExternalLink, MoveHorizontal, ArrowUpDown, CircleDot, ChevronDown, Hand, Pointer, Eye, Keyboard, RotateCcw, Target, Globe, Send, AlertTriangle } from 'lucide-preact';
-import type { AnyTraceEvent, ActionTraceEvent, AssertionTraceEvent, GroupTraceEvent, NetworkCaptureRoute, TraceMetadata } from '../../trace/types.js';
+import type { AnyTraceEvent, ActionTraceEvent, AssertionTraceEvent, GroupTraceEvent, NetworkCaptureRoute, TraceDeviceInfo, TraceMetadata } from '../../trace/types.js';
 import type { InFlightAction } from '../types.js';
 import { deviceTagStyle } from './device-frames.js';
 import { parseSelectorParts, selectorPartsCode, selectorValueCode } from './selector-parts.js';
@@ -23,6 +23,12 @@ interface Props {
    * (e.g. "installing app demo.apk"). Replaces the empty state with a
    * spinner + message while no actions have run yet. */
   preflightMessage?: string
+  /** UI mode only — while the pointer is anywhere over the list (a row, a
+   * group header, the space below the rows), a new pin of the same test
+   * doesn't scroll the list, so a live run can't move it from under the
+   * pointer. The trace viewer leaves this off: its keyboard steps must
+   * scroll wherever the pointer rests. */
+  holdScrollUnderPointer?: boolean
 }
 
 
@@ -166,6 +172,15 @@ function networkRouteLabel(route: NetworkCaptureRoute | undefined): string | und
   return route ? NETWORK_ROUTE_LABELS[route] ?? route : undefined;
 }
 
+/** How a device's traffic was captured, and whether its HTTPS passed through uncaptured. */
+function networkCaptureLabel(device: TraceDeviceInfo): string | undefined {
+  const parts = [
+    networkRouteLabel(device.networkCaptureRoute),
+    device.networkHttpsPassthrough ? 'HTTPS passed through uncaptured (CA not trusted)' : undefined,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
@@ -175,18 +190,37 @@ function displayDuration(event: ActionTraceEvent | AssertionTraceEvent): number 
   return event.wallDuration ?? event.duration;
 }
 
-export function ActionsPanel({ events, actionEvents: _actionEvents, selectedIndex, pinnedIndex, onHover, onPin, metadata, showMetadata, inFlightAction, preflightMessage }: Props) {
+export function ActionsPanel({ events, actionEvents: _actionEvents, selectedIndex, pinnedIndex, onHover, onPin, metadata, showMetadata, inFlightAction, preflightMessage, holdScrollUnderPointer }: Props) {
   const [tab, setTab] = useState<'actions' | 'metadata'>('actions');
   const [filter, setFilter] = useState('');
-  const selectedRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!showMetadata && tab === 'metadata') setTab('actions');
   }, [showMetadata, tab]);
 
+  // Follow the pinned row (a click, a keyboard step, UI mode's live
+  // auto-pin), as Playwright's list follows its selected item. Never the
+  // hovered row: scrolling to it slides another row under the pointer, which
+  // hovers that one and scrolls again, and leaving a row (or crossing a group
+  // header) would snap the list back to the pinned row. While the pointer
+  // rests on a row, a live pin doesn't move the list from under it either —
+  // and with `holdScrollUnderPointer`, nor while it rests anywhere else over
+  // the list. A newly viewed test (UI mode) can keep the same index, so it
+  // re-runs too — keyed on project as well, since two projects share a test's
+  // name and file — and, being a different list, scrolls to its pinned row
+  // even with the pointer over it.
+  const hovering = selectedIndex !== pinnedIndex;
+  const viewedTest = `${metadata.project ?? ''}\u0000${metadata.testFile}\u0000${metadata.testName}`;
+  const scrolledTestRef = useRef(viewedTest);
   useEffect(() => {
-    selectedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [selectedIndex]);
+    const sameTest = scrolledTestRef.current === viewedTest;
+    scrolledTestRef.current = viewedTest;
+    if (hovering) return;
+    if (holdScrollUnderPointer && sameTest && listRef.current?.matches(':hover')) return;
+    pinnedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [pinnedIndex, viewedTest]);
 
   // A `use.devices` trace: rows carry the device that acted on them.
   const groupDevices = metadata.devices && metadata.devices.length > 1 ? metadata.devices : undefined;
@@ -281,7 +315,7 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
                 onInput={e => setFilter((e.target as HTMLInputElement).value)}
               />
             </div>
-            <div class="actions-list" data-testid="actions-list">
+            <div class="actions-list" data-testid="actions-list" ref={listRef}>
               {items.map((item, i) => {
                 if (item.kind === 'group-start') {
                   if (!nonEmptyGroups.has(i)) return null;
@@ -312,7 +346,7 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
                 return (
                   <div
                     key={`a-${item.actionIndex}`}
-                    ref={isSelected ? selectedRef : undefined}
+                    ref={isPinned ? pinnedRef : undefined}
                     class={`action-item act${isSelected ? ' selected' : ''}${isPinned ? ' pinned' : ''}${isFailed ? ' failed' : ''}${isPassed ? ' passed' : ''}`}
                     data-testid="action-item"
                     data-selected={isSelected}
@@ -357,7 +391,7 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
                 return (
                   <div
                     key={`a-inflight-${inFlightAction.actionIndex}`}
-                    ref={isSelected ? selectedRef : undefined}
+                    ref={isPinned ? pinnedRef : undefined}
                     class={`action-item act in-progress${isSelected ? ' selected' : ''}${isPinned ? ' pinned' : ''}`}
                     data-testid="action-item"
                     data-selected={isSelected}
@@ -408,7 +442,7 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
               ? groupDevices.map((d) => <>
                   <span class="metadata-label">Device {d.name}</span>
                   <span class="metadata-value" data-testid="metadata-device">
-                    {[d.model, d.serial, d.osVersion, d.isEmulator ? 'emulator' : 'physical', networkRouteLabel(d.networkCaptureRoute)].filter(Boolean).join(' · ')}
+                    {[d.model, d.serial, d.osVersion, d.isEmulator ? 'emulator' : 'physical', networkCaptureLabel(d)].filter(Boolean).join(' · ')}
                   </span>
                 </>)
               : <>
@@ -424,9 +458,9 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
                 </>}
                 <span class="metadata-label">Physical</span>
                 <span class="metadata-value">{metadata.device.isEmulator ? 'No' : 'Yes'}</span>
-                {metadata.device.networkCaptureRoute && <>
+                {networkCaptureLabel(metadata.device) && <>
                   <span class="metadata-label">Network capture</span>
-                  <span class="metadata-value" data-testid="metadata-network-route">{networkRouteLabel(metadata.device.networkCaptureRoute)}</span>
+                  <span class="metadata-value" data-testid="metadata-network-route">{networkCaptureLabel(metadata.device)}</span>
                 </>}
               </>}
             <span class="metadata-label">Actions</span>

@@ -33,6 +33,7 @@ class OcclusionGuard(
     private val instrumentation: Instrumentation,
     private val nodeInfoOf: (UiObject2) -> AccessibilityNodeInfo?,
     private val input: AgentInput,
+    private val systemDialogs: SystemDialogAnswerer,
 ) {
     companion object {
         private const val TAG = "TapsmithOcclusion"
@@ -81,6 +82,8 @@ class OcclusionGuard(
             override val bounds: Box get() = Box(0, 0, device.displayWidth, device.displayHeight)
 
             override fun windows() = readWindows()
+
+            override fun answerSystemDialogs() = systemDialogs.answer()
         }
 
     /** Waits for a list to stop scrolling after a clearing drag; the action

@@ -100,7 +100,7 @@ enum CellFrames {
 
     // MARK: - Dictionary access
 
-    private static func elementType(of dict: [String: Any]) -> XCUIElement.ElementType {
+    static func elementType(of dict: [String: Any]) -> XCUIElement.ElementType {
         let raw: UInt?
         switch dict["elementType"] {
         case let v as UInt: raw = v
@@ -112,7 +112,7 @@ enum CellFrames {
     }
 
     /// Same keys as `SnapshotElementFinder.parseFrame`.
-    private static func frame(of dict: [String: Any]) -> CGRect {
+    static func frame(of dict: [String: Any]) -> CGRect {
         guard let f = dict["frame"] as? [String: Any] else { return .zero }
         let x = (f["X"] as? Double) ?? (f["x"] as? Double) ?? 0
         let y = (f["Y"] as? Double) ?? (f["y"] as? Double) ?? 0

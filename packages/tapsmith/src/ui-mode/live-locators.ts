@@ -12,11 +12,8 @@ import type { TapsmithGrpcClient } from '../grpc-client.js';
 import type { WebViewHandle } from '../webview-handle.js';
 import { getNodeBounds, type Bounds, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
-import { agentValidatedSuggestions } from '../mcp/agent-suggestions.js';
+import { agentValidatedSuggestions, IOS_CHUNK_SIZE } from '../mcp/agent-suggestions.js';
 import { sdkDeviceFor, withEvaluatedLocator } from '../mcp/sdk-device.js';
-
-/** iOS checks a batch in one XCUI snapshot, so it takes far more per call. */
-const IOS_CHUNK_SIZE = 500;
 
 /** One live WebView query's budget: a wedged page must not hold a tab's queue for the device timeout. */
 const LIVE_WEBVIEW_TIMEOUT_MS = 5_000;
@@ -279,5 +276,36 @@ export class LatestOnlyRunner<R> {
         this.run(key, next.job, next.done);
       }
     });
+  }
+
+  /**
+   * Forgets the request waiting behind `key`'s running one: it is never run
+   * and never answered. The running one finishes (its device call cannot be
+   * taken back) and is answered as usual.
+   */
+  dropWaiting(key: string): void {
+    this._waiting.delete(key);
+  }
+}
+
+/**
+ * The latest live pick per device and tab (`worker:device:client`), by a
+ * generation count: a newer pick, or a cancel, supersedes the one in flight,
+ * whose check stops between candidates and whose answer is never sent.
+ */
+export class PickGenerations {
+  private readonly _latest = new Map<string, number>();
+
+  /** Starts a pick; the returned function says whether it has been superseded. */
+  start(key: string): () => boolean {
+    const generation = (this._latest.get(key) ?? 0) + 1;
+    this._latest.set(key, generation);
+    return () => this._latest.get(key) !== generation;
+  }
+
+  /** Supersedes the pick in flight for `key`, if any. */
+  cancel(key: string): void {
+    const current = this._latest.get(key);
+    if (current !== undefined) this._latest.set(key, current + 1);
   }
 }

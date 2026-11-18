@@ -6,7 +6,7 @@ import type { Writable } from "node:stream";
 import { deviceGroupSize, type TapsmithConfig } from "./config.js";
 import type { ResolvedProject } from "./project.js";
 import { resolveTraceConfig } from "./trace/types.js";
-import { shouldRecord } from "./trace/trace-mode.js";
+import { shouldRecord, uiModeTraceMode } from "./trace/trace-mode.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -127,6 +127,11 @@ export interface UiLaunchPlanInput {
    * Defaults to the group `config` itself declares.
    */
   deviceGroupSize?: number;
+  /**
+   * The run's test files use the network APIs (`testFilesUseNetworkApis`),
+   * so the proxy starts with the device session.
+   */
+  networkApisInRun?: boolean;
 }
 
 export interface UiLaunchProgressOptions {
@@ -161,13 +166,16 @@ function platformSummary(
 
 /**
  * How network capture runs (PILOT-775): `captured` when the trace records
- * network for every test, else `on demand` — the proxy starts on a test's
- * first route() or network wait. Projects that differ are listed together.
+ * network for every test, else `at session start` when the run's tests use
+ * the network APIs, else `on demand` — the proxy starts on a
+ * test's first route() or network wait. Projects that differ are listed
+ * together.
  */
 function networkSummary(
   config: TapsmithConfig,
   projects: ResolvedProject[] | undefined,
   mode: "ui" | "test",
+  networkApisInRun: boolean,
 ): string {
   const configs =
     projects && projects.length > 0
@@ -175,13 +183,17 @@ function networkSummary(
       : [config];
   const modes = new Set(
     configs.map((c) => {
-      // UI mode's workers turn a missing or 'off' trace on (ui-worker.ts).
+      // UI mode's workers turn a missing or 'off' trace on (ui-worker.ts),
+      // and its runner records a retry-only mode as 'on' (uiModeTraceMode).
       const trace = resolveTraceConfig(
         mode === "ui" && (!c.trace || c.trace === "off") ? "on" : c.trace,
       );
-      return trace.network && shouldRecord(trace.mode, 0)
+      const traceMode = mode === "ui" ? uiModeTraceMode(trace.mode) : trace.mode;
+      return trace.network && shouldRecord(traceMode, 0)
         ? "captured"
-        : "on demand";
+        : networkApisInRun
+          ? "at session start"
+          : "on demand";
     }),
   );
   return `network: ${[...modes].sort().join(" + ")}`;
@@ -244,7 +256,7 @@ export function createUiLaunchSteps(input: UiLaunchPlanInput): LaunchStep[] {
     plural(input.testFileCount, "test file"),
     platformSummary(input.config, input.projects),
     projectCount > 0 ? plural(projectCount, "project") : undefined,
-    networkSummary(input.config, input.projects, input.mode ?? "ui"),
+    networkSummary(input.config, input.projects, input.mode ?? "ui", input.networkApisInRun ?? false),
   ]
     .filter(Boolean)
     .join(" | ");

@@ -6,7 +6,7 @@ plugins {
 val coreKtxVersion = "1.19.1"
 val testRunnerVersion = "1.7.0"
 val testCoreVersion = "1.7.0"
-val uiautomatorVersion = "2.4.0"
+val uiautomatorVersion = "2.4.1"
 val coroutinesVersion = "1.11.0"
 val jsonVersion = "20240303"
 
@@ -16,7 +16,10 @@ android {
 
     defaultConfig {
         applicationId = "dev.tapsmith.agent"
-        minSdk = 23
+        // 24 (Android 7): from here on /proc hides other apps' processes, so
+        // no app can read the agent token from the `am instrument -e token`
+        // command line (PILOT-969). Tapsmith documents API 26+ anyway.
+        minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"

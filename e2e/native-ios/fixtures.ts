@@ -1,6 +1,7 @@
 import { test as base, type Device } from "tapsmith"
 import {
   NativeAccessibilityScreen,
+  NativeBackKeyScreen,
   NativeDialogsScreen,
   NativeGesturesScreen,
   NativeHomeScreen,
@@ -11,6 +12,7 @@ import {
   NativeSlowLoadScreen,
   NativeTabsScreen,
   NativeTogglesScreen,
+  NativeToolbarScreen,
   UIKitControlsScreen,
   UIKitDialogsScreen,
   UIKitGesturesScreen,
@@ -22,6 +24,7 @@ type NativeFixtures = {
   home: NativeHomeScreen
   login: NativeLoginScreen
   toggles: NativeTogglesScreen
+  toolbar: NativeToolbarScreen
   list: NativeListScreen
   dialogs: NativeDialogsScreen
   scroll: NativeScrollScreen
@@ -30,6 +33,7 @@ type NativeFixtures = {
   gestures: NativeGesturesScreen
   slowLoad: NativeSlowLoadScreen
   a11y: NativeAccessibilityScreen
+  backKey: NativeBackKeyScreen
   uikitControls: UIKitControlsScreen
   uikitTable: UIKitTableScreen
   uikitDialogs: UIKitDialogsScreen
@@ -41,6 +45,7 @@ export const test = base.extend<NativeFixtures>({
   home: async ({ device }, use) => { await use(new NativeHomeScreen(device)) },
   login: async ({ device }, use) => { await use(new NativeLoginScreen(device)) },
   toggles: async ({ device }, use) => { await use(new NativeTogglesScreen(device)) },
+  toolbar: async ({ device }, use) => { await use(new NativeToolbarScreen(device)) },
   list: async ({ device }, use) => { await use(new NativeListScreen(device)) },
   dialogs: async ({ device }, use) => { await use(new NativeDialogsScreen(device)) },
   scroll: async ({ device }, use) => { await use(new NativeScrollScreen(device)) },
@@ -49,6 +54,7 @@ export const test = base.extend<NativeFixtures>({
   gestures: async ({ device }, use) => { await use(new NativeGesturesScreen(device)) },
   slowLoad: async ({ device }, use) => { await use(new NativeSlowLoadScreen(device)) },
   a11y: async ({ device }, use) => { await use(new NativeAccessibilityScreen(device)) },
+  backKey: async ({ device }, use) => { await use(new NativeBackKeyScreen(device)) },
   uikitControls: async ({ device }, use) => { await use(new UIKitControlsScreen(device)) },
   uikitTable: async ({ device }, use) => { await use(new UIKitTableScreen(device)) },
   uikitDialogs: async ({ device }, use) => { await use(new UIKitDialogsScreen(device)) },

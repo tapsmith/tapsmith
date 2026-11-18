@@ -1,11 +1,14 @@
 pub mod agent_launch;
 pub mod agent_registry;
+pub mod animation_speed;
 pub mod device;
 pub mod iproxy;
+pub mod launch_gate;
 #[cfg(target_os = "macos")]
 pub mod physical_device_proxy;
 pub mod recording;
 pub mod screenshot;
+pub mod sim_ca_trust;
 #[cfg(target_os = "macos")]
 pub mod simulator_processes;
 #[cfg(target_os = "macos")]

@@ -6,16 +6,11 @@
  * a non-breaking space, a narrow no-break space, a line break and a run of
  * spaces (test-app/app/text-matching.tsx).
  */
-import { beforeEach, describe, expect, test } from "tapsmith"
-import { openScreen } from "../utils/app-reset.js"
+import { describe, expect, test } from "tapsmith"
 
 describe("Whitespace-normalized text matching (PILOT-510)", () => {
   // Tests tap counters on one screen, so each needs a fresh app state.
-  test.use({ appResetScope: "test" })
-
-  beforeEach(async ({ device }) => {
-    await openScreen(device, "/text-matching")
-  })
+  test.use({ appResetScope: "test", appResetRoute: "/text-matching" })
 
   test("getByText exact matches text with a non-breaking space", async ({ device }) => {
     const heading = device.getByText("Welcome to Expo", { exact: true })

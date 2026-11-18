@@ -54,6 +54,8 @@ let config: TapsmithConfig | undefined;
 /** The worker's device group, primary first. Empty until `init` completes. */
 let sessions: DeviceSession[] = [];
 let screenshotDir: string | undefined;
+/** Whether the session's test files use the network APIs: from `init`, then each `run-file`. */
+let networkApisInRun = false;
 let ipcOpen = true;
 let currentAbortController: AbortController | undefined;
 
@@ -151,6 +153,7 @@ function setupTraceStreaming(dev: DeviceSession['device']): void {
 async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
   workerId = msg.workerId;
   screenshotDir = msg.screenshotDir;
+  networkApisInRun = msg.networkApisInRun;
   const daemonAddress = `localhost:${msg.daemonPort}`;
 
   config = configFromSerialized(msg.config, daemonAddress);
@@ -194,6 +197,8 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
     config,
     {
       claimSession: currentSession(),
+      // The CLI opened an adopted primary with the same startup scan.
+      startNetworkProxy: msg.networkApisInRun && { multiDevice: members.length > 0, startedBeforeLaunch: true },
       label: `UI Worker ${workerId}`,
       launchPhase: 'UI worker startup launch',
       forceInstall: msg.forceInstall,
@@ -410,14 +415,15 @@ async function runFileWithRecovery(
         abortFileOnError: isRecoverableInfrastructureError,
         resetCapabilities: sharedCapabilities(),
         runMode: 'ui',
+        networkApisInRun,
         projectUseOptions,
         projectName,
         testFilter: selection.testFilter,
         fullNames: selection.fullNames,
         ...deserializeGrepFilters(selection.grep),
-        onNetworkEntries: (entries, networkCaptureEnabled, networkCaptureRoute) => {
+        onNetworkEntries: (entries, networkCaptureEnabled, networkCaptureRoute, networkHttpsPassthrough) => {
           for (const { entries: safe, bodies } of encodeBodies(entries)) {
-            send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled, networkCaptureRoute: networkCaptureRoute ?? null });
+            send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled, networkCaptureRoute: networkCaptureRoute ?? null, networkHttpsPassthrough: networkHttpsPassthrough === true });
           }
         },
       });
@@ -580,17 +586,28 @@ process.on('message', (msg: UIWorkerMessage) => {
       enqueue(() => handleInit(msg));
       break;
     case 'run-file':
-      enqueue(() => handleRunFile(
-        msg.filePath, msg.projectUseOptions, msg.projectName,
-        { testFilter: msg.testFilter, fullNames: msg.fullNames, grep: msg.grep },
-        msg.preparedFor,
-      ));
+      enqueue(() => {
+        networkApisInRun = msg.networkApisInRun;
+        return handleRunFile(
+          msg.filePath, msg.projectUseOptions, msg.projectName,
+          { testFilter: msg.testFilter, fullNames: msg.fullNames, grep: msg.grep },
+          msg.preparedFor,
+        );
+      });
       break;
     case 'prepare':
       enqueue(() => handlePrepare(msg));
       break;
     case 'cancel-prepare':
       if (currentPrepare?.prepareId === msg.prepareId) currentPrepare.abort.abort();
+      break;
+    case 'invalidate-prepared':
+      // Queued, not immediate: a preparation already on the device (or
+      // queued behind a run, where `cancel-prepare` cannot reach it) records
+      // itself when it finishes, and that record predates the touch too.
+      enqueue(async () => {
+        for (const s of sessions) s.prepared = undefined;
+      });
       break;
     case 'abort':
       currentAbortController?.abort();

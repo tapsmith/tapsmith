@@ -113,7 +113,7 @@ export interface CliHandlers {
   init(opts: InitCommandOptions): Promise<number | void>;
   verify(opts: { json: boolean; config?: string }): Promise<number | void>;
   doctor(opts: { json: boolean; config?: string }): Promise<number | void>;
-  mcpServer(opts: { config?: string }): Promise<number | void>;
+  mcpServer(opts: { config?: string; preferUi?: boolean }): Promise<number | void>;
   telemetry(opts: { action?: TelemetryAction; json: boolean; config?: string }): Promise<number | void>;
 }
 
@@ -261,8 +261,10 @@ Examples:
 
 const MCP_EXAMPLES = `
 Examples:
-  codex mcp add tapsmith-headless -- npx tapsmith mcp-server
+  claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
+  codex mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui
   claude mcp add tapsmith-headless -- npx tapsmith mcp-server
+  codex mcp add tapsmith-headless -- npx tapsmith mcp-server
   npx tapsmith mcp-server --config tapsmith.config.ios.mjs`;
 
 const TELEMETRY_HELP = `
@@ -467,7 +469,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--simulator <name>', 'iOS simulator name (default: a booted iOS simulator, else the newest available iPhone; stock names before renamed ones)')
     .option('--device-type <type>', 'emulator, physical or both (default: emulator)')
     .option('--network-capture', 'Record HTTP(S) traffic in traces (default: on, unless the only device is a Google Play-image emulator)')
-    .option('--no-network-capture', 'Write no trace setting (network mocking still works: the proxy starts on demand)')
+    .option('--no-network-capture', 'Write no trace setting (network mocking still works: the proxy starts when the tests need it)')
     .option('--no-example-test', 'Skip scaffolding tests/example.tapsmith.ts')
     .option('--no-agents-md', 'Skip scaffolding the AGENTS.md section')
     .option('--force', 'Overwrite an existing tapsmith.config.*', false)
@@ -479,8 +481,9 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .command('mcp-server')
     .description('Run the MCP server for LLM/agent integration (stdio transport)')
     .addOption(configOption())
+    .option('--prefer-ui', "Work in this project's running UI-mode session (tapsmith test --ui) when there is one, and headless otherwise")
     .addHelpText('after', MCP_EXAMPLES)
-    .action((opts: { config?: string }) => act('mcp-server', handlers.mcpServer)({ ...opts }));
+    .action((opts: { config?: string; preferUi?: boolean }) => act('mcp-server', handlers.mcpServer)({ ...opts }));
 
   program
     .command('telemetry')

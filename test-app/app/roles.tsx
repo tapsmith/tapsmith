@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useTapsmithResetEpoch } from "@tapsmith/react-native"
+import { useEffect, useState } from "react"
 import { Pressable, StyleSheet, Text, View } from "react-native"
 
 // React Native accessibilityRole values with no native widget (PILOT-664).
@@ -9,6 +10,16 @@ const MENU_ITEMS = ["Copy", "Paste"]
 export default function RolesScreen() {
   const [lastAction, setLastAction] = useState("none")
   const [bold, setBold] = useState(false)
+
+  // A warm reset that lands on this screen (`appResetRoute: "/roles"`)
+  // navigates here rather than remounting, so clear local state explicitly
+  // when the epoch moves.
+  const resetEpoch = useTapsmithResetEpoch()
+  useEffect(() => {
+    if (resetEpoch === 0) return
+    setLastAction("none")
+    setBold(false)
+  }, [resetEpoch])
 
   return (
     <View style={styles.container}>

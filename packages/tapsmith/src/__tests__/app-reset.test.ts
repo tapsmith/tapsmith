@@ -5,7 +5,9 @@ import {
   describeAction,
   parseHooksMarker,
   resolveAppResetPolicy,
+  routeDeepLink,
   satisfies,
+  warmResetTarget,
   type AppResetPolicy,
 } from '../app-reset.js';
 
@@ -122,10 +124,55 @@ describe('appResetPolicyEquals / describeAction', () => {
   });
 });
 
+describe('start route (appResetRoute, PILOT-1064)', () => {
+  it('rides on the resolved policy and takes part in equality, not satisfaction', () => {
+    const p = resolveAppResetPolicy(undefined, { ...base, appResetRoute: '/settings' }, { hooksDetected: true });
+    expect(p).toEqual({ mode: 'warm', scope: 'file', route: '/settings' });
+    expect(appResetPolicyEquals(p, { mode: 'warm', scope: 'file' })).toBe(false);
+    expect(appResetPolicyEquals(p, { mode: 'warm', scope: 'file', route: '/settings' })).toBe(true);
+    // The state is what a prepared device must match; the route is one navigation away.
+    expect(satisfies({ mode: 'warm', scope: 'file' }, p)).toBe(true);
+  });
+
+  it('names the route in the trace label, except when nothing resets', () => {
+    expect(describeAction({ mode: 'warm', scope: 'test', route: '/settings' })).toBe('App reset (warm → /settings)');
+    expect(describeAction({ mode: 'clear', scope: 'file', appState: '/x/a.tar.gz', route: '/p' })).toBe('App reset (restore a.tar.gz → /p)');
+    expect(describeAction({ mode: 'none', scope: 'file', route: '/p' })).toBe('App reset (none)');
+  });
+
+  it('turns a route into the warm reset\'s in-app path', () => {
+    expect(warmResetTarget('/settings?tab=2', undefined)).toBe('/settings?tab=2');
+    expect(warmResetTarget('app:///settings', 'app:///')).toBe('/settings');
+    expect(warmResetTarget('app://settings', 'app://')).toBe('/settings');
+    expect(warmResetTarget('exp://h:8081/--/a/b', 'exp://h:8081/--/')).toBe('/a/b');
+    expect(warmResetTarget('exp://h:8081/--/a', 'exp://h:8081/--')).toBe('/a');
+    expect(warmResetTarget('app:///', 'app:///')).toBe('/');
+    expect(warmResetTarget('other:///settings', 'app:///')).toBeUndefined();
+    expect(warmResetTarget('app:///settings', undefined)).toBeUndefined();
+  });
+
+  it('builds the deep link that opens a route the way the daemon joins reset links', () => {
+    expect(routeDeepLink('/settings', 'app:///')).toBe('app:///settings');
+    expect(routeDeepLink('/settings', 'app://')).toBe('app://settings');
+    expect(routeDeepLink('/a?b=1', 'exp://h:8081/--')).toBe('exp://h:8081/--/a?b=1');
+    expect(routeDeepLink('/', 'app:///')).toBe('app:///');
+    expect(routeDeepLink('https://x.test/a', undefined)).toBe('https://x.test/a');
+    expect(routeDeepLink('/settings', undefined)).toBeUndefined();
+  });
+});
+
 describe('parseHooksMarker', () => {
-  it('ignores fields it does not use (boot token from newer modules)', () => {
-    const m = parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;boot=c0ffee42;url=app:///" />');
-    expect(m).toMatchObject({ epoch: 3, urlPrefix: 'app:///' });
+  it('ignores fields it does not know', () => {
+    const m = parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;future=x;url=app:///" />');
+    expect(m).toEqual({ version: 1, epoch: 3, urlPrefix: 'app:///' });
+  });
+
+  it('reads the boot token and the persisted write count', () => {
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;boot=c0ffee42;url=app:///;writes=5" />'))
+      .toEqual({ version: 1, epoch: 3, boot: 'c0ffee42', urlPrefix: 'app:///', writes: 5 });
+    // A malformed count is no count: the app then reports no writes.
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;url=app:///;writes=-1" />')).not.toHaveProperty('writes');
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;url=app:///;writes=" />')).not.toHaveProperty('writes');
   });
 
   it('parses the Android text attribute and the iOS label attribute', () => {

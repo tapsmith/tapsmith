@@ -9,11 +9,23 @@
  *   m <x> <y>   touch move (contact maintained)
  *   u <x> <y>   touch up
  *   c           cancel (lift at last point; x/y unused)
- *   t2 <x> <y>  double-tap primitive: the helper injects both down/up pairs
+ *   t2 <x> <y> [<hold>]
+ *               double-tap primitive: the helper injects both down/up pairs
  *               with in-process timing, so the inter-tap gap stays inside
  *               every double-tap recognizer window regardless of how loaded
  *               the daemon-side event loop is (four host round-trips were
- *               observed stretching the gap past the app's window on CI)
+ *               observed stretching the gap past the app's window on CI).
+ *               <hold>: how long each tap holds its touch, in whole
+ *               milliseconds (0..HID_MAX_HOLD_MS); without it, the helper's
+ *               default.
+ *   t1 <x> <y> [<hold>]
+ *               single-tap primitive: down, a hold of <hold> milliseconds
+ *               (0..HID_MAX_HOLD_MS; without it, the helper's default), up,
+ *               timed in-process. Lines are paced at least a frame apart and
+ *               each `d` waits for its delivery, so a `d`/`u` pair cannot hold
+ *               a touch for less than a frame, and its hold grows with load.
+ *               Only the up waits for delivery: the reply to the line comes
+ *               once the touch has been lifted.
  */
 typedef enum {
   HID_DOWN,
@@ -21,18 +33,40 @@ typedef enum {
   HID_UP,
   HID_CANCEL,
   HID_DOUBLE_TAP,
+  HID_TAP,
   HID_INVALID
 } HidCmd;
+
+/* holdMs when a line gives none. */
+#define HID_DEFAULT_HOLD (-1)
+/* The longest hold a tap's or double tap's line may ask for: a hold past
+ * this would make the pair two separate taps, or a long press. */
+#define HID_MAX_HOLD_MS 500
 
 typedef struct {
   HidCmd cmd;
   double x;
   double y;
+  /* A tap's or double tap's hold in milliseconds, or HID_DEFAULT_HOLD. */
+  int holdMs;
 } HidEvent;
 
 /* Parse one protocol line. Returns cmd==HID_INVALID on malformed input
  * (unknown command, missing coordinate, or NULL). */
 HidEvent hid_parse_line(const char *line);
+
+/* Whether the simulator has a contact down after `cmd` was sent, given
+ * whether it had one before (`contactDown`) and whether the send succeeded
+ * (`sent`). A d or m (sent as a down) leaves one; u, c, t1 and t2 end with
+ * none; an invalid line sends nothing. A u or c that failed keeps the contact
+ * it was lifting: the daemon streams those without waiting, so it sends no
+ * recovery lift, and the next t1/t2 must lift the finger first. */
+int hid_contact_after(HidCmd cmd, int contactDown, int sent);
+
+/* Whether `cmd` must first lift a contact left down (a mirror gesture whose
+ * u never came): a t1 or t2 down would otherwise only move that finger, and
+ * the app would see no tap. */
+int hid_lifts_held_contact(HidCmd cmd, int contactDown);
 
 /* Convert a logical-point coordinate to a normalized 0..1 ratio, clamped to
  * [0,1]. Returns 0.0 when extentPt <= 0 (divide-by-zero guard). */

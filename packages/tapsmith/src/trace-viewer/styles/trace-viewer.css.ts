@@ -151,10 +151,6 @@ html, body, #app {
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-@keyframes flash-fail {
-  0% { background: oklch(0.68 0.2 25 / 0.3); }
-  100% { background: transparent; }
-}
 
 /* ─── Trace Viewer Layout ─── */
 
@@ -856,6 +852,55 @@ html, body, #app {
   border: none;
   border-radius: 0;
   display: block;
+}
+
+/* A landscape photographic frame is the portrait PNG turned 90°
+ * counter-clockwise (assets/bezels/frames.ts): sized to the frame box's
+ * swapped sides, centred, then turned. Percent widths resolve against the box
+ * width and heights against its height, and --dm-fa is the box's aspect. */
+.dm-frame-img .dm-frame-png.dm-frame-png-ccw {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  width: calc(100% / var(--dm-fa));
+  height: calc(100% * var(--dm-fa));
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
+/* Landscape phones (CSS fallback, if a frame image fails to load): the phone
+ * turned counter-clockwise like the frames — camera on the left short edge,
+ * side buttons on the top edge. Sizes are in cqi (the box's width), so they
+ * shrink to match the now much wider box. */
+.dm-skin-phone.dm-skin-landscape {
+  --bezel: 1.4cqi;
+  --bezel-radius: 5.5cqi;
+  padding: var(--bezel);
+}
+.dm-skin-ios.dm-skin-phone.dm-skin-landscape::after {
+  top: 50%;
+  left: calc(var(--bezel) + 1cqi);
+  transform: translateY(-50%);
+  width: 2.8cqi;
+  height: 10cqi;
+  border-radius: 1.4cqi;
+}
+.dm-skin-android.dm-skin-phone.dm-skin-landscape {
+  padding-left: calc(var(--bezel) * 1.25);
+}
+.dm-skin-android.dm-skin-phone.dm-skin-landscape::after {
+  top: 50%;
+  left: calc(var(--bezel) + 0.7cqi);
+  transform: translateY(-50%);
+  width: 1.2cqi;
+  height: 1.2cqi;
+}
+.dm-skin-phone.dm-skin-landscape::before {
+  right: auto;
+  top: -0.5cqi;
+  left: 20%;
+  width: 6.5cqi;
+  height: 0.5cqi;
+  border-radius: 0.5cqi 0.5cqi 0 0;
 }
 
 /* ─── Detail Tabs ─── */

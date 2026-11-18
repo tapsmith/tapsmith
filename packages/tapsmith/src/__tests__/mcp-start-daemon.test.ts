@@ -38,6 +38,8 @@ let pickPort: () => Promise<number> = () => Promise.resolve(nextPort++);
 vi.mock('../port-utils.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../port-utils.js')>()),
   pickFreePort: () => pickPort(),
+  // The fake daemons answer through the mocked gRPC client, not a socket.
+  connectionRefused: () => Promise.resolve(false),
 }));
 
 const { startDaemon, closeAllClients, ensureConnected, ensurePlatformTarget, getAllDaemonAddresses } = await import('../mcp/connection.js');
