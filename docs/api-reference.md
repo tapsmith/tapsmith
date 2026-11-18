@@ -226,6 +226,8 @@ Perform a swipe gesture across the screen in the given direction: `"up"`, `"down
 
 On Android, `swipe()` (like `dragXY()`) returns once any scrolling it started has come to rest: it waits until no scroll along the swipe's axis has been reported for 300 ms, at most 3 s. A scroll view that is still flinging takes the next touch as "stop scrolling", so a `tap()` made straight after the swipe would otherwise be lost.
 
+On iOS, `swipe()` first gives the app's UIKit animations (an alert being dismissed) up to a second to end, as a `tap()` does: iOS drops a touch made while an alert or sheet is still animating away, so a swipe straight after an alert's OK would otherwise do nothing. It swipes anyway if they have not ended by then, or if the app cannot report them. `dragXY()` waits for nothing, as `tapXY()` does.
+
 ```typescript
 await device.swipe("up");
 await device.swipe("left", { speed: 500, distance: 0.5 });
@@ -1265,6 +1267,8 @@ Scroll this element in the given direction: the way the view scrolls, so `"down"
 ```typescript
 await device.getByTestId("product-list").scroll("down"); // a FlatList with testID="product-list"
 ```
+
+On iOS, `scroll()` first gives the app's UIKit animations up to a second to end, as [`device.swipe()`](#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid) does, so a scroll straight after an alert's OK is not dropped.
 
 The device agents don't apply `distance` yet: each call scrolls by a fixed step of the element's size, whatever `distance` says. To reach a particular element, use [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid).
 
