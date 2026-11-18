@@ -3,7 +3,7 @@ import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getN
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
-import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES } from '../../accessible-name.js';
+import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES, iosBackButtonName } from '../../accessible-name.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
 import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, iosGenericViewHasRole, iosInsideNativeAlert, normalizeRole, unknownRoleMessage } from '../../roles.js';
@@ -479,7 +479,8 @@ function descendantText(node: HierarchyNode, depth = 0): string[] {
  * EditText's text is its typed value unless it equals the hint (an empty
  * field reports its hint as text), and a typed value is only compared whole.
  * A text field with no other name is named by its placeholder
- * ({@link placeholderName}, PILOT-834).
+ * ({@link placeholderName}, PILOT-834), and an iOS back button with no label
+ * "Back" ({@link backButtonName}).
  */
 function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boolean {
   const query = normalizeWhitespace(name);
@@ -500,7 +501,19 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
     || (!textIsHint(node) && matches(text, exact || textIsValue))
     || (!isAndroid && (iosChildLabel(node.attributes.get('label')) || iosChildLabel(node.attributes.get('title'))))
     || (isAndroid && matches(descendantText(node).join(' '), exact))
-    || matches(placeholderName(node), exact);
+    || matches(placeholderName(node), exact)
+    || matches(backButtonName(node), exact);
+}
+
+/** An iOS node's name when it is the system back button with no label or title, else ''. */
+function backButtonName(node: HierarchyNode): string {
+  if (node.attributes.has('class')) return '';
+  return iosBackButtonName({
+    type: node.attributes.get('type') ?? node.tagName,
+    identifier: node.attributes.get('identifier') ?? '',
+    label: node.attributes.get('label') ?? '',
+    title: node.attributes.get('title') ?? '',
+  });
 }
 
 /**
@@ -552,7 +565,8 @@ function roleNameMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
     || test(node.attributes.get('title'))
     || (!textIsValue && !textIsHint(node) && test(text))
     || (isAndroid && test(descendantText(node).join(' ')))
-    || test(placeholderName(node));
+    || test(placeholderName(node))
+    || test(backButtonName(node));
 }
 
 /**

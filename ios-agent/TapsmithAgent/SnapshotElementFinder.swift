@@ -1849,20 +1849,22 @@ class SnapshotElementFinder {
             }
 
             // Filter by name if provided: the label or title, or a label-less
-            // text input's placeholder (RoleName, PILOT-834).
+            // text input's placeholder (RoleName, PILOT-834), or an
+            // unlabelled back button's "Back" (PILOT-1260).
             // Like Playwright: a case-insensitive substring by default, a
             // case-sensitive whole-string match with `exact` (PILOT-549).
             if let name = selector.name {
                 if !RoleName.matches(
                     elementType: elType, label: label, title: title, placeholder: placeholderValue,
-                    name: name, exact: selector.nameExact
+                    identifier: identifier, name: name, exact: selector.nameExact
                 ) {
                     return false
                 }
             } else if let nameRegex = selector.nameRegex {
                 // A RegExp tests the whitespace-normalized name (PILOT-520).
                 if !RoleName.matches(
-                    elementType: elType, label: label, title: title, placeholder: placeholderValue, regex: nameRegex
+                    elementType: elType, label: label, title: title, placeholder: placeholderValue,
+                    identifier: identifier, regex: nameRegex
                 ) {
                     return false
                 }
@@ -2235,6 +2237,13 @@ class SnapshotElementFinder {
                 )
             } else if !nodeLabel.isEmpty, let labelIndex {
                 element = byOwnLabel(nodeLabel, at: labelIndex)
+            } else if let type = nodeElType, selector.role != nil, RoleName.backButtonName(
+                elementType: type, label: nodeLabel, title: snapshotNode?["title"] as? String ?? "",
+                identifier: nodeIdentifier
+            ) != nil {
+                // An unlabelled back button, named "Back" (PILOT-1260): no
+                // label query can find it, its identifier ("BackButton") can.
+                element = resolve(app.descendants(matching: type))
             } else {
                 // Matched through its title with an empty label: no label
                 // query can find this node, and a name query would bind some

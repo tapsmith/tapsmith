@@ -46,6 +46,8 @@ interface Case {
   value?: string
   /** iOS: the UIAccessibilityTraits the element carries, by name (RoleMapping's AccessibilityTrait). */
   traits?: string[]
+  /** iOS: the accessibility identifier. */
+  identifier?: string
   /** iOS: whether the element is inside a tab bar. */
   inTabBar?: boolean
   /** iOS: whether the element is inside a native alert (an XCUIElementTypeAlert). */
@@ -137,6 +139,15 @@ const CASES: Case[] = [
   { why: 'a titled field is not named by its placeholder', platform: 'ios', type: 'XCUIElementTypeTextField', reportedRole: 'textfield', role: 'textfield', label: '', title: 'Email', placeholder: 'Your email', name: 'Your', matches: false },
   { why: 'no label, title or placeholder, no name', platform: 'ios', type: 'XCUIElementTypeTextField', reportedRole: 'textfield', role: 'textfield', label: '', placeholder: '', name: 'Title', matches: false },
   { why: 'a button is not named by a placeholder', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'button', label: '', placeholder: 'Go', name: 'Go', matches: false },
+  // iOS: the iPhone Duo's back button has no label or title (PILOT-1260). It
+  // is named "Back", as VoiceOver reads a back button with no title.
+  { why: 'an unlabelled back button is named Back', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'button', identifier: 'BackButton', label: '', name: 'Back', matches: true },
+  { why: 'exact compares an unlabelled back button\'s name whole', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'button', identifier: 'BackButton', label: '', name: 'Back', exact: true, matches: true },
+  { why: 'a RegExp tests an unlabelled back button\'s name', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'button', identifier: 'BackButton', label: '', name: { source: '^back$', flags: 'i' }, matches: true },
+  { why: 'a labelled back button is named by its label alone', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'button', identifier: 'BackButton', label: 'Native Screens', name: 'Back', matches: false },
+  { why: 'a labelled back button is still named by its label', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'button', identifier: 'BackButton', label: 'Native Screens', name: 'Native Screens', matches: true },
+  { why: 'an unlabelled button with another identifier is not named Back', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'button', identifier: 'Close', label: '', name: 'Back', matches: false },
+  { why: 'an unlabelled back button is not a link', platform: 'ios', type: 'XCUIElementTypeButton', reportedRole: 'button', role: 'link', identifier: 'BackButton', label: '', name: 'Back', matches: false },
 
   // Android: an empty EditText reports its hint as its text; a typed one keeps the hint as its name.
   { why: 'an empty EditText is named by its hint', platform: 'android', type: 'android.widget.EditText', role: 'textfield', text: 'Email', placeholder: 'Email', name: 'Email', matches: true },
@@ -305,7 +316,7 @@ const CASES: Case[] = [
 /** The case's element as a hierarchy node, the way each agent's dump writes it. */
 function nodeFor(c: Case): HierarchyNode {
   const attrs: Record<string, string> = c.platform === 'ios'
-    ? { type: c.type, label: c.label ?? '', identifier: '', value: c.value ?? '', placeholderValue: c.placeholder ?? '' }
+    ? { type: c.type, label: c.label ?? '', identifier: c.identifier ?? '', value: c.value ?? '', placeholderValue: c.placeholder ?? '' }
     : { class: c.type, text: c.text ?? '', 'resource-id': '', hint: c.placeholder ?? '' };
   if (c.title !== undefined) attrs.title = c.title;
   if (c.contentDesc !== undefined) attrs['content-desc'] = c.contentDesc;

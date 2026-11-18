@@ -5,7 +5,8 @@
 // iPhone 17 Pro simulator, both iOS 27.2 (`Tests/Fixtures`). The Duo lays the
 // chrome out differently: its TabView has no tab bar (the items are buttons
 // in iOS 27's bar host), it publishes a navigation title's header trait only
-// some of the time, and its back button floats in the bar host with no label.
+// some of the time, and its back button floats in the bar host with no label
+// (other devices label it with the previous screen's title).
 //
 // A dump carries no traits, so every title here is read without the header
 // trait, as the Duo often publishes it.
@@ -38,6 +39,7 @@ func prepared(_ name: String) -> [String: Any] {
 struct Seen {
     let type: XCUIElement.ElementType
     let label: String
+    let title: String
     let identifier: String
     let traits: UInt64
     let inTabBar: Bool
@@ -54,6 +56,7 @@ func walk(_ tree: [String: Any]) -> [Seen] {
         seen.append(Seen(
             type: type,
             label: node["label"] as? String ?? "",
+            title: node["title"] as? String ?? "",
             identifier: node["identifier"] as? String ?? "",
             traits: node["traits"] as? UInt64 ?? 0,
             inTabBar: inTabBar,
@@ -77,6 +80,20 @@ func matching(_ role: String, in tree: [String: Any]) -> [String] {
             isTabBarHost: $0.isTabBarHost
         )
     }.map(\.label)
+}
+
+/// The identifiers of the nodes getByRole(`role`, { name, exact }) matches in `tree`.
+func named(_ role: String, _ name: String, exact: Bool = false, in tree: [String: Any]) -> [String] {
+    walk(tree).filter {
+        RoleMapping.matches(
+            role: role, elementType: $0.type, traits: $0.traits, value: nil, hasNameFilter: true,
+            inTabBar: $0.inTabBar, inAlert: false, isEmptyBarHost: $0.isEmptyBarHost,
+            isTabBarHost: $0.isTabBarHost
+        ) && RoleName.matches(
+            elementType: $0.type, label: $0.label, title: $0.title, placeholder: "", identifier: $0.identifier,
+            name: name, exact: exact
+        )
+    }.map(\.identifier)
 }
 
 /// The labels of the nodes reported with `role` (the dump's `tapsmith-role`).
@@ -189,6 +206,17 @@ check("17 Pro: the tab bar's items are tabs", matching("tab", in: proTabs), ["Fe
 check("17 Pro: the tab bar is the tablist", matching("tablist", in: proTabs), ["Tab Bar"])
 check("17 Pro: no tab-bar host", walk(proTabs).filter(\.isTabBarHost).count, 0)
 check("17 Pro: the TabView screen has no toolbar", matching("toolbar", in: proTabs), [])
+
+// ─── The back button's name ───
+
+check("Duo: the unlabelled back button is named Back", named("button", "Back", exact: true, in: duoTabs), ["BackButton"])
+check("Duo: the toolbar screen's back button is named Back",
+      named("button", "Back", exact: true, in: duoToolbar), ["BackButton"])
+check("17 Pro: the back button is named by the previous title",
+      named("button", "Native Screens", exact: true, in: proTabs), ["BackButton"])
+check("17 Pro: the labelled back button is not named Back", named("button", "Back", in: proTabs), [])
+check("Duo: the tabs are named by their labels", named("tab", "Profile", exact: true, in: duoTabs), ["person"])
+check("Duo: the tablist is no button", named("button", "Toolbar", in: duoTabs), [])
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

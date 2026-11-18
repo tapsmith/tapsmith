@@ -62,6 +62,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
         let label = c["label"] as? String ?? ""
         let title = c["title"] as? String ?? ""
         let placeholder = c["placeholder"] as? String ?? ""
+        let identifier = c["identifier"] as? String ?? ""
         let value = c["value"] as? String ?? ""
         let role = c["role"] as? String ?? ""
         let inTabBar = c["inTabBar"] as? Bool ?? false
@@ -86,7 +87,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
             expect("role \(role) \(why)", isRole == want)
         } else if let name = c["name"] as? String {
             let got = isRole && RoleName.matches(
-                elementType: type, label: label, title: title, placeholder: placeholder,
+                elementType: type, label: label, title: title, placeholder: placeholder, identifier: identifier,
                 name: name, exact: c["exact"] as? Bool ?? false
             )
             expect("string \(why)", got == want)
@@ -99,7 +100,8 @@ if let data = FileManager.default.contents(atPath: fixturePath),
                 display: "/\(source)/\(flags)"
             )
             let got = isRole && RoleName.matches(
-                elementType: type, label: label, title: title, placeholder: placeholder, regex: re
+                elementType: type, label: label, title: title, placeholder: placeholder, identifier: identifier,
+                regex: re
             )
             expect("regex /\(source)/\(flags) \(why)", re.error == nil && got == want)
         } else {
