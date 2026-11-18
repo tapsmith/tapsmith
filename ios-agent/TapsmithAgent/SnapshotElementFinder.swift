@@ -285,6 +285,7 @@ class SnapshotElementFinder {
         var matchedAncestors: [WrapperAncestor] = []
         var suppressed = Set<Int>()
         var keyboardMatches: [UInt] = []
+        var emptyHostMatches: [String: Int] = [:]
         var keyboardTop: CGFloat?
         findMatches(
             in: snapshotDict,
@@ -298,6 +299,7 @@ class SnapshotElementFinder {
             matchedAncestors: &matchedAncestors,
             suppressed: &suppressed,
             keyboardMatches: &keyboardMatches,
+            emptyHostMatches: &emptyHostMatches,
             keyboardTop: &keyboardTop,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
@@ -314,11 +316,13 @@ class SnapshotElementFinder {
         // (document order). Used to resolve same-identifier elements positionally
         // — `firstMatch` would ignore the position when an id isn't unique.
         var idSeen: [String: Int] = [:]
+        // An empty toolbar host is no match, but the live query returns it
+        // too (PILOT-1251).
         let idIndices: [Int] = matches.map { (nodeDict, _) in
             let id = nodeDict["identifier"] as? String ?? ""
             let n = idSeen[id, default: 0]
             idSeen[id] = n + 1
-            return n
+            return n + (nodeDict[SnapshotElementFinder.emptyHostsBeforeKey] as? Int ?? 0)
         }
         // A label-less getByText match (substring or exact) is re-resolved by
         // the selector's own query: which numbered nodes that query returns,
@@ -1457,8 +1461,15 @@ class SnapshotElementFinder {
     /// Key under which `findMatches` records, on a match after the keyboard
     /// in tree order, the element types of the keyboard's nodes that match
     /// the selector: a live query re-resolving the match by position returns
-    /// those of its own type (or all, unscoped) too.
+    /// those of its own type (or all, unscoped) too. An empty toolbar host
+    /// that matches is recorded the same way (PILOT-1251).
     static let keyboardMatchesKey = "tapsmithKeyboardMatches"
+
+    /// Key under which `findMatches` records, on a match, how many empty
+    /// toolbar hosts with its identifier that match the selector came
+    /// before it: a live query narrowed to that identifier returns them
+    /// first (`idIndices`, PILOT-1251).
+    static let emptyHostsBeforeKey = "tapsmithEmptyHostsBefore"
 
     /// The element types of the nodes of the subtree at `nodeDict` (itself
     /// included) that match the selector, ignoring NonAppElements — the
@@ -1513,6 +1524,7 @@ class SnapshotElementFinder {
         matchedAncestors: inout [WrapperAncestor],
         suppressed: inout Set<Int>,
         keyboardMatches: inout [UInt],
+        emptyHostMatches: inout [String: Int],
         keyboardTop: inout CGFloat?,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
@@ -1550,12 +1562,31 @@ class SnapshotElementFinder {
             )
             return
         }
-        let isAppNode = !NonAppElements.excludesNode(
+        // Nor does iOS 27's empty toolbar host, which is no toolbar on
+        // screen; what it holds (the Duo's back button) still matches
+        // (BarHost.markEmptyHosts, PILOT-1251).
+        let isEmptyBarHost = BarHost.isMarkedEmpty(nodeDict)
+        let isAppNode = !isEmptyBarHost && !NonAppElements.excludesNode(
             elementType: nodeType,
             label: nodeDict["label"] as? String ?? "",
             title: nodeDict["title"] as? String ?? "",
             value: nodeDict["value"] as? String ?? ""
         )
+        // Not a match, but counted as the keyboard's are: a live query
+        // re-resolving a later match by its position sees it too.
+        if isEmptyBarHost, matchesSelector(
+            nodeDict,
+            inTabBar: inTabBar,
+            inAlert: inAlert,
+            containerLabel: containerLabel,
+            selector: selector,
+            keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
+            liveFocusedTextInput: liveFocusedTextInput,
+            focusedHint: focusedHint
+        ) {
+            keyboardMatches.append(parseUInt(nodeDict["elementType"]) ?? 0)
+            emptyHostMatches[nodeDict["identifier"] as? String ?? "", default: 0] += 1
+        }
         // This node's index among the nodes of its row that the query
         // finding it inside the row returns (RowAnchor, PILOT-952), and, for
         // a row, its own context.
@@ -1667,6 +1698,7 @@ class SnapshotElementFinder {
                 ), on: &matched)
             }
             if !keyboardMatches.isEmpty { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
+            if let n = emptyHostMatches[myId], n > 0 { matched[SnapshotElementFinder.emptyHostsBeforeKey] = n }
             results.append((matched, frame))
             let myIndex = results.count - 1
 
@@ -1712,6 +1744,7 @@ class SnapshotElementFinder {
                     matchedAncestors: &matchedAncestors,
                     suppressed: &suppressed,
                     keyboardMatches: &keyboardMatches,
+                    emptyHostMatches: &emptyHostMatches,
                     keyboardTop: &keyboardTop,
                     keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
                     liveFocusedTextInput: liveFocusedTextInput,
@@ -2025,7 +2058,8 @@ class SnapshotElementFinder {
         // the query does too: it never counts the hooks marker. It can't leave
         // out the keyboard, so a match after the keyboard in tree order (an
         // accessory toolbar, a later window) is indexed past the keyboard's
-        // nodes that match the selector (`keyboardMatchesKey`).
+        // nodes that match the selector (`keyboardMatchesKey`) — and past an
+        // empty toolbar host that does (`getByTestId("Toolbar")`, PILOT-1251).
         let keyboardTypes = snapshotNode?[SnapshotElementFinder.keyboardMatchesKey] as? [UInt] ?? []
         let scopedToType = nodeElType.map { $0 != .other && $0 != .any } ?? false
         // `resolve` re-finds by a query on the match's type when it is specific

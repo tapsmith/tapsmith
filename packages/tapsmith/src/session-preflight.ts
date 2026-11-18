@@ -229,7 +229,7 @@ async function readHooksMarkerAndContent(ctx: SessionPreflightContext): Promise<
  * True when the iOS hierarchy has an element of the app, other than the
  * application node itself (which carries the app's name from launch on),
  * with a label or an identifier: the app has drawn real UI. Keyboard subtrees
- * (`tapsmith-non-app`) do not count.
+ * (`tapsmith-non-app`) and iOS 27's empty toolbar host do not count.
  */
 function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
   let nonAppDepth = 0;
@@ -247,6 +247,9 @@ function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
       continue;
     }
     if (tag.startsWith('<XCUIElementTypeApplication')) continue;
+    // iOS 27's empty toolbar host carries "Toolbar" before the app has drawn
+    // anything (non-app-nodes.ts isEmptyBarHostNode).
+    if (tag.includes('tapsmith-empty-bar-host="true"')) continue;
     if (/\blabel="[^"]+"/.test(tag) || /\bidentifier="[^"]+"/.test(tag)) return true;
   }
   return false;

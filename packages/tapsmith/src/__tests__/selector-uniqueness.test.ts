@@ -379,6 +379,29 @@ describe("iOS 27's empty Toolbar host (PILOT-1219)", () => {
     expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("toolbar", { name: "Toolbar" })')!)).toEqual([]);
   });
 
+  it('matches an empty host by no locator at all (PILOT-1251)', () => {
+    const host = makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-empty-bar-host': 'true' }, [blank()]);
+    const roots = screen(host);
+    for (const locator of [
+      'device.getByTestId("Toolbar")',
+      'device.getByText("Toolbar")',
+      'device.getByText("Tool", { exact: false })',
+      'device.getByDescription("Toolbar")',
+      'device.getByRole("toolbar")',
+    ]) {
+      expect(findMatchingNodes(roots, parseSelectorString(locator)!), locator).toEqual([]);
+    }
+  });
+
+  it("still matches what an empty host holds: the iPhone Duo's floating back button (PILOT-1251)", () => {
+    const back = makeNode('XCUIElementTypeButton', {
+      type: 'XCUIElementTypeButton', 'tapsmith-role': 'button', identifier: 'BackButton', bounds: '[399,179][437,217]',
+    });
+    const host = makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-empty-bar-host': 'true' }, [back]);
+    expect(findMatchingNodes(screen(host), parseSelectorString('device.getByTestId("BackButton")')!)).toEqual([back]);
+    expect(findMatchingNodes(screen(host), parseSelectorString('device.getByTestId("Toolbar")')!)).toEqual([]);
+  });
+
   it('matches a host holding items as the one toolbar', () => {
     const archive = makeNode('XCUIElementTypeButton', { type: 'XCUIElementTypeButton', 'tapsmith-role': 'button', label: 'Archive', bounds: '[33,804][114,840]' });
     const host = makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-role': 'toolbar' }, [archive]);

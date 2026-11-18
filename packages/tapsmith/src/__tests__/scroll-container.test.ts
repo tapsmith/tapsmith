@@ -121,6 +121,15 @@ describe('scrollRegion — iOS (the element\'s frame is known)', () => {
     expect(scrollRegion(xml, { left: 0, top: 1200, right: 402, bottom: 1244 })).toEqual({ left: 20, top: 400, right: 382, bottom: 800 });
   });
 
+  it("ignores iOS 27's screen-sized empty toolbar host: it is no edge cover (PILOT-1251)", () => {
+    const xml = ios(
+      el('Toolbar', '[0,0][402,874]', 'label="Toolbar" identifier="Toolbar" tapsmith-empty-bar-host="true"', el('Other', '[0,0][402,874]', '')),
+      el('ScrollView', '[20,400][382,800]', '', row('Visible', 420) + row('Max Calories', 1200)),
+    );
+
+    expect(scrollRegion(xml, { left: 0, top: 1200, right: 402, bottom: 1244 })).toEqual({ left: 20, top: 400, right: 382, bottom: 800 });
+  });
+
   it('picks the nearest scrollable ancestor: a carousel on screen holding the element', () => {
     const xml = ios(
       el('ScrollView', '[0,0][402,874]', '',

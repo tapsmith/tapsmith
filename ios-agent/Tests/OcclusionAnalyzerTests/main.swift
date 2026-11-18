@@ -382,6 +382,61 @@ checkPoint("a bar in a bar-sized wrapper after a sibling still clips a row half 
            ]).analyze(.init(frame: R(16, 770, 370, 60), elementType: .cell, label: "", identifier: ""), isHittable: true),
            CGPoint(x: 201, y: 780))
 
+// The iPhone Duo simulator (iOS 27.2, PILOT-1251) lays the host out first in
+// the screen's container, before the navigation bar and the content, and on a
+// pushed screen it holds the floating back button.
+let duo = R(0, 0, 466, 678)
+func duoAnalyzer(_ rows: [Row]) -> OcclusionAnalyzer { OcclusionAnalyzer(nodes: tree(rows), screen: duo) }
+let duoToggles: [Row] = [
+    (0, .application, "Tapsmith Native", "", duo),
+    (1, .window, "", "", duo),
+    (2, .other, "", "", duo),
+    (3, .other, "", "", duo),
+    (4, .toolbar, "Toolbar", "Toolbar", duo),
+    (5, .other, "", "", duo),
+    (6, .other, "", "", R(394, 174, 48, 48)),
+    (7, .button, "", "BackButton", R(399, 179, 38, 38)),
+    (4, .navigationBar, "", "Toggles", R(0, 24, 466, 58)),
+    (5, .staticText, "Toggles", "", R(20, 31, 90, 34)),
+    (4, .other, "", "", duo),
+    (5, .collectionView, "", "", duo),
+    (6, .cell, "", "", R(20, 300, 426, 52)),
+    (7, .button, "Large", "", R(300, 310, 107, 32)),
+]
+for hittable in [true, false] {
+    checkPoint("iPhone Duo: a host laid out first does not cover the content (hittable: \(hittable))",
+               duoAnalyzer(duoToggles).analyze(button("Large", R(300, 310, 107, 32)), isHittable: hittable),
+               CGPoint(x: 353.5, y: 326))
+}
+checkPoint("iPhone Duo: the back button in a first host is touched where it is",
+           duoAnalyzer(duoToggles).analyze(.init(frame: R(399, 179, 38, 38), elementType: .button, label: "", identifier: "BackButton"),
+                                        isHittable: false),
+           CGPoint(x: 418, y: 198))
+// A TabView: the tab's host, holding the floating tab bar, is alone in a
+// wrapper of its own size after the tab's content. Content under a tab
+// button is still covered by the button.
+let duoTabs: [Row] = [
+    (0, .application, "Tapsmith Native", "", duo),
+    (1, .window, "", "", duo),
+    (2, .other, "", "", duo),
+    (3, .other, "", "", duo),
+    (4, .staticText, "Feed tab content", "", R(126, 352, 129, 21)),
+    (4, .button, "Under", "", R(400, 500, 30, 20)),
+    (3, .other, "", "", duo),
+    (4, .toolbar, "Toolbar", "Toolbar", duo),
+    (5, .other, "", "", R(394, 492, 48, 162)),
+    (6, .button, "Feed", "house", R(396, 494, 44, 58)),
+]
+for hittable in [true, false] {
+    checkPoint("iPhone Duo: a host alone in a same-size wrapper does not cover the tab's content (hittable: \(hittable))",
+               duoAnalyzer(duoTabs).analyze(.init(frame: R(126, 352, 129, 21), elementType: .staticText,
+                                               label: "Feed tab content", identifier: ""), isHittable: hittable),
+               CGPoint(x: 190.5, y: 362.5))
+}
+check("iPhone Duo: content under a floating tab button is still covered by the button",
+      duoAnalyzer(duoTabs).analyze(button("Under", R(400, 500, 30, 20)), isHittable: false),
+      .covered(by: "button \"Feed\""))
+
 // A sheet at a small detent (or an iPad popover) gets the same host, however
 // short: a host is told by what it is laid over, not by its size.
 let shortSheet: [Row] = [

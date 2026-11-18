@@ -313,15 +313,18 @@ struct OcclusionAnalyzer {
     /// painted after the target. (`KeyboardDismissPlanner` treats a host as
     /// plain for the same reason.)
     func isBarHost(_ i: Int) -> Bool {
-        guard let p = nodes[i].parent else { return false }
         let nodes = self.nodes
-        let siblings = sequence(first: p + 1) { nodes[$0].subtreeEnd }.lazy
-            .prefix { $0 < i }
-            .map { nodes[$0].frame }
-        return BarHost.isHost(
-            elementType: nodes[i].elementType, frame: nodes[i].frame, container: nodes[p].frame,
-            earlierSiblings: siblings
-        )
+        // Its ancestry, innermost first: each ancestor's frame and the frames
+        // of the children it holds besides the one on the way down.
+        let levels = sequence(first: i) { nodes[$0].parent }.lazy.compactMap { child -> BarHost.Level? in
+            guard let p = nodes[child].parent else { return nil }
+            let siblings = sequence(first: p + 1) { nodes[$0].subtreeEnd }
+                .prefix { $0 < nodes[p].subtreeEnd }
+                .filter { $0 != child }
+                .map { nodes[$0].frame }
+            return (nodes[p].frame, siblings)
+        }
+        return BarHost.isHost(elementType: nodes[i].elementType, frame: nodes[i].frame, levels: levels)
     }
 
     // MARK: - Keyboard

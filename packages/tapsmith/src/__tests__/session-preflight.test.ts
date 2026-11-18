@@ -2823,16 +2823,18 @@ describe('session-preflight', () => {
         expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true, hooksUrlPrefix: 'exp://x/' });
       });
 
-      it('on iOS, counts an element of the app with a label or identifier, not the application node or keyboard', async () => {
+      it('on iOS, counts an element of the app with a label or identifier, not the application node, keyboard or empty toolbar host', async () => {
         const app = (inner: string) => `<hierarchy><XCUIElementTypeApplication label="Example" identifier="" type="XCUIElementTypeApplication">${inner}</XCUIElementTypeApplication></hierarchy>`;
         const ctx = probeContext(project({}), 'ios');
         vi.mocked(ctx.client.getUiHierarchy)
           .mockResolvedValueOnce(read(app('<XCUIElementTypeWindow label="" identifier="" type="XCUIElementTypeWindow" />')))
           .mockResolvedValueOnce(read(app('<XCUIElementTypeKeyboard label="" identifier="" type="XCUIElementTypeKeyboard" tapsmith-non-app="true"><XCUIElementTypeKey label="q" identifier="q" type="XCUIElementTypeKey" /></XCUIElementTypeKeyboard>')))
+          // iOS 27's empty toolbar host, labelled "Toolbar" before anything is drawn (PILOT-1251).
+          .mockResolvedValueOnce(read(app('<XCUIElementTypeToolbar label="Toolbar" identifier="Toolbar" type="XCUIElementTypeToolbar" tapsmith-empty-bar-host="true"><XCUIElementTypeOther label="" identifier="" type="XCUIElementTypeOther" /></XCUIElementTypeToolbar>')))
           .mockResolvedValue(read(app('<XCUIElementTypeStaticText label="Welcome" identifier="" type="XCUIElementTypeStaticText" />')));
 
         expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
-        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(4);
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(5);
       });
     });
 

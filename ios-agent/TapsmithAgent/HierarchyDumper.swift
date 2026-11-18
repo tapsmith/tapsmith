@@ -141,9 +141,11 @@ class HierarchyDumper {
         if NonAppElements.isSwitchPart(elementType: elType, insideSwitch: insideSwitch) {
             xml += " tapsmith-switch-part=\"true\""
         }
-        // iOS 27's empty toolbar host: no role, so no role query matches it
-        // (BarHost.markEmptyHosts, PILOT-1219). The trace viewer reads this,
-        // not the missing role, as a dump without roles still matches by type.
+        // iOS 27's empty toolbar host: no role, and no locator matches it,
+        // though what it holds still does (BarHost.markEmptyHosts, PILOT-1219,
+        // PILOT-1251). The trace viewer reads this, not the missing role, as a
+        // dump without roles still matches by type. Not non-app: it is the size
+        // of its screen, and non-app nodes are edges the scroll region avoids.
         if isEmptyBarHost {
             xml += " tapsmith-empty-bar-host=\"true\""
         }

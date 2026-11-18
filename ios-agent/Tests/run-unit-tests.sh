@@ -31,6 +31,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/BarHostTests/main.swift \
   TapsmithAgent/BarHost.swift \
+  TapsmithAgent/TextMatch.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
