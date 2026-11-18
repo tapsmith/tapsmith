@@ -65,31 +65,62 @@ let screen = R(0, 0, 402, 874)
 
 // MARK: - The structural rule
 
+/// isHost with one level: the node's container and its siblings there.
+func isHost(_ type: XCUIElement.ElementType, _ frame: CGRect, in container: CGRect, siblings: [CGRect]) -> Bool {
+    BarHost.isHost(elementType: type, frame: frame, levels: [(container: container, siblings: siblings)])
+}
+
 check("a toolbar filling its container, laid over content that fills it too, is a host",
-      BarHost.isHost(elementType: .toolbar, frame: screen, container: screen, earlierSiblings: [R(0, 62, 402, 106), screen]),
+      isHost(.toolbar, screen, in: screen, siblings: [R(0, 62, 402, 106), screen]),
       true)
 check("a host's frame may overhang its container by a point",
-      BarHost.isHost(elementType: .toolbar, frame: R(-1, 0, 403, 875), container: screen, earlierSiblings: [screen]),
+      isHost(.toolbar, R(-1, 0, 403, 875), in: screen, siblings: [screen]),
       true)
 check("a sheet-sized host (the sheet's container, not the window) is a host",
-      BarHost.isHost(elementType: .toolbar, frame: R(0, 62, 402, 812), container: R(0, 62, 402, 812),
-                     earlierSiblings: [R(0, 78, 402, 106), R(0, 62, 402, 812)]),
+      isHost(.toolbar, R(0, 62, 402, 812), in: R(0, 62, 402, 812), siblings: [R(0, 78, 402, 106), R(0, 62, 402, 812)]),
       true)
 check("a bar alone in a wrapper of its own size is a bar",
-      BarHost.isHost(elementType: .toolbar, frame: R(0, 790, 402, 84), container: R(0, 790, 402, 84), earlierSiblings: []),
+      isHost(.toolbar, R(0, 790, 402, 84), in: R(0, 790, 402, 84), siblings: []),
       false)
-check("a bar in a wrapper of its own size after something smaller (a badge) is a bar",
-      BarHost.isHost(elementType: .tabBar, frame: R(0, 790, 402, 84), container: R(0, 790, 402, 84),
-                     earlierSiblings: [R(300, 792, 16, 16)]),
+check("a bar in a wrapper of its own size beside something smaller (a badge) is a bar",
+      isHost(.tabBar, R(0, 790, 402, 84), in: R(0, 790, 402, 84), siblings: [R(300, 792, 16, 16)]),
       false)
 check("a bar-sized toolbar in a screen-sized container is a bar",
-      BarHost.isHost(elementType: .toolbar, frame: R(0, 790, 402, 84), container: screen, earlierSiblings: [screen]),
+      isHost(.toolbar, R(0, 790, 402, 84), in: screen, siblings: [screen]),
       false)
 check("only a bar type can be a host",
-      BarHost.isHost(elementType: .button, frame: screen, container: screen, earlierSiblings: [screen]),
+      isHost(.button, screen, in: screen, siblings: [screen]),
       false)
 check("a container with no area hosts nothing",
-      BarHost.isHost(elementType: .toolbar, frame: screen, container: R(0, 0, 0, 0), earlierSiblings: [R(0, 0, 0, 0)]),
+      isHost(.toolbar, screen, in: R(0, 0, 0, 0), siblings: [R(0, 0, 0, 0)]),
+      false)
+
+// The iPhone Duo (iOS 27.2, PILOT-1251) lays the host out FIRST in its
+// container, before the navigation bar and the content.
+let duo = R(0, 0, 466, 678)
+check("iPhone Duo: a host laid out before the content that fills its container is a host",
+      isHost(.toolbar, duo, in: duo, siblings: [R(0, 24, 466, 58), duo]),
+      true)
+// In a TabView the Duo's host (holding the floating tab bar) is alone in a
+// wrapper of its own size, laid out after the tab's content: the wrapper is
+// what sits beside the content.
+check("iPhone Duo: a host alone in a same-size wrapper beside content is a host",
+      BarHost.isHost(elementType: .toolbar, frame: duo, levels: [
+          (container: duo, siblings: []),
+          (container: duo, siblings: [duo]),
+      ]),
+      true)
+check("a bar alone in a wrapper of its own size, in a screen with content, is still a bar",
+      BarHost.isHost(elementType: .toolbar, frame: R(0, 790, 402, 84), levels: [
+          (container: R(0, 790, 402, 84), siblings: []),
+          (container: screen, siblings: [R(0, 62, 402, 106), screen]),
+      ]),
+      false)
+check("a host alone all the way up, beside nothing, is not a host",
+      BarHost.isHost(elementType: .toolbar, frame: screen, levels: [
+          (container: screen, siblings: []),
+          (container: screen, siblings: []),
+      ]),
       false)
 
 // MARK: - Empty hosts
@@ -166,6 +197,38 @@ let wrappedBar = marked(node(.application, screen, [node(.window, screen, [
 ])]))
 check("an empty toolbar alone in a wrapper of its own size is a bar",
       tagged(children(children(children(children(wrappedBar)[0])[0])[1])[0]), false)
+
+// iPhone Duo, iOS 27.2 (PILOT-1251), the fixture's home screen: the host is
+// the first child of the screen's container, empty, before the navigation
+// bar and the content.
+let duoRoot = marked(node(.application, duo, label: "Tapsmith Native", [
+    node(.window, duo, [node(.other, duo, [
+        host(duo, [node(.other, duo, [node(.other, R(0, 0, 0, 0))])]),
+        node(.navigationBar, R(0, 24, 466, 58), identifier: "Native Screens"),
+        node(.other, duo, [node(.collectionView, duo, [node(.cell, R(20, 82, 426, 52), [node(.button, R(20, 82, 426, 52), label: "Toggles")])])]),
+    ])]),
+]))
+func duoHost(_ tree: [String: Any]) -> [String: Any] { children(children(children(tree)[0])[0])[0] }
+check("iPhone Duo: the empty host laid out first is tagged", tagged(duoHost(duoRoot)), true)
+// A pushed screen: the host holds the floating back button.
+let duoPushed = marked(node(.application, duo, label: "Tapsmith Native", [
+    node(.window, duo, [node(.other, duo, [
+        host(duo, [node(.other, duo, [node(.other, R(394, 174, 48, 48), [
+            node(.button, R(399, 179, 38, 38), identifier: "BackButton"),
+        ])])]),
+        node(.navigationBar, R(0, 24, 466, 58), identifier: "Toggles"),
+        node(.other, duo),
+    ])]),
+]))
+check("iPhone Duo: a first host holding the back button is not tagged", tagged(duoHost(duoPushed)), false)
+// TabView: the tab's host is alone in a same-size wrapper after the content,
+// empty here.
+let duoTabs = marked(node(.application, duo, [node(.window, duo, [node(.other, duo, [
+    node(.other, duo, [node(.staticText, R(126, 352, 129, 21), label: "Feed tab content")]),
+    node(.other, duo, [host(duo, [node(.other, duo)])]),
+])])]))
+check("iPhone Duo: an empty host alone in a same-size wrapper beside content is tagged",
+      tagged(children(children(children(children(duoTabs)[0])[0])[1])[0]), true)
 
 check("containsEmptyHost finds an empty host deep in the tree", BarHost.containsEmptyHost(emptyScreen), true)
 check("containsEmptyHost finds none where the host holds items", BarHost.containsEmptyHost(withItems), false)
