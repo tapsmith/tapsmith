@@ -2541,6 +2541,12 @@ class CommandHandler {
             let direction = params["direction"] as? String ?? "up"
             let speed = params["speed"] as? Int ?? 5000
             let distance = params["distance"] as? Double ?? 0.5
+            // A swipe made while an alert's dismissal still animates is
+            // dropped, as a tap is (PILOT-1129): device.swipe() straight
+            // after an alert's OK did nothing on iOS 27 and reported success
+            // (PILOT-1258). Wait for the app's UIKit animations first, as BACK
+            // does. A coordinate drag (above) waits for nothing, as tapXY().
+            waitForAnimationsIdle(reserveMs: 0)
             if let elementId = params["elementId"] as? String {
                 let xcElem = try getXCUIElement(elementId)
                 try actionExecutor.swipe(xcElem, direction: direction, speed: speed, distance: distance)
@@ -2578,6 +2584,10 @@ class CommandHandler {
             return ["success": true]
 
         case "scroll":
+            // A scroll is a swipe: wait out a dismissal first, as swipe does
+            // (PILOT-1258). scroll() through a handle's element id swiped
+            // straight after an alert's OK and was dropped on iOS 27.
+            waitForAnimationsIdle(reserveMs: 0)
             let direction = params["direction"] as? String ?? "down"
             let targetSelector: ElementSelector?
             if let scrollTo = params["scrollTo"] as? [String: Any] {

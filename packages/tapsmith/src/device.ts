@@ -599,10 +599,11 @@ export class Device {
 
   /**
    * Swipe across the screen in `direction` (the way the finger moves, so
-   * `"up"` reveals what is below). Not tied to an element, so nothing is
-   * waited for first; on Android it returns once any scroll it started has
-   * settled. `options.timeoutMs` bounds the gesture (default: the device
-   * timeout).
+   * `"up"` reveals what is below). Not tied to an element, so no element is
+   * waited for; iOS first gives the app's UIKit animations (an alert being
+   * dismissed) up to a second to end, as a tap does, and on Android it
+   * returns once any scroll it started has settled. `options.timeoutMs`
+   * bounds the gesture (default: the device timeout).
    */
   async swipe(direction: SwipeDirection | (string & {}), options?: SwipeOptions): Promise<void> {
     return this._tracedAction('swipe', 'swipe', undefined,

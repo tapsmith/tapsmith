@@ -1,10 +1,22 @@
 import { useRef, useState } from "react"
-import { PanResponder, StyleSheet, Text, View } from "react-native"
+import {
+  Alert,
+  PanResponder,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native"
 
 // Drag and drop that says where the drop landed: on the drop zone or not.
 // The Gestures screen's drag only records that a drag happened, and its drag
 // row sits below the fold of a landscape phone, so this screen keeps both
 // ends near the top, side by side in either orientation.
+//
+// Below them, an alert and a list that fills the rest of the screen: a drag,
+// scroll() or device.swipe() straight after the alert's OK lands while the
+// alert's dismissal still animates (PILOT-1258).
 export default function DragScreen() {
   // Counted, as a warm reset keeps the screen's state across tests: a test
   // tells its own drop from an earlier one by the count.
@@ -56,6 +68,20 @@ export default function DragScreen() {
           <Text style={styles.dropZoneText}>Drop here</Text>
         </View>
       </View>
+      <TouchableOpacity
+        style={styles.button}
+        onPress={() => Alert.alert("Info", "Dismiss me, then drag or scroll.")}
+        accessibilityRole="button"
+        accessibilityLabel="Show alert"
+        testID="drag-show-alert"
+      >
+        <Text style={styles.buttonText}>Show Alert</Text>
+      </TouchableOpacity>
+      <ScrollView style={styles.list} testID="drag-list">
+        {Array.from({ length: 40 }, (_, i) => (
+          <Text key={i} style={styles.listItem}>{`List row ${i + 1}`}</Text>
+        ))}
+      </ScrollView>
     </View>
   )
 }
@@ -102,5 +128,25 @@ const styles = StyleSheet.create({
   dropZoneText: {
     color: "#999",
     fontWeight: "600",
+  },
+  button: {
+    backgroundColor: "#007AFF",
+    borderRadius: 8,
+    padding: 12,
+    alignItems: "center",
+    marginTop: 12,
+  },
+  buttonText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  list: {
+    flex: 1,
+    marginTop: 12,
+  },
+  listItem: {
+    fontSize: 16,
+    paddingVertical: 12,
+    color: "#333",
   },
 })
