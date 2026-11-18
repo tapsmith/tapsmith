@@ -129,6 +129,48 @@ enum RoleMapping {
         return elementTypeToRole[elementType] ?? ""
     }
 
+    /// Give every navigation title in a snapshot dictionary the header trait,
+    /// so it is a heading wherever traits are read (`resolveRole`, `matches`,
+    /// the dump). A navigation title is a static text directly in a
+    /// `.navigationBar` whose label is the bar's identifier: UIKit and SwiftUI
+    /// identify a navigation bar by its title. UIKit gives the title the
+    /// header trait, but the iPhone Duo simulator (iOS 27) publishes it only
+    /// some of the time — on launch, not after a pop or a deep link, and not
+    /// always on two reads of the same screen (PILOT-1260). Any other text in
+    /// the bar (a subtitle, a principal item) keeps its own traits.
+    static func markNavigationTitles(in dict: inout [String: Any]) {
+        guard var children = dict["children"] as? [[String: Any]], !children.isEmpty else { return }
+        let title = elementType(of: dict) == .navigationBar ? dict["identifier"] as? String ?? "" : ""
+        for i in children.indices {
+            if !title.isEmpty, elementType(of: children[i]) == .staticText,
+               children[i]["label"] as? String == title {
+                children[i]["traits"] = traitBits(of: children[i]) | AccessibilityTrait.header
+            }
+            markNavigationTitles(in: &children[i])
+        }
+        dict["children"] = children
+    }
+
+    /// A snapshot dictionary's element type.
+    private static func elementType(of dict: [String: Any]) -> XCUIElement.ElementType {
+        let raw = (dict["elementType"] as? UInt) ?? (dict["elementType"] as? Int).map(UInt.init)
+            ?? (dict["elementType"] as? NSNumber)?.uintValue ?? 0
+        return XCUIElement.ElementType(rawValue: raw) ?? .other
+    }
+
+    /// The traits `SnapshotElementFinder.annotateTraits` spliced into a
+    /// snapshot dictionary (0 when none were read), as its `extractTraits`
+    /// reads them.
+    private static func traitBits(of dict: [String: Any]) -> UInt64 {
+        switch dict["traits"] {
+        case let v as UInt64: return v
+        case let v as UInt: return UInt64(v)
+        case let v as Int: return UInt64(bitPattern: Int64(v))
+        case let v as NSNumber: return v.uint64Value
+        default: return 0
+        }
+    }
+
     /// Whether an element is an item of a tab bar: a button with a `.tabBar`
     /// ancestor (`inTabBar`). UIKit and SwiftUI tab bars expose their items
     /// as buttons, never as `.tab` elements, so this is how getByRole("tab")

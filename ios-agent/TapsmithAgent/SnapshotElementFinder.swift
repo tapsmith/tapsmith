@@ -223,6 +223,9 @@ class SnapshotElementFinder {
         CellAccessories.normalizeIndicators(in: &snapshotDict)
         // iOS 27's empty toolbar host has no role (PILOT-1219).
         BarHost.markEmptyHosts(in: &snapshotDict)
+        // A navigation title is a heading, whether or not the device
+        // published its header trait (PILOT-1260).
+        RoleMapping.markNavigationTitles(in: &snapshotDict)
         return snapshotDict
     }
 
