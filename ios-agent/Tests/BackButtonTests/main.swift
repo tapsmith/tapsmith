@@ -287,6 +287,60 @@ twoStacks += [
 ]
 check("two stacks: the back button painted last", tapPoint(resolve(twoStacks)), CGPoint(x: 56, y: 84))
 
+// A pop on iOS 27.2 (recorded on an iPhone 17 Pro simulator, the test app's
+// Dialogs screen popped to its first screen): for a few hundred ms after the
+// pop's animation the popped screen's back button is still in the tree, in
+// the first screen's navigation bar, though no longer drawn. It has lost the
+// button trait and kept the private back-button one (PILOT-1261).
+let onScreenBackTraits: UInt64 = 0x2_0800_0001
+let leavingBackTraits: UInt64 = 0x2_0800_0000
+
+/// `rows` as nodes, with `traits` set on the nodes at the given indices.
+func resolve(_ rows: [Row], traits: [Int: UInt64]) -> BackButton.Resolution {
+    var nodes = tree(rows)
+    for (i, value) in traits { nodes[i].traits = value }
+    return BackButton.resolve(in: OcclusionAnalyzer(nodes: nodes, screen: screen))
+}
+
+let rootAfterPop: [Row] = [
+    (0, .application, "Tapsmith Test App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .navigationBar, "", "Tapsmith Test App", R(0, 62, 402, 54)),
+    (4, .button, "Back", "BackButton", R(15.5, 61.5, 91, 45)),
+    (4, .staticText, "Tapsmith Test App", "", R(127, 73, 148, 22)),
+    (3, .other, "", "", screen),
+    (4, .staticText, "Test Screens", "", R(16, 132, 370, 29)),
+    toolbarHost(depth: 3),
+]
+check("iOS 27, the first screen just after a pop: the popped screen's back button is no back button",
+      resolve(rootAfterPop, traits: [4: leavingBackTraits]), .none)
+check("the same button with the button trait is tapped",
+      tapPoint(resolve(rootAfterPop, traits: [4: onScreenBackTraits])), CGPoint(x: 61, y: 84))
+check("a system back button whose traits can't be read is tapped",
+      tapPoint(resolve(rootAfterPop, traits: [4: 0])), CGPoint(x: 61, y: 84))
+
+// Popping to a screen that has its own back button: the popped screen's is
+// painted after it, and the screen's own is the one tapped.
+let pushedAfterPop: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .navigationBar, "", "Level 1", R(0, 62, 402, 54)),
+    (3, .button, "Back", "BackButton", R(16, 62, 90, 44)),
+    (3, .button, "Back", "BackButton", R(15.5, 61.5, 91, 45)),
+    toolbarHost(depth: 2),
+]
+check("after a pop to a pushed screen: that screen's own back button, not the popped one's",
+      tapPoint(resolve(pushedAfterPop, traits: [3: onScreenBackTraits, 4: leavingBackTraits])),
+      CGPoint(x: 61, y: 84))
+
+// The iPhone Duo's floating back button, in the Toolbar host, never has the
+// button trait (recorded on its 27.2 simulator): it is on screen all the same.
+var duoNodes = tree(floatingBack)
+duoNodes[3].traits = leavingBackTraits
+check("iOS 27 floating toolbar: a back button without the button trait is still tapped",
+      tapPoint(BackButton.resolve(in: OcclusionAnalyzer(nodes: duoNodes, screen: duo))), CGPoint(x: 418, y: 198))
+
 // Reading again before refusing: for a second, and never past the
 // daemon's deadline.
 let t0 = Date(timeIntervalSinceReferenceDate: 0)

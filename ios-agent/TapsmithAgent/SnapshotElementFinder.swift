@@ -1264,23 +1264,10 @@ class SnapshotElementFinder {
     }
 
     static func annotateTraits(dict: inout [String: Any], snapshot: XCUIElementSnapshot) {
-        // Bare `value(forKey:)` on an NSObject that doesn't have the key
-        // throws an Objective-C NSUnknownKeyException, which is *not*
-        // catchable from Swift and crashes the agent. Check
-        // `responds(to:)` first; if the property went away on a future
-        // Xcode, fall through cleanly and log once instead of crashing.
-        let raw: Any?
-        if let nsSnap = snapshot as? NSObject,
-           nsSnap.responds(to: NSSelectorFromString("traits")) {
-            raw = nsSnap.value(forKey: "traits")
-        } else {
-            raw = nil
-        }
-        let traits: UInt64 = {
-            if let v = raw as? UInt64 { return v }
-            if let v = raw as? NSNumber { return v.uint64Value }
-            return 0
-        }()
+        // If the property went away on a future Xcode, fall through cleanly
+        // and log once instead of crashing.
+        let raw = AccessibilityTrait.read(from: snapshot)
+        let traits = raw ?? 0
         if traits != 0 {
             dict["traits"] = traits
         } else if raw == nil && !kvcMissLogger.hasFired {
