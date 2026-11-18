@@ -3,10 +3,7 @@ import { openScreen } from "../utils/app-reset.js"
 
 // PILOT-979: a loading overlay (a plain view holding a spinner) is a cover,
 // though it is not a control — a tap used to land on it and report success.
-// PILOT-980: a target under fixed chrome in its own window (a header or
-// footer bar laid over its list) is scrolled clear of it and tapped, as
-// Playwright scrolls a target whose click another element intercepts.
-// Every target and cover on the screen counts its own taps.
+// The target and the overlay each count their own taps.
 
 describe("Covers", () => {
   test.use({ appResetScope: "test" })
@@ -22,14 +19,8 @@ describe("Covers", () => {
       (e: unknown) => (e instanceof Error ? e.message : String(e)),
     )
 
-  type Counts = { behindLoading?: number; loadingOverlay?: number; row?: string; rowTaps?: number; added?: string; header?: number; footer?: number }
-  const counts = (c: Counts) => {
-    const all = { behindLoading: 0, loadingOverlay: 0, row: "none", rowTaps: 0, added: "none", header: 0, footer: 0, ...c }
-    return (
-      `behindLoading=${all.behindLoading} loadingOverlay=${all.loadingOverlay} row=${all.row} ` +
-      `rowTaps=${all.rowTaps} added=${all.added} header=${all.header} footer=${all.footer}`
-    )
-  }
+  const counts = (c: { behindLoading?: number; loadingOverlay?: number }) =>
+    `behindLoading=${c.behindLoading ?? 0} loadingOverlay=${c.loadingOverlay ?? 0}`
 
   describe("a loading overlay", () => {
     test("tap() waits for a loading overlay to go away, then taps the target", async ({ coversScreen }) => {
@@ -48,82 +39,6 @@ describe("Covers", () => {
       expect(await failureOf(coversScreen.behindLoading.tap({ timeout: 1_500 }))).toMatch(/covered by a loading overlay/i)
 
       await expect(coversScreen.counts).toHaveText(counts({}))
-    })
-  })
-
-  describe("fixed chrome over a list", () => {
-    test("tap() on a row under a footer bar scrolls it clear and taps it", async ({ coversScreen }) => {
-      const label = await coversScreen.rowUnderFooter()
-
-      await coversScreen.row(label).tap()
-
-      await expect(coversScreen.counts).toHaveText(counts({ row: label, rowTaps: 1 }))
-    })
-
-    // The drag would start on the dialog's backdrop, which takes no clicks
-    // and has no role, so nothing tells it apart from a pass-through view
-    // before the drag. Pressing it closes the dialog; the touch then sees the
-    // screen change outside the list and fails instead of tapping the row.
-    test("tap() on a row under a footer bar with a dialog over the screen does not tap the row", async ({ coversScreen }) => {
-      const label = await coversScreen.rowUnderFooter()
-      await coversScreen.showDialogButton.tap()
-      await expect(coversScreen.dialogOk).toBeVisible()
-
-      expect(await failureOf(coversScreen.row(label).tap({ timeout: 8_000 }))).toMatch(/covered by/i)
-
-      await expect(coversScreen.counts).toHaveText(counts({}))
-    })
-
-    // The "Add" buttons all share one name, so nth() picks one by position.
-    // Android follows the node it found through the scroll. The iOS agent
-    // re-finds an element through a live query, which for one bound only by
-    // position may pick another row once the list has moved, so iOS does not
-    // scroll for it: it waits the cover out and fails, never tapping the cover.
-    test("tap() on an nth() match under a footer bar scrolls it clear on Android and fails as covered on iOS", async ({ platform, coversScreen }) => {
-      const label = await coversScreen.rowUnderFooter()
-      const index = Number(label.replace("Row ", "")) - 1
-
-      const failure = await failureOf(coversScreen.addButtons.nth(index).tap({ timeout: 8_000 }))
-
-      if (platform === "android") {
-        expect(failure).toBe("")
-        await expect(coversScreen.counts).toHaveText(counts({ added: label }))
-      } else {
-        expect(failure).toMatch(/covered by .*Footer action/i)
-        await expect(coversScreen.counts).toHaveText(counts({}))
-      }
-    })
-
-    // Under the header on Android (under the footer, the focused field would
-    // sit under its own keyboard, which hides it from Android's tree), under
-    // the footer on iOS (see the header test below). On iOS the field then
-    // sits under its keyboard, so the test checks the focusing tap landed
-    // (the field has focus, the footer was not tapped) rather than typing
-    // into a field the keyboard hides.
-    test("type() and focus() on a field under a bar scroll it clear for the focusing tap", async ({ platform, coversScreen }) => {
-      if (platform === "android") {
-        await coversScreen.noteUnderHeaderButton.tap()
-        await coversScreen.note.type("hello")
-        await expect(coversScreen.note).toHaveValue("hello")
-      } else {
-        await coversScreen.noteUnderFooterButton.tap()
-        await coversScreen.note.focus()
-        await expect(coversScreen.note).toBeFocused()
-      }
-      await expect(coversScreen.counts).toHaveText(counts({}))
-    })
-
-    test("tap() on a row under a header bar scrolls it clear and taps it", async ({ platform, coversScreen }) => {
-      // iOS lists sibling views top to bottom, so the header bar comes before
-      // the list it is laid over and the iOS agent cannot tell it is on top
-      // (as before this change; native navigation bars and toolbars are told
-      // by their type).
-      test.skip(platform !== "android", "iOS cannot tell a control laid over a list's top edge from one under it")
-      await coversScreen.rowUnderHeaderButton.tap()
-
-      await coversScreen.row("Row 5").tap()
-
-      await expect(coversScreen.counts).toHaveText(counts({ row: "Row 5", rowTaps: 1 }))
     })
   })
 })

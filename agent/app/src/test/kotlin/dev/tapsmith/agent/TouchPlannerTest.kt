@@ -50,29 +50,11 @@ class TouchPlannerTest {
         }
     }
 
-    /** Records drags, and moves the list's rows by what each one scrolls. */
-    private class FakeScroller(
-        private val clock: FakeClock,
-    ) : GuardScroller {
-        val drags = mutableListOf<CoverClearance.Drag>()
-        var onDrag: (CoverClearance.Drag) -> Unit = {}
-        override val margin = 20
-        override val touchSlop = 16
-        override val dragMs = 600L
-
-        override fun drag(drag: CoverClearance.Drag) {
-            drags.add(drag)
-            clock.nowMs += dragMs
-            onDrag(drag)
-        }
-    }
-
     private class Node(
-        override var bounds: Box,
+        override val bounds: Box,
         override val drawingOrder: Int = 0,
         override val takesTouches: Boolean = false,
         private val name: String = "node",
-        override val scrollsVertically: Boolean = false,
         override val isProgressIndicator: Boolean = false,
     ) : OcclusionAnalyzer.HitNode {
         override val isVisible = true
@@ -151,8 +133,7 @@ class TouchPlannerTest {
     private val clock = FakeClock()
     private val screen = FakeScreen(clock)
     private val target = FakeTarget(clock)
-    private val scroller = FakeScroller(clock)
-    private val planner = TouchPlanner(screen, clock, scroller)
+    private val planner = TouchPlanner(screen, clock)
 
     /** A 5 s action that arrived at t=0; the daemon waits timeout + 5 s. */
     private fun budget(
@@ -224,203 +205,6 @@ class TouchPlannerTest {
         val e = assertThrows<ElementCoveredException> { planner.plan(target, BUTTON, budget().noWait(), LABELLED) }
         assertEquals(CoverKind.CONTROL, e.kind)
         assertTrue(e.message, e.message!!.contains("button \"Overlay\""))
-    }
-
-    // ─── plan: scrolling a target clear of fixed chrome (PILOT-980) ───
-
-    /** A list (200..2400) of rows under a sticky footer button (2200..2400)
-     *  outside the list; the target row starts at [rowTop]. A drag moves the
-     *  rows by its length less the slop, at most by [maxScroll] in all. */
-    private fun listUnderFooter(
-        rowTop: Int,
-        maxScroll: Int = Int.MAX_VALUE,
-        footerTakesTouches: Boolean = true,
-    ): Node {
-        val row = Node(Box(0, rowTop, 1080, rowTop + 150), takesTouches = true, name = "row")
-        val content = Node(Box(0, 200, 1080, 2400)).add(row)
-        val list = Node(Box(0, 200, 1080, 2400), scrollsVertically = true).add(content)
-        val footer = Node(Box(0, 2200, 1080, 2400), drawingOrder = 1, takesTouches = footerTakesTouches, name = "button \"Checkout\"")
-        Node(SCREEN).add(list, footer)
-        var scrolled = 0
-        scroller.onDrag = { d ->
-            val by = minOf(maxOf(0, (d.fromY - d.toY) - scroller.touchSlop), maxScroll - scrolled)
-            scrolled += by
-            row.bounds = Box(row.bounds.left, row.bounds.top - by, row.bounds.right, row.bounds.bottom - by)
-        }
-        target.readAt = { snapshot(row.bounds, node = row) }
-        return row
-    }
-
-    @Test
-    fun `a target under a sticky footer is dragged clear of it and touched`() {
-        val row = listUnderFooter(rowTop = 2250)
-        val plan = planner.plan(target, row.bounds, budget(), LABELLED)
-        assertEquals(1, scroller.drags.size)
-        assertEquals(Box(0, 2030, 1080, 2180), row.bounds)
-        assertEquals(TouchPlan.Point(540, 2105), plan)
-    }
-
-    @Test
-    fun `a list that scrolls less than asked gets a second drag`() {
-        val row = listUnderFooter(rowTop = 2250, maxScroll = 100)
-        // After two drags the row has moved 100 px: still under the footer.
-        assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 3_000), LABELLED) }
-        assertEquals(TouchPlanner.MAX_CLEAR_DRAGS, scroller.drags.size)
-    }
-
-    @Test
-    fun `drags that do not move the target stop at the limit and the cover is reported`() {
-        val row = listUnderFooter(rowTop = 2250, maxScroll = 0)
-        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 3_000), LABELLED) }
-        assertEquals(TouchPlanner.MAX_CLEAR_DRAGS, scroller.drags.size)
-        assertTrue(e.message, e.message!!.contains("button \"Checkout\""))
-    }
-
-    @Test
-    fun `an unlabelled row the list rebinds during the drag is not touched`() {
-        val row = listUnderFooter(rowTop = 2250)
-        // The row shows item 20 until the drag, then the view is rebound to
-        // another item (a data update during the drag).
-        target.readAt = {
-            val item = if (scroller.drags.isEmpty()) "Item 20" else "Item 31"
-            snapshot(row.bounds, node = row, contentDescription = null, className = "android.view.ViewGroup", content = item)
-        }
-        assertThrows<TargetChangedException> { planner.plan(target, row.bounds, budget(), UNLABELLED) }
-    }
-
-    @Test
-    fun `a dialog over a row is never dragged from, so its backdrop is not pressed`() {
-        // An in-window dialog (a Paper Portal): its OK button is over the row,
-        // and its full-screen dismissing backdrop lies where a drag clear of
-        // the dialog would start.
-        val row = Node(Box(0, 1150, 1080, 1300), takesTouches = true, name = "row")
-        val list = Node(Box(0, 200, 1080, 2400), scrollsVertically = true).add(Node(Box(0, 200, 1080, 2400)).add(row))
-        val ok = Node(Box(100, 1150, 980, 1300), takesTouches = true, name = "button \"OK\"")
-        val dialog = Node(Box(100, 1000, 980, 1400), drawingOrder = 2).add(ok)
-        val backdrop = Node(SCREEN, drawingOrder = 1, takesTouches = true, name = "backdrop")
-        Node(SCREEN).add(list, Node(SCREEN, drawingOrder = 1).add(backdrop, dialog))
-        target.readAt = { snapshot(row.bounds, node = row) }
-        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 3_000), LABELLED) }
-        assertTrue(e.message, e.message!!.contains("button \"OK\""))
-        assertTrue("never dragged", scroller.drags.isEmpty())
-    }
-
-    @Test
-    fun `a drag that dismisses a dialog laid over the list fails instead of touching the target`() {
-        // A hand-rolled in-window dialog: one host holding a backdrop that
-        // takes no clicks (a responder-built view) and a card, painted over
-        // the list. The drag start is on the backdrop, which nothing before
-        // the drag can tell from a pass-through view; pressing it dismisses
-        // the dialog.
-        val row = listUnderFooter(rowTop = 2250)
-        val root = row.parentNode!!.parentNode!!.parentNode!!
-        val card = Node(Box(100, 900, 980, 1300)).add(Node(Box(140, 1150, 940, 1280), takesTouches = true, name = "button \"OK\""))
-        val host = Node(SCREEN, drawingOrder = 2).add(Node(SCREEN, name = "backdrop"), card)
-        root.add(host)
-        val scrolls = scroller.onDrag
-        scroller.onDrag = { d ->
-            root.children.remove(host)
-            scrolls(d)
-        }
-        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(), LABELLED) }
-        assertEquals(1, scroller.drags.size)
-        assertTrue(e.message, e.message!!.contains("made something outside the list go away"))
-    }
-
-    @Test
-    fun `a dialog the drag dismissed that is still fading out at the first look is caught at the second`() {
-        val row = listUnderFooter(rowTop = 2250)
-        val root = row.parentNode!!.parentNode!!.parentNode!!
-        val host = Node(SCREEN, drawingOrder = 2).add(Node(SCREEN, name = "backdrop"), Node(Box(100, 900, 980, 1300)))
-        root.add(host)
-        // The dialog's nodes stay through the first read after the drag (its
-        // exit animation), and are gone by the next.
-        var readsAfterDrag = 0
-        target.readAt = {
-            if (scroller.drags.isNotEmpty() && ++readsAfterDrag == 2) root.children.remove(host)
-            snapshot(row.bounds, node = row)
-        }
-        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(), LABELLED) }
-        assertEquals(1, scroller.drags.size)
-        assertTrue(e.message, e.message!!.contains("made something outside the list go away"))
-    }
-
-    @Test
-    fun `a button the scroll brings in outside the list does not stop the touch`() {
-        // A "back to top" button that appears once the list has scrolled.
-        val row = listUnderFooter(rowTop = 2250)
-        val root = row.parentNode!!.parentNode!!.parentNode!!
-        val scrolls = scroller.onDrag
-        scroller.onDrag = { d ->
-            scrolls(d)
-            root.add(Node(Box(880, 1900, 1040, 2060), drawingOrder = 3, takesTouches = true, name = "button \"Back to top\""))
-        }
-        val plan = planner.plan(target, row.bounds, budget(), LABELLED)
-        assertEquals(1, scroller.drags.size)
-        assertEquals(TouchPlan.Point(540, 2105), plan)
-    }
-
-    @Test
-    fun `no drag is made while an app window is over the target's window`() {
-        // A dialog window elsewhere on screen: a touch outside it cancels it.
-        val row = listUnderFooter(rowTop = 2250)
-        screen.windowsAt = { listOf(APP, DIALOG.copy(bounds = Box(100, 300, 980, 900))) }
-        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 3_000), LABELLED) }
-        assertTrue("never dragged", scroller.drags.isEmpty())
-        assertTrue(e.message, e.message!!.contains("button \"Checkout\""))
-    }
-
-    @Test
-    fun `a dropped first drag leaves the second to clear the target`() {
-        val row = listUnderFooter(rowTop = 2250)
-        val scrolls = scroller.onDrag
-        scroller.onDrag = { d -> if (scroller.drags.size > 1) scrolls(d) }
-        val plan = planner.plan(target, row.bounds, budget(), LABELLED)
-        assertEquals(2, scroller.drags.size)
-        assertEquals(TouchPlan.Point(540, 2105), plan)
-    }
-
-    @Test
-    fun `a cover that is not a control is never dragged away from`() {
-        // The keyboard over a row: the existing advice, no drag.
-        val row = listUnderFooter(rowTop = 1600, footerTakesTouches = false)
-        keyboardUntil(Long.MAX_VALUE)
-        assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 1_000), LABELLED) }
-        assertTrue(scroller.drags.isEmpty())
-    }
-
-    @Test
-    fun `a loading overlay is waited out, never dragged away from`() {
-        val row = Node(Box(0, 800, 1080, 950), takesTouches = true)
-        val list = Node(Box(0, 200, 1080, 2400), scrollsVertically = true).add(Node(Box(0, 200, 1080, 2400)).add(row))
-        val overlay = Node(Box(0, 700, 1080, 1100), drawingOrder = 1).add(Node(Box(490, 850, 590, 950), isProgressIndicator = true))
-        Node(SCREEN).add(list, overlay)
-        target.readAt = { snapshot(row.bounds, node = row) }
-        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 1_000), LABELLED) }
-        assertEquals(CoverKind.LOADING, e.kind)
-        assertTrue(scroller.drags.isEmpty())
-    }
-
-    @Test
-    fun `no drag is made without time left for it`() {
-        val row = listUnderFooter(rowTop = 2250)
-        assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 500), LABELLED) }
-        assertTrue(scroller.drags.isEmpty())
-    }
-
-    @Test
-    fun `a single check never drags`() {
-        val row = listUnderFooter(rowTop = 2250)
-        assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget().noWait(), LABELLED) }
-        assertTrue(scroller.drags.isEmpty())
-    }
-
-    @Test
-    fun `a planner without a scroller waits as before`() {
-        val row = listUnderFooter(rowTop = 2250)
-        val plain = TouchPlanner(screen, clock, scroller = null)
-        assertThrows<ElementCoveredException> { plain.plan(target, row.bounds, budget(timeoutMs = 1_000), LABELLED) }
-        assertTrue(scroller.drags.isEmpty())
     }
 
     // ─── plan: too late ───
@@ -698,7 +482,7 @@ class TouchPlannerTest {
                     token.cancel("the daemon closed the connection")
                 }
             }
-        val cancellingPlanner = TouchPlanner(screen, cancellingClock, scroller = null)
+        val cancellingPlanner = TouchPlanner(screen, cancellingClock)
         assertThrows<CommandCancelledException> {
             CommandCancellation.runWith(token) { cancellingPlanner.plan(target, LOW, budget(), LABELLED) }
         }
@@ -717,5 +501,18 @@ class TouchPlannerTest {
             CommandCancellation.runWith(token) { planner.plan(target, BUTTON, budget(), LABELLED) }
         }
         assertEquals(1, target.reads)
+    }
+
+    // ─── plan: loading overlays (PILOT-979) ───
+
+    @Test
+    fun `a loading overlay over the target is waited out and named as a loading overlay`() {
+        val row = Node(Box(0, 800, 1080, 950), takesTouches = true)
+        val overlay = Node(Box(0, 700, 1080, 1100), drawingOrder = 1).add(Node(Box(490, 850, 590, 950), isProgressIndicator = true))
+        Node(SCREEN).add(Node(SCREEN).add(row), overlay)
+        target.readAt = { snapshot(row.bounds, node = row) }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 1_000), LABELLED) }
+        assertEquals(CoverKind.LOADING, e.kind)
+        assertTrue(e.message, e.message!!.contains("a loading overlay"))
     }
 }

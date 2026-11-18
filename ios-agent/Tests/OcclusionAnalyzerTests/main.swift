@@ -313,8 +313,7 @@ let rowUnderArchive = OcclusionAnalyzer.Target(frame: R(16, 796, 120, 52), eleme
 let bottomBarScreen = ios27Form + [(5, .cell, "", "", R(16, 796, 120, 52))] + ios27BottomBar
 check("iOS 27: a row under a bottom-toolbar item is covered by the item, not by the host",
       analyzer(bottomBarScreen).analyze(rowUnderArchive, isHittable: false),
-      // In a list, so one the list can scroll clear of it (PILOT-980).
-      .coveredInList(by: "button \"Archive\"", cover: R(28, 798, 91, 48), list: screen))
+      .covered(by: "button \"Archive\""))
 check("iOS 27: a text field above a bottom toolbar is not covered by its host",
       analyzer(ios27Form + ios27BottomBar).analyze(email, isHittable: true),
       .clear(point: CGPoint(x: 201, y: 194), visible: R(36, 183, 330, 22)))
@@ -325,7 +324,7 @@ checkPoint("iOS 27: a bottom-toolbar item is touched where it is",
 check("a row fully under a bar-sized bottom toolbar is covered by it",
       analyzer(ios27Form + [(5, .cell, "", "", R(16, 800, 370, 40)), (3, .toolbar, "", "", R(0, 790, 402, 84))])
           .analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
-      .coveredInList(by: "toolbar", cover: R(0, 790, 402, 84), list: screen))
+      .covered(by: "toolbar"))
 // The host spans its own window, which need not be the screen (an iPad
 // split view, a Stage Manager window).
 let halfWindow = R(0, 0, 201, 874)
@@ -368,7 +367,7 @@ check("a bar alone in a wrapper of its own size still covers what is under it",
           (3, .other, "", "", R(0, 790, 402, 84)),
           (4, .toolbar, "", "", R(0, 790, 402, 84)),
       ]).analyze(.init(frame: R(16, 800, 370, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
-      .coveredInList(by: "toolbar", cover: R(0, 790, 402, 84), list: screen))
+      .covered(by: "toolbar"))
 
 // ... and so does one in a bar-sized wrapper with something smaller laid out
 // before it (a badge before a custom React Native tab bar): it is not laid
@@ -408,9 +407,7 @@ check("a bar filling a tall wrapper after a smaller sibling still covers what is
           (4, .staticText, "3", "", R(60, 300, 16, 16)),
           (4, .toolbar, "", "", R(0, 0, 80, 874)),
       ]).analyze(.init(frame: R(16, 300, 40, 40), elementType: .cell, label: "", identifier: ""), isHittable: true),
-      // A rail as tall as the list leaves nothing to scroll into:
-      // CoverClearance makes no drag, and it is waited out.
-      .coveredInList(by: "toolbar", cover: R(0, 0, 80, 874), list: screen))
+      .covered(by: "toolbar"))
 
 // ─── Scroll viewports ───
 
@@ -550,252 +547,17 @@ checkPoint("a spinner inside the target is not a cover",
 checkPoint("a plain overlay with no spinner is still not a cover",
            analyzer(screenRows(passThrough: true)).analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
            CGPoint(x: 201, y: 359.33))
-
-// ─── Scrolling clear of chrome (PILOT-980) ───
-
-/// A screen with a vertical list (116..874) under a nav bar; rows 44 tall.
-func listRows(_ rows: [Row], after: [Row] = []) -> [Row] {
-    [
-        (0, .application, "App", "", screen),
-        (1, .window, "", "", screen),
-        (2, .other, "", "", screen),
-        (3, .navigationBar, "List", "", R(0, 62, 402, 54)),
-        (3, .table, "", "", R(0, 116, 402, 758)),
-    ] + rows + after
-}
-let list = R(0, 116, 402, 758)
-
-// A sticky footer's button over a row of the list, outside the list.
-let footer: [Row] = listRows([
-    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
-], after: [(3, .button, "Checkout", "", R(0, 774, 402, 100))])
-check("a control outside the list over an unhittable row can be scrolled away from",
-      analyzer(footer).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
-      .coveredInList(by: "button \"Checkout\"", cover: R(0, 774, 402, 100), list: list))
-// The same control inside the list moves with the row: no scrolling away.
-let inListButton: [Row] = listRows([
-    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
-    (4, .button, "Checkout", "", R(0, 774, 402, 100)),
-])
-check("a control inside the same list is a plain cover",
-      analyzer(inListButton).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
-      .covered(by: "button \"Checkout\""))
-// A presented alert is never scrolled away from, even when one of its
-// buttons is what covers the point.
-let alertWithButtons: [Row] = listRows([
-    (4, .cell, "Row 5", "", R(0, 300, 402, 44)),
-], after: [(3, .alert, "Delete?", "", R(40, 250, 322, 200)),
-           (4, .button, "Delete", "", R(40, 290, 322, 44)),
-           (4, .button, "Cancel", "", R(40, 334, 322, 44))])
-check("an alert's button over a row is a plain cover",
-      analyzer(alertWithButtons).analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
-      .covered(by: "button \"Delete\""))
-// A control in another window (an overlay window) is not scrolled away from.
-let otherWindowButton: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))])
-    + [(1, .window, "", "", screen), (2, .button, "Toast action", "", R(0, 774, 402, 100))]
-check("a control in another window is a plain cover",
-      analyzer(otherWindowButton).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
-      .covered(by: "button \"Toast action\""))
-// A checkout bar: a "Total" label above its button. Clearing only the button
-// would leave the row under the label.
-let checkoutBar: [Row] = listRows([
-    (4, .cell, "Row 20", "", R(0, 800, 402, 44)),
-], after: [(3, .other, "", "checkout-bar", R(0, 700, 402, 174)),
-           (4, .staticText, "Total $42", "", R(16, 710, 200, 30)),
-           (4, .button, "Checkout", "", R(0, 774, 402, 100))])
-check("a control in a bar over a list is cleared as the whole bar",
-      analyzer(checkoutBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
-      .coveredInList(by: "button \"Checkout\"", cover: R(0, 700, 402, 174), list: list))
-// A presented alert is never scrolled away from.
-let alertOverList: [Row] = listRows([
-    (4, .cell, "Row 5", "", R(0, 300, 402, 44)),
-], after: [(3, .alert, "Delete?", "", R(40, 250, 322, 200))])
-check("an alert over a row is a plain cover",
-      analyzer(alertOverList).analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
-      .covered(by: "alert \"Delete?\""))
-// A tab bar over a row: bars are checked whatever XCUITest says.
-let tabBarOverList: [Row] = listRows([
-    (4, .cell, "Row 20", "", R(0, 800, 402, 44)),
-], after: [(3, .tabBar, "Tab Bar", "", R(0, 791, 402, 83))])
-check("a row entirely under a tab bar can be scrolled away from",
-      analyzer(tabBarOverList).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
-      .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
-check("a loading overlay over a row is waited out, not scrolled away from",
-      analyzer(listRows([(4, .cell, "Row 5", "", R(0, 300, 402, 44))],
-                        after: [(3, .other, "", "", list), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]))
-          .analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
-      .covered(by: "a loading overlay (element)"))
-
-// A loading overlay drawn over a footer button is what is in the way first:
-// wait it out (a drag under it would be wasted), whatever chrome is beneath.
-let overlayOverFooter: [Row] = footer + [(3, .other, "", "", screen), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]
-check("a loading overlay over a footer button is waited out, not scrolled away from",
-      analyzer(overlayOverFooter).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
-      .covered(by: "a loading overlay (element)"))
-let cancelInOverlay: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
-    after: [(3, .other, "", "", R(0, 600, 402, 274)),
-            (4, .activityIndicator, "", "", R(181, 620, 40, 40)),
-            (4, .button, "Cancel", "", R(0, 774, 402, 100))])
-check("a control inside a loading overlay is named but never scrolled away from",
-      analyzer(cancelInOverlay).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+// A control in the overlay over the point (its Cancel button) is named.
+let loadingWithCancel: [Row] = [
+    (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
+    (4, .activityIndicator, "In progress", "", R(181, 475, 40, 40)),
+    (4, .button, "Cancel", "", R(100, 270, 200, 44)),
+]
+var cancelRows = screenRows()
+cancelRows.insert(contentsOf: loadingWithCancel, at: cancelRows.count - 2)
+check("a control inside a loading overlay over the point is named as the cover",
+      analyzer(cancelRows).analyze(button("Covered action", covered), isHittable: false),
       .covered(by: "button \"Cancel\""))
-let overlayOverTabBar: [Row] = tabBarOverList + [(3, .other, "", "", screen), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]
-check("a loading overlay over a tab bar is waited out before the bar is scrolled away from",
-      analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
-      .covered(by: "a loading overlay (element)"))
-check("…while a hittable target under the tab bar is still scrolled clear",
-      analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
-      .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
-
-// Sticky rows are not covers (a follow-up): React Native's sticky header
-// (recorded on iOS 26.4) and a plain View with a testID, which React Native
-// flattens into an empty node listed before its own contents (recorded on
-// iOS 26.4, the /visibility screen), leave the rows and buttons beside them
-// clear.
-let rnNestedSticky: [Row] = [
-    (0, .application, "App", "", screen),
-    (1, .window, "", "", screen),
-    (2, .scrollView, "", "", R(16, 326, 370, 531)),
-    (3, .other, "", "", R(16, 26, 370, 1940)),
-    (4, .other, "", "", R(16, 26, 370, 1940)),
-    (5, .button, "Row 5", "covers-row", R(16, 326, 290, 60)),
-    (5, .other, "", "", R(16, 326, 370, 60)),
-    (6, .other, "", "sticky-header", R(16, 326, 370, 60)),
-    (7, .staticText, "Sticky header", "", R(32, 346, 200, 20)),
-    (5, .other, "", "", R(16, 326, 370, 60)),
-    (5, .button, "Add", "", R(306, 326, 80, 59)),
-    (5, .button, "Row 6", "covers-row", R(16, 386, 290, 60)),
-    (5, .other, "", "", R(16, 386, 370, 60)),
-]
-checkPoint("a row's own empty background view is not a cover",
-           analyzer(rnNestedSticky).analyze(.init(frame: R(16, 386, 290, 60), elementType: .button, label: "Row 6", identifier: "covers-row"), isHittable: false),
-           CGPoint(x: 161, y: 416))
-checkPoint("content inside a React Native sticky header is not covered by the row under it",
-           analyzer(rnNestedSticky).analyze(.init(frame: R(32, 346, 200, 20), elementType: .staticText, label: "Sticky header", identifier: ""), isHittable: false),
-           CGPoint(x: 132, y: 356))
-let rnFlattenedRow: [Row] = [
-    (0, .application, "App", "", screen),
-    (1, .window, "", "", screen),
-    (2, .scrollView, "", "", R(0, 0, 402, 874)),
-    (3, .other, "", "", R(0, 0, 402, 1400)),
-    (4, .other, "", "", R(0, 0, 402, 1400)),
-    (5, .staticText, "Dynamic List", "", R(16, 391, 370, 22)),
-    (5, .other, "", "dynamic-item-Item A", R(16, 421, 370, 47)),
-    (5, .staticText, "Item A", "", R(30, 435, 46, 19)),
-    (5, .button, "Delete Item A", "", R(328, 436, 44, 17)),
-]
-checkPoint("a flattened React Native row container listed before its button is not a cover",
-           analyzer(rnFlattenedRow).analyze(button("Delete Item A", R(328, 436, 44, 17)), isHittable: false),
-           CGPoint(x: 350, y: 444.5))
-
-// ─── Where a clearing drag may start (PILOT-980) ───
-
-func expectBool(_ name: String, _ got: Bool, _ want: Bool) {
-    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
-}
-let row20 = OcclusionAnalyzer.Target(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: "")
-expectBool("a drag starting on the list itself is on the list",
-           analyzer(footer).isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), true)
-// An in-window dialog (a JS modal): its full-screen dismissing backdrop lies
-// where the drag would start.
-let dialogOverList: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
-    after: [(3, .other, "", "", screen),
-            (4, .button, "Close modal", "", screen),
-            (4, .other, "", "", R(20, 700, 362, 174)),
-            (5, .button, "OK", "", R(20, 774, 362, 100))])
-expectBool("a drag starting on a dialog's backdrop is not on the list",
-           analyzer(dialogOverList).isDragStartOnList(row20, list: list, cover: R(20, 700, 362, 174), at: CGPoint(x: 201, y: 692)), false)
-// The same dialog with a role-less backdrop (a React Native Pressable with no
-// accessibilityRole reads as .other): still not the list.
-let rolelessBackdrop: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
-    after: [(3, .other, "", "", screen),
-            (4, .other, "", "", screen),
-            (4, .other, "", "", R(20, 700, 362, 174)),
-            (5, .button, "OK", "", R(20, 774, 362, 100))])
-expectBool("a drag starting on a role-less dialog backdrop is not on the list",
-           analyzer(rolelessBackdrop).isDragStartOnList(row20, list: list, cover: R(20, 700, 362, 174), at: CGPoint(x: 201, y: 692)), false)
-// A full-screen host that only lays a footer out (pointerEvents box-none)
-// holds the footer but nothing else at the drag start.
-let footerInHost: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
-    after: [(3, .other, "", "", screen),
-            (4, .button, "Checkout", "", R(0, 774, 402, 100))])
-expectBool("a drag starting under a host that only lays out the footer is on the list",
-           analyzer(footerInHost).isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), true)
-expectBool("a target whose list is not found never gets a drag",
-           analyzer(footer).isDragStartOnList(row20, list: R(0, 0, 10, 10), cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), false)
-// A presented alert anywhere (not over the drag start): a touch outside it
-// can dismiss it, so no drag.
-expectBool("no drag while an alert is up, even away from the drag start",
-           analyzer(footer + [(1, .window, "", "", screen), (2, .alert, "Saved", "", R(40, 300, 322, 150))])
-               .isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), false)
-// What lies outside the list, compared before and after a drag: found by
-// the target's list's place in the tree.
-func outsideAfterDrag(_ before: [Row], _ after: [Row], target: OcclusionAnalyzer.Target, list: CGRect) -> ([String: Int]?, [String: Int]?) {
-    guard let chain = analyzer(before).listChain(holding: target, list: list) else { return (nil, nil) }
-    return (analyzer(before).outsideList(of: chain), analyzer(after).outsideList(of: chain))
-}
-let rowsScrolled: [Row] = listRows([
-    (4, .cell, "Row 21", "", R(0, 700, 402, 44)),
-    (4, .cell, "Row 22", "", R(0, 744, 402, 44)),
-], after: [(3, .button, "Checkout", "", R(0, 774, 402, 100))])
-let scrolledOnly = outsideAfterDrag(footer, rowsScrolled, target: row20, list: list)
-expectBool("rows the list scrolls in and out leave what is outside it the same",
-           scrolledOnly.0 != nil && scrolledOnly.0 == scrolledOnly.1, true)
-// A role-less dialog backdrop listed before the list (iOS lists views top to
-// bottom), dismissed by the drag that started on it.
-let backdropBeforeList: [Row] = [
-    (0, .application, "App", "", screen),
-    (1, .window, "", "", screen),
-    (2, .other, "", "", screen),
-    (3, .navigationBar, "List", "", R(0, 62, 402, 54)),
-    (3, .other, "", "", screen),
-    (3, .table, "", "", R(0, 116, 402, 758)),
-    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
-    (3, .button, "Checkout", "", R(0, 774, 402, 100)),
-]
-let backdropGone = outsideAfterDrag(backdropBeforeList, footer, target: row20, list: list)
-expectBool("a backdrop gone after the drag changes what is outside the list",
-           backdropGone.0.map { OcclusionAnalyzer.lostOutside($0, backdropGone.1) } ?? false, true)
-// The list inside an outer scroller of the same frame (a horizontal tab
-// pager), with an in-page dialog beside it: the pager is not the list, so the
-// dialog counts as outside it.
-func pagerPage(dialog: Bool) -> [Row] {
-    [
-        (0, .application, "App", "", screen),
-        (1, .window, "", "", screen),
-        (2, .other, "", "", screen),
-        (3, .scrollView, "", "", list),
-        (4, .table, "", "", list),
-        (5, .cell, "Row 20", "", R(0, 790, 402, 44)),
-    ] + (dialog ? [(4, .other, "", "", list), (4, .other, "", "", R(20, 300, 362, 200)), (5, .button, "OK", "", R(40, 420, 322, 44))] : [])
-        + [(3, .button, "Checkout", "", R(0, 774, 402, 100))]
-}
-let pagerDialogGone = outsideAfterDrag(pagerPage(dialog: true), pagerPage(dialog: false), target: row20, list: list)
-expectBool("a dialog beside the list inside a same-frame pager, gone after the drag, changes what is outside the list",
-           pagerDialogGone.0.map { OcclusionAnalyzer.lostOutside($0, pagerDialogGone.1) } ?? false, true)
-// A label the scroll brings in above the list (iOS lists it before the list,
-// top to bottom): the list is still found, and nothing went away.
-let labelAboveList: [Row] = [
-    (0, .application, "App", "", screen),
-    (1, .window, "", "", screen),
-    (2, .other, "", "", screen),
-    (3, .staticText, "Scrolled", "", R(300, 0, 80, 14)),
-    (3, .navigationBar, "List", "", R(0, 62, 402, 54)),
-    (3, .table, "", "", R(0, 116, 402, 758)),
-    (4, .cell, "Row 21", "", R(0, 700, 402, 44)),
-    (3, .button, "Checkout", "", R(0, 774, 402, 100)),
-]
-let labelAppeared = outsideAfterDrag(footer, labelAboveList, target: row20, list: list)
-expectBool("a label the scroll brings in above the list is not something going away",
-           labelAppeared.0.map { OcclusionAnalyzer.lostOutside($0, labelAppeared.1) } ?? true, false)
-expectBool("a button the scroll brings in outside the list is not something going away",
-           OcclusionAnalyzer.lostOutside(["9": 2, "4": 1], ["9": 3, "4": 1]), false)
-expectBool("a view outside the list going away is",
-           OcclusionAnalyzer.lostOutside(["9": 2, "4": 1], ["9": 2]), true)
-expectBool("a list not found again after the drag is",
-           OcclusionAnalyzer.lostOutside(["9": 2], nil), true)
-expectBool("no list holding the target, nothing to compare",
-           analyzer(footer).listChain(holding: row20, list: R(0, 0, 10, 10)) == nil, true)
 
 // ─── Keyboard first (PILOT-622) ───
 

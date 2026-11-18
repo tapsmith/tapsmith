@@ -40,12 +40,8 @@ import XCTest
 ///   an activity or progress indicator or holds one. Apps lay one over a
 ///   screen while it loads, often see-through, and it takes the touches
 ///   though nothing in it is a control. A spinner over the point says "wait"
-///   either way, so this is the one plain view that is named.
-///
-/// A cover in the target's own window that the vertical list holding the
-/// target can scroll away from — a bar, or a control outside the list (a
-/// sticky footer's button) — is reported as `.coveredInList`, so
-/// the touch can drag the target clear of it first (PILOT-980).
+///   either way, so this is the one plain view that is named. A control
+///   painted over it (the overlay's Cancel button) is named instead.
 struct OcclusionAnalyzer {
     /// What the snapshot says about the target.
     enum Verdict: Equatable {
@@ -56,10 +52,6 @@ struct OcclusionAnalyzer {
         /// The element is covered, by the thing `by` names ("the keyboard",
         /// `button "Overlay"`).
         case covered(by: String)
-        /// Covered by in-window chrome at `cover` that the vertical list at
-        /// `list`, which holds the target but not the cover, can scroll the
-        /// target clear of (PILOT-980).
-        case coveredInList(by: String, cover: CGRect, list: CGRect)
         /// No part of the element is on screen.
         case offScreen
         /// The target is not hittable and could not be matched in the tree
@@ -199,34 +191,22 @@ struct OcclusionAnalyzer {
         let keyboardWindows = self.keyboardWindows()
         let targetInKeyboard = targetIndex.map { isInKeyboard($0, keyboardWindows: keyboardWindows) } ?? false
 
-        var clips: [(rect: CGRect, name: String, node: Int?)] = []
+        var clips: [(rect: CGRect, name: String)] = []
         if !targetInKeyboard, let region = keyboardRegion(keyboardWindows: keyboardWindows) {
-            clips.append((region, "the keyboard", nil))
+            clips.append((region, "the keyboard"))
         }
         for (i, node) in nodes.enumerated() where Self.barTypes.contains(node.elementType) {
             if let w = node.window, keyboardWindows.contains(w) { continue }
             if isSelfOrAncestor(i, of: targetIndex, targetFrame: target.frame) { continue }
             if isBarHost(i) { continue }
             if !barCovers(i, target: targetIndex) { continue }
-            clips.append((node.frame, describe(node), i))
+            clips.append((node.frame, describe(node)))
         }
         for clip in clips {
-            let before = visible
             visible = Self.subtract(clip.rect, from: visible)
             if visible.isNull
                 || visible.width < Self.minVisibleExtent
                 || visible.height < Self.minVisibleExtent {
-                if let bar = clip.node, let t = targetIndex {
-                    // A loading overlay drawn over the bar is what is in the
-                    // way first: wait it out, and keep the drags for after.
-                    if !isHittable, let loading = paintedOver(
-                        t, at: CGPoint(x: before.midX, y: before.midY),
-                        keyboardWindows: keyboardWindows, targetInKeyboard: targetInKeyboard
-                    ).loading {
-                        return .covered(by: loadingName(loading))
-                    }
-                    return chromeCover(clip.name, at: bar, over: t)
-                }
                 return .covered(by: clip.name)
             }
         }
@@ -243,28 +223,6 @@ struct OcclusionAnalyzer {
                 ? .clear(point: point, visible: visible)
                 : .unlocated(point: point, visible: visible)
         }
-        let (cover, loading) = paintedOver(t, at: point, keyboardWindows: keyboardWindows, targetInKeyboard: targetInKeyboard)
-        if let loading {
-            // The overlay is on top of any control under it: wait it out. A
-            // control in the overlay (its Cancel button) is named, but is
-            // never scrolled away from either.
-            guard let cover, cover > loading else { return .covered(by: loadingName(loading)) }
-            if cover < nodes[loading].subtreeEnd { return .covered(by: describe(nodes[cover])) }
-        }
-        if let cover {
-            return chromeCover(describe(nodes[cover]), at: cover, over: t)
-        }
-        return .clear(point: point, visible: visible)
-    }
-
-    private func loadingName(_ i: Int) -> String { "a loading overlay (\(describe(nodes[i])))" }
-
-    /// What is painted after target `t` over `point`: the topmost
-    /// interactive control, and the outermost view that is or holds a
-    /// progress indicator (a loading overlay).
-    private func paintedOver(
-        _ t: Int, at point: CGPoint, keyboardWindows: Set<Int>, targetInKeyboard: Bool
-    ) -> (cover: Int?, loading: Int?) {
         // Runs of the same text as the target (a link inside a paragraph).
         let paragraph = nodes[t].parent.flatMap { nodes[$0].elementType == .staticText ? $0 : nil }
 
@@ -287,106 +245,22 @@ struct OcclusionAnalyzer {
                 loading = i
             }
         }
-        return (cover, loading)
+        // The topmost of the two is in the way: a control painted after the
+        // overlay (or inside it: its Cancel button) is named, else the overlay.
+        if let cover, loading.map({ cover > $0 }) ?? true { return .covered(by: describe(nodes[cover])) }
+        if let loading { return .covered(by: "a loading overlay (\(describe(nodes[loading])))") }
+        return .clear(point: point, visible: visible)
     }
 
-    /// Whether a drag that starts at `point` would press the vertical list at
-    /// `list` that holds `target` (PILOT-980), and nothing else: no control
-    /// painted after the list lies over the point — a dialog's backdrop, a
-    /// second bar stacked on the cover — and the keyboard does not. A drag
-    /// that started there would press that instead. Nor does anything in the
-    /// layer the cover (`cover`, its frame) is laid out in, other than the
-    /// views that hold it: a dialog's backdrop with no role (a React Native
-    /// Pressable reads as `.other`) sits beside the dialog's card in one
-    /// host; a host that only lays out the chrome holds nothing else there.
-    /// False too when the list is not among the target's ancestors.
-    func isDragStartOnList(_ target: Target, list: CGRect, cover: CGRect, at point: CGPoint) -> Bool {
-        guard let t = locate(target),
-              let l = ancestors(of: t).first(where: {
-                  Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
-              }) else { return false }
-        // A presented alert, sheet or popover anywhere: a touch outside one
-        // can dismiss it, so never drag while one is up.
-        if nodes.contains(where: { Self.presentedTypes.contains($0.elementType) }) { return false }
-        let keyboardWindows = self.keyboardWindows()
-        if let region = keyboardRegion(keyboardWindows: keyboardWindows), region.contains(point) { return false }
-        for i in nodes[l].subtreeEnd..<nodes.count {
-            let node = nodes[i]
-            if let w = node.window, keyboardWindows.contains(w) { continue }
-            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            if (isInteractive(node) || Self.barTypes.contains(node.elementType)), clippedFrame(of: i).contains(point) {
-                return false
-            }
-        }
-        return !coverLayerLies(over: point, cover: cover, after: nodes[l].subtreeEnd)
-    }
+    static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
 
-    /// What identifies a list in the tree across a clearing drag: the type
-    /// and frame of every node from the root down to it.
-    typealias ListChain = [(type: XCUIElement.ElementType, frame: CGRect)]
-
-    /// The chain (`ListChain`) of the vertical list at `list` holding
-    /// `target` — or nil when it is not among the target's ancestors. A
-    /// clearing drag (PILOT-980) compares what lies outside that list before
-    /// and after (`outsideList(of:)`), and the target has moved by then, so
-    /// the list is found again by its chain, not through the target. Not by
-    /// its place among its siblings: iOS lists views top to bottom, so a view
-    /// the scroll brings in above the list comes before it.
-    func listChain(holding target: Target, list: CGRect) -> ListChain? {
-        guard let t = locate(target),
-              let l = ancestors(of: t).first(where: {
-                  Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
-              }) else { return nil }
-        return chain(of: l)
-    }
-
-    private func chain(of i: Int) -> ListChain {
-        ([i] + ancestors(of: i)).reversed().map { (type: nodes[$0].elementType, frame: nodes[$0].frame) }
-    }
-
-    /// What the app holds outside the list with chain `chain` (`listChain`),
-    /// the keyboard left out: how many nodes of each type — or nil when no
-    /// such list is in the tree. The drag must scroll the list without
-    /// making anything outside it go away (`lostOutside`): when something
-    /// does, the drag pressed something laid over the list instead (a
-    /// dialog's backdrop with no role, which iOS lists before the list, top
-    /// to bottom, so no check before the drag can tell it is on top).
-    func outsideList(of chain: ListChain) -> [String: Int]? {
-        guard let last = chain.last,
-              let l = nodes.indices.first(where: { i in
-                  nodes[i].elementType == last.type && Self.framesMatch(nodes[i].frame, last.frame)
-                      && self.chain(of: i).elementsEqual(chain) { $0.type == $1.type && Self.framesMatch($0.frame, $1.frame) }
-              }) else { return nil }
-        let keyboardWindows = self.keyboardWindows()
-        var counts: [String: Int] = [:]
-        for (i, node) in nodes.enumerated() where !(i > l && i < nodes[l].subtreeEnd) {
-            if let w = node.window, keyboardWindows.contains(w) { continue }
-            counts["\(node.elementType.rawValue)", default: 0] += 1
-        }
-        return counts
-    }
-
-    /// Whether something outside the list went away between `before` and
-    /// `after` (`outsideList(at:)`), or the list could not be found again.
-    /// What appears (a "back to top" button the scroll brings in) does not
-    /// count: a drag that pressed a dialog's backdrop makes the dialog go.
-    static func lostOutside(_ before: [String: Int], _ after: [String: Int]?) -> Bool {
-        guard let after else { return true }
-        return before.contains { type, count in (after[type] ?? 0) < count }
-    }
-
-    /// Whether something in the cover's layer — the outermost view painted
-    /// after the list (from index `start`) that holds the cover — other than
-    /// the cover and the views holding it lies over `point`.
-    private func coverLayerLies(over point: CGPoint, cover: CGRect, after start: Int) -> Bool {
-        guard start < nodes.count,
-              let c = (start..<nodes.count).first(where: { Self.framesMatch(clippedFrame(of: $0), cover) }) else { return false }
-        let holders = Set(ancestors(of: c).filter { $0 >= start })
-        guard let layer = holders.min() else { return false }
-        for i in layer..<nodes[layer].subtreeEnd where !holders.contains(i) && !(i >= c && i < nodes[c].subtreeEnd) {
-            let node = nodes[i]
-            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            if clippedFrame(of: i).contains(point) { return true }
+    /// Whether node `i` is a progress indicator or holds a visible one inside
+    /// its frame (PILOT-979).
+    private func holdsProgressIndicator(_ i: Int) -> Bool {
+        let frame = clippedFrame(of: i)
+        for j in i..<nodes[i].subtreeEnd where Self.progressTypes.contains(nodes[j].elementType) {
+            let f = clippedFrame(of: j)
+            if !f.isNull, f.width > 0, f.height > 0, f.intersects(frame) { return true }
         }
         return false
     }
@@ -412,63 +286,6 @@ struct OcclusionAnalyzer {
             if points.contains(where: { frame.contains($0) }) { return describe(node) }
         }
         return nil
-    }
-
-    // MARK: - Loading overlays (PILOT-979) and fixed chrome (PILOT-980)
-
-    static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
-
-    /// Presented containers: never scrolled away from.
-    static let presentedTypes: Set<XCUIElement.ElementType> = [.alert, .sheet, .dialog, .popover]
-
-    /// Whether node `i` is a progress indicator or holds a visible one inside
-    /// its frame.
-    private func holdsProgressIndicator(_ i: Int) -> Bool {
-        let frame = clippedFrame(of: i)
-        for j in i..<nodes[i].subtreeEnd where Self.progressTypes.contains(nodes[j].elementType) {
-            let f = clippedFrame(of: j)
-            if !f.isNull, f.width > 0, f.height > 0, f.intersects(frame) { return true }
-        }
-        return false
-    }
-
-    /// The nearest vertical list holding target `t` but not node `cover`:
-    /// a scroller ancestor (not a web view) with room to scroll the target
-    /// up or down (taller than twice it).
-    private func verticalList(holding t: Int, notHolding cover: Int) -> Int? {
-        ancestors(of: t).first { a in
-            Self.listTypes.contains(nodes[a].elementType)
-                && !(a <= cover && nodes[a].subtreeEnd > cover)
-                && nodes[a].frame.height > 2 * nodes[t].frame.height
-        }
-    }
-
-    static let listTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView]
-
-    /// `.coveredInList` when a vertical list can scroll target `t` clear of
-    /// node `cover`, else `.covered`.
-    /// A cover in a presented container (an alert's button, a popover's
-    /// row) or in another window is never scrolled away from: it is waited
-    /// out, and a drag under it would touch it.
-    private func chromeCover(_ name: String, at cover: Int, over t: Int) -> Verdict {
-        let presented = ([cover] + ancestors(of: cover)).contains { Self.presentedTypes.contains(nodes[$0].elementType) }
-        guard !presented, nodes[cover].window == nodes[t].window,
-              let list = verticalList(holding: t, notHolding: cover) else { return .covered(by: name) }
-        // A control is cleared as the bar it sits in.
-        return .coveredInList(by: name, cover: chromeFrame(of: cover, over: t, list: list), list: nodes[list].frame)
-    }
-
-    /// The frame of the fixed chrome control `cover` sits in: its outermost
-    /// ancestor that does not hold the target and is no taller than half of
-    /// `list` — a bar, with its labels, not a full-screen host it is placed in.
-    private func chromeFrame(of cover: Int, over t: Int, list: Int) -> CGRect {
-        var node = cover
-        while let p = nodes[node].parent,
-              !(p <= t && nodes[p].subtreeEnd > t),
-              nodes[p].frame.height * 2 <= nodes[list].frame.height {
-            node = p
-        }
-        return clippedFrame(of: node)
     }
 
     // MARK: - Target lookup

@@ -78,22 +78,6 @@ interface GuardScreen {
     fun answerSystemDialogs(): Boolean = false
 }
 
-/** Scrolls a list to move a target clear of a cover (PILOT-980). */
-interface GuardScroller {
-    /** Clearance kept around a target moved clear of a cover, in pixels. */
-    val margin: Int
-
-    /** How far a finger moves before a list starts scrolling, in pixels. */
-    val touchSlop: Int
-
-    /** How long [drag] takes, from the press to the list at rest. */
-    val dragMs: Long
-
-    /** Drag slowly from one point to another and hold there before letting
-     *  go, so the list moves with the finger and does not fling. */
-    fun drag(drag: CoverClearance.Drag)
-}
-
 sealed class TouchPlan {
     /** Touch at ([x], [y]): a point nothing covers. */
     data class Point(
@@ -109,37 +93,19 @@ sealed class TouchPlan {
 
 /**
  * Plans element-addressed touches so they never land on something drawn over
- * the element (PILOT-362): the keyboard, another window, a touchable view, a
- * loading overlay painted on top (PILOT-979). A covered
- * element is waited on — up to the action's budget, the way Playwright waits
- * out a click's intercepting element — and then the action fails with
- * ELEMENT_COVERED naming the cover.
- *
- * A target under fixed chrome in its own window, in a list that can scroll it
- * away (a sticky footer's button, a bottom bar), is first dragged clear of it — up to
- * [MAX_CLEAR_DRAGS] times, while the drags move it — as a user would, and as
- * Playwright scrolls a target whose click another element intercepts
- * (PILOT-980). Then the checks run again. The geometry lives in
- * [OcclusionAnalyzer]; the live reads come in through [GuardTarget] and
- * [GuardScreen], so this runs in JVM unit tests.
+ * the element (PILOT-362): the keyboard, another window, a touchable view or
+ * a loading overlay (PILOT-979) painted on top. A covered element is waited
+ * on — up to the action's budget, the way Playwright waits out a click's
+ * intercepting element — and then the action fails with ELEMENT_COVERED
+ * naming the cover. The geometry lives in [OcclusionAnalyzer]; the live reads
+ * come in through [GuardTarget] and [GuardScreen], so this runs in JVM unit
+ * tests.
  */
 class TouchPlanner(
     private val screen: GuardScreen,
     private val clock: GuardClock,
-    /** Drags a target clear of fixed chrome; null never scrolls. */
-    private val scroller: GuardScroller?,
     private val log: (String) -> Unit = {},
 ) {
-    companion object {
-        /** Drags at most per touch to move a target clear of a cover. */
-        const val MAX_CLEAR_DRAGS = 2
-
-        /** How long after a clearing drag what lies outside the list is
-         *  compared once more: a dialog the drag dismissed may still be
-         *  fading out at the first look. Part of [GuardScroller.dragMs]. */
-        const val OUTSIDE_RECHECK_MS = 300L
-    }
-
     /**
      * Where a touch on [target] can land. [initialBounds] are the element's
      * settled bounds for the first check; later checks (after waiting out a
@@ -170,8 +136,6 @@ class TouchPlanner(
         // container), the text inside it when a wait began: a replacement
         // rendered into the same view meanwhile shows different content.
         var contentWhenWaiting: String? = null
-        // Drags made to move the target clear of a cover (PILOT-980).
-        var clearDrags = 0
 
         fun armContentCheck(snapshot: TargetSnapshot?) {
             if (contentWhenWaiting == null && snapshot != null && expected?.identifiedOnlyByContent == true) {
@@ -223,45 +187,6 @@ class TouchPlanner(
                     // otherwise be waited out to the timeout: answer it and
                     // look again at once (PILOT-977).
                     if (verdict.kind == OcclusionAnalyzer.CoverKind.WINDOW && screen.answerSystemDialogs()) continue
-                    val clearing = clearingDrag(verdict, snapshot, bounds, clearDrags, deadlines, now)
-                    if (clearing != null) {
-                        val (drag, outside) = clearing
-                        clearDrags++
-                        // A view the list rebinds meanwhile must still show
-                        // the same content afterwards, as after a wait.
-                        armContentCheck(snapshot)
-                        log("element is covered by ${verdict.by}; dragging it clear ($drag)")
-                        CommandCancellation.checkpoint()
-                        scroller!!.drag(drag)
-
-                        // The drag must have scrolled the list without making
-                        // anything outside it go away: that would be a dialog
-                        // its backdrop dismissed, so the drag pressed
-                        // something laid over the list. Stop, loudly, rather
-                        // than touch the target on a screen that changed.
-                        // Twice: a dismissed dialog may still be fading out
-                        // (its nodes still there) at the first look.
-                        fun outsideNow() = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
-                        var after = outsideNow()
-                        if (!outside.lostIn(after)) {
-                            clock.sleep(OUTSIDE_RECHECK_MS)
-                            after = outsideNow()
-                        }
-                        if (outside.lostIn(after)) {
-                            log("something outside the list went away during the drag ($outside -> $after)")
-                            throw ElementCoveredException(
-                                "Element is covered by ${verdict.by}. Scrolling the list to move it clear also made something outside " +
-                                    "the list go away: either a view laid over the list (such as a dialog's backdrop) took the drag, " +
-                                    "or the app hides part of its screen as the list scrolls. Not touching the element",
-                                verdict.kind,
-                            )
-                        }
-                        // The next pass reads the target where the drag left
-                        // it. A drag that did not move it (the list's end, or
-                        // a gesture the system dropped) still uses only one of
-                        // the attempts.
-                        continue
-                    }
                     val sleep =
                         deadlines.sleepBeforeNextPass(now)
                             ?: throw ElementCoveredException(
@@ -275,49 +200,6 @@ class TouchPlanner(
                 }
             }
         }
-    }
-
-    /**
-     * The drag that moves the target out from under [verdict]'s cover, or
-     * null when there is none to make: no list to scroll (or the cover is not
-     * one to scroll away from — the analyzer gives no scroller then), the
-     * drags are used up, there is no time left for one and the touch after,
-     * or something other than the list lies under where it would start. With
-     * the drag, what the window holds outside the list
-     * ([OcclusionAnalyzer.outsideList]), to compare after it.
-     */
-    private fun clearingDrag(
-        verdict: OcclusionAnalyzer.Verdict.Covered,
-        snapshot: TargetSnapshot?,
-        bounds: Box,
-        dragsSoFar: Int,
-        deadlines: TouchPlanClock,
-        now: Long,
-    ): Pair<CoverClearance.Drag, OcclusionAnalyzer.Outside>? {
-        val scroller = scroller ?: return null
-        val list = verdict.scroller ?: return null
-        if (verdict.kind != OcclusionAnalyzer.CoverKind.CONTROL || dragsSoFar >= MAX_CLEAR_DRAGS) return null
-        // The drag fits the action's timeout, and the touch after it still
-        // answers the daemon in time.
-        val after = now + scroller.dragMs
-        if (deadlines.sleepBeforeNextPass(after) == null || deadlines.isTooLateToAct(after)) return null
-        val drag = CoverClearance.drag(bounds, verdict.bounds, list, screen.bounds, scroller.margin, scroller.touchSlop) ?: return null
-        // The drag must press the list, not something laid over it.
-        val node = snapshot?.node ?: return null
-        val onList =
-            OcclusionAnalyzer.isDragStartOnList(
-                node,
-                snapshot.windowId,
-                list,
-                verdict.bounds,
-                drag.fromX,
-                drag.fromY,
-                screen.windows(),
-            )
-        if (!onList) return null
-        // What lies outside the list now, to check the drag changed none of it.
-        val outside = OcclusionAnalyzer.outsideList(node, list) ?: return null
-        return drag to outside
     }
 
     /**

@@ -792,22 +792,6 @@ class SnapshotElementFinder {
         throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
     }
 
-    /// Bind `elementId` to `element` from now on, in place of the query it
-    /// was cached with — for a target about to be scrolled, whose cached
-    /// query may bind it by position (PILOT-980). No-op for an id not cached.
-    func rebind(_ elementId: String, to element: XCUIElement) {
-        lock.lock()
-        if elementCache[elementId] != nil || identityCache[elementId] != nil {
-            elementCache[elementId] = element
-            // Its place among rows and its row's anchor were checks on the
-            // query it was found through; the scroll moves it off both
-            // (PILOT-952), so they would call the moved element stale.
-            rowBindings.remove(elementId)
-            anchorChecks[elementId] = nil
-        }
-        lock.unlock()
-    }
-
     /// Whether a live read of `elementId` at `liveFrame`, with `liveLabel`,
     /// `liveIdentifier` and `livePlaceholder`, which a touch is about to be planned on, is the
     /// element it was found as. Not when the read contradicts the query it
