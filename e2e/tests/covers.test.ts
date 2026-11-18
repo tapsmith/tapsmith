@@ -1,11 +1,11 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
 
-// PILOT-979: a loading overlay (a plain view holding a spinner) and a sticky
-// list header are covers, though neither is a control — a tap used to land on
-// them and report success. PILOT-980: a target under fixed chrome in its own
-// window (a sticky header, a footer bar) is scrolled clear of it and tapped,
-// as Playwright scrolls a target whose click another element intercepts.
+// PILOT-979: a loading overlay (a plain view holding a spinner) is a cover,
+// though it is not a control — a tap used to land on it and report success.
+// PILOT-980: a target under fixed chrome in its own window (a header or
+// footer bar laid over its list) is scrolled clear of it and tapped, as
+// Playwright scrolls a target whose click another element intercepts.
 // Every target and cover on the screen counts its own taps.
 
 describe("Covers", () => {
@@ -80,7 +80,7 @@ describe("Covers", () => {
       }
     })
 
-    test("type() into a field under a sticky header scrolls it clear for its focusing tap", async ({ coversScreen }) => {
+    test("type() into a field under a header bar scrolls it clear for its focusing tap", async ({ coversScreen }) => {
       await coversScreen.noteUnderHeaderButton.tap()
 
       await coversScreen.note.type("hello")
@@ -89,7 +89,7 @@ describe("Covers", () => {
       await expect(coversScreen.counts).toHaveText(counts({}))
     })
 
-    test("tap() on a row under a sticky header scrolls it clear and taps it", async ({ coversScreen }) => {
+    test("tap() on a row under a header bar scrolls it clear and taps it", async ({ coversScreen }) => {
       await coversScreen.rowUnderHeaderButton.tap()
 
       await coversScreen.row("Row 5").tap()

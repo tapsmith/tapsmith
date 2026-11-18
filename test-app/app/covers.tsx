@@ -18,31 +18,34 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   holding an ActivityIndicator, with no onPress of its own. It swallows
 //   touches as any view does (and counts them), but nothing in it is a
 //   control. "Load briefly" shows it for 1.5 s; "Keep loading" until toggled.
-// - The list has a sticky header (stickyHeaderIndices) that stays at the top
-//   while rows scroll under it, and a "Footer action" button fixed over the
-//   bottom of the list, as a checkout bar is. "Put row 5 under header"
-//   scrolls so row 5 sits exactly under the header.
+// - The list has a "Header action" bar laid over its top (a translucent
+//   header the rows scroll under) and a "Footer action" button fixed over its
+//   bottom, as a checkout bar is; both sit outside the list. "Put row 5 under
+//   header" scrolls so row 5 sits exactly under the header bar.
 // - Every row also has an "Add" button, all with the same name: a locator
 //   picks one by position (nth), which the iOS agent cannot follow through a
 //   scroll, so there it is waited out instead of scrolled clear.
 // - Every row shares the testID "covers-row", as list rows often do, so a
 //   row is told apart by its name alone.
 // - A "Note" text field sits in the list after Row 12. "Put note under
-//   header" scrolls it to the top of the list, under the sticky header, so
+//   header" scrolls it to the top of the list, under the header bar, so
 //   typing into it needs its focusing tap scrolled clear first. (Not under
 //   the footer: once focused, the field would sit under its own keyboard,
 //   and Android hides a field its keyboard covers from the tree.)
 
 const ROW_HEIGHT = 60
 const ROWS = Array.from({ length: 30 }, (_, i) => `Row ${i + 1}`)
-type Item = { key: string; header?: boolean; note?: boolean }
+// The header bar's height: the list's content starts below it.
+const HEADER_HEIGHT = 60
+type Item = { key: string; note?: boolean }
 const ITEMS: Item[] = [
-  { key: "Sticky header", header: true },
   ...ROWS.slice(0, 12).map((key) => ({ key })),
   { key: "Note", note: true },
   ...ROWS.slice(12).map((key) => ({ key })),
 ]
 const NOTE_INDEX = ITEMS.findIndex((item) => item.note)
+/** The scroll offset that puts item `index` at the top of the list, under the header bar. */
+const offsetUnderHeader = (index: number) => HEADER_HEIGHT + index * ROW_HEIGHT
 
 export default function CoversScreen() {
   const [loading, setLoading] = useState(false)
@@ -110,7 +113,9 @@ export default function CoversScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.smallButton}
-          onPress={() => list.current?.scrollToOffset({ offset: 5 * ROW_HEIGHT, animated: false })}
+          onPress={() =>
+            list.current?.scrollToOffset({ offset: offsetUnderHeader(ITEMS.findIndex((item) => item.key === "Row 5")), animated: false })
+          }
           accessibilityRole="button"
           accessibilityLabel="Put row 5 under header"
         >
@@ -119,7 +124,7 @@ export default function CoversScreen() {
         <TouchableOpacity
           style={styles.smallButton}
           onPress={() =>
-            list.current?.scrollToIndex({ index: NOTE_INDEX, viewPosition: 0, animated: false })
+            list.current?.scrollToOffset({ offset: offsetUnderHeader(NOTE_INDEX), animated: false })
           }
           accessibilityRole="button"
           accessibilityLabel="Put note under header"
@@ -153,7 +158,6 @@ export default function CoversScreen() {
         <FlatList
           ref={list}
           data={ITEMS}
-          stickyHeaderIndices={[0]}
           testID="covers-list"
           getItemLayout={(_, index) => ({ length: ROW_HEIGHT, offset: ROW_HEIGHT * index, index })}
           contentContainerStyle={styles.listContent}
@@ -170,15 +174,6 @@ export default function CoversScreen() {
                   accessibilityLabel="Note"
                   testID="covers-note"
                 />
-              </View>
-            ) : item.header ? (
-              <View
-                style={styles.header}
-                testID="sticky-header"
-                onStartShouldSetResponder={() => true}
-                onResponderRelease={() => setHeaderTaps((n) => n + 1)}
-              >
-                <Text style={styles.headerText}>Sticky header</Text>
               </View>
             ) : (
               <View style={styles.row}>
@@ -206,6 +201,14 @@ export default function CoversScreen() {
             )
           }
         />
+        <TouchableOpacity
+          style={styles.header}
+          onPress={() => setHeaderTaps((n) => n + 1)}
+          accessibilityRole="button"
+          accessibilityLabel="Header action"
+        >
+          <Text style={styles.headerText}>Header action</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={styles.footer}
           onPress={() => setFooterTaps((n) => n + 1)}
@@ -272,11 +275,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
+    paddingTop: HEADER_HEIGHT,
     paddingBottom: 80,
   },
   header: {
-    height: ROW_HEIGHT,
-    backgroundColor: "#333",
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    height: HEADER_HEIGHT,
+    backgroundColor: "rgba(51, 51, 51, 0.9)",
     justifyContent: "center",
     paddingHorizontal: 16,
   },

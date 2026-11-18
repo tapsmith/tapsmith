@@ -15,7 +15,7 @@ export class CoversScreen {
 
   get behindLoading() { return this.device.getByRole("button", { name: "Behind loading" }) }
   get loadingOverlay() { return this.device.getByTestId("loading-overlay") }
-  get stickyHeader() { return this.device.getByText("Sticky header") }
+  get headerAction() { return this.device.getByRole("button", { name: "Header action" }) }
   get footerAction() { return this.device.getByRole("button", { name: "Footer action" }) }
 
   /** A list row by its label ("Row 5"). */
