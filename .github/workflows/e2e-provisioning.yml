@@ -742,9 +742,21 @@ jobs:
         run: |
           sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           xcodebuild -version
-          MODEL=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
+          # Take a plain "iPhone <N>" model from the selected Xcode's own iOS
+          # runtime, and create the simulator on that runtime. A prefix match
+          # on the device list turns "iPhone 18 Pro" into a model that doesn't
+          # exist, and an unpinned create picks whichever runtime it likes.
+          RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-$(xcrun --sdk iphonesimulator --show-sdk-version | tr . -)"
+          echo "Simulator runtime: $RUNTIME"
+          MODEL=$(xcrun simctl list devices available -j | python3 -c "
+          import json,re,sys
+          for dev in json.load(sys.stdin)['devices'].get('$RUNTIME', []):
+            if re.fullmatch(r'iPhone \\d+', dev['name']):
+              print(dev['name']); sys.exit()
+          ")
+          if [ -z "$MODEL" ]; then echo "::error::No plain iPhone model on $RUNTIME"; exit 1; fi
           SIM="Tapsmith Fresh $MODEL"
-          UDID=$(xcrun simctl create "$SIM" "$MODEL")
+          UDID=$(xcrun simctl create "$SIM" "$MODEL" "$RUNTIME")
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID"
           xcrun simctl spawn "$UDID" defaults write -g AppleKeyboards -array \
