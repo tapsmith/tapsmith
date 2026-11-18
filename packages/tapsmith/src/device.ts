@@ -620,7 +620,11 @@ export class Device {
       () => this._client.pressKey(key), 'Press key failed');
   }
 
-  /** Press the hardware back button. @platform android */
+  /**
+   * Go back: `pressKey("BACK")`. Android presses the back button; iOS taps
+   * the navigation stack's own back button, once the app's UIKit animations
+   * (an alert being dismissed) are over, and throws on a screen without one.
+   */
   async pressBack(): Promise<void> {
     return this.pressKey('BACK');
   }

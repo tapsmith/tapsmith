@@ -265,9 +265,11 @@ import type { DeviceKey, Role, SwipeDirection } from "tapsmith";
 
 All names are case-insensitive. `scroll()` and `scrollIntoView()` take the way the view scrolls (`"down"` reveals what is below), while `device.swipe()` takes the way the finger moves (`"up"` reveals what is below). Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK`, and types any single character. iOS has no back key: `BACK` taps the navigation stack's own back button, and on a screen without one (a stack's first screen, a sheet, a dialog) it throws rather than tap another button in the bar.
 
-### `device.pressBack(): Promise<void>` *(Android only)*
+### `device.pressBack(): Promise<void>`
 
-Press the Android back button. Convenience method equivalent to `device.pressKey("BACK")`.
+Go back: the same as `device.pressKey("BACK")`. On Android it presses the back button. iOS has no back button, so it taps the navigation stack's own back button, and throws on a screen without one (a stack's first screen, a sheet, a dialog) or while an alert covers it.
+
+On iOS it first waits for the app's UIKit animations to finish (at most 1 s), as an element tap does: a touch made while an alert is still being dismissed or a screen is still being presented is dropped by iOS, so a BACK straight after tapping an alert's OK would otherwise do nothing.
 
 ```typescript
 await device.pressBack();

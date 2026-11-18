@@ -87,7 +87,7 @@ This guide is for teams with a Detox suite who want to move it to Tapsmith. Of t
 | `device.reloadReactNative()` | A warm reset through [`@tapsmith/react-native`](warm-reset.md), automatic between files once the app mounts it |
 | `device.terminateApp()` | [`device.terminateApp()`](api-reference.md#deviceterminateapppackagename-string-promisevoid) |
 | `device.sendToHome()` | [`device.sendToBackground()`](api-reference.md#devicesendtobackground-promisevoid) |
-| `device.pressBack()` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) |
+| `device.pressBack()` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid) |
 | `device.setOrientation("landscape")` | [`device.setOrientation("landscape")`](api-reference.md#devicesetorientationorientation-orientation-promisevoid) |
 | `device.takeScreenshot(name)` | [`device.takeScreenshot()`](api-reference.md#devicetakescreenshot-promisescreenshotresponse) |
 | `device.getPlatform()` | [`device.platform`](api-reference.md#deviceplatform-android--ios), or the `platform` fixture |

@@ -71,7 +71,7 @@ Appium has clients in many languages. The examples here use [WebdriverIO](https:
 | `mobile: pinchOpenGesture` / `mobile: pinchCloseGesture` | [`locator.pinchOut()`](api-reference.md#elementhandlepinchoutoptions-promisevoid) / [`locator.pinchIn()`](api-reference.md#elementhandlepinchinoptions-promisevoid) |
 | Tap at coordinates (W3C actions) | [`device.tapXY(x, y)`](api-reference.md#devicetapxyx-number-y-number-promisevoid) |
 | `mobile: hideKeyboard` | [`device.hideKeyboard()`](api-reference.md#devicehidekeyboard-promisevoid) |
-| `mobile: pressKey` / `driver.back()` | [`device.pressKey()`](api-reference.md#devicepresskeykey-devicekey-promisevoid) / [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) (Android) |
+| `mobile: pressKey` / `driver.back()` | [`device.pressKey()`](api-reference.md#devicepresskeykey-devicekey-promisevoid) / [`device.pressBack()`](api-reference.md#devicepressback-promisevoid) |
 
 ### App and device management
 

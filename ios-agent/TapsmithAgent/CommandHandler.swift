@@ -2609,6 +2609,7 @@ class CommandHandler {
             let key = params["key"] as? String ?? ""
             try actionExecutor.pressKey(
                 key,
+                waitForAnimations: { waitForAnimationsIdle(reserveMs: 0) },
                 readScreen: { try snapshotFinder.settledSnapshot() },
                 deadline: snapshotFinder.commandDeadline
             )
