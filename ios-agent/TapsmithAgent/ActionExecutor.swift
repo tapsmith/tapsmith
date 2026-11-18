@@ -447,20 +447,9 @@ class ActionExecutor {
 
     // MARK: - Drag and Drop
 
-    /// Drag from one element to another.
-    func dragTo(source: XCUIElement, target: XCUIElement) throws {
-        let sourceFrame = source.frame
-        let targetFrame = target.frame
-        guard sourceFrame.width > 0 && sourceFrame.height > 0 else {
-            throw AgentError.actionFailed("Source element has zero frame for drag")
-        }
-        guard targetFrame.width > 0 && targetFrame.height > 0 else {
-            throw AgentError.actionFailed("Target element has zero frame for drag")
-        }
-        try drag(from: sourceFrame, to: targetFrame)
-    }
-
-    /// Drag between two screen coordinates.
+    /// Drag between two points in the device's native portrait space, which
+    /// the agent's synthesized touch takes (`dragXY` and UI-mode mirror
+    /// drags send such points).
     func drag(from start: CGPoint, to end: CGPoint) throws {
         if EventSynthesizer.drag(from: start, to: end) {
             return
@@ -471,25 +460,14 @@ class ActionExecutor {
         tapCoordinates(x: Int(start.x), y: Int(start.y), hold: TapTiming.hold(for: nil))
     }
 
-    /// Drag between two element frames, biasing the path away from system-edge gestures.
-    func drag(from sourceFrame: CGRect, to targetFrame: CGRect) throws {
-        let start = dragAnchorPoint(in: sourceFrame, toward: targetFrame)
-        let end = dragAnchorPoint(in: targetFrame, toward: sourceFrame)
-        try drag(from: start, to: end)
-    }
-
-    private func dragAnchorPoint(in frame: CGRect, toward otherFrame: CGRect) -> CGPoint {
-        let horizontalBias = otherFrame.midX >= frame.midX ? 0.75 : 0.25
-        let verticalBias = otherFrame.midY >= frame.midY ? 0.75 : 0.25
-        let edgeInset = min(max(min(frame.width, frame.height) * 0.18, 10), 24)
-
-        let preferredX = frame.minX + frame.width * horizontalBias
-        let preferredY = frame.minY + frame.height * verticalBias
-
-        return CGPoint(
-            x: min(max(preferredX, frame.minX + edgeInset), frame.maxX - edgeInset),
-            y: min(max(preferredY, frame.minY + edgeInset), frame.maxY - edgeInset)
-        )
+    /// Drag from one element's frame to another's, as `DragPlan` places the
+    /// path. The frames are in the app's interface space as the snapshot that
+    /// read them saw it (`screen` is that snapshot's window); the touch takes
+    /// native portrait points, so on a turned screen the path is mapped by the
+    /// way the device is turned.
+    func drag(from sourceFrame: CGRect, to targetFrame: CGRect, screen: CGSize, device: HidTouch.DeviceTurn) throws {
+        let points = DragPlan.nativePoints(from: sourceFrame, to: targetFrame, screen: screen, device: device)
+        try drag(from: points.start, to: points.end)
     }
 
     // MARK: - Select Option
