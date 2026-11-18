@@ -250,10 +250,10 @@ struct OcclusionAnalyzer {
         }
         // The topmost of the two is in the way: a control painted after the
         // overlay (or inside it: its Cancel button) is named, else the overlay.
-        // For a hittable text input, only an overlay on top counts.
-        if let cover, loading.map({ cover > $0 }) ?? true {
-            return hittableInput ? .clear(point: point, visible: visible) : .covered(by: describe(nodes[cover]))
-        }
+        // For a hittable text input the hit test is trusted unless a loading
+        // overlay was found; then whichever of the two is on top is named.
+        if hittableInput, loading == nil { return .clear(point: point, visible: visible) }
+        if let cover, loading.map({ cover > $0 }) ?? true { return .covered(by: describe(nodes[cover])) }
         if let loading { return .covered(by: "a loading overlay (\(describe(nodes[loading])))") }
         return .clear(point: point, visible: visible)
     }

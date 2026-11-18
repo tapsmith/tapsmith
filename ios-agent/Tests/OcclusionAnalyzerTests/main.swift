@@ -562,6 +562,28 @@ check("a loading overlay covers a text field XCUITest calls hittable",
 checkPoint("…but a plain control over a hittable text field is left to the hit test",
            analyzer(fieldUnderOverlay).analyze(coveredField, isHittable: true),
            CGPoint(x: 201, y: 291.33))
+// A hittable text field under an overlay whose Cancel button lies over it, or
+// under a control painted after the overlay: still covered, by the control.
+func asField(_ rows: [Row]) -> [Row] {
+    rows.map { row in
+        row.label == "Covered action" && row.type == .button ? (row.depth, .textField, "Covered field", row.id, row.frame) : row
+    }
+}
+var fieldCancelRows = asField(screenRows())
+fieldCancelRows.insert(contentsOf: [
+    (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
+    (4, .activityIndicator, "In progress", "", R(181, 475, 40, 40)),
+    (4, .button, "Cancel", "", R(100, 270, 200, 44)),
+], at: fieldCancelRows.count - 2)
+check("a hittable text field under an overlay with its Cancel over the point is covered by Cancel",
+      analyzer(fieldCancelRows).analyze(coveredField, isHittable: true),
+      .covered(by: "button \"Cancel\""))
+var fieldControlAfterRows = asField(screenRows())
+fieldControlAfterRows.insert(contentsOf: loadingOverlay + [(3, .button, "Retry", "", R(100, 270, 200, 44))],
+                             at: fieldControlAfterRows.count - 2)
+check("a hittable text field under an overlay and a control painted after it is covered by the control",
+      analyzer(fieldControlAfterRows).analyze(coveredField, isHittable: true),
+      .covered(by: "button \"Retry\""))
 // A control in the overlay over the point (its Cancel button) is named.
 let loadingWithCancel: [Row] = [
     (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
