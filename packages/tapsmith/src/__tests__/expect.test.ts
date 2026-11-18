@@ -1329,6 +1329,35 @@ describe("toHaveAccessibleName()", () => {
     await tapsmithExpect(handle).toHaveAccessibleName("Title", { timeout: 50 });
   });
 
+  // PILOT-1260: the iPhone Duo's back button has no label; the agent names it
+  // "Back", and a labelled one by its label alone.
+  it.each([
+    ["an unlabelled iOS back button", "", "Back"],
+    ["a labelled iOS back button", "Native Screens", "Native Screens"],
+  ])("names %s", async (_why, contentDescription, name) => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({
+        className: "XCUIElementTypeButton", role: "button", resourceId: "BackButton", text: "", contentDescription,
+      }),
+      errorMessage: "",
+    }));
+    const handle = makeHandle(client);
+    await tapsmithExpect(handle).toHaveAccessibleName(name, { timeout: 50 });
+  });
+
+  it("does not name another unlabelled iOS button Back", async () => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({ className: "XCUIElementTypeButton", role: "button", resourceId: "Close", text: "" }),
+      errorMessage: "",
+    }));
+    const handle = makeHandle(client);
+    await tapsmithExpect(handle).toHaveAccessibleName("", { timeout: 50 });
+  });
+
   it("names a labelled field by its label, not its placeholder", async () => {
     const client = makeMockClient(async () => ({
       requestId: "1",

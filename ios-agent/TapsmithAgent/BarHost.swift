@@ -14,7 +14,7 @@ import XCTest
 ///   items in it do (and `KeyboardDismissPlanner` treats it as plain).
 /// - Locators: an empty host — holding nothing, or only the Duo's floating
 ///   back button — is no toolbar a user can see, so no locator matches it,
-///   though what it holds still matches (`markEmptyHosts`; PILOT-1219 for
+///   though what it holds still matches (`markHosts`; PILOT-1219 for
 ///   roles, PILOT-1251 for the rest). A host holding items is the one
 ///   toolbar of its screen.
 enum BarHost {
@@ -43,17 +43,31 @@ enum BarHost {
         frame: CGRect,
         levels: some Sequence<Level>
     ) -> Bool {
-        guard OcclusionAnalyzer.barTypes.contains(elementType) else { return false }
+        wrappers(elementType: elementType, frame: frame, levels: levels) != nil
+    }
+
+    /// How many wrappers of its own size a host sits alone in (0: it is laid
+    /// out directly beside the content), or nil when the node is no host —
+    /// `isHost`'s rule. On the iPhone Duo a TabView's host is the one in a
+    /// wrapper (`markHosts`).
+    private static func wrappers(
+        elementType: XCUIElement.ElementType,
+        frame: CGRect,
+        levels: some Sequence<Level>
+    ) -> Int? {
+        guard OcclusionAnalyzer.barTypes.contains(elementType) else { return nil }
         var frame = frame
+        var wrappers = 0
         for level in levels {
             let container = level.container
             guard container.width > 0, container.height > 0,
-                  frame.insetBy(dx: -1, dy: -1).contains(container) else { return false }
-            if level.siblings.contains(where: { OcclusionAnalyzer.framesMatch($0, container) }) { return true }
-            guard level.siblings.isEmpty else { return false }
+                  frame.insetBy(dx: -1, dy: -1).contains(container) else { return nil }
+            if level.siblings.contains(where: { OcclusionAnalyzer.framesMatch($0, container) }) { return wrappers }
+            guard level.siblings.isEmpty else { return nil }
             frame = container
+            wrappers += 1
         }
-        return false
+        return nil
     }
 
     /// What a live query reads of a host: iOS 27 labels and identifies every
@@ -73,16 +87,27 @@ enum BarHost {
         predicate.evaluate(with: hostAttributes)
     }
 
-    /// Key under which `markEmptyHosts` marks a host that holds nothing.
+    /// Key under which `markHosts` marks a host that holds nothing.
     static let emptyHostKey = "tapsmithEmptyBarHost"
 
-    /// Mark every host in a snapshot dictionary that holds no toolbar items —
-    /// nothing but unlabelled generic views and the system back button —
-    /// with `emptyHostKey`. That is the host of a screen with no toolbar:
-    /// no locator matches it (what it holds still matches as usual).
-    static func markEmptyHosts(in dict: inout [String: Any]) {
+    /// Key under which `markHosts` marks the iPhone Duo's TabView host.
+    static let tabBarHostKey = "tapsmithTabBarHost"
+
+    /// Mark the hosts in a snapshot dictionary that are no toolbar:
+    /// - one that holds no toolbar items — nothing but unlabelled generic
+    ///   views and the system back button — with `emptyHostKey`. That is the
+    ///   host of a screen with no toolbar: no locator matches it (what it
+    ///   holds still matches as usual).
+    /// - the iPhone Duo's TabView host with `tabBarHostKey`: the Duo has no
+    ///   tab bar, and lays a TabView's items out as buttons in a host alone in
+    ///   a wrapper of its own size, one of them selected (PILOT-1260). That
+    ///   host is the tab bar ("tablist") and its buttons are tabs, as a
+    ///   `.tabBar` and its buttons are on other devices (`isTabBar`). A
+    ///   toolbar's items are never laid out that way: they go in the host of
+    ///   the navigation stack, laid out beside its content.
+    static func markHosts(in dict: inout [String: Any]) {
         var ancestry: [Place] = []
-        markEmptyHosts(in: &dict, ancestry: &ancestry)
+        markHosts(in: &dict, ancestry: &ancestry)
     }
 
     /// Where a node sits: its container's frame, its siblings' frames and its
@@ -97,7 +122,7 @@ enum BarHost {
     }
 
     /// `ancestry`: where each of `dict`'s ancestors sits, outermost first.
-    private static func markEmptyHosts(in dict: inout [String: Any], ancestry: inout [Place]) {
+    private static func markHosts(in dict: inout [String: Any], ancestry: inout [Place]) {
         guard var children = dict["children"] as? [[String: Any]], !children.isEmpty else { return }
         let container = CellFrames.frame(of: dict)
         let frames = children.map { CellFrames.frame(of: $0) }
@@ -105,13 +130,16 @@ enum BarHost {
             let place: Place = (container, frames, i)
             let type = CellFrames.elementType(of: children[i])
             if OcclusionAnalyzer.barTypes.contains(type),
-               isHost(elementType: type, frame: frames[i],
-                      levels: ([place] + ancestry.reversed()).lazy.map(level)),
-               !holdsItems(children[i]) {
-                children[i][emptyHostKey] = true
+               let wrappers = wrappers(elementType: type, frame: frames[i],
+                                       levels: ([place] + ancestry.reversed()).lazy.map(level)) {
+                if !holdsItems(children[i]) {
+                    children[i][emptyHostKey] = true
+                } else if wrappers > 0, holdsSelectedButton(children[i]) {
+                    children[i][tabBarHostKey] = true
+                }
             }
             ancestry.append(place)
-            markEmptyHosts(in: &children[i], ancestry: &ancestry)
+            markHosts(in: &children[i], ancestry: &ancestry)
             ancestry.removeLast()
         }
         dict["children"] = children
@@ -123,9 +151,29 @@ enum BarHost {
         CellFrames.elementType(of: dict) == .button && dict["identifier"] as? String == "BackButton"
     }
 
-    /// Whether `markEmptyHosts` marked `dict` as an empty host.
+    /// Whether `markHosts` marked `dict` as an empty host.
     static func isMarkedEmpty(_ dict: [String: Any]) -> Bool {
         dict[emptyHostKey] as? Bool == true
+    }
+
+    /// Whether `markHosts` marked `dict` as the iPhone Duo's TabView host.
+    static func isMarkedTabBarHost(_ dict: [String: Any]) -> Bool {
+        dict[tabBarHostKey] as? Bool == true
+    }
+
+    /// Whether `dict` is a tab bar, which makes the buttons in it tabs
+    /// (`RoleMapping.isTabBarItem`): a `.tabBar`, or the iPhone Duo's TabView
+    /// host.
+    static func isTabBar(_ dict: [String: Any]) -> Bool {
+        CellFrames.elementType(of: dict) == .tabBar || isMarkedTabBarHost(dict)
+    }
+
+    /// Whether a descendant of `dict` is a selected button: a TabView's
+    /// current tab.
+    private static func holdsSelectedButton(_ dict: [String: Any]) -> Bool {
+        (dict["children"] as? [[String: Any]] ?? []).contains {
+            (CellFrames.elementType(of: $0) == .button && $0["selected"] as? Bool == true) || holdsSelectedButton($0)
+        }
     }
 
     /// Whether `dict` or a descendant is marked as an empty host.

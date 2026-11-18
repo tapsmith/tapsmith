@@ -382,7 +382,7 @@ check("a progressbar query covers both indicators",
 // ─── iOS 27's empty Toolbar host (PILOT-1219) ───
 
 // The container-sized Toolbar iOS 27 lays over a screen with no toolbar
-// (BarHost.markEmptyHosts) is not a toolbar: it has no role and no toolbar
+// (BarHost.markHosts) is not a toolbar: it has no role and no toolbar
 // query matches it, named or not. A host holding items is the toolbar.
 check("an empty toolbar host is not a toolbar", matches("toolbar", .toolbar, emptyBarHost: true), false)
 check("an empty toolbar host is not a toolbar by name either",

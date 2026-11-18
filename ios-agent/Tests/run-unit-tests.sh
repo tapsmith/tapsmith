@@ -40,6 +40,23 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/bar-host-tests"
 "$OUT/bar-host-tests"
 
+# Recorded hierarchy dumps (Tests/Fixtures) replayed through the agent's
+# passes: navigation titles, tab bars and back buttons (PILOT-1260).
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/NavigationChromeTests/main.swift \
+  Tests/Support/HierarchyFixture.swift \
+  TapsmithAgent/BarHost.swift \
+  TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/CellFrames.swift \
+  TapsmithAgent/NonAppElements.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/RoleName.swift \
+  TapsmithAgent/TextMatch.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/navigation-chrome-tests"
+"$OUT/navigation-chrome-tests" Tests/Fixtures
+
 xcrun swiftc -sdk "$SDK" \
   Tests/AgentErrorTests/main.swift \
   TapsmithAgent/Models/AgentError.swift \

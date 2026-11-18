@@ -56,7 +56,8 @@ class HierarchyDumper {
         CellAccessories.normalizeIndicators(in: &dict)
         // The roles locators see: iOS 27's empty toolbar host has none
         // (PILOT-1219), so the trace viewer and MCP don't take it for a toolbar.
-        BarHost.markEmptyHosts(in: &dict)
+        BarHost.markHosts(in: &dict)
+        RoleMapping.markNavigationTitles(in: &dict)
         var keyboardTop: CGFloat?
         dumpNode(dict, depth: 1, inTabBar: false, insideNonApp: false, keyboardTop: &keyboardTop, into: &xml)
         xml += "</hierarchy>\n"
@@ -65,8 +66,8 @@ class HierarchyDumper {
 
     // MARK: - Snapshot-based dump (fast path)
 
-    /// `inTabBar`: whether the node has a `.tabBar` ancestor, which makes a
-    /// button a tab (RoleMapping.isTabBarItem, PILOT-514). `nonApp`: whether
+    /// `inTabBar`: whether the node has a tab bar ancestor (BarHost.isTabBar),
+    /// which makes a button a tab (RoleMapping.isTabBarItem, PILOT-514). `nonApp`: whether
     /// an ancestor is keyboard UI no locator matches, and the window's
     /// keyboard top so far (NonAppElements.excludesSubtree). Each such
     /// subtree's root is written `tapsmith-non-app="true"`, so the trace
@@ -104,7 +105,8 @@ class HierarchyDumper {
         let traits = SnapshotElementFinder.extractTraits(from: node)
         let isEmptyBarHost = node[BarHost.emptyHostKey] as? Bool ?? false
         let role = RoleMapping.resolveRole(
-            for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost
+            for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost,
+            isTabBarHost: BarHost.isMarkedTabBarHost(node)
         )
 
         xml += "\(indent)<\(typeName)"
@@ -142,7 +144,7 @@ class HierarchyDumper {
             xml += " tapsmith-switch-part=\"true\""
         }
         // iOS 27's empty toolbar host: no role, and no locator matches it,
-        // though what it holds still does (BarHost.markEmptyHosts, PILOT-1219,
+        // though what it holds still does (BarHost.markHosts, PILOT-1219,
         // PILOT-1251). The trace viewer reads this, not the missing role, as a
         // dump without roles still matches by type. Not non-app: it is the size
         // of its screen, and non-app nodes are edges the scroll region avoids.
@@ -163,7 +165,7 @@ class HierarchyDumper {
                 dumpNode(
                     child,
                     depth: depth + 1,
-                    inTabBar: inTabBar || elType == .tabBar,
+                    inTabBar: inTabBar || BarHost.isTabBar(node),
                     insideNonApp: insideNonApp || nonApp,
                     insideSwitch: insideSwitch || NonAppElements.isSwitch(elType),
                     keyboardTop: &keyboardTop,

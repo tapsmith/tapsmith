@@ -10,8 +10,11 @@ export class NativeHomeScreen {
 
   get title() { return this.device.getByRole("heading", { name: "Native Screens" }) }
   row(name: string) { return this.device.getByRole("button", { name, exact: true }) }
-  /** A pushed screen's back button is labelled with this screen's title, not "Back". */
-  get backButton() { return this.device.getByRole("button", { name: "Native Screens" }) }
+  /**
+   * A pushed screen's back button is labelled with this screen's title — or,
+   * on the iPhone Duo, which gives it no label, named "Back" (PILOT-1260).
+   */
+  get backButton() { return this.device.getByRole("button", { name: /^(Native Screens|Back)$/ }) }
 }
 
 export class NativeLoginScreen {

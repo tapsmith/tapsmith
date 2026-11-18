@@ -408,6 +408,19 @@ describe("iOS 27's empty Toolbar host (PILOT-1219)", () => {
     expect(findMatchingNodes(screen(host), parseSelectorString('device.getByRole("toolbar")')!)).toEqual([host]);
   });
 
+  it("matches the iPhone Duo's TabView host, which the agent reports as the tablist, as no toolbar", () => {
+    // The Duo has no tab bar: its TabView's items are buttons in a host the
+    // agent reports as the tablist, and those buttons as tabs.
+    const feed = makeNode('XCUIElementTypeButton', {
+      type: 'XCUIElementTypeButton', 'tapsmith-role': 'tab', label: 'Feed', selected: 'true', bounds: '[396,494][440,552]',
+    });
+    const host = makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-role': 'tablist' }, [feed]);
+    const roots = screen(host);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tablist")')!)).toEqual([host]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("toolbar")')!)).toEqual([]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab", { name: "Feed" })')!)).toEqual([feed]);
+  });
+
   it('still matches the host in a trace recorded before the agent marked it', () => {
     const host = makeNode('XCUIElementTypeToolbar', { ...hostAttrs, 'tapsmith-role': 'toolbar' }, [blank()]);
     expect(findMatchingNodes(screen(host), parseSelectorString('device.getByRole("toolbar")')!)).toEqual([host]);

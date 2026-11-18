@@ -137,13 +137,20 @@ class ElementFinder {
                     && TextMatch.normalize(label).isEmpty && TextMatch.normalize(title).isEmpty
                     ? elem.placeholderValue ?? "" : ""
             }
+            // An unlabelled back button is named "Back" (RoleName, PILOT-1260):
+            // its identifier is read only when it can name the element.
+            func identifier(_ elem: XCUIElement, _ label: String, _ title: String) -> String {
+                elem.elementType == .button && TextMatch.normalize(label).isEmpty
+                    && TextMatch.normalize(title).isEmpty ? elem.identifier : ""
+            }
             if let name = selector.name {
                 results = results.filter { elem in
                     let label = elem.label
                     let title = elem.title
                     return RoleName.matches(
                         elementType: elem.elementType, label: label, title: title,
-                        placeholder: placeholder(elem, label, title), name: name, exact: selector.nameExact
+                        placeholder: placeholder(elem, label, title), identifier: identifier(elem, label, title),
+                        name: name, exact: selector.nameExact
                     )
                 }
             } else if let nameRegex = selector.nameRegex {
@@ -152,7 +159,8 @@ class ElementFinder {
                     let title = elem.title
                     return RoleName.matches(
                         elementType: elem.elementType, label: label, title: title,
-                        placeholder: placeholder(elem, label, title), regex: nameRegex
+                        placeholder: placeholder(elem, label, title), identifier: identifier(elem, label, title),
+                        regex: nameRegex
                     )
                 }
             }
@@ -310,9 +318,11 @@ class ElementFinder {
             // fast path) never knows an element's ancestors, so it can't tell
             // a tab bar's button from any other; the snapshot finder can
             // (PILOT-514), or iOS 27's empty toolbar host from a toolbar
-            // (PILOT-1219).
+            // (PILOT-1219), or the iPhone Duo's TabView host from a toolbar
+            // (PILOT-1260).
             inTabBar: false,
-            isEmptyBarHost: false
+            isEmptyBarHost: false,
+            isTabBarHost: false
         )
     }
 

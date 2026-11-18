@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy>
+  <XCUIElementTypeApplication label="Tapsmith Native" identifier="" value="" placeholderValue="" type="XCUIElementTypeApplication" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+    <XCUIElementTypeWindow label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeWindow" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]" />
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                <XCUIElementTypeToolbar label="Toolbar" identifier="Toolbar" value="" placeholderValue="" type="XCUIElementTypeToolbar" tapsmith-role="toolbar" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[0,0][0,0]">
+                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,174][442,222]">
+                            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,174][442,222]">
+                              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[399,179][437,217]">
+                                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[399,179][437,217]">
+                                  <XCUIElementTypeButton label="" identifier="BackButton" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[399,179][437,217]" />
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeToolbar>
+                <XCUIElementTypeNavigationBar label="" identifier="Tabs" value="" placeholderValue="" type="XCUIElementTypeNavigationBar" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,24][466,82]">
+                  <XCUIElementTypeStaticText label="Tabs" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[20,31][81,65]" />
+                </XCUIElementTypeNavigationBar>
+                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[126,352][255,373]">
+                                    <XCUIElementTypeStaticText label="Feed tab content" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[126,352][255,373]" />
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                            <XCUIElementTypeToolbar label="Toolbar" identifier="Toolbar" value="" placeholderValue="" type="XCUIElementTypeToolbar" tapsmith-role="toolbar" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][466,678]">
+                                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,82][466,678]">
+                                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,82][466,678]">
+                                    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[0,82][0,82]">
+                                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                                    <XCUIElementTypeButton label="Feed" identifier="house" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="true" hasFocus="false" bounds="[396,494][440,552]">
+                                                      <XCUIElementTypeImage label="home" identifier="house.fill" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[401,509][434,537]" />
+                                                    </XCUIElementTypeButton>
+                                                    <XCUIElementTypeButton label="Search" identifier="magnifyingglass" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,544][440,602]">
+                                                      <XCUIElementTypeImage label="Search" identifier="magnifyingglass" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[404,559][432,586]" />
+                                                    </XCUIElementTypeButton>
+                                                    <XCUIElementTypeButton label="Profile" identifier="person" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,594][440,652]">
+                                                      <XCUIElementTypeImage label="Person silhouette, filled" identifier="person.fill" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[405,610][430,635]" />
+                                                    </XCUIElementTypeButton>
+                                                  </XCUIElementTypeOther>
+                                                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][438,550]" />
+                                                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]" />
+                                                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                                    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]">
+                                                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]" />
+                                                        </XCUIElementTypeOther>
+                                                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[394,492][442,654]" />
+                                                      </XCUIElementTypeOther>
+                                                    </XCUIElementTypeOther>
+                                                  </XCUIElementTypeOther>
+                                                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]">
+                                                    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]">
+                                                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]" />
+                                                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]">
+                                                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]">
+                                                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]">
+                                                            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]" />
+                                                          </XCUIElementTypeOther>
+                                                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]" />
+                                                        </XCUIElementTypeOther>
+                                                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[396,494][440,552]" />
+                                                      </XCUIElementTypeOther>
+                                                    </XCUIElementTypeOther>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeToolbar>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeWindow>
+  </XCUIElementTypeApplication>
+</hierarchy>

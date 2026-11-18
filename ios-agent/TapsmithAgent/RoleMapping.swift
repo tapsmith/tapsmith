@@ -129,10 +129,53 @@ enum RoleMapping {
         return elementTypeToRole[elementType] ?? ""
     }
 
+    /// Give every navigation title in a snapshot dictionary the header trait,
+    /// so it is a heading wherever traits are read (`resolveRole`, `matches`,
+    /// the dump). A navigation title is a static text directly in a
+    /// `.navigationBar` whose label is the bar's identifier: UIKit and SwiftUI
+    /// identify a navigation bar by its title. UIKit gives the title the
+    /// header trait, but the iPhone Duo simulator (iOS 27) publishes it only
+    /// some of the time — on launch, not after a pop or a deep link, and not
+    /// always on two reads of the same screen (PILOT-1260). Any other text in
+    /// the bar (a subtitle, a principal item) keeps its own traits.
+    static func markNavigationTitles(in dict: inout [String: Any]) {
+        guard var children = dict["children"] as? [[String: Any]], !children.isEmpty else { return }
+        let title = elementType(of: dict) == .navigationBar ? dict["identifier"] as? String ?? "" : ""
+        for i in children.indices {
+            if !title.isEmpty, elementType(of: children[i]) == .staticText,
+               children[i]["label"] as? String == title {
+                children[i]["traits"] = traitBits(of: children[i]) | AccessibilityTrait.header
+            }
+            markNavigationTitles(in: &children[i])
+        }
+        dict["children"] = children
+    }
+
+    /// A snapshot dictionary's element type.
+    private static func elementType(of dict: [String: Any]) -> XCUIElement.ElementType {
+        let raw = (dict["elementType"] as? UInt) ?? (dict["elementType"] as? Int).map(UInt.init)
+            ?? (dict["elementType"] as? NSNumber)?.uintValue ?? 0
+        return XCUIElement.ElementType(rawValue: raw) ?? .other
+    }
+
+    /// The traits `SnapshotElementFinder.annotateTraits` spliced into a
+    /// snapshot dictionary (0 when none were read), as its `extractTraits`
+    /// reads them.
+    private static func traitBits(of dict: [String: Any]) -> UInt64 {
+        switch dict["traits"] {
+        case let v as UInt64: return v
+        case let v as UInt: return UInt64(v)
+        case let v as Int: return UInt64(bitPattern: Int64(v))
+        case let v as NSNumber: return v.uint64Value
+        default: return 0
+        }
+    }
+
     /// Whether an element is an item of a tab bar: a button with a `.tabBar`
-    /// ancestor (`inTabBar`). UIKit and SwiftUI tab bars expose their items
-    /// as buttons, never as `.tab` elements, so this is how getByRole("tab")
-    /// finds them (PILOT-514).
+    /// ancestor, or the iPhone Duo's TabView host (`inTabBar`,
+    /// `BarHost.isTabBar`). UIKit and SwiftUI tab bars expose their items as
+    /// buttons, never as `.tab` elements, so this is how getByRole("tab")
+    /// finds them (PILOT-514, PILOT-1260).
     static func isTabBarItem(_ elementType: XCUIElement.ElementType, inTabBar: Bool) -> Bool {
         inTabBar && elementType == .button
     }
@@ -144,15 +187,19 @@ enum RoleMapping {
     /// `inTabBar` is whether the element has a `.tabBar` ancestor: a button
     /// there is a tab (`isTabBarItem`). `isEmptyBarHost`: whether it is the
     /// empty host iOS 27 lays over a screen with no toolbar
-    /// (`BarHost.markEmptyHosts`, PILOT-1219), which is nothing a user can
-    /// see and has no role. A live element can't tell; its callers pass what
-    /// was found with it.
+    /// (`BarHost.markHosts`, PILOT-1219), which is nothing a user can
+    /// see and has no role. `isTabBarHost`: whether it is the iPhone Duo's
+    /// TabView host (`BarHost.markHosts`, PILOT-1260), which is the tab bar.
+    /// A live element can't tell either; its callers pass what was found
+    /// with it.
     static func resolveRole(
-        for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool, isEmptyBarHost: Bool = false
+        for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool, isEmptyBarHost: Bool = false,
+        isTabBarHost: Bool = false
     ) -> String {
         typealias Trait = AccessibilityTrait
 
         if isEmptyBarHost { return "" }
+        if isTabBarHost { return "tablist" }
 
         // Trait-derived semantic roles take priority — these are the ones an
         // app explicitly declares via `accessibilityRole`.
@@ -202,14 +249,16 @@ enum RoleMapping {
 
     /// The element types a type query must cover to find every element of
     /// `role`: its `roleToElementTypes` entry plus, for "tab", the buttons a
-    /// tab bar's items are, and for "alert" the static text an RN `Text` is
-    /// (`staticTextRoles`). A coarse query — callers still filter by
+    /// tab bar's items are, for "tablist" the bar host the iPhone Duo's
+    /// TabView is (PILOT-1260), and for "alert" the static text an RN `Text`
+    /// is (`staticTextRoles`). A coarse query — callers still filter by
     /// `matches` or by the tab-bar ancestry.
     /// - Throws: AgentError.invalidSelector if the role is unknown.
     static func queryTypes(for role: String) throws -> [XCUIElement.ElementType] {
         let types = try elementTypes(for: role)
         let canonical = normalize(role)
         if canonical == "tab" { return types + [.button] }
+        if canonical == "tablist" { return types + [.toolbar] }
         if staticTextRoles.contains(canonical) { return types + [.staticText] }
         return types
     }
@@ -322,8 +371,10 @@ enum RoleMapping {
     ///   named query finds the alert, not also its title text (PILOT-919).
     /// - every other role: its element types, or its trait.
     /// - no role at all: iOS 27's empty toolbar host (`isEmptyBarHost`,
-    ///   `BarHost.markEmptyHosts`, PILOT-1219). A host holding a toolbar's
+    ///   `BarHost.markHosts`, PILOT-1219). A host holding a toolbar's
     ///   items is the toolbar.
+    /// - tablist and nothing else: the iPhone Duo's TabView host
+    ///   (`isTabBarHost`, PILOT-1260), whose buttons are tabs (`inTabBar`).
     static func matches(
         role: String,
         elementType: XCUIElement.ElementType,
@@ -332,10 +383,12 @@ enum RoleMapping {
         hasNameFilter: Bool,
         inTabBar: Bool,
         inAlert: Bool,
-        isEmptyBarHost: Bool = false
+        isEmptyBarHost: Bool = false,
+        isTabBarHost: Bool = false
     ) -> Bool {
         if isEmptyBarHost { return false }
         let canonical = normalize(role)
+        if isTabBarHost { return canonical == "tablist" }
         if canonical == "alert" && inAlert && elementType != .alert {
             return false
         }
