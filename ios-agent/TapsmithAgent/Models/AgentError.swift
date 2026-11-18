@@ -2,7 +2,12 @@ import Foundation
 
 /// Structured error types matching the Android agent's error protocol.
 /// These map to the JSON error types sent back to the daemon.
-enum AgentError: Error {
+///
+/// A `LocalizedError`, so `localizedDescription` is the message: code that
+/// reports an `Error` it caught (a read that failed inside a command) keeps
+/// the cause instead of Foundation's generic "The operation couldn't be
+/// completed" (PILOT-1252).
+enum AgentError: LocalizedError {
     case elementNotFound(String)
     case timeout(String)
     case invalidSelector(String)
@@ -42,4 +47,6 @@ enum AgentError: Error {
             return msg
         }
     }
+
+    var errorDescription: String? { message }
 }
