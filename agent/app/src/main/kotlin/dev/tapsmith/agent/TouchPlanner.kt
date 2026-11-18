@@ -133,6 +133,11 @@ class TouchPlanner(
     companion object {
         /** Drags at most per touch to move a target clear of a cover. */
         const val MAX_CLEAR_DRAGS = 2
+
+        /** How long after a clearing drag what lies outside the list is
+         *  compared once more: a dialog the drag dismissed may still be
+         *  fading out at the first look. Part of [GuardScroller.dragMs]. */
+        const val OUTSIDE_RECHECK_MS = 300L
     }
 
     /**
@@ -233,7 +238,13 @@ class TouchPlanner(
                         // dialog its backdrop dismissed) means it pressed
                         // something laid over the list: stop, loudly, rather
                         // than touch the target on a screen that changed.
-                        val after = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
+                        // Twice: a dialog the drag dismissed may still be
+                        // fading out (its nodes still there) at the first look.
+                        var after = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
+                        if (after == outside) {
+                            clock.sleep(OUTSIDE_RECHECK_MS)
+                            after = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
+                        }
                         if (after != outside) {
                             log("the screen outside the list changed during the drag ($outside -> $after)")
                             throw ElementCoveredException(

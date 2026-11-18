@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   StyleSheet,
   Text,
@@ -27,7 +28,8 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   scroll, so there it is waited out instead of scrolled clear.
 // - "Show dialog" lays a hand-rolled dialog over the whole screen: one host
 //   holding a role-less backdrop (a responder, as many apps build one) that
-//   closes the dialog when pressed, and a card. A tap on a row under the
+//   closes the dialog when pressed (fading it out over 300 ms, as dialog
+//   libraries do, so its views are still there for a moment), and a card. A tap on a row under the
 //   footer must not drag from the backdrop and then tap the row.
 // - Every row shares the testID "covers-row", as list rows often do, so a
 //   row is told apart by its name alone.
@@ -67,6 +69,11 @@ export default function CoversScreen() {
   const [headerTaps, setHeaderTaps] = useState(0)
   const [note, setNote] = useState("")
   const [dialog, setDialog] = useState(false)
+  const dialogOpacity = useRef(new Animated.Value(1)).current
+  const closeDialog = () =>
+    Animated.timing(dialogOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() =>
+      setDialog(false),
+    )
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const list = useRef<FlatList<Item>>(null)
   const listHeight = useRef(0)
@@ -163,7 +170,10 @@ export default function CoversScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.smallButton}
-          onPress={() => setDialog(true)}
+          onPress={() => {
+            dialogOpacity.setValue(1)
+            setDialog(true)
+          }}
           accessibilityRole="button"
           accessibilityLabel="Show dialog"
         >
@@ -261,24 +271,24 @@ export default function CoversScreen() {
       </View>
 
       {dialog && (
-        <View style={fill} testID="covers-dialog">
+        <Animated.View style={[fill, { opacity: dialogOpacity }]} testID="covers-dialog">
           <View
             style={[fill, styles.dialogBackdrop]}
             onStartShouldSetResponder={() => true}
-            onResponderRelease={() => setDialog(false)}
+            onResponderRelease={closeDialog}
           />
           <View style={styles.dialogCard}>
             <Text style={styles.rowText}>A dialog</Text>
             <TouchableOpacity
               style={styles.smallButton}
-              onPress={() => setDialog(false)}
+              onPress={closeDialog}
               accessibilityRole="button"
               accessibilityLabel="Dialog OK"
             >
               <Text style={styles.smallButtonText}>OK</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </Animated.View>
       )}
     </View>
   )

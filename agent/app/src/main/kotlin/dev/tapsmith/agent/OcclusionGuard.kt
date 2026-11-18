@@ -96,7 +96,7 @@ class OcclusionGuard(
             private val density = instrumentation.targetContext.resources.displayMetrics.density
             override val margin: Int get() = (CLEAR_MARGIN_DP * density).toInt()
             override val touchSlop: Int get() = ViewConfiguration.get(instrumentation.targetContext).scaledTouchSlop
-            override val dragMs: Long get() = AgentInput.SCROLL_DRAG_MAX_MS + CLEAR_SETTLE_MS
+            override val dragMs: Long get() = AgentInput.SCROLL_DRAG_MAX_MS + CLEAR_SETTLE_MS + TouchPlanner.OUTSIDE_RECHECK_MS
 
             override fun drag(drag: CoverClearance.Drag) {
                 input.scrollDrag(ScreenPoint(drag.fromX, drag.fromY), ScreenPoint(drag.toX, drag.toY))

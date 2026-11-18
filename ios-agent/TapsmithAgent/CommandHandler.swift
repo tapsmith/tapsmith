@@ -916,8 +916,17 @@ class CommandHandler {
                     // backdrop dismissed) means it pressed something laid
                     // over the list: stop, loudly, rather than touch the
                     // target on a screen that changed.
-                    let after = (try? snapshotFinder.takeSnapshot()).flatMap {
-                        OcclusionAnalyzer(snapshot: $0, screenSize: snapshotFinder.screenSize).outsideList(at: path, list: list)
+                    // Twice: a dialog the drag dismissed may still be
+                    // fading out (its nodes still there) at the first look.
+                    func outsideNow() -> [String: Int]? {
+                        (try? snapshotFinder.takeSnapshot()).flatMap {
+                            OcclusionAnalyzer(snapshot: $0, screenSize: snapshotFinder.screenSize).outsideList(at: path, list: list)
+                        }
+                    }
+                    var after = outsideNow()
+                    if after == outside {
+                        Thread.sleep(forTimeInterval: CoverClearance.outsideRecheckSeconds)
+                        after = outsideNow()
                     }
                     if after != outside {
                         NSLog("[TapsmithCommand] the screen outside the list changed during the drag: \(outside) -> \(String(describing: after))")

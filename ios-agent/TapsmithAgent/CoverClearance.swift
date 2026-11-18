@@ -29,8 +29,13 @@ enum CoverClearance {
     /// How long the finger holds still before letting go, so the list does
     /// not fling.
     static let releaseHoldSeconds: TimeInterval = 0.25
-    /// Longest a clearing drag takes, the hold and settling included.
-    static let dragSeconds: TimeInterval = 2.5
+    /// Longest a clearing drag takes, the hold, the settling and the second
+    /// look at what lies outside the list included.
+    static let dragSeconds: TimeInterval = 2.85
+    /// How long after a clearing drag what lies outside the list is
+    /// compared once more: a dialog the drag dismissed may still be fading
+    /// out at the first look. Part of `dragSeconds`.
+    static let outsideRecheckSeconds: TimeInterval = 0.35
 
     /// How long the finger takes over `drag`'s move: steady at `dragSpeed`,
     /// and never shorter than `minMoveSeconds`.

@@ -328,6 +328,24 @@ class TouchPlannerTest {
     }
 
     @Test
+    fun `a dialog the drag dismissed that is still fading out at the first look is caught at the second`() {
+        val row = listUnderFooter(rowTop = 2250)
+        val root = row.parentNode!!.parentNode!!.parentNode!!
+        val host = Node(SCREEN, drawingOrder = 2).add(Node(SCREEN, name = "backdrop"), Node(Box(100, 900, 980, 1300)))
+        root.add(host)
+        // The dialog's nodes stay through the first read after the drag (its
+        // exit animation), and are gone by the next.
+        var readsAfterDrag = 0
+        target.readAt = {
+            if (scroller.drags.isNotEmpty() && ++readsAfterDrag == 2) root.children.remove(host)
+            snapshot(row.bounds, node = row)
+        }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(), LABELLED) }
+        assertEquals(1, scroller.drags.size)
+        assertTrue(e.message, e.message!!.contains("changed the screen outside the list"))
+    }
+
+    @Test
     fun `no drag is made while an app window is over the target's window`() {
         // A dialog window elsewhere on screen: a touch outside it cancels it.
         val row = listUnderFooter(rowTop = 2250)
