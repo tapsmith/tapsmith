@@ -139,6 +139,59 @@ int main(void) {
   assert(!hid_simulatorkit_path("", 0, p, sizeof p));
   assert(!hid_simulatorkit_path("/x", -1, p, sizeof p));
 
+  /* Which screen a touch addresses (PILOT-1259). */
+  HidTouchScreen ts;
+  /* A phone: one LCD, plus the TV-out and CarPlay screens every simulator
+   * lists. The legacy digitizer target, as before. */
+  const HidScreen phone[] = {
+    {3, HID_SCREEN_TYPE_CARPLAY, 720, 480},
+    {2, HID_SCREEN_TYPE_TV_OUT, 720, 480},
+    {1, HID_SCREEN_TYPE_INTEGRATED, 1206, 2622},
+  };
+  ts = hid_touch_screen(phone, 3, 1206, 2622);
+  assert(ts.found && ts.target == HID_LEGACY_TOUCH_TARGET && ts.screenId == 1);
+  assert(approx(ts.widthPx, 1206) && approx(ts.heightPx, 2622));
+
+  /* The iPhone Duo: two integrated screens (LCD 1398x2034, and LCD-1
+   * 2007x2853, mounted turned), a resizable one and the usual external
+   * ones. The legacy target does not reach the LCD the app is on, so the
+   * touch addresses that screen by its id, sized as that screen. */
+  const HidScreen duo[] = {
+    {5, HID_SCREEN_TYPE_RESIZABLE, 7680, 4320},
+    {4, HID_SCREEN_TYPE_CARPLAY, 720, 480},
+    {3, HID_SCREEN_TYPE_INTEGRATED, 2007, 2853},
+    {2, HID_SCREEN_TYPE_TV_OUT, 720, 480},
+    {1, HID_SCREEN_TYPE_INTEGRATED, 1398, 2034},
+  };
+  ts = hid_touch_screen(duo, 5, 1398, 2034);
+  assert(ts.found && ts.screenId == 1 && ts.target == (HID_SCREEN_TARGET_BASE | 1));
+  assert(approx(ts.widthPx, 1398) && approx(ts.heightPx, 2034));
+  /* The main screen is the one the device type calls main, whatever the order. */
+  const HidScreen duoMainSecond[] = {
+    {1, HID_SCREEN_TYPE_INTEGRATED, 2007, 2853},
+    {7, HID_SCREEN_TYPE_INTEGRATED, 1398, 2034},
+  };
+  ts = hid_touch_screen(duoMainSecond, 2, 1398, 2034);
+  assert(ts.found && ts.screenId == 7 && ts.target == (HID_SCREEN_TARGET_BASE | 7));
+  /* No integrated screen the main size: the lowest-numbered one, at its own size. */
+  ts = hid_touch_screen(duo, 5, 1000, 1000);
+  assert(ts.found && ts.screenId == 1 && ts.target == (HID_SCREEN_TARGET_BASE | 1));
+  assert(approx(ts.widthPx, 1398) && approx(ts.heightPx, 2034));
+  /* A screen reporting no size keeps the device type's main size. */
+  const HidScreen unsized[] = {
+    {1, HID_SCREEN_TYPE_INTEGRATED, 0, 0},
+    {3, HID_SCREEN_TYPE_INTEGRATED, 2007, 2853},
+  };
+  ts = hid_touch_screen(unsized, 2, 1398, 2034);
+  assert(ts.found && ts.screenId == 1 && approx(ts.widthPx, 1398) && approx(ts.heightPx, 2034));
+  /* No integrated screen listed at all: nothing to address. A guessed
+   * target can reboot the simulator's SpringBoard, and the legacy one may
+   * press a screen the app is not on, reported as delivered. */
+  ts = hid_touch_screen(phone, 2, 1206, 2622);
+  assert(!ts.found);
+  ts = hid_touch_screen(NULL, 0, 1206, 2622);
+  assert(!ts.found);
+
   printf("all hid_protocol tests passed\n");
   return 0;
 }

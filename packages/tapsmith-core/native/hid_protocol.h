@@ -81,4 +81,46 @@ double hid_normalize(double point, double extentPt);
  * or a path that does not fit in `len` bytes. */
 int hid_simulatorkit_path(const char *devDir, int index, char *buf, size_t len);
 
+/* The simulator's screen types (SimScreenProperties.screenType). */
+#define HID_SCREEN_TYPE_INTEGRATED 0
+#define HID_SCREEN_TYPE_TV_OUT 1
+#define HID_SCREEN_TYPE_CARPLAY 2
+#define HID_SCREEN_TYPE_RESIZABLE 4
+
+/* The IndigoHID target that addresses "the" touch screen. On a device with
+ * one integrated screen it reaches that screen. */
+#define HID_LEGACY_TOUCH_TARGET 0x32u
+/* A screen's own IndigoHID target is this OR'd with its screen id, the way
+ * SimulatorKit's display view addresses the screen it shows. */
+#define HID_SCREEN_TARGET_BASE 0x40000000u
+
+/* One screen the simulator lists: its id, type and size in pixels. */
+typedef struct {
+  unsigned screenId;
+  int screenType;
+  double widthPx;
+  double heightPx;
+} HidScreen;
+
+/* The screen a touch goes to, the IndigoHID target that reaches it, and the
+ * pixel size its coordinates are normalised against. */
+typedef struct {
+  int found;
+  unsigned screenId;
+  unsigned target;
+  double widthPx;
+  double heightPx;
+} HidTouchScreen;
+
+/* Pick the screen touches go to from the `count` screens the simulator
+ * lists, given the device type's main screen size in pixels (PILOT-1259).
+ * A device with one integrated screen keeps HID_LEGACY_TOUCH_TARGET. A device
+ * with several (the iPhone Duo) is addressed by the screen's own target: the
+ * legacy one does not reach the screen the app is on there, and the touch is
+ * still reported as delivered. The screen is the integrated one the main
+ * size describes, else the lowest-numbered integrated one. found == 0 when no
+ * integrated screen is listed. */
+HidTouchScreen hid_touch_screen(const HidScreen *screens, size_t count,
+                                double mainWidthPx, double mainHeightPx);
+
 #endif /* TAPSMITH_HID_PROTOCOL_H */

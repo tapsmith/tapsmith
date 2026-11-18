@@ -104,3 +104,33 @@ int hid_simulatorkit_path(const char *devDir, int index, char *buf, size_t len) 
   }
   return w >= 0 && (size_t)w < len;
 }
+
+HidTouchScreen hid_touch_screen(const HidScreen *screens, size_t count,
+                                double mainWidthPx, double mainHeightPx) {
+  HidTouchScreen pick = {0, 0, 0, 0, 0};
+  if (!screens) return pick;
+  size_t integrated = 0;
+  const HidScreen *chosen = NULL;
+  int chosenIsMain = 0;
+  for (size_t i = 0; i < count; i++) {
+    const HidScreen *s = &screens[i];
+    if (s->screenType != HID_SCREEN_TYPE_INTEGRATED) continue;
+    integrated++;
+    int isMain = s->widthPx == mainWidthPx && s->heightPx == mainHeightPx;
+    /* The main-sized screen wins; among equals, the lowest id. */
+    if (!chosen || (isMain && !chosenIsMain) ||
+        (isMain == chosenIsMain && s->screenId < chosen->screenId)) {
+      chosen = s;
+      chosenIsMain = isMain;
+    }
+  }
+  if (!chosen) return pick;
+  pick.found = 1;
+  pick.screenId = chosen->screenId;
+  pick.target = integrated == 1 ? HID_LEGACY_TOUCH_TARGET
+                                : (HID_SCREEN_TARGET_BASE | chosen->screenId);
+  int sized = chosen->widthPx > 0 && chosen->heightPx > 0;
+  pick.widthPx = integrated == 1 || !sized ? mainWidthPx : chosen->widthPx;
+  pick.heightPx = integrated == 1 || !sized ? mainHeightPx : chosen->heightPx;
+  return pick;
+}
