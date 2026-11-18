@@ -26,8 +26,16 @@ describe("Dialogs screen", () => {
   // after the pop tapped it and reported success. It must refuse: the first
   // screen has no back button. No wait between the two, on purpose. On
   // Android the second BACK would leave the app.
+  //
+  // The test builds its own two-screen stack. The hook's deep link does not
+  // promise one: after a warm reset, screens an earlier test left can sit
+  // under the home screen (which then has a back button), and after a cold
+  // relaunch the deep-linked screen is itself the first screen.
   test("BACK straight after popping to the first screen refuses", async ({ device, platform, dialogsScreen, homeScreen }) => {
     test.skip(platform !== "ios", "Android's BACK on the first screen leaves the app")
+    await device.restartApp()
+    await homeScreen.dialogsCard.tap()
+    await expect(dialogsScreen.heading).toBeVisible()
     await device.pressBack()
     const error = await device.pressBack().catch((err: unknown) => err)
     expect(String(error)).toContain("No back button found")
