@@ -29,7 +29,7 @@ This guide is for teams with a Maestro suite who want to move it to Tapsmith. It
 | `scroll` / `swipe` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-swipedirection-options-promisevoid) on a scroll view |
 | `scrollUntilVisible` | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid) |
 | `hideKeyboard` | [`device.hideKeyboard()`](api-reference.md#devicehidekeyboard-promisevoid) |
-| `back` / `pressKey` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) (Android) / [`device.pressKey(key)`](api-reference.md#devicepresskeykey-devicekey-promisevoid) |
+| `back` / `pressKey` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid) / [`device.pressKey(key)`](api-reference.md#devicepresskeykey-devicekey-promisevoid) |
 | `openLink` | [`device.openDeepLink(url)`](api-reference.md#deviceopendeeplinkuri-string-options-opendeeplinkoptions-promisevoid) |
 | `launchApp` | Automatic before each test file; [`device.launchApp(pkg)`](api-reference.md#devicelaunchapppackagename-string-options-launchappoptions-promisevoid) when you need it mid-test |
 | `launchApp: { clearState: true }` / `clearState` | The default [`appReset`](writing-tests.md#test-isolation) policy; [`device.resetApp({ mode: "clear" })`](api-reference.md#deviceresetappoptions-promiseappresetresult) mid-test |

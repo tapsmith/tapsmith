@@ -7,6 +7,20 @@ describe("Dialogs screen", () => {
     await expect(dialogsScreen.heading).toBeVisible()
   })
 
+  // ─── Alert, then BACK ───
+
+  // PILOT-1252: on iOS 27 a BACK straight after the alert's OK landed while
+  // the alert's dismissal still animated. iOS dropped the touch, the screen
+  // stayed, and BACK reported success. BACK now waits for the dismissal, as
+  // an element tap does. No wait between the two, on purpose.
+  test("BACK straight after an alert's OK goes back", async ({ device, dialogsScreen, homeScreen }) => {
+    await dialogsScreen.showAlertButton.tap()
+    await dialogsScreen.alertOk.tap()
+    await device.pressBack()
+    await expect(homeScreen.header).toBeVisible()
+    await expect(dialogsScreen.heading).toBeHidden()
+  })
+
   // ─── Toast ───
 
   test("tapping show toast displays a toast", async ({ dialogsScreen }) => {

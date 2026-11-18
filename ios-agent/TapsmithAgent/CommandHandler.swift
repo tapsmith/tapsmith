@@ -2054,7 +2054,6 @@ class CommandHandler {
             return ["results": results.map { result -> [String: Any] in
                 switch result {
                 case .success(let elements): return ["elements": elements.map { $0.toDict() }]
-                case .failure(let error as AgentError): return ["error": error.message]
                 case .failure(let error): return ["error": error.localizedDescription]
                 }
             }]
@@ -2610,6 +2609,7 @@ class CommandHandler {
             let key = params["key"] as? String ?? ""
             try actionExecutor.pressKey(
                 key,
+                waitForAnimations: { waitForAnimationsIdle(reserveMs: 0) },
                 readScreen: { try snapshotFinder.settledSnapshot() },
                 deadline: snapshotFinder.commandDeadline
             )

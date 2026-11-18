@@ -39,6 +39,12 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/bar-host-tests"
 "$OUT/bar-host-tests"
 
+xcrun swiftc -sdk "$SDK" \
+  Tests/AgentErrorTests/main.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/agent-error-tests"
+"$OUT/agent-error-tests"
+
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/RoleMappingTests/main.swift \

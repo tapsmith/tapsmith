@@ -688,9 +688,16 @@ class ActionExecutor {
 
     // MARK: - Key Press
 
-    /// Send a key press event. `readScreen` reads the app's tree for the back
-    /// key, `deadline` is when the daemon stops waiting for the command.
-    func pressKey(_ key: String, readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
+    /// Send a key press event. For the back key, `waitForAnimations` waits
+    /// for the app's UIKit animations to end (`AnimationsIdle`), `readScreen`
+    /// reads the app's tree, and `deadline` is when the daemon stops waiting
+    /// for the command.
+    func pressKey(
+        _ key: String,
+        waitForAnimations: () -> Void,
+        readScreen: () throws -> XCUIElementSnapshot,
+        deadline: Date?
+    ) throws {
         switch key.lowercased() {
         case "home":
             XCUIDevice.shared.press(.home)
@@ -710,7 +717,7 @@ class ActionExecutor {
         case "space":
             typeTextWithoutFocus(" ")
         case "back":
-            try pressBack(readScreen: readScreen, deadline: deadline)
+            try pressBack(waitForAnimations: waitForAnimations, readScreen: readScreen, deadline: deadline)
         default:
             // Try typing the key as a character
             if key.count == 1 {
@@ -730,15 +737,27 @@ class ActionExecutor {
     /// in progress; a screen with no back button (or a covered one) is read
     /// again for a moment before refusing, as a push just tapped may not have
     /// begun.
-    private func pressBack(readScreen: () throws -> XCUIElementSnapshot, deadline: Date?) throws {
+    ///
+    /// Each read first waits for the app's UIKit animations to end, as an
+    /// element tap does (PILOT-1129): a touch made while an alert's
+    /// dismissal is still animating is dropped, though the alert has already
+    /// left the tree — BACK straight after an alert's OK did nothing on iOS
+    /// 27 and reported success (PILOT-1252).
+    private func pressBack(
+        waitForAnimations: () -> Void,
+        readScreen: () throws -> XCUIElementSnapshot,
+        deadline: Date?
+    ) throws {
         let started = Date()
         while true {
+            waitForAnimations()
             let snapshot: XCUIElementSnapshot
             do {
                 snapshot = try readScreen()
             } catch {
-                let cause = (error as? AgentError)?.message ?? error.localizedDescription
-                throw AgentError.actionFailed("Could not read the screen to find its back button: \(cause)")
+                throw AgentError.actionFailed(
+                    "Could not read the screen to find its back button: \(error.localizedDescription)"
+                )
             }
             let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
             let resolution = BackButton.resolve(in: analyzer)
