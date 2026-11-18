@@ -172,9 +172,10 @@ enum RoleMapping {
     }
 
     /// Whether an element is an item of a tab bar: a button with a `.tabBar`
-    /// ancestor (`inTabBar`). UIKit and SwiftUI tab bars expose their items
-    /// as buttons, never as `.tab` elements, so this is how getByRole("tab")
-    /// finds them (PILOT-514).
+    /// ancestor, or the iPhone Duo's TabView host (`inTabBar`,
+    /// `BarHost.isTabBar`). UIKit and SwiftUI tab bars expose their items as
+    /// buttons, never as `.tab` elements, so this is how getByRole("tab")
+    /// finds them (PILOT-514, PILOT-1260).
     static func isTabBarItem(_ elementType: XCUIElement.ElementType, inTabBar: Bool) -> Bool {
         inTabBar && elementType == .button
     }
@@ -186,15 +187,19 @@ enum RoleMapping {
     /// `inTabBar` is whether the element has a `.tabBar` ancestor: a button
     /// there is a tab (`isTabBarItem`). `isEmptyBarHost`: whether it is the
     /// empty host iOS 27 lays over a screen with no toolbar
-    /// (`BarHost.markEmptyHosts`, PILOT-1219), which is nothing a user can
-    /// see and has no role. A live element can't tell; its callers pass what
-    /// was found with it.
+    /// (`BarHost.markHosts`, PILOT-1219), which is nothing a user can
+    /// see and has no role. `isTabBarHost`: whether it is the iPhone Duo's
+    /// TabView host (`BarHost.markHosts`, PILOT-1260), which is the tab bar.
+    /// A live element can't tell either; its callers pass what was found
+    /// with it.
     static func resolveRole(
-        for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool, isEmptyBarHost: Bool = false
+        for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool, isEmptyBarHost: Bool = false,
+        isTabBarHost: Bool = false
     ) -> String {
         typealias Trait = AccessibilityTrait
 
         if isEmptyBarHost { return "" }
+        if isTabBarHost { return "tablist" }
 
         // Trait-derived semantic roles take priority — these are the ones an
         // app explicitly declares via `accessibilityRole`.
@@ -244,14 +249,16 @@ enum RoleMapping {
 
     /// The element types a type query must cover to find every element of
     /// `role`: its `roleToElementTypes` entry plus, for "tab", the buttons a
-    /// tab bar's items are, and for "alert" the static text an RN `Text` is
-    /// (`staticTextRoles`). A coarse query — callers still filter by
+    /// tab bar's items are, for "tablist" the bar host the iPhone Duo's
+    /// TabView is (PILOT-1260), and for "alert" the static text an RN `Text`
+    /// is (`staticTextRoles`). A coarse query — callers still filter by
     /// `matches` or by the tab-bar ancestry.
     /// - Throws: AgentError.invalidSelector if the role is unknown.
     static func queryTypes(for role: String) throws -> [XCUIElement.ElementType] {
         let types = try elementTypes(for: role)
         let canonical = normalize(role)
         if canonical == "tab" { return types + [.button] }
+        if canonical == "tablist" { return types + [.toolbar] }
         if staticTextRoles.contains(canonical) { return types + [.staticText] }
         return types
     }
@@ -364,8 +371,10 @@ enum RoleMapping {
     ///   named query finds the alert, not also its title text (PILOT-919).
     /// - every other role: its element types, or its trait.
     /// - no role at all: iOS 27's empty toolbar host (`isEmptyBarHost`,
-    ///   `BarHost.markEmptyHosts`, PILOT-1219). A host holding a toolbar's
+    ///   `BarHost.markHosts`, PILOT-1219). A host holding a toolbar's
     ///   items is the toolbar.
+    /// - tablist and nothing else: the iPhone Duo's TabView host
+    ///   (`isTabBarHost`, PILOT-1260), whose buttons are tabs (`inTabBar`).
     static func matches(
         role: String,
         elementType: XCUIElement.ElementType,
@@ -374,10 +383,12 @@ enum RoleMapping {
         hasNameFilter: Bool,
         inTabBar: Bool,
         inAlert: Bool,
-        isEmptyBarHost: Bool = false
+        isEmptyBarHost: Bool = false,
+        isTabBarHost: Bool = false
     ) -> Bool {
         if isEmptyBarHost { return false }
         let canonical = normalize(role)
+        if isTabBarHost { return canonical == "tablist" }
         if canonical == "alert" && inAlert && elementType != .alert {
             return false
         }

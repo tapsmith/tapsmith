@@ -60,9 +60,13 @@ class SnapshotElementFinder {
         /// a tap on it is delivered to the knob.
         var holdsSwitchPart = false
         /// Whether the element is iOS 27's empty toolbar host
-        /// (BarHost.markEmptyHosts, PILOT-1219), so a live re-read still
+        /// (BarHost.markHosts, PILOT-1219), so a live re-read still
         /// reports no role for it.
         var isEmptyBarHost = false
+        /// Whether the element is the iPhone Duo's TabView host
+        /// (BarHost.markHosts, PILOT-1260), so a live re-read still reports
+        /// it as the tablist.
+        var isTabBarHost = false
     }
 
     /// Maximum number of cached elements before eviction. Prevents unbounded
@@ -222,7 +226,7 @@ class SnapshotElementFinder {
         // part of the row's text (PILOT-895).
         CellAccessories.normalizeIndicators(in: &snapshotDict)
         // iOS 27's empty toolbar host has no role (PILOT-1219).
-        BarHost.markEmptyHosts(in: &snapshotDict)
+        BarHost.markHosts(in: &snapshotDict)
         // A navigation title is a heading, whether or not the device
         // published its header trait (PILOT-1260).
         RoleMapping.markNavigationTitles(in: &snapshotDict)
@@ -414,8 +418,10 @@ class SnapshotElementFinder {
             let traits = SnapshotElementFinder.extractTraits(from: nodeDict)
             let inTabBar = nodeDict[SnapshotElementFinder.inTabBarKey] as? Bool ?? false
             let isEmptyBarHost = nodeDict[BarHost.emptyHostKey] as? Bool ?? false
+            let isTabBarHost = BarHost.isMarkedTabBarHost(nodeDict)
             let role = RoleMapping.resolveRole(
-                for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost
+                for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost,
+                isTabBarHost: isTabBarHost
             )
             let isEnabled = nodeDict["enabled"] as? Bool ?? true
             let value = nodeDict["value"] as? String
@@ -432,7 +438,8 @@ class SnapshotElementFinder {
                 identityCache[elementId] = CachedIdentity(
                     elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar,
                     holdsSwitchPart: NonAppElements.isSwitch(elType) && Self.holdsSwitch(nodeDict),
-                    isEmptyBarHost: isEmptyBarHost
+                    isEmptyBarHost: isEmptyBarHost,
+                    isTabBarHost: isTabBarHost
                 )
                 // Every minted id takes part in eviction, with or without a live
                 // query — ids that get none (placeholder, className, …) would
@@ -1567,7 +1574,7 @@ class SnapshotElementFinder {
         }
         // Nor does iOS 27's empty toolbar host, which is no toolbar on
         // screen; what it holds (the Duo's back button) still matches
-        // (BarHost.markEmptyHosts, PILOT-1251).
+        // (BarHost.markHosts, PILOT-1251).
         let isEmptyBarHost = BarHost.isMarkedEmpty(nodeDict)
         let isAppNode = !isEmptyBarHost && !NonAppElements.excludesNode(
             elementType: nodeType,
@@ -1719,8 +1726,7 @@ class SnapshotElementFinder {
         }
 
         if let children = nodeDict["children"] as? [[String: Any]] {
-            let childrenInTabBar = inTabBar
-                || parseUInt(nodeDict["elementType"]) == XCUIElement.ElementType.tabBar.rawValue
+            let childrenInTabBar = inTabBar || BarHost.isTabBar(nodeDict)
             // A keyboard's top edge only applies within its own window.
             let outerKeyboardTop = keyboardTop
             if nodeType == .window { keyboardTop = nil }
@@ -1836,7 +1842,8 @@ class SnapshotElementFinder {
                 hasNameFilter: selector.hasNameFilter,
                 inTabBar: inTabBar,
                 inAlert: inAlert,
-                isEmptyBarHost: node[BarHost.emptyHostKey] as? Bool ?? false
+                isEmptyBarHost: node[BarHost.emptyHostKey] as? Bool ?? false,
+                isTabBarHost: BarHost.isMarkedTabBarHost(node)
             ) {
                 return false
             }
@@ -2441,7 +2448,8 @@ class SnapshotElementFinder {
             bounds: bounds,
             viewportRatio: viewportRatio,
             inTabBar: getIdentity(elementId)?.inTabBar ?? false,
-            isEmptyBarHost: getIdentity(elementId)?.isEmptyBarHost ?? false
+            isEmptyBarHost: getIdentity(elementId)?.isEmptyBarHost ?? false,
+            isTabBarHost: getIdentity(elementId)?.isTabBarHost ?? false
         )
     }
 

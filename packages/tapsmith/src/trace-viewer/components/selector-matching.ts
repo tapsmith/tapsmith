@@ -870,6 +870,9 @@ function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean
   if (node.attributes.get('tapsmith-empty-bar-host') === 'true') return false;
   const reported = getNodeRole(node);
   if (reported && normalizeRole(reported) === role) return true;
+  // The iPhone Duo's TabView host is a Toolbar the agent reports as the
+  // tablist: the tab bar, and no toolbar.
+  if (reported === 'tablist') return false;
   const className = node.attributes.get('class');
   if (className) {
     // Like the agent's dual-path post-filter: a published role description

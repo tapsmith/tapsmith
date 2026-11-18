@@ -29,7 +29,7 @@ let fixtures = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Tes
 /// over every snapshot.
 func prepared(_ name: String) -> [String: Any] {
     var tree = HierarchyFixture.load("\(fixtures)/\(name)")
-    BarHost.markEmptyHosts(in: &tree)
+    BarHost.markHosts(in: &tree)
     RoleMapping.markNavigationTitles(in: &tree)
     return tree
 }
@@ -42,6 +42,7 @@ struct Seen {
     let traits: UInt64
     let inTabBar: Bool
     let isEmptyBarHost: Bool
+    let isTabBarHost: Bool
 }
 
 /// Every node of `tree` in pre-order, with the context the match walk
@@ -56,10 +57,11 @@ func walk(_ tree: [String: Any]) -> [Seen] {
             identifier: node["identifier"] as? String ?? "",
             traits: node["traits"] as? UInt64 ?? 0,
             inTabBar: inTabBar,
-            isEmptyBarHost: BarHost.isMarkedEmpty(node)
+            isEmptyBarHost: BarHost.isMarkedEmpty(node),
+            isTabBarHost: BarHost.isMarkedTabBarHost(node)
         ))
         for child in node["children"] as? [[String: Any]] ?? [] {
-            visit(child, inTabBar: inTabBar || type == .tabBar)
+            visit(child, inTabBar: inTabBar || BarHost.isTabBar(node))
         }
     }
     visit(tree, inTabBar: false)
@@ -71,7 +73,8 @@ func matching(_ role: String, in tree: [String: Any]) -> [String] {
     walk(tree).filter {
         RoleMapping.matches(
             role: role, elementType: $0.type, traits: $0.traits, value: nil, hasNameFilter: false,
-            inTabBar: $0.inTabBar, inAlert: false, isEmptyBarHost: $0.isEmptyBarHost
+            inTabBar: $0.inTabBar, inAlert: false, isEmptyBarHost: $0.isEmptyBarHost,
+            isTabBarHost: $0.isTabBarHost
         )
     }.map(\.label)
 }
@@ -80,7 +83,8 @@ func matching(_ role: String, in tree: [String: Any]) -> [String] {
 func reported(_ role: String, in tree: [String: Any]) -> [String] {
     walk(tree).filter {
         RoleMapping.resolveRole(
-            for: $0.type, traits: $0.traits, inTabBar: $0.inTabBar, isEmptyBarHost: $0.isEmptyBarHost
+            for: $0.type, traits: $0.traits, inTabBar: $0.inTabBar, isEmptyBarHost: $0.isEmptyBarHost,
+            isTabBarHost: $0.isTabBarHost
         ) == role
     }.map(\.label)
 }
@@ -144,6 +148,47 @@ check(
     ]]))),
     []
 )
+
+// ─── The iPhone Duo's TabView: its bar host is the tab bar ───
+
+// The Duo has no tab bar: a TabView's items are buttons in iOS 27's bar host,
+// which it lays out alone in a wrapper of its own size after the tab's content.
+check("Duo: the TabView's items are tabs", matching("tab", in: duoTabs), ["Feed", "Search", "Profile"])
+check("Duo: the TabView's items report tab", reported("tab", in: duoTabs), ["Feed", "Search", "Profile"])
+check("Duo: the TabView's host is the tablist", matching("tablist", in: duoTabs), ["Toolbar"])
+check("Duo: the TabView's host reports tablist", reported("tablist", in: duoTabs), ["Toolbar"])
+check("Duo: the TabView's host is no toolbar", matching("toolbar", in: duoTabs), [])
+check("Duo: the TabView screen reports no toolbar", reported("toolbar", in: duoTabs), [])
+check("Duo: the stack's host is still empty", walk(duoTabs).filter(\.isEmptyBarHost).count, 1)
+check("Duo: the back button is no tab", reported("button", in: duoTabs).contains(""), true)
+check("Duo: a toolbar's host is still the toolbar", matching("toolbar", in: duoToolbar), ["Toolbar"])
+check("Duo: a toolbar's items are no tabs", matching("tab", in: duoToolbar), [])
+check("Duo: a toolbar is no tablist", matching("tablist", in: duoToolbar), [])
+check("Duo: the root screen has no tab", matching("tab", in: duoHome), [])
+check("Duo: the root screen has no tablist", matching("tablist", in: duoHome), [])
+check("Duo: the root screen has no toolbar", matching("toolbar", in: duoHome), [])
+/// `tree` with no button selected.
+func unselected(_ tree: [String: Any]) -> [String: Any] {
+    var tree = tree
+    tree["selected"] = false
+    tree["children"] = (tree["children"] as? [[String: Any]] ?? []).map(unselected)
+    return tree
+}
+
+// Toolbar items in a host of the TabView's shape (none of them a selected
+// tab) stay a toolbar's items.
+var unselectedDuoTabs = unselected(HierarchyFixture.load("\(fixtures)/iphone-duo-27.2/tabs.xml"))
+BarHost.markHosts(in: &unselectedDuoTabs)
+check("Duo: a host of the TabView's shape with no selected button is no tablist",
+      matching("tablist", in: unselectedDuoTabs), [])
+check("Duo: a host of the TabView's shape with no selected button is a toolbar",
+      matching("toolbar", in: unselectedDuoTabs), ["Toolbar"])
+check("Duo: its buttons are no tabs", matching("tab", in: unselectedDuoTabs), [])
+
+check("17 Pro: the tab bar's items are tabs", matching("tab", in: proTabs), ["Feed", "Search", "Profile"])
+check("17 Pro: the tab bar is the tablist", matching("tablist", in: proTabs), ["Tab Bar"])
+check("17 Pro: no tab-bar host", walk(proTabs).filter(\.isTabBarHost).count, 0)
+check("17 Pro: the TabView screen has no toolbar", matching("toolbar", in: proTabs), [])
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

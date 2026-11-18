@@ -53,7 +53,7 @@ class WaitEngine {
         let query = buildWaitQuery(selector)
         // A query that can return iOS 27's toolbar host can't tell an empty
         // one, which no locator matches, from one holding a toolbar: the
-        // snapshot finder can (BarHost.markEmptyHosts, PILOT-1251).
+        // snapshot finder can (BarHost.markHosts, PILOT-1251).
         let queryFullyRepresentsSelector = waitQueryFullyRepresentsSelector(selector)
             && !(selectorPredicate(selector).map(BarHost.mayMatchHost) ?? false)
 

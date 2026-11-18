@@ -82,7 +82,7 @@ struct ElementSelector {
 
     /// Whether this is `getByRole("toolbar")` with no name: a live toolbar
     /// query also returns iOS 27's empty toolbar hosts, which the match set
-    /// leaves out (BarHost.markEmptyHosts, PILOT-1219).
+    /// leaves out (BarHost.markHosts, PILOT-1219).
     var roleOnlyToolbar: Bool {
         guard let role, !hasNameFilter else { return false }
         return RoleMapping.normalize(role) == "toolbar"
@@ -194,6 +194,8 @@ struct ElementInfo {
     /// honours React Native `accessibilityRole` flags. A live element can't
     /// see its ancestors, so the caller says whether it is inside a tab bar
     /// (`inTabBar`, from find time), which makes a button a tab (PILOT-514),
+    /// whether it is the iPhone Duo's TabView host (`isTabBarHost`, from find
+    /// time), which is the tablist (PILOT-1260),
     /// or whether it is iOS 27's empty toolbar host (`isEmptyBarHost`, from
     /// find time), which has no role (PILOT-1219).
     static func makeFromXCUIElement(
@@ -202,7 +204,8 @@ struct ElementInfo {
         bounds: ElementBounds,
         viewportRatio: Float,
         inTabBar: Bool,
-        isEmptyBarHost: Bool
+        isEmptyBarHost: Bool,
+        isTabBarHost: Bool
     ) -> ElementInfo {
         let elType = element.elementType
         let label = element.label
@@ -221,7 +224,8 @@ struct ElementInfo {
         let className = RoleMapping.typeName(for: elType)
         let traits = ElementInfo.extractTraits(from: element)
         let role = RoleMapping.resolveRole(
-            for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost
+            for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost,
+            isTabBarHost: isTabBarHost
         )
 
         let isSelected = element.isSelected

@@ -49,15 +49,15 @@ func children(_ dict: [String: Any]) -> [[String: Any]] {
     dict["children"] as? [[String: Any]] ?? []
 }
 
-/// Whether markEmptyHosts tagged `dict` as an empty host.
+/// Whether markHosts tagged `dict` as an empty host.
 func tagged(_ dict: [String: Any]) -> Bool {
     dict[BarHost.emptyHostKey] as? Bool ?? false
 }
 
-/// The tree after markEmptyHosts.
+/// The tree after markHosts.
 func marked(_ tree: [String: Any]) -> [String: Any] {
     var tree = tree
-    BarHost.markEmptyHosts(in: &tree)
+    BarHost.markHosts(in: &tree)
     return tree
 }
 
