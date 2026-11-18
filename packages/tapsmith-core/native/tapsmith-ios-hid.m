@@ -4,7 +4,8 @@
 //
 // On startup: dlopen CoreSimulator + SimulatorKit, resolve the SimDevice for
 // <udid>, open ONE persistent SimulatorKit.SimDeviceLegacyHIDClient, query the
-// device screen size+scale, then print "ready <wPx> <hPx> <scale>" to stdout.
+// screen touches go to (hid_touch_screen) and its size+scale, then print
+// "ready <wPx> <hPx> <scale> screen <id> target <hex>" to stdout.
 //
 // Then loop on stdin, one event per line (coords in LOGICAL POINTS):
 //   d <x> <y>   touch down       m <x> <y>   touch move (contact held)
@@ -77,10 +78,13 @@ static atomic_int gNoWaitFailures;
  * is only slow (`err send failed`, PILOT-1072). */
 static atomic_int gRejected;
 
+/* The IndigoHID target every touch addresses (hid_touch_screen). */
+static unsigned gTouchTarget = HID_LEGACY_TOUCH_TARGET;
+
 // Build the canonical 320-byte touch Indigo message (verbatim from the spike).
 static IndigoMessage *makeTouchMessage(double xRatio, double yRatio, int direction) {
   CGPoint p = CGPointMake(xRatio, yRatio);
-  IndigoMessage *base = gMouseFn(&p, NULL, 0x32, direction, 0x0);
+  IndigoMessage *base = gMouseFn(&p, NULL, gTouchTarget, direction, 0x0);
   if (!base) return NULL;  // private API returned nothing — don't deref/crash
   base->payload.touch.xRatio = xRatio;
   base->payload.touch.yRatio = yRatio;
@@ -124,6 +128,38 @@ static NSString *selectedDeveloperDir(void) {
 
 static id msgSend_id(id self, SEL op) {
   return ((id(*)(id, SEL))objc_msgSend)(self, op);
+}
+
+/* The screens `device` lists (its IO ports that are screens), up to `max`,
+ * into `out`. Returns how many, or -1 when they could not be read. */
+static int listScreens(id device, HidScreen *out, int max) {
+  @try {
+    id io = msgSend_id(device, NSSelectorFromString(@"io"));
+    NSArray *ports = io ? msgSend_id(io, NSSelectorFromString(@"ioPorts")) : nil;
+    if (![ports isKindOfClass:[NSArray class]]) return -1;
+    SEL propsSel = NSSelectorFromString(@"screenProperties");
+    SEL idSel = NSSelectorFromString(@"screenID");
+    SEL typeSel = NSSelectorFromString(@"screenType");
+    SEL sizeSel = NSSelectorFromString(@"pixelSize");
+    int n = 0;
+    for (id port in ports) {
+      id desc = msgSend_id(port, NSSelectorFromString(@"descriptor"));
+      if (![desc respondsToSelector:propsSel]) continue;
+      id props = msgSend_id(desc, propsSel);
+      if (!props || ![props respondsToSelector:idSel] || ![props respondsToSelector:typeSel]) continue;
+      if (n == max) break;
+      out[n].screenId = ((unsigned (*)(id, SEL))objc_msgSend)(props, idSel);
+      out[n].screenType = (int)((NSInteger (*)(id, SEL))objc_msgSend)(props, typeSel);
+      CGSize px = [props respondsToSelector:sizeSel]
+          ? ((CGSize (*)(id, SEL))objc_msgSend)(props, sizeSel) : CGSizeZero;
+      out[n].widthPx = px.width;
+      out[n].heightPx = px.height;
+      n++;
+    }
+    return n;
+  } @catch (id e) {
+    return -1;
+  }
 }
 
 int main(int argc, char **argv) {
@@ -188,8 +224,20 @@ int main(int argc, char **argv) {
     CGSize screenPx = ((CGSize(*)(id, SEL))objc_msgSend)(deviceType, NSSelectorFromString(@"mainScreenSize"));
     float scale = ((float(*)(id, SEL))objc_msgSend)(deviceType, NSSelectorFromString(@"mainScreenScale"));
     if (scale <= 0) scale = 1;
-    double widthPt = screenPx.width / scale;
-    double heightPt = screenPx.height / scale;
+
+    // The screen touches go to (PILOT-1259). A device with two integrated
+    // screens (the iPhone Duo) is not reached by the legacy touch target:
+    // the simulator accepts the touch and the app never sees it. Without the
+    // screen list there is no telling, so refuse: the daemon then uses the
+    // agent's touch, which always reaches the app.
+    HidScreen screens[16];
+    int screenCount = listScreens(device, screens, 16);
+    if (screenCount < 0) { fprintf(stderr, "fatal could not read the simulator's screens\n"); return 1; }
+    HidTouchScreen touchScreen = hid_touch_screen(screens, (size_t)screenCount, screenPx.width, screenPx.height);
+    if (!touchScreen.found) { fprintf(stderr, "fatal the simulator lists no touch screen (%d screens)\n", screenCount); return 1; }
+    gTouchTarget = touchScreen.target;
+    double widthPt = touchScreen.widthPx / scale;
+    double heightPt = touchScreen.heightPx / scale;
 
     NSBundle *skBundle = [NSBundle bundleWithIdentifier:@"com.apple.SimulatorKit"];
     [skBundle loadAndReturnError:nil];
@@ -254,7 +302,8 @@ int main(int argc, char **argv) {
     };
 
     // Announce readiness; the daemon reads this line to confirm the helper is up.
-    printf("ready %.0f %.0f %.1f\n", screenPx.width, screenPx.height, scale);
+    printf("ready %.0f %.0f %.1f screen %u target 0x%x\n", touchScreen.widthPx, touchScreen.heightPx,
+           scale, touchScreen.screenId, touchScreen.target);
     fflush(stdout);
 
     // Process stdin events. Track the last point so a bare `c` can lift there.
