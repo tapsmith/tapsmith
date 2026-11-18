@@ -8,7 +8,7 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Behind loading" sits under a loading overlay: a plain see-through view
 //   holding an ActivityIndicator, with no onPress of its own. It swallows
 //   touches as any view does (and counts them), but nothing in it is a
-//   control. "Load briefly" shows it for 1.5 s; "Keep loading" until toggled.
+//   control. "Load briefly" shows it for 3 s; "Keep loading" until toggled.
 
 export default function CoversScreen() {
   const [loading, setLoading] = useState(false)
@@ -31,7 +31,7 @@ export default function CoversScreen() {
   const loadBriefly = () => {
     setLoading(true)
     clearTimeout(hideTimer.current)
-    hideTimer.current = setTimeout(() => setLoading(false), 1500)
+    hideTimer.current = setTimeout(() => setLoading(false), 3000)
   }
 
   return (
