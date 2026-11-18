@@ -321,42 +321,42 @@ struct OcclusionAnalyzer {
         return !coverLayerLies(over: point, cover: cover, after: nodes[l].subtreeEnd)
     }
 
-    /// Where the vertical list at `list` holding `target` sits in the tree:
-    /// the child positions from the root down to it — or nil when it is not
-    /// among the target's ancestors. A clearing drag (PILOT-980) compares
-    /// what lies outside that list before and after (`outsideList(at:)`),
-    /// and the target has moved by then, so the list is found again by its
-    /// place, not through the target.
-    func listPath(holding target: Target, list: CGRect) -> [Int]? {
+    /// What identifies a list in the tree across a clearing drag: the type
+    /// and frame of every node from the root down to it.
+    typealias ListChain = [(type: XCUIElement.ElementType, frame: CGRect)]
+
+    /// The chain (`ListChain`) of the vertical list at `list` holding
+    /// `target` — or nil when it is not among the target's ancestors. A
+    /// clearing drag (PILOT-980) compares what lies outside that list before
+    /// and after (`outsideList(of:)`), and the target has moved by then, so
+    /// the list is found again by its chain, not through the target. Not by
+    /// its place among its siblings: iOS lists views top to bottom, so a view
+    /// the scroll brings in above the list comes before it.
+    func listChain(holding target: Target, list: CGRect) -> ListChain? {
         guard let t = locate(target),
               let l = ancestors(of: t).first(where: {
                   Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
               }) else { return nil }
-        var path: [Int] = []
-        var node = l
-        while let p = nodes[node].parent {
-            path.append(children(of: p).firstIndex(of: node)!)
-            node = p
-        }
-        return node == 0 ? path.reversed() : nil
+        return chain(of: l)
     }
 
-    /// What the app holds outside the list at `path` (`listPath`), the
-    /// keyboard left out: how many nodes of each type — or nil when no list
-    /// with the frame `list` is there. The drag must scroll the list and
-    /// change nothing else: when this differs after it, the drag pressed
-    /// something laid over the list instead (a dialog's backdrop with no
-    /// role, which iOS lists before the list, top to bottom, so no check
-    /// before the drag can tell it is on top).
-    func outsideList(at path: [Int], list: CGRect) -> [String: Int]? {
-        guard !nodes.isEmpty else { return nil }
-        var l = 0
-        for index in path {
-            let kids = children(of: l)
-            guard index < kids.count else { return nil }
-            l = kids[index]
-        }
-        guard Self.listTypes.contains(nodes[l].elementType), Self.framesMatch(nodes[l].frame, list) else { return nil }
+    private func chain(of i: Int) -> ListChain {
+        ([i] + ancestors(of: i)).reversed().map { (type: nodes[$0].elementType, frame: nodes[$0].frame) }
+    }
+
+    /// What the app holds outside the list with chain `chain` (`listChain`),
+    /// the keyboard left out: how many nodes of each type — or nil when no
+    /// such list is in the tree. The drag must scroll the list without
+    /// making anything outside it go away (`lostOutside`): when something
+    /// does, the drag pressed something laid over the list instead (a
+    /// dialog's backdrop with no role, which iOS lists before the list, top
+    /// to bottom, so no check before the drag can tell it is on top).
+    func outsideList(of chain: ListChain) -> [String: Int]? {
+        guard let last = chain.last,
+              let l = nodes.indices.first(where: { i in
+                  nodes[i].elementType == last.type && Self.framesMatch(nodes[i].frame, last.frame)
+                      && self.chain(of: i).elementsEqual(chain) { $0.type == $1.type && Self.framesMatch($0.frame, $1.frame) }
+              }) else { return nil }
         let keyboardWindows = self.keyboardWindows()
         var counts: [String: Int] = [:]
         for (i, node) in nodes.enumerated() where !(i > l && i < nodes[l].subtreeEnd) {
@@ -366,8 +366,13 @@ struct OcclusionAnalyzer {
         return counts
     }
 
-    private func children(of i: Int) -> [Int] {
-        ((i + 1)..<nodes[i].subtreeEnd).filter { nodes[$0].parent == i }
+    /// Whether something outside the list went away between `before` and
+    /// `after` (`outsideList(at:)`), or the list could not be found again.
+    /// What appears (a "back to top" button the scroll brings in) does not
+    /// count: a drag that pressed a dialog's backdrop makes the dialog go.
+    static func lostOutside(_ before: [String: Int], _ after: [String: Int]?) -> Bool {
+        guard let after else { return true }
+        return before.contains { type, count in (after[type] ?? 0) < count }
     }
 
     /// Whether something in the cover's layer — the outermost view painted

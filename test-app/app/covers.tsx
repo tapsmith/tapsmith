@@ -31,6 +31,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   closes the dialog when pressed (fading it out over 300 ms, as dialog
 //   libraries do, so its views are still there for a moment), and a card. A tap on a row under the
 //   footer must not drag from the backdrop and then tap the row.
+// - A "Scrolled" label appears in the corner once the list has scrolled, as
+//   "back to top" buttons do: something outside the list that the scroll
+//   brings in must not stop a scroll-clear.
 // - Every row shares the testID "covers-row", as list rows often do, so a
 //   row is told apart by its name alone.
 // - A "Note" text field sits in the list after Row 12. "Put note under
@@ -69,6 +72,7 @@ export default function CoversScreen() {
   const [headerTaps, setHeaderTaps] = useState(0)
   const [note, setNote] = useState("")
   const [dialog, setDialog] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
   const dialogOpacity = useRef(new Animated.Value(1)).current
   const closeDialog = () =>
     Animated.timing(dialogOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() =>
@@ -94,6 +98,7 @@ export default function CoversScreen() {
     setHeaderTaps(0)
     setNote("")
     setDialog(false)
+    setScrolled(false)
     list.current?.scrollToOffset({ offset: 0, animated: false })
   }, [resetEpoch])
   useEffect(() => () => clearTimeout(hideTimer.current), [])
@@ -205,6 +210,8 @@ export default function CoversScreen() {
       <View style={styles.listArea}>
         <FlatList
           ref={list}
+          onScroll={(e) => setScrolled(e.nativeEvent.contentOffset.y > 20)}
+          scrollEventThrottle={16}
           onLayout={(e) => {
             listHeight.current = e.nativeEvent.layout.height
           }}
@@ -269,6 +276,12 @@ export default function CoversScreen() {
           <Text style={styles.buttonText}>Footer action</Text>
         </TouchableOpacity>
       </View>
+
+      {scrolled && (
+        <Text style={styles.scrolled} testID="covers-scrolled">
+          Scrolled
+        </Text>
+      )}
 
       {dialog && (
         <Animated.View style={[fill, { opacity: dialogOpacity }]} testID="covers-dialog">
@@ -381,6 +394,13 @@ const styles = StyleSheet.create({
     width: 80,
     justifyContent: "center",
     alignItems: "center",
+  },
+  scrolled: {
+    position: "absolute",
+    top: 0,
+    right: 16,
+    fontSize: 11,
+    color: "#666",
   },
   dialogBackdrop: {
     backgroundColor: "rgba(0, 0, 0, 0.3)",

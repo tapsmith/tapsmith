@@ -324,7 +324,7 @@ class TouchPlannerTest {
         }
         val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(), LABELLED) }
         assertEquals(1, scroller.drags.size)
-        assertTrue(e.message, e.message!!.contains("changed the screen outside the list"))
+        assertTrue(e.message, e.message!!.contains("made something outside the list go away"))
     }
 
     @Test
@@ -342,7 +342,22 @@ class TouchPlannerTest {
         }
         val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(), LABELLED) }
         assertEquals(1, scroller.drags.size)
-        assertTrue(e.message, e.message!!.contains("changed the screen outside the list"))
+        assertTrue(e.message, e.message!!.contains("made something outside the list go away"))
+    }
+
+    @Test
+    fun `a button the scroll brings in outside the list does not stop the touch`() {
+        // A "back to top" button that appears once the list has scrolled.
+        val row = listUnderFooter(rowTop = 2250)
+        val root = row.parentNode!!.parentNode!!.parentNode!!
+        val scrolls = scroller.onDrag
+        scroller.onDrag = { d ->
+            scrolls(d)
+            root.add(Node(Box(880, 1900, 1040, 2060), drawingOrder = 3, takesTouches = true, name = "button \"Back to top\""))
+        }
+        val plan = planner.plan(target, row.bounds, budget(), LABELLED)
+        assertEquals(1, scroller.drags.size)
+        assertEquals(TouchPlan.Point(540, 2105), plan)
     }
 
     @Test

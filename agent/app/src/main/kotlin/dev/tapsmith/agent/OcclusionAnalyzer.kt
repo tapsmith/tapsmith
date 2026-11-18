@@ -435,19 +435,31 @@ object OcclusionAnalyzer {
         return true
     }
 
+    /** How many nodes the target's window holds outside a list, and how
+     *  many of them take touches ([outsideList]). */
+    data class Outside(
+        val nodes: Int,
+        val touchable: Int,
+    ) {
+        /** Whether something outside the list went away between this and
+         *  [after] (or the list could not be found again). What appears
+         *  (a "back to top" button the scroll brings in) does not count. */
+        fun lostIn(after: Outside?): Boolean = after == null || after.nodes < nodes || after.touchable < touchable
+    }
+
     /**
-     * What the target's window holds outside the vertical list at [list]: how
-     * many nodes, and how many of them take touches — or null when the list
-     * is not among the target's ancestors, or the tree is too big to read.
-     * A clearing drag (PILOT-980) must scroll the list and change nothing
-     * else: when this differs after it, the drag pressed something laid over
-     * the list (a dialog's backdrop that takes no clicks, which no check
-     * before the drag can see) instead.
+     * What the target's window holds outside the vertical list at [list] — or
+     * null when the list is not among the target's ancestors, or the tree is
+     * too big to read. A clearing drag (PILOT-980) must scroll the list
+     * without making anything outside it go away: when something does, the
+     * drag may have pressed something laid over the list (a dialog's backdrop
+     * that takes no clicks, which no check before the drag can see) and
+     * dismissed it.
      */
     fun outsideList(
         target: HitNode,
         list: Box,
-    ): String? {
+    ): Outside? {
         val levels = levelsOf(target)
         if (levels.none { it.first.scrollsVertically && it.first.bounds == list }) return null
         val root = levels.lastOrNull()?.first ?: return null
@@ -466,7 +478,7 @@ object OcclusionAnalyzer {
                 if (reader.exhausted) return null
             }
         }
-        return "$nodes nodes, $touchable touchable"
+        return Outside(nodes, touchable)
     }
 
     /** The bounds of the fixed chrome [cover] sits in: its outermost ancestor

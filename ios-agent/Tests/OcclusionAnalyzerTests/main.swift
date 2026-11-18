@@ -731,8 +731,8 @@ expectBool("no drag while an alert is up, even away from the drag start",
 // What lies outside the list, compared before and after a drag: found by
 // the target's list's place in the tree.
 func outsideAfterDrag(_ before: [Row], _ after: [Row], target: OcclusionAnalyzer.Target, list: CGRect) -> ([String: Int]?, [String: Int]?) {
-    guard let path = analyzer(before).listPath(holding: target, list: list) else { return (nil, nil) }
-    return (analyzer(before).outsideList(at: path, list: list), analyzer(after).outsideList(at: path, list: list))
+    guard let chain = analyzer(before).listChain(holding: target, list: list) else { return (nil, nil) }
+    return (analyzer(before).outsideList(of: chain), analyzer(after).outsideList(of: chain))
 }
 let rowsScrolled: [Row] = listRows([
     (4, .cell, "Row 21", "", R(0, 700, 402, 44)),
@@ -755,7 +755,7 @@ let backdropBeforeList: [Row] = [
 ]
 let backdropGone = outsideAfterDrag(backdropBeforeList, footer, target: row20, list: list)
 expectBool("a backdrop gone after the drag changes what is outside the list",
-           backdropGone.0 != nil && backdropGone.0 != backdropGone.1, true)
+           backdropGone.0.map { OcclusionAnalyzer.lostOutside($0, backdropGone.1) } ?? false, true)
 // The list inside an outer scroller of the same frame (a horizontal tab
 // pager), with an in-page dialog beside it: the pager is not the list, so the
 // dialog counts as outside it.
@@ -772,9 +772,30 @@ func pagerPage(dialog: Bool) -> [Row] {
 }
 let pagerDialogGone = outsideAfterDrag(pagerPage(dialog: true), pagerPage(dialog: false), target: row20, list: list)
 expectBool("a dialog beside the list inside a same-frame pager, gone after the drag, changes what is outside the list",
-           pagerDialogGone.0 != nil && pagerDialogGone.0 != pagerDialogGone.1, true)
+           pagerDialogGone.0.map { OcclusionAnalyzer.lostOutside($0, pagerDialogGone.1) } ?? false, true)
+// A label the scroll brings in above the list (iOS lists it before the list,
+// top to bottom): the list is still found, and nothing went away.
+let labelAboveList: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .staticText, "Scrolled", "", R(300, 0, 80, 14)),
+    (3, .navigationBar, "List", "", R(0, 62, 402, 54)),
+    (3, .table, "", "", R(0, 116, 402, 758)),
+    (4, .cell, "Row 21", "", R(0, 700, 402, 44)),
+    (3, .button, "Checkout", "", R(0, 774, 402, 100)),
+]
+let labelAppeared = outsideAfterDrag(footer, labelAboveList, target: row20, list: list)
+expectBool("a label the scroll brings in above the list is not something going away",
+           labelAppeared.0.map { OcclusionAnalyzer.lostOutside($0, labelAppeared.1) } ?? true, false)
+expectBool("a button the scroll brings in outside the list is not something going away",
+           OcclusionAnalyzer.lostOutside(["9": 2, "4": 1], ["9": 3, "4": 1]), false)
+expectBool("a view outside the list going away is",
+           OcclusionAnalyzer.lostOutside(["9": 2, "4": 1], ["9": 2]), true)
+expectBool("a list not found again after the drag is",
+           OcclusionAnalyzer.lostOutside(["9": 2], nil), true)
 expectBool("no list holding the target, nothing to compare",
-           analyzer(footer).listPath(holding: row20, list: R(0, 0, 10, 10)) == nil, true)
+           analyzer(footer).listChain(holding: row20, list: R(0, 0, 10, 10)) == nil, true)
 
 // ─── Keyboard first (PILOT-622) ───
 

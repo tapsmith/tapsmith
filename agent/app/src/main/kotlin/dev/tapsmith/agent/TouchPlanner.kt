@@ -233,24 +233,26 @@ class TouchPlanner(
                         log("element is covered by ${verdict.by}; dragging it clear ($drag)")
                         CommandCancellation.checkpoint()
                         scroller!!.drag(drag)
-                        // The drag must have scrolled the list and nothing
-                        // else. Anything outside it that came or went (a
-                        // dialog its backdrop dismissed) means it pressed
-                        // something laid over the list: stop, loudly, rather
+
+                        // The drag must have scrolled the list without making
+                        // anything outside it go away: that would be a dialog
+                        // its backdrop dismissed, so the drag pressed
+                        // something laid over the list. Stop, loudly, rather
                         // than touch the target on a screen that changed.
-                        // Twice: a dialog the drag dismissed may still be
-                        // fading out (its nodes still there) at the first look.
-                        var after = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
-                        if (after == outside) {
+                        // Twice: a dismissed dialog may still be fading out
+                        // (its nodes still there) at the first look.
+                        fun outsideNow() = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
+                        var after = outsideNow()
+                        if (!outside.lostIn(after)) {
                             clock.sleep(OUTSIDE_RECHECK_MS)
-                            after = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
+                            after = outsideNow()
                         }
-                        if (after != outside) {
-                            log("the screen outside the list changed during the drag ($outside -> $after)")
+                        if (outside.lostIn(after)) {
+                            log("something outside the list went away during the drag ($outside -> $after)")
                             throw ElementCoveredException(
-                                "Element is covered by ${verdict.by}. Scrolling the list to move it clear also changed " +
-                                    "the screen outside the list, so something laid over the list (such as a dialog's " +
-                                    "backdrop) may have taken the drag; not touching the element",
+                                "Element is covered by ${verdict.by}. Scrolling the list to move it clear also made something outside " +
+                                    "the list go away: either a view laid over the list (such as a dialog's backdrop) took the drag, " +
+                                    "or the app hides part of its screen as the list scrolls. Not touching the element",
                                 verdict.kind,
                             )
                         }
@@ -291,7 +293,7 @@ class TouchPlanner(
         dragsSoFar: Int,
         deadlines: TouchPlanClock,
         now: Long,
-    ): Pair<CoverClearance.Drag, String>? {
+    ): Pair<CoverClearance.Drag, OcclusionAnalyzer.Outside>? {
         val scroller = scroller ?: return null
         val list = verdict.scroller ?: return null
         if (verdict.kind != OcclusionAnalyzer.CoverKind.CONTROL || dragsSoFar >= MAX_CLEAR_DRAGS) return null
