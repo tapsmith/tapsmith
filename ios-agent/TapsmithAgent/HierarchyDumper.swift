@@ -125,14 +125,12 @@ class HierarchyDumper {
         xml += " selected=\"\(isSelected)\""
         xml += " hasFocus=\"\(hasFocus)\""
         xml += " bounds=\"\(bounds)\""
-        // iOS 27's empty toolbar host is nothing on screen: no locator
-        // matches it or anything in it, as for the keyboard (PILOT-1251).
-        let nonApp = !insideNonApp && (NonAppElements.excludesSubtree(
+        let nonApp = !insideNonApp && NonAppElements.excludesSubtree(
             elementType: elType,
             identifier: node["identifier"] as? String ?? "",
             frame: frame,
             keyboardTop: keyboardTop
-        ) || isEmptyBarHost)
+        )
         if nonApp {
             xml += " tapsmith-non-app=\"true\""
             if elType == .keyboard { keyboardTop = frame.minY }
@@ -143,9 +141,11 @@ class HierarchyDumper {
         if NonAppElements.isSwitchPart(elementType: elType, insideSwitch: insideSwitch) {
             xml += " tapsmith-switch-part=\"true\""
         }
-        // iOS 27's empty toolbar host: no role, so no role query matches it
-        // (BarHost.markEmptyHosts, PILOT-1219). The trace viewer reads this,
-        // not the missing role, as a dump without roles still matches by type.
+        // iOS 27's empty toolbar host: no role, and no locator matches it,
+        // though what it holds still does (BarHost.markEmptyHosts, PILOT-1219,
+        // PILOT-1251). The trace viewer reads this, not the missing role, as a
+        // dump without roles still matches by type. Not non-app: it is the size
+        // of its screen, and non-app nodes are edges the scroll region avoids.
         if isEmptyBarHost {
             xml += " tapsmith-empty-bar-host=\"true\""
         }

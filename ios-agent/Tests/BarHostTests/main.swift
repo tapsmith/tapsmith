@@ -210,7 +210,9 @@ let duoRoot = marked(node(.application, duo, label: "Tapsmith Native", [
 ]))
 func duoHost(_ tree: [String: Any]) -> [String: Any] { children(children(children(tree)[0])[0])[0] }
 check("iPhone Duo: the empty host laid out first is tagged", tagged(duoHost(duoRoot)), true)
-// A pushed screen: the host holds the floating back button.
+// A pushed screen: the host holds the floating back button and nothing else.
+// That is navigation, not a toolbar: the host is empty (no locator matches
+// it), and the back button in it is found as usual.
 let duoPushed = marked(node(.application, duo, label: "Tapsmith Native", [
     node(.window, duo, [node(.other, duo, [
         host(duo, [node(.other, duo, [node(.other, R(394, 174, 48, 48), [
@@ -220,7 +222,20 @@ let duoPushed = marked(node(.application, duo, label: "Tapsmith Native", [
         node(.other, duo),
     ])]),
 ]))
-check("iPhone Duo: a first host holding the back button is not tagged", tagged(duoHost(duoPushed)), false)
+check("iPhone Duo: a first host holding only the back button is tagged empty", tagged(duoHost(duoPushed)), true)
+let duoPushedWithItem = marked(node(.application, duo, label: "Tapsmith Native", [
+    node(.window, duo, [node(.other, duo, [
+        host(duo, [node(.other, duo, [
+            node(.other, R(394, 174, 48, 48), [node(.button, R(399, 179, 38, 38), identifier: "BackButton")]),
+            node(.other, R(300, 600, 120, 48), [node(.button, R(305, 605, 110, 38), label: "Compose")]),
+        ])]),
+        node(.navigationBar, R(0, 24, 466, 58), identifier: "Toolbar"),
+        node(.other, duo),
+    ])]),
+]))
+check("iPhone Duo: a host holding the back button and a toolbar item is the toolbar", tagged(duoHost(duoPushedWithItem)), false)
+let backInContent = marked(window(host(screen, [node(.button, R(16, 62, 44, 44), label: "Back", identifier: "Back")])))
+check("a host holding an app's own button (not the system BackButton) is not empty", tagged(hostIn(backInContent)), false)
 // TabView: the tab's host is alone in a same-size wrapper after the content,
 // empty here.
 let duoTabs = marked(node(.application, duo, [node(.window, duo, [node(.other, duo, [

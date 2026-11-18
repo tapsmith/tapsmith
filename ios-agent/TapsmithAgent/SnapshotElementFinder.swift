@@ -1527,17 +1527,15 @@ class SnapshotElementFinder {
         //
         // What isn't the app's never matches (NonAppElements): the keyboard
         // and everything in it, the application element itself, the hooks
-        // marker. Nor does iOS 27's empty toolbar host, which is nothing on
-        // screen (BarHost.markEmptyHosts, PILOT-1251). Only matching skips
-        // them — numberDescendants still counts them, as the live queries
-        // that re-resolve a match see them too.
+        // marker. Only matching skips them — numberDescendants still counts
+        // them, as the live queries that re-resolve a match see them too.
         let nodeType = XCUIElement.ElementType(rawValue: parseUInt(nodeDict["elementType"]) ?? 0) ?? .other
         if NonAppElements.excludesSubtree(
             elementType: nodeType,
             identifier: nodeDict["identifier"] as? String ?? "",
             frame: parseFrame(nodeDict),
             keyboardTop: keyboardTop
-        ) || BarHost.isMarkedEmpty(nodeDict) {
+        ) {
             if nodeType == .keyboard { keyboardTop = parseFrame(nodeDict).minY }
             // A query inside an anchored row returns them too.
             row?.scopes.forEach { $0.visitSubtree(nodeDict) }
@@ -1553,12 +1551,30 @@ class SnapshotElementFinder {
             )
             return
         }
-        let isAppNode = !NonAppElements.excludesNode(
+        // Nor does iOS 27's empty toolbar host, which is no toolbar on
+        // screen; what it holds (the Duo's back button) still matches
+        // (BarHost.markEmptyHosts, PILOT-1251).
+        let isEmptyBarHost = BarHost.isMarkedEmpty(nodeDict)
+        let isAppNode = !isEmptyBarHost && !NonAppElements.excludesNode(
             elementType: nodeType,
             label: nodeDict["label"] as? String ?? "",
             title: nodeDict["title"] as? String ?? "",
             value: nodeDict["value"] as? String ?? ""
         )
+        // Not a match, but counted as the keyboard's are: a live query
+        // re-resolving a later match by its position sees it too.
+        if isEmptyBarHost, matchesSelector(
+            nodeDict,
+            inTabBar: inTabBar,
+            inAlert: inAlert,
+            containerLabel: containerLabel,
+            selector: selector,
+            keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
+            liveFocusedTextInput: liveFocusedTextInput,
+            focusedHint: focusedHint
+        ) {
+            keyboardMatches.append(parseUInt(nodeDict["elementType"]) ?? 0)
+        }
         // This node's index among the nodes of its row that the query
         // finding it inside the row returns (RowAnchor, PILOT-952), and, for
         // a row, its own context.

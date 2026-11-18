@@ -12,9 +12,11 @@ import XCTest
 /// One rule, read by everything that has to tell a host from a bar:
 /// - `OcclusionAnalyzer.isBarHost`: a host's frame covers nothing; only the
 ///   items in it do (and `KeyboardDismissPlanner` treats it as plain).
-/// - Locators: an empty host is nothing a user can see, so no locator matches
-///   it (`markEmptyHosts`; PILOT-1219 for roles, PILOT-1251 for the rest). A
-///   host holding items is the one toolbar of its screen.
+/// - Locators: an empty host — holding nothing, or only the Duo's floating
+///   back button — is no toolbar a user can see, so no locator matches it,
+///   though what it holds still matches (`markEmptyHosts`; PILOT-1219 for
+///   roles, PILOT-1251 for the rest). A host holding items is the one
+///   toolbar of its screen.
 enum BarHost {
     /// One level of a node's ancestry: the frame of the container it sits in,
     /// and the frames of its siblings there (not its own).
@@ -74,9 +76,10 @@ enum BarHost {
     /// Key under which `markEmptyHosts` marks a host that holds nothing.
     static let emptyHostKey = "tapsmithEmptyBarHost"
 
-    /// Mark every host in a snapshot dictionary that holds nothing — no
-    /// descendant but unlabelled generic views — with `emptyHostKey`.
-    /// That is the host of a screen with no toolbar: nothing on screen.
+    /// Mark every host in a snapshot dictionary that holds no toolbar items —
+    /// nothing but unlabelled generic views and the system back button —
+    /// with `emptyHostKey`. That is the host of a screen with no toolbar:
+    /// no locator matches it (what it holds still matches as usual).
     static func markEmptyHosts(in dict: inout [String: Any]) {
         var ancestry: [Place] = []
         markEmptyHosts(in: &dict, ancestry: &ancestry)
@@ -114,6 +117,12 @@ enum BarHost {
         dict["children"] = children
     }
 
+    /// Whether `dict` is the system back button (`BackButton`, in UIKit and
+    /// SwiftUI stacks alike).
+    private static func isSystemBackButton(_ dict: [String: Any]) -> Bool {
+        CellFrames.elementType(of: dict) == .button && dict["identifier"] as? String == "BackButton"
+    }
+
     /// Whether `markEmptyHosts` marked `dict` as an empty host.
     static func isMarkedEmpty(_ dict: [String: Any]) -> Bool {
         dict[emptyHostKey] as? Bool == true
@@ -126,10 +135,13 @@ enum BarHost {
     }
 
     /// Whether a descendant of `dict` is anything but an unlabelled generic
-    /// view: a button, text, image, or a view with a label, identifier or
-    /// value — an item a host holds.
+    /// view or the system back button: a button, text, image, or a view with
+    /// a label, identifier or value — an item a host holds. The iPhone Duo
+    /// floats the back button of every pushed screen in the host
+    /// (PILOT-1251); that is navigation, not a toolbar.
     private static func holdsItems(_ dict: [String: Any]) -> Bool {
         for child in dict["children"] as? [[String: Any]] ?? [] {
+            if isSystemBackButton(child) { continue }
             let plain = CellFrames.elementType(of: child) == .other
                 && (child["label"] as? String ?? "").isEmpty
                 && (child["identifier"] as? String ?? "").isEmpty
