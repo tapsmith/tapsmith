@@ -285,6 +285,7 @@ class SnapshotElementFinder {
         var matchedAncestors: [WrapperAncestor] = []
         var suppressed = Set<Int>()
         var keyboardMatches: [UInt] = []
+        var emptyHostMatches: [String: Int] = [:]
         var keyboardTop: CGFloat?
         findMatches(
             in: snapshotDict,
@@ -298,6 +299,7 @@ class SnapshotElementFinder {
             matchedAncestors: &matchedAncestors,
             suppressed: &suppressed,
             keyboardMatches: &keyboardMatches,
+            emptyHostMatches: &emptyHostMatches,
             keyboardTop: &keyboardTop,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
@@ -314,11 +316,13 @@ class SnapshotElementFinder {
         // (document order). Used to resolve same-identifier elements positionally
         // — `firstMatch` would ignore the position when an id isn't unique.
         var idSeen: [String: Int] = [:]
+        // An empty toolbar host is no match, but the live query returns it
+        // too (PILOT-1251).
         let idIndices: [Int] = matches.map { (nodeDict, _) in
             let id = nodeDict["identifier"] as? String ?? ""
             let n = idSeen[id, default: 0]
             idSeen[id] = n + 1
-            return n
+            return n + (nodeDict[SnapshotElementFinder.emptyHostsBeforeKey] as? Int ?? 0)
         }
         // A label-less getByText match (substring or exact) is re-resolved by
         // the selector's own query: which numbered nodes that query returns,
@@ -1461,6 +1465,12 @@ class SnapshotElementFinder {
     /// that matches is recorded the same way (PILOT-1251).
     static let keyboardMatchesKey = "tapsmithKeyboardMatches"
 
+    /// Key under which `findMatches` records, on a match, how many empty
+    /// toolbar hosts with its identifier that match the selector came
+    /// before it: a live query narrowed to that identifier returns them
+    /// first (`idIndices`, PILOT-1251).
+    static let emptyHostsBeforeKey = "tapsmithEmptyHostsBefore"
+
     /// The element types of the nodes of the subtree at `nodeDict` (itself
     /// included) that match the selector, ignoring NonAppElements — the
     /// keyboard's, which the live queries see.
@@ -1514,6 +1524,7 @@ class SnapshotElementFinder {
         matchedAncestors: inout [WrapperAncestor],
         suppressed: inout Set<Int>,
         keyboardMatches: inout [UInt],
+        emptyHostMatches: inout [String: Int],
         keyboardTop: inout CGFloat?,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
@@ -1574,6 +1585,7 @@ class SnapshotElementFinder {
             focusedHint: focusedHint
         ) {
             keyboardMatches.append(parseUInt(nodeDict["elementType"]) ?? 0)
+            emptyHostMatches[nodeDict["identifier"] as? String ?? "", default: 0] += 1
         }
         // This node's index among the nodes of its row that the query
         // finding it inside the row returns (RowAnchor, PILOT-952), and, for
@@ -1686,6 +1698,7 @@ class SnapshotElementFinder {
                 ), on: &matched)
             }
             if !keyboardMatches.isEmpty { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
+            if let n = emptyHostMatches[myId], n > 0 { matched[SnapshotElementFinder.emptyHostsBeforeKey] = n }
             results.append((matched, frame))
             let myIndex = results.count - 1
 
@@ -1731,6 +1744,7 @@ class SnapshotElementFinder {
                     matchedAncestors: &matchedAncestors,
                     suppressed: &suppressed,
                     keyboardMatches: &keyboardMatches,
+                    emptyHostMatches: &emptyHostMatches,
                     keyboardTop: &keyboardTop,
                     keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
                     liveFocusedTextInput: liveFocusedTextInput,
