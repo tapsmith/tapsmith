@@ -3719,3 +3719,79 @@ describe('route scopes (PILOT-534)', () => {
     expect([...a.live(), ...b.live()]).toEqual([]);
   });
 });
+
+// PILOT-1253: a test that turns the device gets it back as it found it after
+// the test, pass or fail, so a test that fails in landscape does not leave
+// the next test turned. Device decides what was the test's turn
+// (device.test.ts); the runner forgets earlier turns at each attempt's start
+// and restores after each attempt.
+describe('orientation restore after each test (PILOT-1253)', () => {
+  const makeDevice = () => {
+    const calls: string[] = [];
+    const device = {
+      tracing: new Tracing(async () => undefined, async () => undefined),
+      waitForIdle: vi.fn(async () => {}),
+      _networkProxyRunning: false,
+      _takeRouteRegistrations: () => 0,
+      _routeManager: null,
+      _disposeRouteManager: vi.fn(async () => {}),
+      _disposeWebViewManager: vi.fn(async () => {}),
+      _resetWebViewContext: vi.fn(),
+      _forgetTestOrientation: vi.fn(() => { calls.push('forget'); }),
+      _restoreTestOrientation: vi.fn(async () => { calls.push('restore'); }),
+      calls,
+    };
+    return device;
+  };
+  const run = (ctx: ReturnType<typeof popContext>, devices: Array<ReturnType<typeof makeDevice>>, config: Partial<TapsmithConfig> = {}) =>
+    runSuiteContext(ctx, '', [], [], makeOpts({
+      config: makeConfig(config),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+      devices: devices.map((device, i) => ({ name: `device-${i + 1}`, device })) as any,
+    }));
+
+  it('forgets earlier turns before each test and restores after it, pass or fail', async () => {
+    const device = makeDevice();
+    pushContext();
+    tapsmithTest('passes', async () => { device.calls.push('body'); });
+    tapsmithTest('fails in landscape', async () => {
+      device.calls.push('body');
+      throw new Error('Order Confirmed not visible');
+    });
+    const result = await run(popContext(), [device]);
+    expect(result.tests.map((t) => t.status)).toEqual(['passed', 'failed']);
+    expect(device.calls).toEqual(['forget', 'body', 'restore', 'forget', 'body', 'restore']);
+  });
+
+  it('restores after afterEach hooks, which may still turn the device', async () => {
+    const device = makeDevice();
+    pushContext();
+    tapsmithAfterEach(async () => { device.calls.push('afterEach'); });
+    tapsmithTest('turns', async () => { device.calls.push('body'); });
+    await run(popContext(), [device]);
+    expect(device.calls).toEqual(['forget', 'body', 'afterEach', 'restore']);
+  });
+
+  it('restores after every attempt of a retried test', async () => {
+    const device = makeDevice();
+    pushContext();
+    tapsmithTest('flaky', async () => {
+      device.calls.push('body');
+      throw new Error('flake');
+    });
+    await run(popContext(), [device], { retries: 1 });
+    expect(device.calls).toEqual(['forget', 'body', 'restore', 'forget', 'body', 'restore']);
+  });
+
+  it('restores every device of a group, and a failed restore fails nothing', async () => {
+    const a = makeDevice();
+    const b = makeDevice();
+    a._restoreTestOrientation.mockRejectedValueOnce(new Error('agent gone'));
+    pushContext();
+    tapsmithTest('two devices', async () => {});
+    const result = await run(popContext(), [a, b]);
+    expect(result.tests.map((t) => t.status)).toEqual(['passed']);
+    expect(a._restoreTestOrientation).toHaveBeenCalledTimes(1);
+    expect(b._restoreTestOrientation).toHaveBeenCalledTimes(1);
+  });
+});

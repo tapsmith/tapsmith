@@ -61,6 +61,12 @@ describe("Orientation", () => {
     expect(orientation).toBe("landscape");
   });
 
+  // The test above leaves the device turned. A test's turn is undone after
+  // it, pass or fail, so the next test finds the device as it was (PILOT-1253).
+  test("a turn made by the previous test is undone", async ({ device }) => {
+    expect(await device.getOrientation()).toBe("portrait");
+  });
+
   test("setOrientation('portrait') restores portrait", async ({ device }) => {
     await device.setOrientation("portrait");
     const orientation = await device.getOrientation();

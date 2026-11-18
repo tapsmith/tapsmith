@@ -2777,6 +2777,9 @@ async function runSuiteContext(
       // (PILOT-543).
       const attemptErrors = openErrorScope();
       const waiterMark = pendingWaiterMark();
+      // A turn made outside any test (a UI-mode or MCP tool call) is not this
+      // test's to undo (PILOT-1253). Optional call: lifecycle mocks.
+      for (const d of allDevices(opts)) d._forgetTestOrientation?.();
 
       // Trace recording — start if configured
       const recording = shouldRecord(traceConfig.mode, attempt);
@@ -3357,6 +3360,13 @@ async function runSuiteContext(
         // device.on() listeners the test added end with it too (PILOT-775).
         d._routeManager?.removeTestListeners?.();
       });
+
+      // A device the test turned (its hooks and fixtures included) goes back
+      // to the orientation the test found it in, pass or fail, so a test that
+      // fails in landscape does not leave the next one turned, as each
+      // Playwright test gets its own viewport (PILOT-1253). Best effort: a
+      // device that cannot turn back fails nothing here.
+      await forEachDeviceBestEffort(opts, (d) => d._restoreTestOrientation?.());
 
       // System ANR / crash dialogs the agent answered during the attempt
       // (PILOT-977): a trace row each, while the trace is still recording,

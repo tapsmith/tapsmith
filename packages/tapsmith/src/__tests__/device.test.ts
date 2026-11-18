@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Device } from '../device.js';
+import { runInRouteScope } from '../network.js';
 import { WebViewHandle } from '../webview-handle.js';
 import { isTestEndedError, runInAttemptContext } from '../attempt-fence.js';
 import { selectorToProto } from '../selectors.js';
@@ -1175,6 +1176,76 @@ describe('Device.setOrientation()', () => {
     });
     const device = new Device(client);
     await expect(device.setOrientation('landscape')).rejects.toThrow('Set orientation failed');
+  });
+});
+
+// PILOT-1253: a test that turns the device gets it back as it found it, so a
+// test that fails in landscape does not leave the next one turned.
+describe('Device orientation restore after a test', () => {
+  const makeTurnable = (start: 'portrait' | 'landscape' = 'portrait') => {
+    let current = start;
+    const setOrientation = vi.fn(async (o: 'portrait' | 'landscape') => { current = o; return successResponse(); });
+    const getOrientation = vi.fn(async () => ({ requestId: '1', orientation: current }));
+    const device = new Device(makeMockClient({ setOrientation, getOrientation }));
+    return { device, setOrientation, getOrientation, current: () => current };
+  };
+
+  it('turns the device back to the orientation it had before the test turned it', async () => {
+    const { device, setOrientation, current } = makeTurnable('portrait');
+    await device.setOrientation('landscape');
+    await device._restoreTestOrientation();
+    expect(current()).toBe('portrait');
+    expect(setOrientation).toHaveBeenLastCalledWith('portrait');
+  });
+
+  it('remembers the orientation from before the first turn only', async () => {
+    const { device, getOrientation, current } = makeTurnable('landscape');
+    await device.setOrientation('portrait');
+    await device.setOrientation('landscape');
+    await device.setOrientation('portrait');
+    expect(getOrientation).toHaveBeenCalledTimes(1);
+    await device._restoreTestOrientation();
+    expect(current()).toBe('landscape');
+  });
+
+  it('does nothing for a test that never turned the device', async () => {
+    const { device, setOrientation } = makeTurnable();
+    await device._restoreTestOrientation();
+    expect(setOrientation).not.toHaveBeenCalled();
+  });
+
+  it('restores once: the next test starts from what it finds', async () => {
+    const { device, setOrientation } = makeTurnable();
+    await device.setOrientation('landscape');
+    await device._restoreTestOrientation();
+    await device._restoreTestOrientation();
+    expect(setOrientation).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a turn made by a beforeAll hook in place', async () => {
+    const { device, setOrientation, current } = makeTurnable();
+    await runInRouteScope({ label: 'suite' }, () => device.setOrientation('landscape'));
+    await device._restoreTestOrientation();
+    expect(current()).toBe('landscape');
+    expect(setOrientation).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a turn made before the test started', async () => {
+    const { device, current } = makeTurnable();
+    // A turn outside any test (a UI-mode or MCP tool call) is not the test's.
+    await device.setOrientation('landscape');
+    device._forgetTestOrientation();
+    await device._restoreTestOrientation();
+    expect(current()).toBe('landscape');
+  });
+
+  it('still turns when the orientation cannot be read first, and then restores nothing', async () => {
+    const { device, setOrientation, getOrientation, current } = makeTurnable();
+    getOrientation.mockRejectedValueOnce(new Error('agent busy'));
+    await device.setOrientation('landscape');
+    expect(setOrientation).toHaveBeenCalledWith('landscape');
+    await device._restoreTestOrientation();
+    expect(current()).toBe('landscape');
   });
 });
 

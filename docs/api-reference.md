@@ -585,7 +585,7 @@ const text = await device.getClipboard();
 
 ### `device.setOrientation(orientation: Orientation): Promise<void>`
 
-Set the device orientation. Accepts `"portrait"` or `"landscape"`.
+Set the device orientation. Accepts `"portrait"` or `"landscape"`. A turn made in a test, its `beforeEach` and `afterEach` hooks or its fixtures is undone after the test, whether it passed or failed, so the next test finds the device in the orientation the test found it in. A turn made in a `beforeAll` or `afterAll` hook is not undone.
 
 ```typescript
 await device.setOrientation("landscape");
