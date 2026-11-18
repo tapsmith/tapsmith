@@ -15,13 +15,16 @@ export default function DragScreen() {
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderRelease: (_evt, gesture) => {
-        // moveX/moveY: the touch's latest window position, where it lifted.
-        // The zone is measured now, not on layout: on layout it can still be
-        // sliding in with the screen's push transition, or turning.
-        const { moveX, moveY } = gesture
-        dropZone.current?.measureInWindow((x, y, width, height) => {
-          const inside = moveX >= x && moveX <= x + width && moveY >= y && moveY <= y + height
+      onPanResponderRelease: (evt) => {
+        // Where the touch lifted, and the zone, both in page coordinates:
+        // window coordinates (measureInWindow) sit below the status bar on
+        // Android, which put a drop on the zone's centre outside it. The zone
+        // is measured now, not on layout: on layout it can still be sliding
+        // in with the screen's push transition, or turning.
+        const { pageX, pageY } = evt.nativeEvent
+        dropZone.current?.measure((_x, _y, width, height, left, top) => {
+          const inside =
+            pageX >= left && pageX <= left + width && pageY >= top && pageY <= top + height
           setDrop((d) => ({ count: d.count + 1, result: inside ? "On target" : "Missed" }))
         })
       },
