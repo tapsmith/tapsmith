@@ -40,5 +40,24 @@ describe("Covers", () => {
 
       await expect(coversScreen.counts).toHaveText(counts({}))
     })
+
+    test("type() into a field under a loading overlay waits for it to go away", async ({ coversScreen }) => {
+      await coversScreen.loadBrieflyButton.tap()
+      await expect(coversScreen.loadingOverlay).toBeVisible()
+
+      await coversScreen.fieldBehindLoading.type("hello")
+
+      await expect(coversScreen.fieldBehindLoading).toHaveValue("hello")
+      await expect(coversScreen.counts).toHaveText(counts({}))
+    })
+
+    test("focus() on a field under a loading overlay that stays fails naming it, without tapping the overlay", async ({ coversScreen }) => {
+      await coversScreen.keepLoadingButton.tap()
+      await expect(coversScreen.loadingOverlay).toBeVisible()
+
+      expect(await failureOf(coversScreen.fieldBehindLoading.focus({ timeout: 1_500 }))).toMatch(/covered by a loading overlay/i)
+
+      await expect(coversScreen.counts).toHaveText(counts({}))
+    })
   })
 })

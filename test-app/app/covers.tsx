@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react"
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native"
+import {
+  ActivityIndicator,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native"
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 
 // Covers that are not interactive controls (PILOT-979). The target counts its
@@ -9,11 +16,14 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   holding an ActivityIndicator, with no onPress of its own. It swallows
 //   touches as any view does (and counts them), but nothing in it is a
 //   control. "Load briefly" shows it for 3 s; "Keep loading" until toggled.
+// - "Field behind loading" is a text field under a second overlay shown at
+//   the same time, for the focusing tap of type(), clear() and focus().
 
 export default function CoversScreen() {
   const [loading, setLoading] = useState(false)
   const [behindLoadingTaps, setBehindLoadingTaps] = useState(0)
   const [loadingOverlayTaps, setLoadingOverlayTaps] = useState(0)
+  const [field, setField] = useState("")
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // A warm reset navigates here rather than remounting, so clear local state
@@ -25,6 +35,7 @@ export default function CoversScreen() {
     setLoading(false)
     setBehindLoadingTaps(0)
     setLoadingOverlayTaps(0)
+    setField("")
   }, [resetEpoch])
   useEffect(() => () => clearTimeout(hideTimer.current), [])
 
@@ -82,6 +93,29 @@ export default function CoversScreen() {
           </View>
         )}
       </View>
+
+      <View style={styles.stack}>
+        <TextInput
+          style={styles.field}
+          value={field}
+          onChangeText={setField}
+          placeholder="Write here"
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Field behind loading"
+          testID="field-behind-loading"
+        />
+        {loading && (
+          <View
+            style={styles.loadingOverlay}
+            testID="field-loading-overlay"
+            onStartShouldSetResponder={() => true}
+            onResponderRelease={() => setLoadingOverlayTaps((n) => n + 1)}
+          >
+            <ActivityIndicator color="#333" />
+          </View>
+        )}
+      </View>
     </View>
   )
 }
@@ -127,6 +161,13 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
+  },
+  field: {
+    ...fill,
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontSize: 16,
   },
   loadingOverlay: {
     ...fill,

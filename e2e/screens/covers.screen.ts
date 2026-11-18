@@ -11,4 +11,6 @@ export class CoversScreen {
 
   get behindLoading() { return this.device.getByRole("button", { name: "Behind loading" }) }
   get loadingOverlay() { return this.device.getByTestId("loading-overlay") }
+  /** A text field under a second loading overlay, shown with the first. */
+  get fieldBehindLoading() { return this.device.getByRole("textfield", { name: "Field behind loading" }) }
 }

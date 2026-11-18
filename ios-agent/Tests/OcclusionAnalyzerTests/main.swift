@@ -547,6 +547,21 @@ checkPoint("a spinner inside the target is not a cover",
 checkPoint("a plain overlay with no spinner is still not a cover",
            analyzer(screenRows(passThrough: true)).analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
            CGPoint(x: 201, y: 359.33))
+// XCUITest calls a React Native text field under a loading overlay hittable:
+// the overlay still covers it (the focusing tap would land on the overlay).
+// Another control over a hittable field is still left to the hit test.
+let fieldUnderOverlay: [Row] = screenRows(extra: []).map { row in
+    row.label == "Covered action" && row.type == .button ? (row.depth, .textField, "Covered field", row.id, row.frame) : row
+}
+var fieldLoadingRows = fieldUnderOverlay
+fieldLoadingRows.insert(contentsOf: loadingOverlay, at: fieldLoadingRows.count - 2)
+let coveredField = OcclusionAnalyzer.Target(frame: covered, elementType: .textField, label: "Covered field", identifier: "")
+check("a loading overlay covers a text field XCUITest calls hittable",
+      analyzer(fieldLoadingRows).analyze(coveredField, isHittable: true),
+      .covered(by: "a loading overlay (element \"loading-overlay\")"))
+checkPoint("…but a plain control over a hittable text field is left to the hit test",
+           analyzer(fieldUnderOverlay).analyze(coveredField, isHittable: true),
+           CGPoint(x: 201, y: 291.33))
 // A control in the overlay over the point (its Cancel button) is named.
 let loadingWithCancel: [Row] = [
     (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),

@@ -213,8 +213,11 @@ struct OcclusionAnalyzer {
 
         let point = CGPoint(x: visible.midX, y: visible.midY)
         // XCUITest's hit test passed: trust it over the snapshot (see the
-        // type comment on pass-through overlays).
-        if isHittable { return .clear(point: point, visible: visible) }
+        // type comment on pass-through overlays) — except about a loading
+        // overlay over a text input: XCUITest calls a React Native text field
+        // hittable under one, and the focusing tap then lands on the overlay.
+        let hittableInput = isHittable && targetIndex.map { Self.textInputTypes.contains(nodes[$0].elementType) } == true
+        if isHittable, !hittableInput { return .clear(point: point, visible: visible) }
         // Without the target's place in the tree there is no telling what is
         // drawn over it: a live target that just moved can be read again; a
         // tree that has nothing to match (no snapshot) is no evidence.
@@ -247,7 +250,10 @@ struct OcclusionAnalyzer {
         }
         // The topmost of the two is in the way: a control painted after the
         // overlay (or inside it: its Cancel button) is named, else the overlay.
-        if let cover, loading.map({ cover > $0 }) ?? true { return .covered(by: describe(nodes[cover])) }
+        // For a hittable text input, only an overlay on top counts.
+        if let cover, loading.map({ cover > $0 }) ?? true {
+            return hittableInput ? .clear(point: point, visible: visible) : .covered(by: describe(nodes[cover]))
+        }
         if let loading { return .covered(by: "a loading overlay (\(describe(nodes[loading])))") }
         return .clear(point: point, visible: visible)
     }
