@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// The drag that scrolls a target out from under fixed chrome in its own
-/// window — a sticky header or footer, a tab bar, a bottom bar's button — as a
+/// window — a navigation or tab bar, a toolbar, a sticky footer's button — as a
 /// user would before tapping it (PILOT-980). Playwright does the same when an
 /// element "intercepts pointer events": it scrolls the target to another
 /// alignment and tries again. The Android agent's `CoverClearance` is the same

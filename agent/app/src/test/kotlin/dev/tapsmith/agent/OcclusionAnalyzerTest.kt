@@ -439,34 +439,12 @@ class OcclusionAnalyzerTest {
         assertEquals(OcclusionAnalyzer.CoverKind.CONTROL, coverKind(verdict))
     }
 
-    // ─── Sticky list rows (PILOT-979) ───
+    // ─── List rows: overlapping rows are not covers (sticky rows are a follow-up) ───
 
     /** A vertical list: scroll view > content > rows, rows 150 px tall from y = 300. */
     private fun list(vararg rows: FakeNode): FakeNode {
         val content = FakeNode(Box(0, 300, 1080, 2100)).add(*rows)
         return FakeNode(Box(0, 300, 1080, 2100), scrollsVertically = true, name = "list").add(content)
-    }
-
-    @Test
-    fun `a sticky header row stuck over the target's row covers it`() {
-        // Android lists order their children by place: the header comes first
-        // though it is drawn over the row scrolled under it. It takes no touches.
-        val header = FakeNode(Box(0, 300, 1080, 450), name = "text \"Section A\"")
-        val row = FakeNode(Box(0, 320, 1080, 470), takesTouches = true, name = "row 5")
-        val title = FakeNode(Box(40, 340, 600, 450)).also { row.add(it) }
-        root(list(header, row))
-        val verdict = analyze(title)
-        assertCoveredBy(verdict, "text \"Section A\"")
-        assertEquals(OcclusionAnalyzer.CoverKind.CONTROL, coverKind(verdict))
-        assertEquals(Box(0, 300, 1080, 450), coverBounds(verdict))
-    }
-
-    @Test
-    fun `a row directly in a scrolling node (RecyclerView) is covered by a sticky sibling`() {
-        val header = FakeNode(Box(0, 300, 1080, 450), name = "header")
-        val row = FakeNode(Box(0, 320, 1080, 470), takesTouches = true)
-        root(FakeNode(Box(0, 300, 1080, 2100), scrollsVertically = true).add(header, row))
-        assertCoveredBy(analyze(row), "header")
     }
 
     @Test
@@ -479,7 +457,7 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
-    fun `a narrower sibling (a grid cell beside it) is not a sticky row`() {
+    fun `a narrower sibling (a grid cell beside it) is not a cover`() {
         val left = FakeNode(Box(0, 300, 540, 450), takesTouches = true)
         val badge = FakeNode(Box(500, 330, 600, 420), name = "badge")
         root(list(left, badge))
@@ -487,7 +465,7 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
-    fun `rows of a horizontal list are not sticky rows`() {
+    fun `rows of a horizontal list are not covers`() {
         val a = FakeNode(Box(0, 300, 600, 450), name = "a")
         val b = FakeNode(Box(0, 300, 600, 450), takesTouches = true)
         val content = FakeNode(Box(0, 300, 1080, 450)).add(a, b)
@@ -496,23 +474,13 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
-    fun `a background drawn behind the target in scroll content is not a sticky row`() {
+    fun `a background drawn behind the target in scroll content is not a cover`() {
         // NestedScrollView > ConstraintLayout > [card background declared
         // first, button on top of it]: the background is painted under it.
         val background = FakeNode(Box(0, 300, 1080, 700), drawingOrder = 1, name = "background")
         val button = FakeNode(Box(40, 400, 1040, 550), drawingOrder = 2, takesTouches = true)
         root(list(background, button))
         assertClearAt(analyze(button), 540, 475)
-    }
-
-    @Test
-    fun `a sticky header drawn on top by z-order covers the row though listed first`() {
-        // React Native's stickyHeaderIndices: the header is the first cell,
-        // raised above the rows by its zIndex.
-        val header = FakeNode(Box(0, 300, 1080, 450), drawingOrder = 3, name = "header")
-        val row = FakeNode(Box(0, 320, 1080, 470), drawingOrder = 2, takesTouches = true)
-        root(list(header, row))
-        assertCoveredBy(analyze(row), "header")
     }
 
     @Test
@@ -556,7 +524,7 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
-    fun `with no drawing order, an image laid under a button is not a sticky row`() {
+    fun `with no drawing order, an image laid under a button is not a cover`() {
         // Compose before 1.9: Box { Image; Button } in a scrolling column,
         // every drawing order 0. The image is listed first but is a backdrop.
         val image = FakeNode(Box(0, 300, 1080, 900), name = "image \"Hero\"")
@@ -566,7 +534,7 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
-    fun `with no drawing order, a row-sized background laid under a button is not a sticky row`() {
+    fun `with no drawing order, a row-sized background laid under a button is not a cover`() {
         // Compose before 1.9: Box { Image; Button(Modifier.matchParentSize()) },
         // every drawing order 0. The backdrop is the button's own size.
         val image = FakeNode(Box(0, 700, 1080, 850), name = "image \"Banner\"")
@@ -576,7 +544,7 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
-    fun `with no drawing order, a backdrop enclosing a button within twice its height is not a sticky row`() {
+    fun `with no drawing order, a backdrop enclosing a button within twice its height is not a cover`() {
         val image = FakeNode(Box(0, 680, 1080, 950), name = "image \"Banner\"")
         val button = FakeNode(Box(40, 700, 1040, 850), takesTouches = true)
         root(list(image, button))
@@ -589,17 +557,6 @@ class OcclusionAnalyzerTest {
         val row = FakeNode(Box(0, 320, 1080, 470), name = "row 5")
         root(list(header, row))
         assertClearAt(analyze(header), 540, 375)
-    }
-
-    @Test
-    fun `a wide later branch does not use up the sticky-row check either`() {
-        val far = FakeNode(Box(0, 0, 1080, 100))
-        repeat(OcclusionAnalyzer.MAX_NODES_VISITED + 500) { far.add(FakeNode(Box(0, 0, 1080, 100))) }
-        val host = FakeNode(screen, drawingOrder = 2).add(far)
-        val header = FakeNode(Box(0, 300, 1080, 450), name = "header")
-        val row = FakeNode(Box(0, 320, 1080, 470), takesTouches = true)
-        root(FakeNode(screen, drawingOrder = 1).add(list(header, row)), host)
-        assertCoveredBy(analyze(row), "header")
     }
 
     @Test

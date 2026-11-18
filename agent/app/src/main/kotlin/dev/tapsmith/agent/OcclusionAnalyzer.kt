@@ -80,16 +80,10 @@ data class Box(
  *   touches though nothing in it is clickable. This is the one plain view
  *   that is named: a spinner over the point says "wait", whether or not the
  *   overlay passes touches through. Kind [CoverKind.LOADING].
- * - **A sticky list row** (PILOT-979): another row of the vertical list the
- *   target's row is in, at least as wide as the target, over the touch point.
- *   A list's rows do not overlap, except a section header stuck to the top
- *   (or a footer to the bottom) over the rows scrolling under it — and
- *   Android lists order their children by place, so such a header comes
- *   before the row it is drawn over, and it rarely takes touches itself.
  *
  * A cover in the target's own window that the list holding the target can
- * scroll away from (a sticky row, or a control outside the list, such as a
- * sticky footer's button) carries that list's bounds as
+ * scroll away from (a control outside the list, such as a sticky footer's
+ * button or a bottom bar's tab) carries that list's bounds as
  * [Verdict.Covered.scroller], for [TouchPlanner] to drag the target clear
  * (PILOT-980).
  *
@@ -240,7 +234,7 @@ object OcclusionAnalyzer {
         val x = (visible.left + visible.right) / 2
         val y = (visible.top + visible.bottom) / 2
         if (target != null) {
-            findCoverInWindow(target, onScreen, x, y)?.let { return it }
+            findCoverInWindow(target, x, y)?.let { return it }
         }
         return Verdict.Clear(x, y, visible)
     }
@@ -323,26 +317,23 @@ object OcclusionAnalyzer {
 
     /**
      * What covers ([x], [y]) in the target's window, or null: a touchable
-     * node, a loading overlay or a sticky list row painted over it.
+     * node or a loading overlay painted over it.
      *
      * Walks up from the target; at each level, every sibling of the target's
      * branch that is painted after it is drawn over the whole branch, so its
      * subtree is searched for a touchable node containing the point, then
-     * checked for a progress indicator. At a list's level, its other rows are
-     * checked for one stuck over the point. Levels nearer the root are checked
+     * checked for a progress indicator. Levels nearer the root are checked
      * first — what they paint is on top.
      */
     private fun findCoverInWindow(
         target: HitNode,
-        targetBounds: Box,
         x: Int,
         y: Int,
     ): Verdict.Covered? {
         val reader = BudgetedReader(MAX_NODES_VISITED)
-        // The loading-overlay and sticky-row checks walk more widely; their
-        // own allowance keeps them from starving the touchable-cover search.
+        // The loading-overlay check walks more widely; its own allowance
+        // keeps it from starving the touchable-cover search.
         val extraReader = BudgetedReader(MAX_NODES_VISITED)
-        val rowReader = BudgetedReader(MAX_NODES_VISITED)
         val levels = levelsOf(target)
 
         // The nearest vertical list holding the target below level [depth]
@@ -370,12 +361,6 @@ object OcclusionAnalyzer {
                 }
                 if (isLoadingOverlay(sibling, x, y, extraReader)) {
                     return Verdict.Covered("a loading overlay (${sibling.describe()})", CoverKind.LOADING, sibling.bounds)
-                }
-            }
-            if (isListContent(node)) {
-                stickyRow(node, branch, branchIndex, targetBounds, x, y, rowReader)?.let { row ->
-                    val list = if (node.scrollsVertically) node else node.parent()
-                    return Verdict.Covered(row.describe(), CoverKind.CONTROL, row.bounds, list?.bounds)
                 }
             }
             if (reader.exhausted) return null
@@ -446,14 +431,6 @@ object OcclusionAnalyzer {
         return true
     }
 
-    /** Whether [node] holds a vertical list's rows: the list itself (a
-     *  RecyclerView) or a scroll view's only child (its content). */
-    private fun isListContent(node: HitNode): Boolean {
-        if (node.scrollsVertically) return true
-        val parent = node.parent() ?: return false
-        return parent.scrollsVertically && parent.childCount() == 1
-    }
-
     /** The bounds of the fixed chrome [cover] sits in: its outermost ancestor
      *  below [level] (where its branch splits from the target's) no taller
      *  than half of [list] — a bar, not a full-screen host it is placed in. */
@@ -470,47 +447,6 @@ object OcclusionAnalyzer {
         }
         return node.bounds
     }
-
-    /** Another row of [content] than the target's ([branch] at [branchIndex])
-     *  stuck over ([x], [y]): visible, containing the point, at least as wide
-     *  as the target's visible part (a grid's neighbouring cell is not), and
-     *  painted over the target's row — or, with no drawing order to tell (a
-     *  list reporting 0 for every child, which orders a sticky header before
-     *  the rows it is drawn over), listed before it, row-sized (no taller
-     *  than twice the target's row) and not enclosing the target's row. A
-     *  background drawn behind the row (a decor view declared first in a
-     *  ScrollView's content, an image under a button, even one the button's
-     *  own size) is not a cover, and nor is a row scrolled under a target that
-     *  is itself the sticky header. Unordered, a header that happens to hide
-     *  a whole row is missed too, and the row is touched as before. */
-    private fun stickyRow(
-        content: HitNode,
-        branch: HitNode,
-        branchIndex: Int,
-        targetBounds: Box,
-        x: Int,
-        y: Int,
-        reader: BudgetedReader,
-    ): HitNode? =
-        (0 until content.childCount())
-            .filter { it != branchIndex }
-            .firstNotNullOfOrNull { i ->
-                reader.child(content, i)?.takeIf {
-                    val drawnOver =
-                        if (it.drawingOrder == 0 && branch.drawingOrder == 0) {
-                            i < branchIndex &&
-                                it.bounds.height <= 2 * branch.bounds.height &&
-                                !it.bounds.contains(branch.bounds)
-                        } else {
-                            compareKeys(drawKey(it, i), drawKey(branch, branchIndex)) > 0
-                        }
-                    drawnOver &&
-                        it.isVisible &&
-                        it.bounds.contains(x, y) &&
-                        it.bounds.left <= targetBounds.left &&
-                        it.bounds.right >= targetBounds.right
-                }
-            }
 
     /** Whether [branch], painted over the target, is a loading overlay over
      *  ([x], [y]): visible, containing the point, and a progress indicator

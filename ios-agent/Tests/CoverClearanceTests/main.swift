@@ -28,8 +28,8 @@ func drag(_ target: CGRect, _ cover: CGRect, list: CGRect = list) -> CoverCleara
 // Tab bar 791..874; a row 800..844 under it: move up 844 - (791 - 8) = 61, + slop.
 check("a row under a tab bar is dragged up just clear of it",
       drag(R(0, 800, 402, 44), R(0, 791, 402, 83)), D(201, 783, 712))
-// Sticky header 116..160; a row 120..164 under it: move down 160 + 8 - 120 = 48, + slop.
-check("a row under a sticky header is dragged down just clear of it",
+// A header bar 116..160 over the list; a row 120..164 under it: move down 160 + 8 - 120 = 48, + slop.
+check("a row under a header bar is dragged down just clear of it",
       drag(R(0, 120, 402, 44), R(0, 116, 402, 44)), D(201, 168, 226))
 // Free part 116..600 (centre 358); target 300..800 (centre 550): move up 192.
 check("a target too tall for the free part is centred in it",

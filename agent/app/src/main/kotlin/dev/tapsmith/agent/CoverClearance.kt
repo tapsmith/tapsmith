@@ -2,8 +2,8 @@ package dev.tapsmith.agent
 
 /**
  * The drag that scrolls a target out from under fixed chrome in its own
- * window — a sticky header or footer, a bottom bar's button — as a user would
- * before tapping it (PILOT-980). Playwright does the same when an element
+ * window — a sticky footer's button, a bottom bar — as a user would before
+ * tapping it (PILOT-980). Playwright does the same when an element
  * "intercepts pointer events": it scrolls the target to another alignment and
  * tries again.
  *

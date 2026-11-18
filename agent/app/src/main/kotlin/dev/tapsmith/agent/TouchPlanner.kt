@@ -110,13 +110,13 @@ sealed class TouchPlan {
 /**
  * Plans element-addressed touches so they never land on something drawn over
  * the element (PILOT-362): the keyboard, another window, a touchable view, a
- * loading overlay or a sticky list row painted on top (PILOT-979). A covered
+ * loading overlay painted on top (PILOT-979). A covered
  * element is waited on — up to the action's budget, the way Playwright waits
  * out a click's intercepting element — and then the action fails with
  * ELEMENT_COVERED naming the cover.
  *
  * A target under fixed chrome in its own window, in a list that can scroll it
- * away (a sticky footer or header), is first dragged clear of it — up to
+ * away (a sticky footer's button, a bottom bar), is first dragged clear of it — up to
  * [MAX_CLEAR_DRAGS] times, while the drags move it — as a user would, and as
  * Playwright scrolls a target whose click another element intercepts
  * (PILOT-980). Then the checks run again. The geometry lives in

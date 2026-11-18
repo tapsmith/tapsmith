@@ -41,14 +41,10 @@ import XCTest
 ///   screen while it loads, often see-through, and it takes the touches
 ///   though nothing in it is a control. A spinner over the point says "wait"
 ///   either way, so this is the one plain view that is named.
-/// - **A sticky list row** (PILOT-979), when not hittable: another row of the
-///   list the target's row is in, at least as wide as the target, over the
-///   touch point — a section header floating over the rows scrolled under it.
-///   A list's rows do not overlap otherwise.
 ///
 /// A cover in the target's own window that the vertical list holding the
-/// target can scroll away from — a sticky row, a bar, or a control outside
-/// the list (a sticky footer's button) — is reported as `.coveredInList`, so
+/// target can scroll away from — a bar, or a control outside the list (a
+/// sticky footer's button) — is reported as `.coveredInList`, so
 /// the touch can drag the target clear of it first (PILOT-980).
 struct OcclusionAnalyzer {
     /// What the snapshot says about the target.
@@ -258,9 +254,6 @@ struct OcclusionAnalyzer {
         if let cover {
             return chromeCover(describe(nodes[cover]), at: cover, over: t)
         }
-        if let row = stickyRow(over: t, at: point, targetFrame: visible) {
-            return chromeCover(describe(nodes[row.row]), at: row.row, over: t, list: row.list)
-        }
         return .clear(point: point, visible: visible)
     }
 
@@ -364,7 +357,7 @@ struct OcclusionAnalyzer {
         return nil
     }
 
-    // MARK: - Loading overlays and sticky rows (PILOT-979)
+    // MARK: - Loading overlays (PILOT-979) and fixed chrome (PILOT-980)
 
     static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
 
@@ -382,76 +375,6 @@ struct OcclusionAnalyzer {
         return false
     }
 
-    /// Another row of the list the target's row is in, stuck over `point`:
-    /// containing it, at least as wide as the target, and no taller than half
-    /// the list. (The tree's order says nothing here: iOS lists a floating
-    /// header before the rows it is drawn over.) A list's rows are
-    /// the children of a table or collection view, or of a scroll view's
-    /// content view (React Native).
-    private func stickyRow(over t: Int, at point: CGPoint, targetFrame: CGRect) -> (row: Int, list: Int)? {
-        var row = t
-        while let content = nodes[row].parent {
-            if let list = listOwning(content: content) {
-                // The target inside a plain view stuck at the list's visible
-                // top or bottom edge is in the sticky header itself (React
-                // Native's sticky wrapper holds its contents), on top of the
-                // row scrolled under it: the tree has no paint order to say
-                // so. The row's own frame, not its clipped one: a row partly
-                // scrolled past the edge is clipped to it without being stuck
-                // there. A cell is never the header, even when a scroll to a
-                // row aligns it with the edge; a target that is a row is
-                // still checked.
-                let edges = clippedFrame(of: list), rowFrame = nodes[row].frame
-                if row != t, nodes[row].elementType == .other,
-                   abs(rowFrame.minY - edges.minY) <= 1 || abs(rowFrame.maxY - edges.maxY) <= 1 {
-                    return nil
-                }
-                for i in (content + 1)..<nodes[content].subtreeEnd where nodes[i].parent == content && i != row {
-                    let node = nodes[i]
-                    if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-                    let f = clippedFrame(of: i)
-                    // A bar-sized row with content of its own — children or
-                    // a label. A background laid behind the rows (a view
-                    // filling the content), a row's own empty background
-                    // view React Native lists beside its controls, or a
-                    // plain View with a testID, which React Native flattens
-                    // into an empty node with only that identifier, its
-                    // contents listed beside it in whatever order XCUITest
-                    // sorts them (the /visibility screen's banner and rows),
-                    // is not a header stuck over one. A sticky header holds
-                    // its contents (React Native) or carries a label (UIKit).
-                    if f.contains(point), f.minX <= targetFrame.minX + 1, f.maxX >= targetFrame.maxX - 1,
-                       f.height * 2 <= nodes[list].frame.height,
-                       node.subtreeEnd > i + 1 || !node.label.isEmpty {
-                        return (i, list)
-                    }
-                }
-                return nil
-            }
-            row = content
-        }
-        return nil
-    }
-
-    /// The scroller whose rows are `content`'s children: `content` itself (a
-    /// table, a collection view, a scroll view whose rows are direct
-    /// children), or the scroll view `content` is the only content of —
-    /// through any chain of only-child wrappers (React Native nests its
-    /// content view in another).
-    private func listOwning(content: Int) -> Int? {
-        let type = nodes[content].elementType
-        if type == .table || type == .collectionView || type == .scrollView { return content }
-        var inner = content
-        while let p = nodes[inner].parent {
-            let children = ((p + 1)..<nodes[p].subtreeEnd).filter { nodes[$0].parent == p && !isScrollIndicator(nodes[$0]) }
-            guard children == [inner] else { return nil }
-            if nodes[p].elementType == .scrollView { return p }
-            guard nodes[p].elementType == .other else { return nil }
-            inner = p
-        }
-        return nil
-    }
-
     /// The nearest vertical list holding target `t` but not node `cover`:
     /// a scroller ancestor (not a web view) with room to scroll the target
     /// up or down (taller than twice it).
@@ -466,17 +389,16 @@ struct OcclusionAnalyzer {
     static let listTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView]
 
     /// `.coveredInList` when a vertical list can scroll target `t` clear of
-    /// node `cover` (`list` when already known), else `.covered`.
+    /// node `cover`, else `.covered`.
     /// A cover in a presented container (an alert's button, a popover's
     /// row) or in another window is never scrolled away from: it is waited
     /// out, and a drag under it would touch it.
-    private func chromeCover(_ name: String, at cover: Int, over t: Int, list known: Int? = nil) -> Verdict {
+    private func chromeCover(_ name: String, at cover: Int, over t: Int) -> Verdict {
         let presented = ([cover] + ancestors(of: cover)).contains { Self.presentedTypes.contains(nodes[$0].elementType) }
         guard !presented, nodes[cover].window == nodes[t].window,
-              let list = known ?? verticalList(holding: t, notHolding: cover) else { return .covered(by: name) }
-        // A sticky row is cleared as itself; a control as the bar it sits in.
-        let bounds = known != nil ? clippedFrame(of: cover) : chromeFrame(of: cover, over: t, list: list)
-        return .coveredInList(by: name, cover: bounds, list: nodes[list].frame)
+              let list = verticalList(holding: t, notHolding: cover) else { return .covered(by: name) }
+        // A control is cleared as the bar it sits in.
+        return .coveredInList(by: name, cover: chromeFrame(of: cover, over: t, list: list), list: nodes[list].frame)
     }
 
     /// The frame of the fixed chrome control `cover` sits in: its outermost

@@ -24,8 +24,8 @@ class CoverClearanceTest {
     }
 
     @Test
-    fun `a target under a sticky header is dragged down just clear of it`() {
-        // Header 200..350 (top of the list); row 220..370 under it.
+    fun `a target under a header bar is dragged down just clear of it`() {
+        // A header bar 200..350 laid over the list's top; row 220..370 under it.
         assertEquals(Drag(540, 370, 540, 536), drag(Box(0, 220, 1080, 370), Box(0, 200, 1080, 350)))
     }
 
