@@ -14,6 +14,9 @@ export class CoversScreen {
   /** The text field in the list, after Row 12. */
   get note() { return this.device.getByRole("textfield", { name: "Note" }) }
 
+  get showDialogButton() { return this.device.getByRole("button", { name: "Show dialog" }) }
+  get dialogOk() { return this.device.getByRole("button", { name: "Dialog OK" }) }
+
   get behindLoading() { return this.device.getByRole("button", { name: "Behind loading" }) }
   get loadingOverlay() { return this.device.getByTestId("loading-overlay") }
   get headerAction() { return this.device.getByRole("button", { name: "Header action" }) }

@@ -306,6 +306,38 @@ class TouchPlannerTest {
     }
 
     @Test
+    fun `a drag that dismisses a dialog laid over the list fails instead of touching the target`() {
+        // A hand-rolled in-window dialog: one host holding a backdrop that
+        // takes no clicks (a responder-built view) and a card, painted over
+        // the list. The drag start is on the backdrop, which nothing before
+        // the drag can tell from a pass-through view; pressing it dismisses
+        // the dialog.
+        val row = listUnderFooter(rowTop = 2250)
+        val root = row.parentNode!!.parentNode!!.parentNode!!
+        val card = Node(Box(100, 900, 980, 1300)).add(Node(Box(140, 1150, 940, 1280), takesTouches = true, name = "button \"OK\""))
+        val host = Node(SCREEN, drawingOrder = 2).add(Node(SCREEN, name = "backdrop"), card)
+        root.add(host)
+        val scrolls = scroller.onDrag
+        scroller.onDrag = { d ->
+            root.children.remove(host)
+            scrolls(d)
+        }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(), LABELLED) }
+        assertEquals(1, scroller.drags.size)
+        assertTrue(e.message, e.message!!.contains("changed the screen outside the list"))
+    }
+
+    @Test
+    fun `no drag is made while an app window is over the target's window`() {
+        // A dialog window elsewhere on screen: a touch outside it cancels it.
+        val row = listUnderFooter(rowTop = 2250)
+        screen.windowsAt = { listOf(APP, DIALOG.copy(bounds = Box(100, 300, 980, 900))) }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 3_000), LABELLED) }
+        assertTrue("never dragged", scroller.drags.isEmpty())
+        assertTrue(e.message, e.message!!.contains("button \"Checkout\""))
+    }
+
+    @Test
     fun `a dropped first drag leaves the second to clear the target`() {
         val row = listUnderFooter(rowTop = 2250)
         val scrolls = scroller.onDrag

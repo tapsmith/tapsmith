@@ -218,8 +218,9 @@ class TouchPlanner(
                     // otherwise be waited out to the timeout: answer it and
                     // look again at once (PILOT-977).
                     if (verdict.kind == OcclusionAnalyzer.CoverKind.WINDOW && screen.answerSystemDialogs()) continue
-                    val drag = clearingDrag(verdict, snapshot, bounds, clearDrags, deadlines, now)
-                    if (drag != null) {
+                    val clearing = clearingDrag(verdict, snapshot, bounds, clearDrags, deadlines, now)
+                    if (clearing != null) {
+                        val (drag, outside) = clearing
                         clearDrags++
                         // A view the list rebinds meanwhile must still show
                         // the same content afterwards, as after a wait.
@@ -227,6 +228,21 @@ class TouchPlanner(
                         log("element is covered by ${verdict.by}; dragging it clear ($drag)")
                         CommandCancellation.checkpoint()
                         scroller!!.drag(drag)
+                        // The drag must have scrolled the list and nothing
+                        // else. Anything outside it that came or went (a
+                        // dialog its backdrop dismissed) means it pressed
+                        // something laid over the list: stop, loudly, rather
+                        // than touch the target on a screen that changed.
+                        val after = target.read()?.node?.let { OcclusionAnalyzer.outsideList(it, verdict.scroller!!) }
+                        if (after != outside) {
+                            log("the screen outside the list changed during the drag ($outside -> $after)")
+                            throw ElementCoveredException(
+                                "Element is covered by ${verdict.by}. Scrolling the list to move it clear also changed " +
+                                    "the screen outside the list, so something laid over the list (such as a dialog's " +
+                                    "backdrop) may have taken the drag; not touching the element",
+                                verdict.kind,
+                            )
+                        }
                         // The next pass reads the target where the drag left
                         // it. A drag that did not move it (the list's end, or
                         // a gesture the system dropped) still uses only one of
@@ -253,7 +269,9 @@ class TouchPlanner(
      * null when there is none to make: no list to scroll (or the cover is not
      * one to scroll away from — the analyzer gives no scroller then), the
      * drags are used up, there is no time left for one and the touch after,
-     * or something other than the list lies under where it would start.
+     * or something other than the list lies under where it would start. With
+     * the drag, what the window holds outside the list
+     * ([OcclusionAnalyzer.outsideList]), to compare after it.
      */
     private fun clearingDrag(
         verdict: OcclusionAnalyzer.Verdict.Covered,
@@ -262,7 +280,7 @@ class TouchPlanner(
         dragsSoFar: Int,
         deadlines: TouchPlanClock,
         now: Long,
-    ): CoverClearance.Drag? {
+    ): Pair<CoverClearance.Drag, String>? {
         val scroller = scroller ?: return null
         val list = verdict.scroller ?: return null
         if (verdict.kind != OcclusionAnalyzer.CoverKind.CONTROL || dragsSoFar >= MAX_CLEAR_DRAGS) return null
@@ -283,7 +301,10 @@ class TouchPlanner(
                 drag.fromY,
                 screen.windows(),
             )
-        return drag.takeIf { onList }
+        if (!onList) return null
+        // What lies outside the list now, to check the drag changed none of it.
+        val outside = OcclusionAnalyzer.outsideList(node, list) ?: return null
+        return drag to outside
     }
 
     /**

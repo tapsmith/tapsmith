@@ -723,6 +723,34 @@ expectBool("a drag starting under a host that only lays out the footer is on the
            analyzer(footerInHost).isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), true)
 expectBool("a target whose list is not found never gets a drag",
            analyzer(footer).isDragStartOnList(row20, list: R(0, 0, 10, 10), cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), false)
+// A presented alert anywhere (not over the drag start): a touch outside it
+// can dismiss it, so no drag.
+expectBool("no drag while an alert is up, even away from the drag start",
+           analyzer(footer + [(1, .window, "", "", screen), (2, .alert, "Saved", "", R(40, 300, 322, 150))])
+               .isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), false)
+// What lies outside the list, compared before and after a drag.
+let rowsScrolled: [Row] = listRows([
+    (4, .cell, "Row 21", "", R(0, 700, 402, 44)),
+    (4, .cell, "Row 22", "", R(0, 744, 402, 44)),
+], after: [(3, .button, "Checkout", "", R(0, 774, 402, 100))])
+expectBool("rows the list scrolls in and out leave what is outside it the same",
+           analyzer(footer).outsideList(list) == analyzer(rowsScrolled).outsideList(list), true)
+// A role-less dialog backdrop listed before the list (iOS lists views top to
+// bottom), dismissed by the drag that started on it.
+let backdropBeforeList: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .navigationBar, "List", "", R(0, 62, 402, 54)),
+    (3, .other, "", "", screen),
+    (3, .table, "", "", R(0, 116, 402, 758)),
+    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
+    (3, .button, "Checkout", "", R(0, 774, 402, 100)),
+]
+expectBool("a backdrop gone after the drag changes what is outside the list",
+           analyzer(backdropBeforeList).outsideList(list) == analyzer(footer).outsideList(list), false)
+expectBool("no list, nothing to compare",
+           analyzer(footer).outsideList(R(0, 0, 10, 10)) == nil, true)
 
 // ─── Keyboard first (PILOT-622) ───
 

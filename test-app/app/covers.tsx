@@ -25,6 +25,10 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - Every row also has an "Add" button, all with the same name: a locator
 //   picks one by position (nth), which the iOS agent cannot follow through a
 //   scroll, so there it is waited out instead of scrolled clear.
+// - "Show dialog" lays a hand-rolled dialog over the whole screen: one host
+//   holding a role-less backdrop (a responder, as many apps build one) that
+//   closes the dialog when pressed, and a card. A tap on a row under the
+//   footer must not drag from the backdrop and then tap the row.
 // - Every row shares the testID "covers-row", as list rows often do, so a
 //   row is told apart by its name alone.
 // - A "Note" text field sits in the list after Row 12. "Put note under
@@ -62,6 +66,7 @@ export default function CoversScreen() {
   const [footerTaps, setFooterTaps] = useState(0)
   const [headerTaps, setHeaderTaps] = useState(0)
   const [note, setNote] = useState("")
+  const [dialog, setDialog] = useState(false)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const list = useRef<FlatList<Item>>(null)
   const listHeight = useRef(0)
@@ -81,6 +86,7 @@ export default function CoversScreen() {
     setFooterTaps(0)
     setHeaderTaps(0)
     setNote("")
+    setDialog(false)
     list.current?.scrollToOffset({ offset: 0, animated: false })
   }, [resetEpoch])
   useEffect(() => () => clearTimeout(hideTimer.current), [])
@@ -120,7 +126,10 @@ export default function CoversScreen() {
         <TouchableOpacity
           style={styles.smallButton}
           onPress={() =>
-            list.current?.scrollToOffset({ offset: offsetUnderHeader(ITEMS.findIndex((item) => item.key === "Row 5")), animated: false })
+            list.current?.scrollToOffset({
+              offset: offsetUnderHeader(ITEMS.findIndex((item) => item.key === "Row 5")),
+              animated: false,
+            })
           }
           accessibilityRole="button"
           accessibilityLabel="Put row 5 under header"
@@ -151,6 +160,14 @@ export default function CoversScreen() {
           accessibilityLabel="Put note under footer"
         >
           <Text style={styles.smallButtonText}>Note under footer</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.smallButton}
+          onPress={() => setDialog(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Show dialog"
+        >
+          <Text style={styles.smallButtonText}>Show dialog</Text>
         </TouchableOpacity>
       </View>
 
@@ -242,6 +259,27 @@ export default function CoversScreen() {
           <Text style={styles.buttonText}>Footer action</Text>
         </TouchableOpacity>
       </View>
+
+      {dialog && (
+        <View style={fill} testID="covers-dialog">
+          <View
+            style={[fill, styles.dialogBackdrop]}
+            onStartShouldSetResponder={() => true}
+            onResponderRelease={() => setDialog(false)}
+          />
+          <View style={styles.dialogCard}>
+            <Text style={styles.rowText}>A dialog</Text>
+            <TouchableOpacity
+              style={styles.smallButton}
+              onPress={() => setDialog(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Dialog OK"
+            >
+              <Text style={styles.smallButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </View>
   )
 }
@@ -332,6 +370,20 @@ const styles = StyleSheet.create({
   addButton: {
     width: 80,
     justifyContent: "center",
+    alignItems: "center",
+  },
+  dialogBackdrop: {
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+  },
+  dialogCard: {
+    position: "absolute",
+    top: "30%",
+    left: 40,
+    right: 40,
+    padding: 24,
+    gap: 16,
+    backgroundColor: "#fff",
+    borderRadius: 12,
     alignItems: "center",
   },
   noteInput: {

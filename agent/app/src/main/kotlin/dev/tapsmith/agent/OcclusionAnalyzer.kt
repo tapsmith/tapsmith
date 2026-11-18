@@ -411,6 +411,10 @@ object OcclusionAnalyzer {
         windows: List<WindowSpec>,
     ): Boolean {
         if (coveringWindows(windows, targetWindowId).any { it.bounds.contains(x, y) }) return false
+        // An app window over the target's (a dialog, a popup menu) is
+        // dismissed by a touch outside it: never drag while one is up.
+        val targetLayer = windows.firstOrNull { it.id == targetWindowId }?.layer ?: return false
+        if (windows.any { it.id != targetWindowId && it.kind == WindowKind.APPLICATION && it.layer > targetLayer }) return false
         val levels = levelsOf(target)
         val listDepth = levels.indexOfFirst { it.first.scrollsVertically && it.first.bounds == list }
         if (listDepth < 0) return false
@@ -429,6 +433,40 @@ object OcclusionAnalyzer {
             if (reader.exhausted) return false
         }
         return true
+    }
+
+    /**
+     * What the target's window holds outside the vertical list at [list]: how
+     * many nodes, and how many of them take touches — or null when the list
+     * is not among the target's ancestors, or the tree is too big to read.
+     * A clearing drag (PILOT-980) must scroll the list and change nothing
+     * else: when this differs after it, the drag pressed something laid over
+     * the list (a dialog's backdrop that takes no clicks, which no check
+     * before the drag can see) instead.
+     */
+    fun outsideList(
+        target: HitNode,
+        list: Box,
+    ): String? {
+        val levels = levelsOf(target)
+        if (levels.none { it.first.scrollsVertically && it.first.bounds == list }) return null
+        val root = levels.lastOrNull()?.first ?: return null
+        val reader = BudgetedReader(MAX_NODES_VISITED)
+        var nodes = 0
+        var touchable = 0
+        val stack = ArrayDeque<HitNode>()
+        stack.addLast(root)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            nodes++
+            if (node.takesTouches) touchable++
+            if (node.scrollsVertically && node.bounds == list) continue
+            for (i in 0 until node.childCount()) {
+                reader.child(node, i)?.let(stack::addLast)
+                if (reader.exhausted) return null
+            }
+        }
+        return "$nodes nodes, $touchable touchable"
     }
 
     /** The bounds of the fixed chrome [cover] sits in: its outermost ancestor

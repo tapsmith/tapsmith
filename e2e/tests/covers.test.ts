@@ -60,6 +60,20 @@ describe("Covers", () => {
       await expect(coversScreen.counts).toHaveText(counts({ row: label, rowTaps: 1 }))
     })
 
+    // The drag would start on the dialog's backdrop, which takes no clicks
+    // and has no role, so nothing tells it apart from a pass-through view
+    // before the drag. Pressing it closes the dialog; the touch then sees the
+    // screen change outside the list and fails instead of tapping the row.
+    test("tap() on a row under a footer bar with a dialog over the screen does not tap the row", async ({ coversScreen }) => {
+      const label = await coversScreen.rowUnderFooter()
+      await coversScreen.showDialogButton.tap()
+      await expect(coversScreen.dialogOk).toBeVisible()
+
+      expect(await failureOf(coversScreen.row(label).tap({ timeout: 8_000 }))).toMatch(/covered by/i)
+
+      await expect(coversScreen.counts).toHaveText(counts({}))
+    })
+
     // The "Add" buttons all share one name, so nth() picks one by position.
     // Android follows the node it found through the scroll. The iOS agent
     // re-finds an element through a live query, which for one bound only by

@@ -904,12 +904,27 @@ class CommandHandler {
                 // table unloads its top cells) that binds another element.
                 // Anything else is waited out as before.
                 if clearing.drags < CoverClearance.maxDrags,
-                   let drag = clearingDrag(target: target, cover: coverFrame, list: list, clock: clock),
+                   let cleared = clearingDrag(target: target, cover: coverFrame, list: list, clock: clock),
                    let identifying = identifyingQuery() {
+                    let (drag, outside) = cleared
                     clearing.drags += 1
                     snapshotFinder.rebind(element.elementId, to: identifying.firstMatch)
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
                     actionExecutor.scrollDrag(drag)
+                    // The drag must have scrolled the list and nothing else.
+                    // Anything outside it that came or went (a dialog its
+                    // backdrop dismissed) means it pressed something laid
+                    // over the list: stop, loudly, rather than touch the
+                    // target on a screen that changed.
+                    let after = (try? snapshotFinder.takeSnapshot()).flatMap {
+                        OcclusionAnalyzer(snapshot: $0, screenSize: snapshotFinder.screenSize).outsideList(list)
+                    }
+                    if after != outside {
+                        NSLog("[TapsmithCommand] the screen outside the list changed during the drag: \(outside) -> \(String(describing: after))")
+                        throw AgentError.elementCovered(
+                            "Element is covered by \(cover). Scrolling the list to move it clear also changed the screen outside the list, so something laid over the list (such as a dialog's backdrop) may have taken the drag; not touching the element"
+                        )
+                    }
                     // Rows the drag brought in may share the name: then the
                     // target can no longer be told apart. Say so rather than
                     // touch whichever one the query finds first.
@@ -1103,11 +1118,13 @@ class CommandHandler {
     }
 
     /// The drag that scrolls a target at `target` clear of `cover` in `list`,
-    /// or nil when there is none to make or no time for it and the touch
-    /// after (within the action's timeout and the daemon's read deadline).
+    /// with what the app holds outside the list (`outsideList`) to compare
+    /// after it — or nil when there is none to make or no time for it and
+    /// the touch after (within the action's timeout and the daemon's read
+    /// deadline).
     private func clearingDrag(
         target: OcclusionAnalyzer.Target, cover: CGRect, list: CGRect, clock: TouchPlanClock
-    ) -> CoverClearance.Drag? {
+    ) -> (CoverClearance.Drag, outside: [String: Int])? {
         let after = Date().addingTimeInterval(CoverClearance.dragSeconds)
         guard clock.sleepBeforeNextPass(at: after) != nil, !clock.isTooLateToAct(at: after) else { return nil }
         let screenSize = snapshotFinder.screenSize
@@ -1117,13 +1134,15 @@ class CommandHandler {
         ) else { return nil }
         // The drag must press the list, not something laid over it (a
         // dialog's backdrop, a second bar stacked on the cover).
-        guard let appSnapshot = try? snapshotFinder.takeSnapshot(),
-              OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
-                  .isDragStartOnList(target, list: list, cover: cover, at: drag.from) else {
-            NSLog("[TapsmithCommand] not dragging clear: something other than the list is at \(drag.from)")
+        guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+        guard analyzer.isDragStartOnList(target, list: list, cover: cover, at: drag.from) else {
+            NSLog("[TapsmithCommand] not dragging clear: something other than the list is at \(drag.from), or a presented container is up")
             return nil
         }
-        return drag
+        // What lies outside the list now, to check the drag changed none of it.
+        guard let outside = analyzer.outsideList(list) else { return nil }
+        return (drag, outside)
     }
 
     /// What the UI tree says about touching the element, and how long a tap

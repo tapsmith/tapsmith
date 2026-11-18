@@ -305,6 +305,9 @@ struct OcclusionAnalyzer {
               let l = ancestors(of: t).first(where: {
                   Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
               }) else { return false }
+        // A presented alert, sheet or popover anywhere: a touch outside one
+        // can dismiss it, so never drag while one is up.
+        if nodes.contains(where: { Self.presentedTypes.contains($0.elementType) }) { return false }
         let keyboardWindows = self.keyboardWindows()
         if let region = keyboardRegion(keyboardWindows: keyboardWindows), region.contains(point) { return false }
         for i in nodes[l].subtreeEnd..<nodes.count {
@@ -316,6 +319,26 @@ struct OcclusionAnalyzer {
             }
         }
         return !coverLayerLies(over: point, cover: cover, after: nodes[l].subtreeEnd)
+    }
+
+    /// What the app holds outside the vertical list at `list`, the keyboard
+    /// left out: how many nodes of each type — or nil when no such list is
+    /// in the tree. A clearing drag (PILOT-980) must scroll the list and
+    /// change nothing else: when this differs after it, the drag pressed
+    /// something laid over the list instead (a dialog's backdrop with no
+    /// role, which iOS lists before the list, top to bottom, so no check
+    /// before the drag can tell it is on top).
+    func outsideList(_ list: CGRect) -> [String: Int]? {
+        guard let l = nodes.indices.first(where: {
+            Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
+        }) else { return nil }
+        let keyboardWindows = self.keyboardWindows()
+        var counts: [String: Int] = [:]
+        for (i, node) in nodes.enumerated() where !(i > l && i < nodes[l].subtreeEnd) {
+            if let w = node.window, keyboardWindows.contains(w) { continue }
+            counts["\(node.elementType.rawValue)", default: 0] += 1
+        }
+        return counts
     }
 
     /// Whether something in the cover's layer — the outermost view painted
