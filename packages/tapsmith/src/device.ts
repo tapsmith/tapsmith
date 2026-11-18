@@ -613,7 +613,7 @@ export class Device {
    * Press a device key by name (`"ENTER"`, `"HOME"`, `"BACK"`, …),
    * case-insensitive. Android also takes a numeric key code, iOS a single
    * character to type; a name the platform does not support throws. Does not
-   * wait for anything first.
+   * wait for anything first, except iOS `BACK` (see `pressBack()`).
    */
   async pressKey(key: DeviceKey | (string & {})): Promise<void> {
     return this._tracedAction('pressKey', 'press-key', undefined,
@@ -622,8 +622,10 @@ export class Device {
 
   /**
    * Go back: `pressKey("BACK")`. Android presses the back button; iOS taps
-   * the navigation stack's own back button, once the app's UIKit animations
-   * (an alert being dismissed) are over, and throws on a screen without one.
+   * the navigation stack's own back button, and throws on a screen without
+   * one. Before each screen read, iOS gives the app's UIKit animations (an
+   * alert being dismissed) up to a second to end; it reads the screen anyway
+   * if they have not, or if the app cannot report them.
    */
   async pressBack(): Promise<void> {
     return this.pressKey('BACK');

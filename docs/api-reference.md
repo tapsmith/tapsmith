@@ -269,7 +269,7 @@ All names are case-insensitive. `scroll()` and `scrollIntoView()` take the way t
 
 Go back: the same as `device.pressKey("BACK")`. On Android it presses the back button. iOS has no back button, so it taps the navigation stack's own back button, and throws on a screen without one (a stack's first screen, a sheet, a dialog) or while an alert covers it.
 
-On iOS it first waits for the app's UIKit animations to finish (at most 1 s), as an element tap does: a touch made while an alert is still being dismissed or a screen is still being presented is dropped by iOS, so a BACK straight after tapping an alert's OK would otherwise do nothing.
+On iOS, before each read of the screen, it waits for the app's UIKit animations to finish, as an element tap does: a touch made while an alert is still being dismissed or a screen is still being presented is dropped by iOS, so a BACK straight after tapping an alert's OK would otherwise do nothing. Each wait is best effort: it lasts at most 1 s (less near the action's timeout), and if the animations have not finished by then, or the app cannot report them, BACK reads the screen anyway. A screen with no back button, or a covered one, is read again for up to a second before BACK throws, so it can wait more than once.
 
 ```typescript
 await device.pressBack();
