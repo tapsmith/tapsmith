@@ -137,6 +137,8 @@ struct KeyboardDismissPlanner {
     static let gridStep: CGFloat = 8
     /// Screen strip at the top left alone: the status bar is not in the app's
     /// snapshot, and a tap on it scrolls the screen's scroll view to the top.
+    /// Kept even when `statusBar` says where the bar is, for a screen whose
+    /// bar is hidden and for the top edge's own system gestures.
     static let statusBarAllowance: CGFloat = 60
     /// How far the dismiss drag moves, as a fraction of the screen.
     static let swipeFraction: CGFloat = 0.03
@@ -171,15 +173,53 @@ struct KeyboardDismissPlanner {
     static let textInputTypes: Set<XCUIElement.ElementType> = singleLineInputTypes.union([.textView])
 
     let analyzer: OcclusionAnalyzer
+    /// Where the system status bar is on the screen (`statusBarRegion`), or
+    /// nil when not known. Touches keep off it: a touch there opens Control
+    /// Center. It is not always the top strip — the iPhone Duo simulator
+    /// shows it as a column at the right edge (PILOT-1262).
+    let statusBar: CGRect?
     var nodes: [Node] { analyzer.nodes }
     var screen: CGRect { analyzer.screen }
 
-    init(analyzer: OcclusionAnalyzer) {
+    init(analyzer: OcclusionAnalyzer, statusBar: CGRect? = nil) {
         self.analyzer = analyzer
+        self.statusBar = statusBar
     }
 
-    init(snapshot: XCUIElementSnapshot, screenSize: CGSize) {
-        self.init(analyzer: OcclusionAnalyzer(snapshot: snapshot, screenSize: screenSize))
+    init(snapshot: XCUIElementSnapshot, screenSize: CGSize, statusBar: CGRect? = nil) {
+        self.init(analyzer: OcclusionAnalyzer(snapshot: snapshot, screenSize: screenSize), statusBar: statusBar)
+    }
+
+    // MARK: - The system status bar
+
+    /// Where SpringBoard draws the status bar, in the app's screen space, from
+    /// a SpringBoard snapshot read into `springboard` with the app's screen:
+    /// the on-screen union of what is in its `.statusBar` elements, leaving
+    /// out any element covering half the screen or more (the iPhone Duo's
+    /// status bar element is the size of the screen; its items are a column
+    /// at the right edge). nil when there is none, or when SpringBoard is laid
+    /// out in another space than the app (it stays portrait under a landscape
+    /// app), where its frames would point at the wrong place. Status bars in a
+    /// window of another size belong to another display (the Duo has two).
+    static func statusBarRegion(springboard: OcclusionAnalyzer) -> CGRect? {
+        let screen = springboard.screen
+        let nodes = springboard.nodes
+        func sameSize(_ frame: CGRect) -> Bool {
+            abs(frame.width - screen.width) <= 1 && abs(frame.height - screen.height) <= 1
+        }
+        if let root = nodes.first, root.elementType == .application, !sameSize(root.frame) { return nil }
+        var region: CGRect?
+        for bar in nodes.indices where nodes[bar].elementType == .statusBar {
+            if let w = nodes[bar].window, !sameSize(nodes[w].frame) { continue }
+            for i in bar..<nodes[bar].subtreeEnd {
+                let onScreen = nodes[i].frame.intersection(screen)
+                guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0,
+                      onScreen.width * onScreen.height < screen.width * screen.height * Self.containerAreaFraction
+                else { continue }
+                region = region.map { $0.union(onScreen) } ?? onScreen
+            }
+        }
+        return region
     }
 
     // MARK: - Keyboard
@@ -353,7 +393,13 @@ struct KeyboardDismissPlanner {
         let ancestors = Set(analyzer.ancestors(of: scroll).filter {
             isPlain($0) || Self.draggableScrollerTypes.contains(nodes[$0].elementType)
         })
-        return clearestPoint(in: starts) { i in
+        // The drag sweeps up and left of its start: keep that whole sweep off
+        // the status bar, wherever it is (a tap or drag there opens Control
+        // Center or Notification Center).
+        let keepOut = statusBar.map {
+            [CGRect(x: $0.minX, y: $0.minY, width: $0.width + dragX, height: $0.height + dragY)]
+        } ?? []
+        return clearestPoint(in: starts, avoiding: keepOut) { i in
             if i == scroll || ancestors.contains(i) { return false }
             // Keyboard-window nodes block like any other: an accessory bar's
             // button or the predictive bar is not a blank spot.
@@ -400,7 +446,7 @@ struct KeyboardDismissPlanner {
         for container in scopeAncestors(of: field) {
             let rect = clippedToScrollers(nodes[container].frame.intersection(area), around: field)
             if rect.isNull { continue }
-            let point = clearestPoint(in: rect) { i in
+            let point = clearestPoint(in: rect, avoiding: statusBar.map { [$0] } ?? []) { i in
                 if fieldAncestors.contains(i) { return false }
                 return !isPlain(i)
             }
@@ -503,19 +549,19 @@ struct KeyboardDismissPlanner {
         return area.width * area.height >= screen.width * screen.height * Self.containerAreaFraction
     }
 
-    /// The grid point in `rect` furthest from every blocking node's frame and
-    /// from `rect`'s edges, if that is at least `touchClearance`. Only nodes
-    /// that overlap `rect` count.
-    private func clearestPoint(in rect: CGRect, blockers: (Int) -> Bool) -> CGPoint? {
+    /// The grid point in `rect` furthest from every blocking node's frame, from
+    /// every `keepOut` area and from `rect`'s edges, if that is at least
+    /// `touchClearance`. Only nodes that overlap `rect` count.
+    private func clearestPoint(in rect: CGRect, avoiding keepOut: [CGRect] = [], blockers: (Int) -> Bool) -> CGPoint? {
         guard !rect.isNull, rect.width >= 2 * Self.touchClearance, rect.height >= 2 * Self.touchClearance else {
             return nil
         }
+        let reach = rect.insetBy(dx: -Self.touchClearance, dy: -Self.touchClearance)
         let blocked = nodes.indices.compactMap { i -> CGRect? in
             let f = nodes[i].frame
-            guard f.width > 0, f.height > 0, f.intersects(rect.insetBy(dx: -Self.touchClearance, dy: -Self.touchClearance)),
-                  blockers(i) else { return nil }
+            guard f.width > 0, f.height > 0, f.intersects(reach), blockers(i) else { return nil }
             return f
-        }
+        } + keepOut.filter { $0.intersects(reach) }
         var best: (point: CGPoint, clearance: CGFloat)?
         var y = rect.minY + Self.touchClearance
         while y <= rect.maxY - Self.touchClearance {

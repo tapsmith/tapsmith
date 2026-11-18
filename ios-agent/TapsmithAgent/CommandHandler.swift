@@ -3474,13 +3474,17 @@ class CommandHandler {
         // clears the focused-field hint then, even when this throws.
         touchedScreen = false
         var attempts: [(KeyboardDismissPlanner.Strategy, KeyboardDismissPlanner.Outcome)] = []
+        // Read once, on the first strategy that may touch the app.
+        var statusBar: CGRect??
         for strategy in strategies {
             if let deadline, Date() >= deadline { break }
             guard let snapshot = try? snapshotFinder.takeSnapshot() else {
                 throw AgentError.actionFailed("hideKeyboard could not read the screen to dismiss the keyboard")
             }
             guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
-            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
+            let screen = screenSize(of: snapshot)
+            if statusBar == nil { statusBar = .some(systemStatusBarRegion(screen: screen)) }
+            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screen, statusBar: statusBar ?? nil)
             // A keyboard element with nothing on screen (zero-sized, off
             // screen, after the appearance wait above) covers nothing: there is
             // nothing to put away, and no reason to touch the app or submit the
@@ -3501,6 +3505,25 @@ class CommandHandler {
         // The last wait can end just before the keyboard leaves.
         if keyboardGoneNow() == true { return }
         throw AgentError.actionFailed(KeyboardDismissPlanner.failureMessage(attempts))
+    }
+
+    /// Where the system status bar is on the app's screen (`screen`), read
+    /// from SpringBoard, which draws it: a strip along the top on an iPhone, a
+    /// column at the right edge on the iPhone Duo simulator (PILOT-1262).
+    /// hideKeyboard keeps its touches off it, since a touch there opens
+    /// Control Center. nil when SpringBoard cannot be read; the planner then
+    /// keeps off only the top strip.
+    private func systemStatusBarRegion(screen: CGSize) -> CGRect? {
+        let started = Date()
+        guard let snapshot = try? XCUIApplication(bundleIdentifier: "com.apple.springboard").snapshot() else {
+            NSLog("[TapsmithCommand] hideKeyboard: could not read SpringBoard for the status bar; keeping off the top strip only")
+            return nil
+        }
+        let region = KeyboardDismissPlanner.statusBarRegion(
+            springboard: OcclusionAnalyzer(snapshot: snapshot, screenSize: screen)
+        )
+        NSLog("[TapsmithCommand] hideKeyboard: status bar at \(region.map { NSCoder.string(for: $0) } ?? "nowhere known") (\(Int(Date().timeIntervalSince(started) * 1000)) ms)")
+        return region
     }
 
     /// `wait`, cut short so it ends by `deadline` (never negative).
@@ -3571,8 +3594,9 @@ class CommandHandler {
             // first drag may have scrolled a control under the old point.
             guard let snapshot = try? snapshotFinder.takeSnapshot(),
                   hasKeyboardInSnapshot(snapshot.dictionaryRepresentation),
-                  let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
-                      .scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
+                  let again = KeyboardDismissPlanner(
+                      snapshot: snapshot, screenSize: screenSize(of: snapshot), statusBar: planner.statusBar
+                  ).scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
             else { return .keyboardStayed }
             _ = EventSynthesizer.swipe(
                 from: again, to: CGPoint(x: again.x - dx, y: again.y), duration: 0.05

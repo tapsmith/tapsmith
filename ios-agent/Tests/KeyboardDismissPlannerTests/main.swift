@@ -636,6 +636,160 @@ do {
           planner(coverRows).scrollSwipeStart(focusedFrame: R(16, 180, 370, 44)), nil)
 }
 
+// MARK: - The system status bar off the top strip (PILOT-1262)
+
+// The iPhone Duo simulator (iOS 27.2) shows its status bar as a column at the
+// right edge, not a strip along the top. A SwiftUI Form there leaves that
+// column empty beside its rows, and the drag started in it opened Control
+// Center. Frames recorded from the Duo's keyboard screen and SpringBoard.
+let duoScreen = R(0, 0, 466, 678)
+/// SpringBoard's status bar content on the Duo (the union of its items).
+let duoStatusBar = R(378, 0, 88, 176.33)
+let duoNameField = R(40, 97, 322, 22)
+let duoForm: [Row] = [
+    (0, .application, "Tapsmith Native", "", duoScreen),
+    (1, .window, "", "", duoScreen),
+    (2, .other, "", "", duoScreen),
+    (3, .other, "", "", duoScreen),
+    (3, .toolbar, "Toolbar", "Toolbar", duoScreen),
+    (4, .other, "", "", R(394, 174, 48, 48)),
+    (5, .button, "", "BackButton", R(399, 179, 38, 38)),
+    (3, .navigationBar, "", "Keyboard", R(0, 24, 466, 58)),
+    (4, .staticText, "Keyboard", "", R(20, 31, 125, 34)),
+    (3, .other, "", "", duoScreen),
+    (4, .collectionView, "", "", duoScreen),
+    (5, .cell, "", "", R(20, 82, 362, 52)),
+    (6, .textField, "", "", duoNameField),
+    (5, .cell, "", "", R(20, 134, 362, 52)),
+    (6, .staticText, "Nothing submitted", "", R(40, 149, 200, 22)),
+    (5, .cell, "", "", R(20, 186, 362, 130)),
+    (6, .textView, "", "notes", R(40, 201, 322, 100)),
+    (5, .cell, "", "", R(20, 316, 362, 44)),
+    (6, .button, "Save Notes", "", R(40, 327, 100, 22)),
+    // The keyboard, its top at 376.
+    (1, .window, "", "", duoScreen),
+    (2, .other, "", "", duoScreen),
+    (3, .other, "", "", R(0, 376, 466, 302)),
+    (4, .other, "", "", R(0, 420, 466, 258)),
+    (5, .keyboard, "", "", R(0, 420, 466, 250)),
+    (6, .key, "q", "", R(4, 430, 42, 50)),
+    (6, .button, "return", "Return", R(360, 610, 100, 50)),
+]
+func duoPlanner(statusBar: CGRect?) -> Planner {
+    Planner(analyzer: OcclusionAnalyzer(nodes: tree(duoForm), screen: duoScreen), statusBar: statusBar)
+}
+/// The area a drag starting at `p` sweeps (it goes up, then left, by
+/// `swipeFraction` of the screen), widened by the touch clearance.
+func dragSweep(from p: CGPoint, screen: CGRect) -> CGRect {
+    let dx = screen.width * Planner.swipeFraction, dy = screen.height * Planner.swipeFraction
+    return CGRect(x: p.x - dx, y: p.y - dy, width: dx, height: dy)
+        .insetBy(dx: -Planner.touchClearance + 0.01, dy: -Planner.touchClearance + 0.01)
+}
+do {
+    // Without knowing where the status bar is, the Form's empty margin under
+    // it looks like the clearest spot (the bug).
+    let unknown = duoPlanner(statusBar: nil).scrollSwipeStart(focusedFrame: duoNameField)
+    checkTrue("Duo, status bar unknown: the drag is still offered (the old pick)", unknown != nil)
+    let p = duoPlanner(statusBar: duoStatusBar).scrollSwipeStart(focusedFrame: duoNameField)
+    checkTrue("Duo form: a drag start is found off the status bar", p != nil)
+    if let p {
+        checkTrue("Duo form: the drag never touches the side status bar",
+                  !dragSweep(from: p, screen: duoScreen).intersects(duoStatusBar), "\(p)")
+        checkTrue("Duo form: the drag starts above the keyboard", p.y < 376, "\(p)")
+        checkTrue("Duo form: the drag starts clear of the back button and the rows",
+                  notInside(p, [R(399, 179, 38, 38), R(20, 82, 362, 278)]), "\(p)")
+    }
+    // A status bar covering the only clear column leaves no drag.
+    check("Duo form: status bar over the whole free column: no drag",
+          duoPlanner(statusBar: R(378, 0, 88, 678)).scrollSwipeStart(focusedFrame: duoNameField), nil)
+}
+
+do {
+    // A blank tap keeps off a side status bar too: the only gap beside the
+    // field is a column the status bar covers the top of.
+    let field = R(16, 132, 300, 44)
+    let rows = fieldScreen([(4, .button, "Wall", "", R(0, 0, 340, 874))], field: field)
+    let sideBar = R(340, 0, 62, 300)
+    let open = Planner(analyzer: OcclusionAnalyzer(nodes: tree(rows), screen: screen), statusBar: nil)
+        .blankPoint(focusedFrame: field)
+    checkTrue("side status bar unknown: the gap's clearest spot is under it", open.map { sideBar.contains($0) } ?? false, "\(String(describing: open))")
+    let p = Planner(analyzer: OcclusionAnalyzer(nodes: tree(rows), screen: screen), statusBar: sideBar)
+        .blankPoint(focusedFrame: field)
+    checkTrue("side status bar: blank spot found below it", p != nil)
+    if let p { checkTrue("side status bar: blank spot clear of it", notInside(p, [sideBar]), "\(p)") }
+    // A top status bar changes nothing the top strip did not already rule out.
+    check("top status bar: same blank spot as without it",
+          Planner(analyzer: OcclusionAnalyzer(nodes: tree(occlusion), screen: screen), statusBar: R(0, 0, 402, 54))
+              .blankPoint(focusedFrame: occlusionInput),
+          planner(occlusion).blankPoint(focusedFrame: occlusionInput))
+    check("top status bar: same drag start as without it",
+          Planner(analyzer: OcclusionAnalyzer(nodes: tree(scrollScreen), screen: screen), statusBar: R(0, 0, 402, 54))
+              .scrollSwipeStart(focusedFrame: R(16, 180, 370, 44)),
+          planner(scrollScreen).scrollSwipeStart(focusedFrame: R(16, 180, 370, 44)))
+}
+
+// Where SpringBoard draws the status bar, from its snapshot.
+do {
+    // The Duo: the status bar element is the size of the screen; its items
+    // sit in a column at the right.
+    let duoSpringBoard: [Row] = [
+        (0, .application, "SpringBoard", "", duoScreen),
+        (1, .window, "", "", duoScreen),
+        (2, .statusBar, "", "", duoScreen),
+        (3, .other, "", "", R(378, 0, 88, 176.33)),
+        (4, .other, "", "", R(390.67, 20.33, 55, 137.33)),
+        (5, .other, "", "", R(399, 30, 37, 37)),
+        (5, .staticText, "19:53", "", R(396.67, 83, 43, 19.33)),
+        (5, .other, "", "", R(394.67, 106.67, 47, 47)),
+        (1, .window, "", "", R(0, 0, 669, 951)),
+        (2, .other, "", "", R(0, 0, 669, 951)),
+    ]
+    check("Duo SpringBoard: the status bar is the column of its items",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(duoSpringBoard), screen: duoScreen)),
+          R(378, 0, 88, 176.33))
+    // iPhone 17 Pro (iOS 27.2 and 26.5): a strip along the top.
+    let proSpringBoard: [Row] = [
+        (0, .application, "SpringBoard", "", screen),
+        (1, .window, "", "", screen),
+        (2, .statusBar, "", "", R(0, 0, 402, 54)),
+        (3, .other, "", "", R(0, 0, 402, 54)),
+        (4, .staticText, "19:54", "", R(51, 22.33, 46, 20.33)),
+        (4, .other, "", "", R(339, 26.33, 27.67, 13)),
+    ]
+    check("iPhone SpringBoard: the status bar is the top strip",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(proSpringBoard), screen: screen)),
+          R(0, 0, 402, 54))
+    let noBar: [Row] = [(0, .application, "SpringBoard", "", screen), (1, .window, "", "", screen)]
+    check("no status bar in SpringBoard: none",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(noBar), screen: screen)), nil)
+    let empty: [Row] = [(0, .application, "SpringBoard", "", screen), (1, .statusBar, "", "", screen)]
+    check("a screen-sized status bar with no items: none",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(empty), screen: screen)), nil)
+    // SpringBoard laid out in another orientation than the app (it stays
+    // portrait under a landscape app): its frames are not the app's.
+    // The Duo's other display: a status bar in a window of its own size.
+    let otherDisplay: [Row] = Array(duoSpringBoard.prefix(8)) + [
+        (1, .window, "", "", R(0, 0, 669, 951)),
+        (2, .statusBar, "", "", R(0, 0, 669, 54)),
+        (3, .staticText, "19:53", "", R(51, 22, 46, 20)),
+    ]
+    check("a status bar on another display counts for nothing",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(otherDisplay), screen: duoScreen)),
+          R(378, 0, 88, 176.33))
+    let landscape = R(0, 0, 874, 402)
+    check("SpringBoard in another orientation than the app: none",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(proSpringBoard), screen: landscape)), nil)
+    let offScreen: [Row] = [
+        (0, .application, "SpringBoard", "", screen),
+        (1, .statusBar, "", "", R(0, 0, 402, 54)),
+        (2, .other, "", "", R(0, -60, 402, 54)),
+        (2, .other, "", "", R(0, 0, 0, 0)),
+    ]
+    check("status bar items off screen or empty count for nothing beyond the bar itself",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(offScreen), screen: screen)),
+          R(0, 0, 402, 54))
+}
+
 // MARK: - 3. Blank spot
 
 do {
