@@ -29,7 +29,8 @@ enum BackButton {
 
     /// How long a screen with no back button (or a covered one) is read
     /// again before the key refuses: a push just tapped may not have begun,
-    /// and an alert just dismissed may still be in the tree.
+    /// an alert just dismissed may still be in the tree, and a back button
+    /// just popped may be too (`isLeaving`).
     static let waitSeconds: TimeInterval = 1
     static let pollSeconds: TimeInterval = 0.1
     /// Room left before the daemon's read deadline to answer.
@@ -57,6 +58,25 @@ enum BackButton {
         text == label || text == "Go back" || text.hasSuffix(", back")
     }
 
+    /// Whether system back button `i` is one a pop has just removed: iOS 27
+    /// leaves it in the navigation bar of the screen popped to, no longer
+    /// drawn, for a few hundred ms after the pop's animation ends. A BACK
+    /// straight after a pop to a stack's first screen read it there, tapped
+    /// where it had been and reported success (PILOT-1261).
+    ///
+    /// Such a button has lost the button trait and kept the private
+    /// back-button one, while one on screen in a navigation bar has both
+    /// (iOS 26.5 and 27.2 iPhones; recorded with React Native and native
+    /// UIKit and SwiftUI stacks). The rule is kept to navigation bars: the
+    /// iPhone Duo's floating back button, in iOS 27's toolbar host, never has
+    /// the button trait. A button whose traits can't be read counts as on
+    /// screen.
+    static func isLeaving(_ i: Int, in analyzer: OcclusionAnalyzer, bar: Int) -> Bool {
+        guard analyzer.nodes[bar].elementType == .navigationBar,
+              let traits = analyzer.nodes[i].traits, traits != 0 else { return false }
+        return traits & AccessibilityTrait.button == 0
+    }
+
     static func match(_ i: Int, in analyzer: OcclusionAnalyzer) -> Match? {
         let node = analyzer.nodes[i]
         guard node.elementType == .button else { return nil }
@@ -68,8 +88,10 @@ enum BackButton {
         } else {
             return nil
         }
-        guard analyzer.ancestors(of: i).contains(where: { barTypes.contains(analyzer.nodes[$0].elementType) })
+        // The innermost bar the button is in.
+        guard let bar = analyzer.ancestors(of: i).first(where: { barTypes.contains(analyzer.nodes[$0].elementType) })
         else { return nil }
+        if match == .system, isLeaving(i, in: analyzer, bar: bar) { return nil }
         return match
     }
 

@@ -84,6 +84,9 @@ struct OcclusionAnalyzer {
         /// Index of the top-level window node this node is in (nil for the
         /// application node itself).
         let window: Int?
+        /// The node's accessibility traits (`AccessibilityTrait`), or nil
+        /// when the snapshot could not say.
+        var traits: UInt64? = nil
     }
 
     /// Smallest visible extent (points, each axis) worth touching: anything
@@ -116,7 +119,7 @@ struct OcclusionAnalyzer {
                 let n = nodes[i]
                 placed[i] = Node(
                     elementType: n.elementType, label: n.label, identifier: n.identifier, frame: frame,
-                    subtreeEnd: n.subtreeEnd, parent: n.parent, window: n.window
+                    subtreeEnd: n.subtreeEnd, parent: n.parent, window: n.window, traits: n.traits
                 )
             }
             childContexts.append(CellFrames.childContext(of: nodes[i].elementType, frame: frame, in: context))
@@ -138,7 +141,8 @@ struct OcclusionAnalyzer {
                 frame: s.frame,
                 subtreeEnd: index + 1,
                 parent: parent,
-                window: s.elementType == .application ? nil : ownWindow
+                window: s.elementType == .application ? nil : ownWindow,
+                traits: AccessibilityTrait.read(from: s)
             ))
             for child in s.children { walk(child, window: ownWindow, parent: index) }
             nodes[index].subtreeEnd = nodes.count

@@ -14,6 +14,23 @@ enum AccessibilityTrait {
     /// TextEditor, React Native's multi-line TextInput — and not to a
     /// read-only one, which carries the static-text trait instead (PILOT-697).
     static let textEntry: UInt64 = 1 << 18
+
+    /// A snapshot node's traits, read through XCTest's private `traits`
+    /// property, or nil when that property is missing (a future Xcode may
+    /// rename it) or holds no number.
+    ///
+    /// Bare `value(forKey:)` on an NSObject that doesn't have the key throws
+    /// an Objective-C NSUnknownKeyException, which is *not* catchable from
+    /// Swift and crashes the agent, so `responds(to:)` is checked first.
+    static func read(from snapshot: XCUIElementSnapshot) -> UInt64? {
+        guard let object = snapshot as? NSObject,
+              object.responds(to: NSSelectorFromString("traits")) else { return nil }
+        switch object.value(forKey: "traits") {
+        case let value as UInt64: return value
+        case let value as NSNumber: return value.uint64Value
+        default: return nil
+        }
+    }
 }
 
 /// Maps Tapsmith role names to XCUIElement.ElementType values.
