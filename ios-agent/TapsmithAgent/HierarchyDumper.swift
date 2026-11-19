@@ -50,8 +50,10 @@ class HierarchyDumper {
         xml += "<hierarchy>\n"
         var dict = convertKeys(snapshot.dictionaryRepresentation)
         SnapshotElementFinder.annotateTraits(dict: &dict, snapshot: snapshot)
-        // The same frames locators see (PILOT-800).
+        // The same frames locators see (PILOT-800), with the keyboard's in
+        // the app's interface space on a turned screen (PILOT-1284).
         CellFrames.placeDetachedNodes(in: &dict)
+        KeyboardSpace.turnIntoInterface(in: &dict, device: ActionExecutor.currentDeviceTurn())
         // The enabled state locators see (PILOT-895).
         CellAccessories.normalizeIndicators(in: &dict)
         // The roles locators see: iOS 27's empty toolbar host has none

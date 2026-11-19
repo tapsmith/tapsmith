@@ -19,6 +19,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/OcclusionAnalyzerTests/main.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/KeyboardSpace.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
   TapsmithAgent/BarHost.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
@@ -33,6 +36,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/BarHost.swift \
   TapsmithAgent/TextMatch.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/KeyboardSpace.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
@@ -48,6 +54,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/Support/HierarchyFixture.swift \
   TapsmithAgent/BarHost.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/KeyboardSpace.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
@@ -56,6 +65,25 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/navigation-chrome-tests"
 "$OUT/navigation-chrome-tests" Tests/Fixtures
+
+# Keyboard frames turned into the app's interface space on a turned screen,
+# replayed from recorded dumps (PILOT-1284).
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/KeyboardSpaceTests/main.swift \
+  Tests/Support/HierarchyFixture.swift \
+  TapsmithAgent/KeyboardSpace.swift \
+  TapsmithAgent/KeyboardDismissPlanner.swift \
+  TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
+  TapsmithAgent/BarHost.swift \
+  TapsmithAgent/CellFrames.swift \
+  TapsmithAgent/NonAppElements.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/keyboard-space-tests"
+"$OUT/keyboard-space-tests" Tests/Fixtures
 
 xcrun swiftc -sdk "$SDK" \
   Tests/AgentErrorTests/main.swift \
@@ -81,6 +109,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/KeyboardDismissPlannerTests/main.swift \
   TapsmithAgent/KeyboardDismissPlanner.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/KeyboardSpace.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
   TapsmithAgent/BarHost.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
@@ -94,6 +125,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/BackButtonTests/main.swift \
   TapsmithAgent/BackButton.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/KeyboardSpace.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
   TapsmithAgent/BarHost.swift \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \

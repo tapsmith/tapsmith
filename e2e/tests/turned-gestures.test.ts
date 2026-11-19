@@ -2,6 +2,7 @@ import type { Device } from "tapsmith"
 import { describe, expect, test } from "../fixtures.js"
 import type { TurnedScreen } from "../screens/turned.screen.js"
 import { openScreen } from "../utils/app-reset.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 // PILOT-984: on a turned iOS screen the agent planned its gestures in the
 // app's interface points and pressed them as if the screen were upright, so
@@ -83,6 +84,21 @@ describe("Gestures on a turned screen", () => {
   test("type() focuses the field and types into it", async ({ turnedScreen }) => {
     await turnedScreen.field.type("turned")
     await expect(turnedScreen.field).toHaveValue("turned")
+  })
+
+  // PILOT-1284: iOS 26 reports the keyboard's own frames unturned in
+  // landscape, so hideKeyboard() found no return key, dismiss key or blank
+  // spot to touch, and failed.
+  test("hideKeyboard() puts the keyboard away", async ({ device, turnedScreen }) => {
+    await turnedScreen.field.type("k")
+    await expectSoftwareKeyboardShown(device)
+    const before = await turnedScreen.padResult.getText()
+
+    await device.hideKeyboard()
+
+    await expect.poll(() => device.isKeyboardShown()).toBe(false)
+    // Nothing else was touched on the way.
+    await expect(turnedScreen.padResult).toHaveText(before)
   })
 
   // BACK taps the navigation bar's back button, which the agent finds in
