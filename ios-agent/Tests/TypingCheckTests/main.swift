@@ -176,6 +176,21 @@ do {
     expect("text after a newline is still checked with a delay, as before", TypingCheck.checks("user\npass", delayMs: 10))
 }
 
+// A first key that replaced the field's text (it was selected) is taken as
+// typing into an empty field (PILOT-1281 review).
+do {
+    expect("a first key shown alone replaced a selection",
+           TypingCheck.replacedSelection("n", before: "old", key: "n", secure: false))
+    expect("a first key after the text is not a replaced selection",
+           !TypingCheck.replacedSelection("oldn", before: "old", key: "n", secure: false))
+    expect("an empty field has no selection to replace",
+           !TypingCheck.replacedSelection("n", before: "", key: "n", secure: false))
+    expect("a field showing something else did not replace a selection",
+           !TypingCheck.replacedSelection("x", before: "old", key: "n", secure: false))
+    expect("a secure field emptied as it took the key is not a replaced selection",
+           !TypingCheck.replacedSelection("•", before: "•••", key: "n", secure: true))
+}
+
 // With no delay, typing is checked only into a text input itself, and only
 // into the input with the live focus when typing into whatever has the focus.
 do {

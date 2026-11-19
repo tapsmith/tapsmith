@@ -1505,12 +1505,13 @@ class CommandHandler {
     ) throws {
         let secure = initialElement.className == "XCUIElementTypeSecureTextField"
         let plan = TypingCheck.plan(text, multiline: initialElement.className == "XCUIElementTypeTextView")
-        let before = initialElement.text ?? ""
+        var before = initialElement.text ?? ""
         if let first = plan.keys.first {
             // From the first key on, part of the text can be in the field: no
             // error may read as a stale element (`TypingCheck.notStale`).
             do {
-                let field = try typeFirstKey(
+                let field: ElementInfo
+                (field, before) = try typeFirstKey(
                     String(first), before: before, secure: secure, selectorParams: selectorParams
                 )
                 let rest = String(plan.keys.dropFirst())
@@ -1573,19 +1574,25 @@ class CommandHandler {
 
     /// Send the first key and wait for the field to show it, sending it again
     /// (after refocusing the field) when nothing arrived.
-    /// The field as read when it showed the key.
-    @discardableResult
+    /// The field as read when it showed the key, and what it held before the
+    /// key: `before`, or nothing when the key replaced it (a selection,
+    /// `TypingCheck.replacedSelection`).
     private func typeFirstKey(
         _ key: String, before: String, secure: Bool, selectorParams: [String: Any]
-    ) throws -> ElementInfo {
+    ) throws -> (field: ElementInfo, before: String) {
         var shown = before
         var field: ElementInfo?
+        var base = before
         func landed() throws -> Bool {
             let fresh = try resolveElement(selectorParams)
             field = fresh
             shown = fresh.text ?? ""
             switch TypingCheck.read(shown, before: before, typed: key, secure: secure) {
             case .complete:
+                return true
+            case .changed where TypingCheck.replacedSelection(shown, before: before, key: key, secure: secure):
+                NSLog("[typeText] the first key replaced the field's text (it was selected): typing on as into an empty field")
+                base = ""
                 return true
             case .changed where secure && shown.count < before.count:
                 throw AgentError.actionFailed(
@@ -1607,7 +1614,7 @@ class CommandHandler {
             }
             let deadline = Date(timeIntervalSinceNow: TypingCheck.firstKeyWait)
             repeat {
-                if try landed(), let field { return field }
+                if try landed(), let field { return (field, base) }
                 Thread.sleep(forTimeInterval: 0.02)
             } while Date() < deadline
             guard TypingCheck.resendsFirstKey(before: before, secure: secure) else {

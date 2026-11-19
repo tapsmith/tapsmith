@@ -115,6 +115,17 @@ enum TypingCheck {
         return added.count == typed.count ? .scrambled : .short
     }
 
+    /// Whether the first key replaced what the field held, rather than going
+    /// after it: the field shows that key alone. Its text was selected as it
+    /// took the focus (a React Native field with `selectTextOnFocus`, or text
+    /// the test selected), and typing replaces a selection, as it does for a
+    /// user. Typing then goes on as into an empty field. Not for a secure
+    /// field: iOS empties one typed into after it takes focus, which is
+    /// reported, not taken as a selection.
+    static func replacedSelection(_ shown: String, before: String, key: String, secure: Bool) -> Bool {
+        !secure && !before.isEmpty && shown == key
+    }
+
     /// Whether a field showing `reading`, holding still, is worth emptying and
     /// typing again a key at a time. Only when what it should end up holding
     /// is known: a secure field's earlier content cannot be read back.

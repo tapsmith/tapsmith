@@ -23,9 +23,13 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   iPad field just focused did while its keyboard came up (PILOT-1281:
 //   "test@example.com" came out "tst@example.com"). Only once per visit, so
 //   typing it again gets every key. What it holds is echoed in "lossy=<value>".
+// - "Select-on-focus input" starts out holding "old" and selects its text as
+//   it takes the focus, so the first key typed replaces it, as it would for a
+//   user. What it holds is echoed in "select=<value>".
 const BUSY_MS = 40
 const CODE_LENGTH = 4
 const SLOW_FOCUS_MS = 500
+const SELECT_START = "old"
 
 function busyWait(ms: number) {
   const end = Date.now() + ms
@@ -46,6 +50,7 @@ export default function TypingScreen() {
   // Bumped to re-render when a key is dropped: the value stays the same, and
   // the re-render is what puts it back into the native field.
   const [, setLossyDrops] = useState(0)
+  const [select, setSelect] = useState(SELECT_START)
 
   // A warm reset navigates here rather than remounting.
   const resetEpoch = useTapsmithResetEpoch()
@@ -57,6 +62,7 @@ export default function TypingScreen() {
     setSlowCode(Array(CODE_LENGTH).fill(""))
     setLossy("")
     lossyDropped.current = false
+    setSelect(SELECT_START)
   }, [resetEpoch])
 
   const setDigit = (index: number, text: string) => {
@@ -164,6 +170,20 @@ export default function TypingScreen() {
         ))}
       </View>
       <Text testID="typing-slow-code-value">{`slowcode=${slowCode.join("")}`}</Text>
+
+      <TextInput
+        style={styles.input}
+        value={select}
+        onChangeText={setSelect}
+        selectTextOnFocus
+        placeholder="Select-on-focus input"
+        autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
+        accessibilityLabel="Select-on-focus input"
+        testID="typing-select-input"
+      />
+      <Text testID="typing-select-value">{`select=${select}`}</Text>
     </View>
   )
 }

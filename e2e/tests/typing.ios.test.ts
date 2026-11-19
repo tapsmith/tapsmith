@@ -54,6 +54,12 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
     await expect(typingScreen.codeValue).toHaveText("code=1234")
   })
 
+  test("typing into a field that selects its text on focus replaces the text, as for a user", async ({ typingScreen }) => {
+    await expect(typingScreen.selectValue).toHaveText("select=old")
+    await typingScreen.selectInput.type("new", { delay })
+    await expect(typingScreen.selectValue).toHaveText("select=new")
+  })
+
   test("a code field whose app moves the focus on late still gets one digit per box", async ({ typingScreen }) => {
     await typingScreen.firstSlowCodeBox.type("1234", { delay })
     await expect(typingScreen.slowCodeValue).toHaveText("slowcode=1234")
@@ -131,5 +137,11 @@ describe("type() with no typing delay checks what arrived too (iOS)", () => {
   test("a code field that moves the focus on gets one digit per box", async ({ typingScreen }) => {
     await typingScreen.firstCodeBox.type("1234", { delay: 0 })
     await expect(typingScreen.codeValue).toHaveText("code=1234")
+  })
+
+  test("typing into a field that selects its text on focus replaces the text, as for a user", async ({ typingScreen }) => {
+    await expect(typingScreen.selectValue).toHaveText("select=old")
+    await typingScreen.selectInput.type("new", { delay: 0 })
+    await expect(typingScreen.selectValue).toHaveText("select=new")
   })
 })
