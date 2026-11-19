@@ -31,10 +31,13 @@ describe("Toggles screen", () => {
   test("tap() lands on the switch after rotating to landscape", async ({ device, togglesScreen }) => {
     // The switch sits at the right of its row, so a touch mapped as if the
     // screen were still portrait would miss it.
-    const portrait = await togglesScreen.darkModeSwitch.boundingBox()
     try {
       // Inside the try: if turning fails part-way, the device may still have
       // turned, and the tests after this one must start in portrait.
+      // Portrait first: a landscape-native tablet starts out landscape.
+      await device.setOrientation("portrait")
+      await expect(togglesScreen.darkModeSwitch).toBeVisible()
+      const portrait = await togglesScreen.darkModeSwitch.boundingBox()
       await device.setOrientation("landscape")
       await expect(togglesScreen.darkModeSwitch).toBeVisible()
       // Some simulator runtimes turn the device but not the app: then there

@@ -38,10 +38,13 @@ describe("Gestures screen", () => {
   // verify-trace-archive.mjs drives this test with tracing on and checks its
   // landscape captures against their hierarchy dumps.
   test("a landscape screen is captured upright", async ({ device, gesturesScreen }) => {
-    const portrait = await gesturesScreen.firstTapArea.boundingBox()
     try {
       // Inside the try: if turning fails part-way, the device may still have
       // turned, and the tests after this one must start in portrait.
+      // Portrait first: a landscape-native tablet starts out landscape.
+      await device.setOrientation("portrait")
+      await expect(gesturesScreen.firstTapArea).toBeVisible()
+      const portrait = await gesturesScreen.firstTapArea.boundingBox()
       await device.setOrientation("landscape")
       await expect(gesturesScreen.firstTapArea).toBeVisible()
       const landscape = await gesturesScreen.firstTapArea.boundingBox()

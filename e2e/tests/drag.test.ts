@@ -43,10 +43,13 @@ describe("Drag and drop screen", () => {
     // The target sits at the far right of the row, so a drag planned in the
     // turned screen's points but pressed as if it were still portrait lands
     // elsewhere (PILOT-1253).
-    const portrait = await dragScreen.target.boundingBox()
     try {
       // Inside the try: if turning fails part-way, the device may still have
       // turned, and the tests after this one must start in portrait.
+      // Portrait first: a landscape-native tablet starts out landscape.
+      await device.setOrientation("portrait")
+      await expect(dragScreen.target).toBeVisible()
+      const portrait = await dragScreen.target.boundingBox()
       await device.setOrientation("landscape")
       await expect(dragScreen.target).toBeVisible()
       // Some simulator runtimes turn the device but not the app: then there

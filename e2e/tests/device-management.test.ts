@@ -1,4 +1,5 @@
 import { test, expect, describe } from "tapsmith";
+import type { Device } from "tapsmith";
 
 const PKG = "dev.tapsmith.testapp";
 
@@ -53,24 +54,37 @@ describe("Deep links", () => {
 // ─── Orientation ───
 
 describe("Orientation", () => {
+  // Tests in a file run in order on one device: the first records how the
+  // device started, which is landscape on a landscape-native tablet.
+  let before: string | undefined;
+
+  // The screen's shape as the screenshot shows it, upright.
+  const shape = async (device: Device) => {
+    const shot = Buffer.from((await device.takeScreenshot()).data);
+    return shot.readUInt32BE(16) > shot.readUInt32BE(20) ? "landscape" : "portrait";
+  };
+
   test("setOrientation('landscape') changes to landscape", async ({
     device,
   }) => {
+    before = await device.getOrientation();
     await device.setOrientation("landscape");
     const orientation = await device.getOrientation();
     expect(orientation).toBe("landscape");
+    await expect.poll(() => shape(device)).toBe("landscape");
   });
 
   // The test above leaves the device turned. A test's turn is undone after
   // it, pass or fail, so the next test finds the device as it was (PILOT-1253).
   test("a turn made by the previous test is undone", async ({ device }) => {
-    expect(await device.getOrientation()).toBe("portrait");
+    expect(await device.getOrientation()).toBe(before ?? "portrait");
   });
 
   test("setOrientation('portrait') restores portrait", async ({ device }) => {
     await device.setOrientation("portrait");
     const orientation = await device.getOrientation();
     expect(orientation).toBe("portrait");
+    await expect.poll(() => shape(device)).toBe("portrait");
   });
 });
 

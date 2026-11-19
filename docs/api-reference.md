@@ -598,7 +598,7 @@ await device.setOrientation("portrait");
 
 ### `device.getOrientation(): Promise<Orientation>`
 
-Get the current device orientation,, named by the screen's shape as for `setOrientation()`.
+Get the current device orientation, named by the screen's shape as for `setOrientation()`.
 
 ```typescript
 const orientation = await device.getOrientation(); // "portrait" | "landscape"
