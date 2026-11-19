@@ -104,7 +104,7 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
 // unchecked, and an iPad field just focused lost the second key while its
 // keyboard came up ("test@example.com" came out "tst@example.com") with the
 // action reporting success. The field is now read back once, and a few lost or
-// out-of-order keys are typed again a key at a time; anything else the field
+// out-of-order keys make it empty the field and send the text again; anything else the field
 // shows (a mask, a filter, a replaced selection, a field the app removed) is
 // left as it is, as before. Each call passes `delay: 0`, so this runs whatever
 // the config's typingDelay is.
@@ -155,8 +155,8 @@ describe("type() with no typing delay types lost keys again (iOS)", () => {
   })
 
   test("a field that filters out a typed character keeps what it took", async ({ typingScreen }) => {
-    // The "a" is filtered out: the field reads one key short, is typed again a
-    // key at a time, and is then left with what it takes.
+    // The "a" is filtered out: the field reads one key short, is emptied and
+    // typed again, and is then left with what it takes.
     await typingScreen.formattedInput.type("12a3", { delay: 0 })
     await expect(typingScreen.formattedValue).toHaveText("fmt=123")
   })

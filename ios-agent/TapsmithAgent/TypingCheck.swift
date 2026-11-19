@@ -111,7 +111,7 @@ enum TypingCheck {
     // With no typing delay the text is sent unchecked, as it always was, then
     // read back once: when a few keys were lost or came out of order (an iPad
     // field just focused lost the second key while its keyboard came up), the
-    // text is typed again a key at a time. Anything else the field shows is
+    // field is emptied and the text sent again. Anything else the field shows is
     // left as it is: a field can format, filter or limit what is typed, and
     // the read-back cannot tell that from lost keys.
 

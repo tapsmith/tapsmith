@@ -1581,8 +1581,18 @@ class CommandHandler {
         }
         _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
         _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+        // Deletes and the text must go to this field: stop if the focus moved.
+        func stillFocused() throws {
+            guard let now = try? resolveElement(selectorParams), isLiveFocused(now) else {
+                throw AgentError.actionFailed(
+                    "typeText: the field showed \(TypingCheck.describe(shown, secure: false)) after typing, and lost " +
+                        "the focus while it was emptied to type it again"
+                )
+            }
+        }
         var left = waitUntilEmpty()
         if let rest = left, !rest.isEmpty {
+            try stillFocused()
             // A field that does not take select-all: the delete took the
             // last character (the caret is at the end after typing), so the
             // rest goes a delete at a time.
@@ -1590,13 +1600,14 @@ class CommandHandler {
                                           charactersPerSecond: TypingCheck.maxCharactersPerSecond)
             left = waitUntilEmpty()
         }
-        if let rest = left, !rest.isEmpty {
-            NSLog("[typeText] the field did not empty to type it again: it shows \(TypingCheck.describe(rest, secure: false))")
+        guard let rest = left, rest.isEmpty else {
+            let now = left.map { "it shows " + TypingCheck.describe($0, secure: false) } ?? "it could not be read"
             throw AgentError.actionFailed(
                 "typeText: the field showed \(TypingCheck.describe(shown, secure: false)) after typing, and could not be " +
-                    "emptied to type it again: it shows \(TypingCheck.describe(rest, secure: false))"
+                    "emptied to type it again: \(now)"
             )
         }
+        try stillFocused()
         if !actionExecutor.typeViaEventSynthesizer(text, delayMs: 0) {
             throw AgentError.actionFailed(
                 "typeText: the field showed \(TypingCheck.describe(shown, secure: false)) after typing, " +
@@ -1615,23 +1626,26 @@ class CommandHandler {
         return field.text ?? ""
     }
 
-    /// Read the field until it shows `text`, or holds the same value for
-    /// `TypingCheck.stillWait`, or `TypingCheck.burstWait` ends. Nil when it
-    /// cannot be read.
+    /// Read the field until it shows `text`, shows a character never typed
+    /// (it formats what is typed: nothing to repair), or holds the same value
+    /// for `TypingCheck.stillWait`. Nil when it cannot be read, or is still
+    /// changing when `TypingCheck.burstWait` ends (keys still arriving).
     private func readBackUntilStill(_ text: String, selectorParams: [String: Any]) -> String? {
         let deadline = Date(timeIntervalSinceNow: TypingCheck.burstWait)
         var last: String?
         var since = Date()
         while true {
             guard let shown = readText(selectorParams) else { return nil }
-            if shown == text { return shown }
+            if shown == text || TypingCheck.read(shown, before: "", typed: text, secure: false) == .changed {
+                return shown
+            }
             if shown != last {
                 last = shown
                 since = Date()
             } else if Date().timeIntervalSince(since) >= TypingCheck.stillWait {
                 return shown
             }
-            if Date() >= deadline { return shown }
+            if Date() >= deadline { return nil }
             Thread.sleep(forTimeInterval: 0.02)
         }
     }
