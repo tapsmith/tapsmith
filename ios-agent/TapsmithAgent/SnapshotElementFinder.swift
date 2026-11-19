@@ -63,8 +63,9 @@ class SnapshotElementFinder {
         /// (BarHost.markHosts, PILOT-1219), so a live re-read still
         /// reports no role for it.
         var isEmptyBarHost = false
-        /// Whether the element is the iPhone Duo's TabView host
-        /// (BarHost.markHosts, PILOT-1260), so a live re-read still reports
+        /// Whether the element is the iPhone Duo's TabView host or the
+        /// iPad's floating tab bar (BarHost.markHosts, PILOT-1260,
+        /// PILOT-1282), so a live re-read still reports
         /// it as the tablist.
         var isTabBarHost = false
     }
@@ -1720,7 +1721,6 @@ class SnapshotElementFinder {
         }
 
         if let children = nodeDict["children"] as? [[String: Any]] {
-            let childrenInTabBar = inTabBar || BarHost.isTabBar(nodeDict)
             // A keyboard's top edge only applies within its own window.
             let outerKeyboardTop = keyboardTop
             if nodeType == .window { keyboardTop = nil }
@@ -1732,7 +1732,7 @@ class SnapshotElementFinder {
             for child in children {
                 findMatches(
                     in: child,
-                    inTabBar: childrenInTabBar,
+                    inTabBar: inTabBar || BarHost.holdsTab(nodeDict, child),
                     insideSwitch: insideSwitch || NonAppElements.isSwitch(nodeType),
                     // Inside a native alert only the alert is an alert
                     // (RoleMapping.matches, PILOT-919).

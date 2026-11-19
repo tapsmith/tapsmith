@@ -189,10 +189,10 @@ enum RoleMapping {
     }
 
     /// Whether an element is an item of a tab bar: a button with a `.tabBar`
-    /// ancestor, or the iPhone Duo's TabView host (`inTabBar`,
-    /// `BarHost.isTabBar`). UIKit and SwiftUI tab bars expose their items as
-    /// buttons, never as `.tab` elements, so this is how getByRole("tab")
-    /// finds them (PILOT-514, PILOT-1260).
+    /// ancestor, the iPhone Duo's TabView host or the iPad's floating tab bar
+    /// (`inTabBar`, `BarHost.holdsTab`). UIKit and SwiftUI tab bars expose
+    /// their items as buttons, never as `.tab` elements, so this is how
+    /// getByRole("tab") finds them (PILOT-514, PILOT-1260, PILOT-1282).
     static func isTabBarItem(_ elementType: XCUIElement.ElementType, inTabBar: Bool) -> Bool {
         inTabBar && elementType == .button
     }
@@ -206,7 +206,8 @@ enum RoleMapping {
     /// empty host iOS 27 lays over a screen with no toolbar
     /// (`BarHost.markHosts`, PILOT-1219), which is nothing a user can
     /// see and has no role. `isTabBarHost`: whether it is the iPhone Duo's
-    /// TabView host (`BarHost.markHosts`, PILOT-1260), which is the tab bar.
+    /// TabView host or the iPad's floating tab bar (`BarHost.markHosts`,
+    /// PILOT-1260, PILOT-1282), which is the tab bar.
     /// A live element can't tell either; its callers pass what was found
     /// with it.
     static func resolveRole(
@@ -267,7 +268,8 @@ enum RoleMapping {
     /// The element types a type query must cover to find every element of
     /// `role`: its `roleToElementTypes` entry plus, for "tab", the buttons a
     /// tab bar's items are, for "tablist" the bar host the iPhone Duo's
-    /// TabView is (PILOT-1260), and for "alert" the static text an RN `Text`
+    /// TabView is (PILOT-1260; the iPad's floating tab bar is a generic
+    /// `.other`, already a tablist type), and for "alert" the static text an RN `Text`
     /// is (`staticTextRoles`). A coarse query — callers still filter by
     /// `matches` or by the tab-bar ancestry.
     /// - Throws: AgentError.invalidSelector if the role is unknown.
@@ -390,8 +392,9 @@ enum RoleMapping {
     /// - no role at all: iOS 27's empty toolbar host (`isEmptyBarHost`,
     ///   `BarHost.markHosts`, PILOT-1219). A host holding a toolbar's
     ///   items is the toolbar.
-    /// - tablist and nothing else: the iPhone Duo's TabView host
-    ///   (`isTabBarHost`, PILOT-1260), whose buttons are tabs (`inTabBar`).
+    /// - tablist and nothing else: the iPhone Duo's TabView host or the
+    ///   iPad's floating tab bar (`isTabBarHost`, PILOT-1260, PILOT-1282),
+    ///   whose buttons are tabs (`inTabBar`).
     static func matches(
         role: String,
         elementType: XCUIElement.ElementType,

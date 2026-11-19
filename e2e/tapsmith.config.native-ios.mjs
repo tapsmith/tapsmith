@@ -4,7 +4,9 @@ import { defineConfig } from "tapsmith"
 //
 // Runs e2e/native-ios/ against native-ios-test-app/ (plain SwiftUI, no React
 // Native, no in-app hooks — so every reset is a cold clear). Build the app
-// first with `native-ios-test-app/build.sh`.
+// first with `native-ios-test-app/build.sh`. TAPSMITH_IOS_SIMULATOR picks the
+// simulator: set it to an iPad (e.g. "iPad Pro 11-inch (M5)") to run the suite
+// on an iPad destination, whose tab bar and keyboard differ from an iPhone's.
 //
 // The tests are named `*.native.ts`, not `*.test.ts`: every other config globs
 // `**/*.test.ts`, and these target a different app.

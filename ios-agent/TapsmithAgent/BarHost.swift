@@ -90,7 +90,9 @@ enum BarHost {
     /// Key under which `markHosts` marks a host that holds nothing.
     static let emptyHostKey = "tapsmithEmptyBarHost"
 
-    /// Key under which `markHosts` marks the iPhone Duo's TabView host.
+    /// Key under which `markHosts` marks a tab bar iOS exposes with no
+    /// `.tabBar` node: the iPhone Duo's TabView host, or the iPad's floating
+    /// tab bar (`isFloatingTabBar`).
     static let tabBarHostKey = "tapsmithTabBarHost"
 
     /// Mark the hosts in a snapshot dictionary that are no toolbar:
@@ -98,6 +100,8 @@ enum BarHost {
     ///   views and the system back button — with `emptyHostKey`. That is the
     ///   host of a screen with no toolbar: no locator matches it (what it
     ///   holds still matches as usual).
+    /// - the iPad's floating tab bar with `tabBarHostKey` too: a group, not a
+    ///   host (`isFloatingTabBar`).
     /// - the iPhone Duo's TabView host with `tabBarHostKey`: the Duo has no
     ///   tab bar, and lays a TabView's items out as buttons in a host alone in
     ///   a wrapper of its own size, one of them selected (PILOT-1260). That
@@ -138,6 +142,13 @@ enum BarHost {
                     children[i][tabBarHostKey] = true
                 }
             }
+            if isFloatingTabBar(children[i]) {
+                children[i][tabBarHostKey] = true
+                if var items = children[i]["children"] as? [[String: Any]] {
+                    for j in items.indices where !isFloatingTab(items[j]) { items[j][barControlKey] = true }
+                    children[i]["children"] = items
+                }
+            }
             ancestry.append(place)
             markHosts(in: &children[i], ancestry: &ancestry)
             ancestry.removeLast()
@@ -156,16 +167,85 @@ enum BarHost {
         dict[emptyHostKey] as? Bool == true
     }
 
-    /// Whether `markHosts` marked `dict` as the iPhone Duo's TabView host.
+    /// Whether `markHosts` marked `dict` as a tab bar with no `.tabBar` node:
+    /// the iPhone Duo's TabView host or the iPad's floating tab bar.
     static func isMarkedTabBarHost(_ dict: [String: Any]) -> Bool {
         dict[tabBarHostKey] as? Bool == true
     }
 
     /// Whether `dict` is a tab bar, which makes the buttons in it tabs
-    /// (`RoleMapping.isTabBarItem`): a `.tabBar`, or the iPhone Duo's TabView
-    /// host.
+    /// (`RoleMapping.isTabBarItem`, through `holdsTab`): a `.tabBar`, the
+    /// iPhone Duo's TabView host, or the iPad's floating tab bar.
     static func isTabBar(_ dict: [String: Any]) -> Bool {
         CellFrames.elementType(of: dict) == .tabBar || isMarkedTabBarHost(dict)
+    }
+
+    /// Whether `dict` is the floating tab bar iPadOS 26 and later draw at the
+    /// top of a regular-width screen (PILOT-1282), for a SwiftUI `TabView` and
+    /// a `UITabBarController` alike. It has no `.tabBar` node: a generic group
+    /// holds one button per tab, each holding a copy of itself and nothing
+    /// else (a duplicate button, or for a search tab an image of the same
+    /// name), and exactly one tab is selected. A sidebar-adaptable `TabView`
+    /// also puts its sidebar toggle there, a plain button. That group is the
+    /// tab bar ("tablist") and its tab-shaped buttons are tabs
+    /// (`holdsTab`). The SDK folds each outer/inner pair into one match, as
+    /// it does every same-target duplicate. A single tab, a toolbar's buttons
+    /// (none selected) and a row of plain buttons are no tab bar.
+    /// iPadOS 18 draws the same bar but marks no tab selected, so it is not
+    /// recognised there.
+    static func isFloatingTabBar(_ dict: [String: Any]) -> Bool {
+        guard CellFrames.elementType(of: dict) == .other,
+              let items = dict["children"] as? [[String: Any]] else { return false }
+        var tabs = 0
+        var selected = 0
+        for item in items {
+            guard CellFrames.elementType(of: item) == .button else { return false }
+            let isSelected = item["selected"] as? Bool == true
+            if isFloatingTab(item) {
+                tabs += 1
+                if isSelected { selected += 1 }
+            } else if isSelected || !(item["children"] as? [[String: Any]] ?? []).isEmpty {
+                return false
+            }
+        }
+        return tabs >= 2 && selected == 1
+    }
+
+    /// Whether `item`, a button of a floating tab bar, is a tab: it holds
+    /// exactly one leaf with the same label, a button with its own frame or
+    /// an image inside it. The SDK folds the outer/inner button pair into one
+    /// match only when their reported bounds are identical, so an inset inner
+    /// button would make the tab two matches.
+    private static func isFloatingTab(_ item: [String: Any]) -> Bool {
+        guard let inner = item["children"] as? [[String: Any]], inner.count == 1,
+              (inner[0]["children"] as? [[String: Any]] ?? []).isEmpty,
+              let label = item["label"] as? String, !label.isEmpty,
+              inner[0]["label"] as? String == label
+        else { return false }
+        let outer = CellFrames.frame(of: item)
+        let leaf = CellFrames.frame(of: inner[0])
+        switch CellFrames.elementType(of: inner[0]) {
+        case .button: return reportedBounds(outer) == reportedBounds(leaf)
+        case .image: return outer.insetBy(dx: -1, dy: -1).contains(leaf)
+        default: return false
+        }
+    }
+
+    /// `frame` as the agent reports it (`ElementBounds`): whole points,
+    /// truncated. Two frames the SDK sees as one target have equal ones.
+    private static func reportedBounds(_ frame: CGRect) -> [Int] {
+        [Int(frame.minX), Int(frame.minY), Int(frame.minX + frame.width), Int(frame.minY + frame.height)]
+    }
+
+    /// Key under which `markHosts` marks a floating tab bar's buttons that
+    /// are no tab (the sidebar toggle).
+    static let barControlKey = "tapsmithTabBarControl"
+
+    /// Whether `child` of `parent` sits in a tab bar as a tab would: a
+    /// button there is a tab (`RoleMapping.isTabBarItem`). A floating tab
+    /// bar's sidebar toggle does not.
+    static func holdsTab(_ parent: [String: Any], _ child: [String: Any]) -> Bool {
+        isTabBar(parent) && child[barControlKey] as? Bool != true
     }
 
     /// Whether a descendant of `dict` is a selected button: a TabView's

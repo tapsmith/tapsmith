@@ -9,6 +9,7 @@ import {
   NativeListScreen,
   NativeLoginScreen,
   NativeScrollScreen,
+  NativeSidebarTabsScreen,
   NativeSlowLoadScreen,
   NativeTabsScreen,
   NativeTogglesScreen,
@@ -30,6 +31,7 @@ type NativeFixtures = {
   scroll: NativeScrollScreen
   keyboard: NativeKeyboardScreen
   tabs: NativeTabsScreen
+  sidebarTabs: NativeSidebarTabsScreen
   gestures: NativeGesturesScreen
   slowLoad: NativeSlowLoadScreen
   a11y: NativeAccessibilityScreen
@@ -51,6 +53,7 @@ export const test = base.extend<NativeFixtures>({
   scroll: async ({ device }, use) => { await use(new NativeScrollScreen(device)) },
   keyboard: async ({ device }, use) => { await use(new NativeKeyboardScreen(device)) },
   tabs: async ({ device }, use) => { await use(new NativeTabsScreen(device)) },
+  sidebarTabs: async ({ device }, use) => { await use(new NativeSidebarTabsScreen(device)) },
   gestures: async ({ device }, use) => { await use(new NativeGesturesScreen(device)) },
   slowLoad: async ({ device }, use) => { await use(new NativeSlowLoadScreen(device)) },
   a11y: async ({ device }, use) => { await use(new NativeAccessibilityScreen(device)) },

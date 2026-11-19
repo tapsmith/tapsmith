@@ -17,6 +17,49 @@ describe("Native: TabView", () => {
     await expect(tabs.content("Profile")).toBeVisible()
     await expect(tabs.content("Feed")).toBeHidden()
   })
+
+  // iPadOS 26+ floats the tab bar at the top with no tab bar node: each tab is
+  // a button holding a duplicate of itself. Run on an iPad destination
+  // (TAPSMITH_IOS_SIMULATOR, see tapsmith.config.native-ios.mjs) as well as
+  // an iPhone.
+  test("each tab is one element, in one tablist", async ({ tabs }) => {
+    await expect(tabs.tabBar).toHaveCount(1)
+    await expect(tabs.tabBar).toHaveRole("tablist")
+    await expect(tabs.tabs).toHaveCount(3)
+    await expect(tabs.tabsInBar).toHaveCount(3)
+    await expect(tabs.tabButton("Search")).toHaveCount(1)
+    await expect(tabs.tab("Search", { selected: false })).toBeVisible()
+
+    await tabs.tab("Search").tap()
+    await expect(tabs.content("Search")).toBeVisible()
+    await expect(tabs.tab("Search", { selected: true })).toBeVisible()
+    await expect(tabs.tab("Feed", { selected: false })).toBeVisible()
+
+    // A role-only match re-binds the right live element for the action.
+    await tabs.tabs.first().tap()
+    await expect(tabs.content("Feed")).toBeVisible()
+  })
+})
+
+describe("Native: sidebar-adaptable TabView", () => {
+  test.beforeEach(async ({ device, sidebarTabs }) => {
+    await openScreen(device, "sidebartabs")
+    await expect(sidebarTabs.content("Inbox")).toBeVisible()
+  })
+
+  // On an iPad the floating tab bar also holds the sidebar toggle, which is
+  // no tab, and the search tab, a button holding an image.
+  test("every tab, search included, is a tab in one tablist", async ({ sidebarTabs }) => {
+    await expect(sidebarTabs.tabBar).toHaveCount(1)
+    await expect(sidebarTabs.tabs).toHaveCount(4)
+    await expect(sidebarTabs.tab("Inbox", { selected: true })).toBeVisible()
+    await expect(sidebarTabs.tab("Toggle sidebar")).toHaveCount(0)
+
+    await sidebarTabs.tab("Drafts").tap()
+    await expect(sidebarTabs.content("Drafts")).toBeVisible()
+    await sidebarTabs.tab("Search").tap()
+    await expect(sidebarTabs.content("Search")).toBeVisible()
+  })
 })
 
 describe("Native: gestures", () => {
