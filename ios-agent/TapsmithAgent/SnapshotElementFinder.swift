@@ -578,6 +578,7 @@ class SnapshotElementFinder {
                 if !s.dictionaryRepresentation.isEmpty {
                     lock.lock()
                     lastSnapshot = s
+                    lastSnapshotPredatesTurn = false
                     lock.unlock()
                     return s
                 }
@@ -597,6 +598,9 @@ class SnapshotElementFinder {
     /// The last snapshot taken, for a scroll step's "did the list move"
     /// (PILOT-998): taken before the step's drag, by the read before it.
     private var lastSnapshot: XCUIElementSnapshot?
+    /// Set when the screen size is invalidated (a turn) after the last
+    /// snapshot: its frame then gives the size before the turn.
+    private var lastSnapshotPredatesTurn = false
 
     /// `ScrollStepWatch.fingerprint` of the last snapshot's nodes in the
     /// scroll container at `region` (`ScrollStepWatch.regionNodes`); nil
@@ -648,11 +652,14 @@ class SnapshotElementFinder {
     }
 
     /// The app's frame in the last snapshot taken: the interface size a
-    /// rotation Tapsmith did not make has already changed.
+    /// rotation Tapsmith did not make has already changed. nil when no
+    /// snapshot has been taken since Tapsmith turned the device
+    /// (`invalidateScreenSize`): that frame has the size before the turn,
+    /// and the touch would be mapped for the wrong way up.
     func lastSnapshotFrameSize() -> CGSize? {
         lock.lock()
         defer { lock.unlock() }
-        guard let size = lastSnapshot?.frame.size, size.width > 0, size.height > 0 else { return nil }
+        guard !lastSnapshotPredatesTurn, let size = lastSnapshot?.frame.size, size.width > 0, size.height > 0 else { return nil }
         return size
     }
 
@@ -2411,6 +2418,7 @@ class SnapshotElementFinder {
     func invalidateScreenSize() {
         lock.lock()
         _screenSize = nil
+        lastSnapshotPredatesTurn = true
         lock.unlock()
     }
 

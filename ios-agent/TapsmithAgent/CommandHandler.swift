@@ -3563,7 +3563,8 @@ class CommandHandler {
         // The planner's points are in the app's interface space, as its
         // snapshot saw it; the touch presses them where this maps them, so a
         // drag still goes up the screen as it is turned. (The keyboard's own
-        // frames are another matter: in landscape iOS reports them unturned.)
+        // frames are another matter: in landscape iOS reports them in native
+        // portrait space; see the dismiss key below.)
         let space = ActionExecutor.touchSpace(screen: planner.screen.size)
         switch strategy {
         case .scrollSwipe:
@@ -3595,7 +3596,11 @@ class CommandHandler {
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
-            guard EventSynthesizer.tap(at: space.point(key), hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
+            // Not mapped: in landscape iOS reports the keyboard's own frames
+            // in native portrait space already (unlike the app's), so the
+            // key's point is where the touch must press it. Map it here once
+            // those frames are turned into the app's interface space.
+            guard EventSynthesizer.tap(at: key, hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .blankTap:
             guard let field = snapshotFinder.liveFocusedTextInput() else {

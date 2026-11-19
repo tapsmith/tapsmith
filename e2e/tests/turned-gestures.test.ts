@@ -50,6 +50,21 @@ describe("Gestures on a turned screen", () => {
     await expect(turnedScreen.padResult).toHaveText(`Pad ${before + 1}: swipe left`)
   })
 
+  // Straight after the turn, with no locator in between: nothing has read
+  // the turned screen yet, so the swipe must not be planned on the screen as
+  // it was before the turn. Without a trace, as a trace's capture after the
+  // turn would read the screen.
+  describe("with nothing reading the screen in between", () => {
+    test.use({ trace: "off" })
+
+    test("device.swipe() straight after turning back swipes the way asked", async ({ device, turnedScreen }) => {
+      const before = await turnedScreen.padCount()
+      await device.setOrientation("portrait")
+      await device.swipe("left")
+      await expect(turnedScreen.padResult).toHaveText(`Pad ${before + 1}: swipe left`)
+    })
+  })
+
   test("pinchOut() pinches the element open", async ({ turnedScreen }) => {
     const before = await turnedScreen.padCount()
     await turnedScreen.pad.pinchOut({ scale: 2 })
