@@ -2250,7 +2250,14 @@ class CommandHandler {
                         break
                     }
                 }
-                if checked {
+                // Without a delay, only typing the read-back can follow is
+                // checked; the rest is typed unchecked, as it always was.
+                let checksInto = delayMs > 0 || TypingCheck.checksInto(
+                    className: element.className,
+                    focusedOnly: isFocusedOnlySelector,
+                    liveFocused: isFocusedOnlySelector && isLiveFocused(element)
+                )
+                if checked && checksInto {
                     let focused = isFocusedOnlySelector ? element : try resolveElement(selectorParams)
                     try typeTextChecked(
                         text,

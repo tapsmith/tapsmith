@@ -25,14 +25,44 @@ enum TypingCheck {
 
     /// Whether typing `text` is checked. With a typing delay, always. With
     /// none, too (an iPad field just focused dropped the second key of an
-    /// unchecked burst, and the action reported success), except for a text
-    /// holding a control character other than a newline (a tab, a
-    /// backspace, a carriage return): what the field makes of one cannot be
-    /// predicted for the read-back, so such a text is still sent unchecked,
-    /// as it always was without a delay.
+    /// unchecked burst, and the action reported success), but only when the
+    /// read-back can tell what the field should hold. Otherwise the text is
+    /// sent unchecked, as it always was without a delay. That excludes a
+    /// control character other than a newline (a tab, a backspace, a
+    /// carriage return), and a newline before the end: a single-line field
+    /// takes Return as submit, and the keys after it go wherever the app
+    /// moves the focus. A newline at the end (type and submit) is checked.
     static func checks(_ text: String, delayMs: Int) -> Bool {
         if delayMs > 0 { return true }
-        return !text.unicodeScalars.contains { $0 != "\n" && $0.properties.generalCategory == .control }
+        let scalars = Array(text.unicodeScalars)
+        for (index, scalar) in scalars.enumerated() {
+            if scalar == "\n" {
+                if index != scalars.count - 1 { return false }
+            } else if scalar.properties.generalCategory == .control {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// The element classes whose value is the text typed into them, so
+    /// typing into them can be read back.
+    static let textInputClassNames: Set<String> = [
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeSecureTextField",
+        "XCUIElementTypeTextView",
+        "XCUIElementTypeSearchField",
+    ]
+
+    /// Whether typing with no delay into the element typing resolved is
+    /// checked: only into a text input itself. A wrapper around one (a
+    /// container with the input's test id) reads back its descendants' text,
+    /// labels and placeholder included, so it is typed into unchecked, as
+    /// before. The input typing into whatever has the focus resolved must
+    /// also be the one with the live focus: the snapshot's focus can be a
+    /// stale hint from an earlier tap after the app moved the focus on.
+    static func checksInto(className: String, focusedOnly: Bool, liveFocused: Bool) -> Bool {
+        textInputClassNames.contains(className) && (!focusedOnly || liveFocused)
     }
 
     /// What of `text` goes into the field as keys, and whether Return is

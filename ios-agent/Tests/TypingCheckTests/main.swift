@@ -159,18 +159,36 @@ do {
 }
 
 // Every typeText is checked, with or without a typing delay: an iPad field
-// just focused dropped the second key of an unchecked burst. Only a text
-// with a control character other than a newline goes unchecked without a
-// delay, as before, since the read-back cannot predict what it does.
+// just focused dropped the second key of an unchecked burst. Without a delay
+// a text the read-back cannot model (a control character, keys after a
+// newline) goes unchecked, as before.
 do {
     expect("no delay is checked", TypingCheck.checks("test@example.com", delayMs: 0))
     expect("a delay is checked", TypingCheck.checks("test@example.com", delayMs: 10))
-    expect("a newline (submit) is checked without a delay", TypingCheck.checks("foo\nbar", delayMs: 0))
     expect("a tab goes unchecked without a delay", !TypingCheck.checks("a\tb", delayMs: 0))
     expect("a backspace goes unchecked without a delay", !TypingCheck.checks("ab\u{8}", delayMs: 0))
     expect("a carriage return goes unchecked without a delay", !TypingCheck.checks("a\r\nb", delayMs: 0))
     expect("a control character with a delay is still checked, as before", TypingCheck.checks("a\tb", delayMs: 10))
     expect("emoji and accents are checked", TypingCheck.checks("café 😀", delayMs: 0))
+    expect("a newline at the end (type and submit) is checked without a delay", TypingCheck.checks("query\n", delayMs: 0))
+    expect("text after a newline goes unchecked without a delay (the app moves the focus on submit)",
+           !TypingCheck.checks("user\npass", delayMs: 0))
+    expect("text after a newline is still checked with a delay, as before", TypingCheck.checks("user\npass", delayMs: 10))
+}
+
+// With no delay, typing is checked only into a text input itself, and only
+// into the input with the live focus when typing into whatever has the focus.
+do {
+    expect("a text field is checked", TypingCheck.checksInto(className: "XCUIElementTypeTextField", focusedOnly: false, liveFocused: false))
+    expect("a secure field is checked", TypingCheck.checksInto(className: "XCUIElementTypeSecureTextField", focusedOnly: false, liveFocused: false))
+    expect("a text view is checked", TypingCheck.checksInto(className: "XCUIElementTypeTextView", focusedOnly: false, liveFocused: false))
+    expect("a search field is checked", TypingCheck.checksInto(className: "XCUIElementTypeSearchField", focusedOnly: false, liveFocused: false))
+    expect("a wrapper around a field is not", !TypingCheck.checksInto(className: "XCUIElementTypeOther", focusedOnly: false, liveFocused: false))
+    expect("an element known only by its bounds is not", !TypingCheck.checksInto(className: "", focusedOnly: false, liveFocused: false))
+    expect("the focused input is checked when it has the live focus",
+           TypingCheck.checksInto(className: "XCUIElementTypeTextField", focusedOnly: true, liveFocused: true))
+    expect("a focused input from a stale hint is not",
+           !TypingCheck.checksInto(className: "XCUIElementTypeTextField", focusedOnly: true, liveFocused: false))
 }
 
 if failures > 0 {
