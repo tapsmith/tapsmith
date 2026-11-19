@@ -107,10 +107,14 @@ do {
     expect("scrambled is typed again", TypingCheck.retypes(.scrambled, before: "x", secure: false))
     expect("a change is not", !TypingCheck.retypes(.changed, before: "", secure: false))
     expect("complete is not", !TypingCheck.retypes(.complete, before: "", secure: false))
-    expect("the first key is sent again into a plain field", TypingCheck.resendsFirstKey(before: "ab", secure: false))
-    expect("and into an empty secure field", TypingCheck.resendsFirstKey(before: "", secure: true))
+    expect("the first key is sent again into a plain field", TypingCheck.resendsFirstKey(before: "ab", key: "c", secure: false))
+    expect("and into an empty secure field", TypingCheck.resendsFirstKey(before: "", key: "c", secure: true))
     expect("not into a secure field that held text (iOS may have emptied it: one bullet can be the new key)",
-           !TypingCheck.resendsFirstKey(before: "•", secure: true))
+           !TypingCheck.resendsFirstKey(before: "•", key: "c", secure: true))
+    expect("not into a field holding just that key: a replaced selection reads the same as a lost key",
+           !TypingCheck.resendsFirstKey(before: "1", key: "1", secure: false))
+    expect("into a field holding another single character",
+           TypingCheck.resendsFirstKey(before: "1", key: "2", secure: false))
     expect("an empty secure field is typed again", TypingCheck.retypes(.short, before: "", secure: true))
     expect("a secure field with content is not (it cannot be read back)",
            !TypingCheck.retypes(.short, before: "••", secure: true))
@@ -156,6 +160,66 @@ do {
 do {
     expect("plain text is quoted", TypingCheck.describe("abc", secure: false) == "\"abc\"")
     expect("secure text is a count", TypingCheck.describe("•••", secure: true) == "3 character(s)")
+}
+
+// A first key that replaced the field's text (it was selected) is taken as
+// typing into an empty field (PILOT-1281).
+do {
+    expect("a first key shown alone replaced a selection",
+           TypingCheck.replacedSelection("n", before: "old", key: "n", secure: false))
+    expect("a first key after the text is not a replaced selection",
+           !TypingCheck.replacedSelection("oldn", before: "old", key: "n", secure: false))
+    expect("an empty field has no selection to replace",
+           !TypingCheck.replacedSelection("n", before: "", key: "n", secure: false))
+    expect("a field showing something else did not replace a selection",
+           !TypingCheck.replacedSelection("x", before: "old", key: "n", secure: false))
+    expect("a secure field emptied as it took the key is not a replaced selection",
+           !TypingCheck.replacedSelection("•", before: "•••", key: "n", secure: true))
+}
+
+// With no delay, typing is read back once and repaired only when a few keys
+// were lost or came out of order (PILOT-1281).
+do {
+    expect("plain text is read back", TypingCheck.repairs("test@example.com"))
+    expect("text with a newline is not", !TypingCheck.repairs("user\npass"))
+    expect("text with a tab is not", !TypingCheck.repairs("a\tb"))
+    expect("a text field is read back", TypingCheck.repairsInto("XCUIElementTypeTextField"))
+    expect("a text view is read back", TypingCheck.repairsInto("XCUIElementTypeTextView"))
+    expect("a search field is read back", TypingCheck.repairsInto("XCUIElementTypeSearchField"))
+    expect("a secure field is not", !TypingCheck.repairsInto("XCUIElementTypeSecureTextField"))
+    expect("a wrapper around a field is not", !TypingCheck.repairsInto("XCUIElementTypeOther"))
+    expect("an element known only by its bounds is not", !TypingCheck.repairsInto(""))
+    let lost = TypingCheck.read("tst@example.com", before: "", typed: "test@example.com", secure: false)
+    expect("a lost key is repaired", TypingCheck.repairs(lost, shown: "tst@example.com", before: "", typed: "test@example.com"))
+    let scrambled = TypingCheck.read("sakerne", before: "", typed: "sneaker", secure: false)
+    expect("keys out of order are not repaired: sent again at the same rate they would scramble again",
+           !TypingCheck.repairs(scrambled, shown: "sakerne", before: "", typed: "sneaker"))
+    let limited = TypingCheck.read("1234", before: "", typed: "12345678", secure: false)
+    expect("a field that keeps only some of the text is left as it is",
+           !TypingCheck.repairs(limited, shown: "1234", before: "", typed: "12345678"))
+    let formatted = TypingCheck.read("123-456", before: "", typed: "123456", secure: false)
+    expect("a field that formats the text is left as it is",
+           !TypingCheck.repairs(formatted, shown: "123-456", before: "", typed: "123456"))
+    let replaced = TypingCheck.read("new", before: "old", typed: "new", secure: false)
+    expect("a field whose selected text was replaced is left as it is",
+           !TypingCheck.repairs(replaced, shown: "new", before: "old", typed: "new"))
+    let threeLost = TypingCheck.read("tst@xampl.com", before: "", typed: "test@example.com", secure: false)
+    expect("up to three lost keys are repaired",
+           TypingCheck.repairs(threeLost, shown: "tst@xampl.com", before: "", typed: "test@example.com"))
+    let replacedPrefix = TypingCheck.read("10", before: "1", typed: "10", secure: false)
+    expect("a field that held text is not repaired: it may have replaced that text as it took the focus",
+           !TypingCheck.repairs(replacedPrefix, shown: "10", before: "1", typed: "10"))
+    let appendedLost = TypingCheck.read("abd", before: "ab", typed: "cd", secure: false)
+    expect("nor when typing after its text lost a key", !TypingCheck.repairs(appendedLost, shown: "abd", before: "ab", typed: "cd"))
+    let oneBox = TypingCheck.read("1", before: "", typed: "1234", secure: false)
+    expect("one box of a code field is not repaired: the rest went to the next boxes",
+           !TypingCheck.repairs(oneBox, shown: "1", before: "", typed: "1234"))
+    let nothing = TypingCheck.read("", before: "", typed: "abc", secure: false)
+    expect("a field that shows nothing is not repaired", !TypingCheck.repairs(nothing, shown: "", before: "", typed: "abc"))
+    let filtered = TypingCheck.read("123", before: "", typed: "12a3", secure: false)
+    expect("one key short of four is repaired", TypingCheck.repairs(filtered, shown: "123", before: "", typed: "12a3"))
+    let complete = TypingCheck.read("abc", before: "", typed: "abc", secure: false)
+    expect("a complete field is left as it is", !TypingCheck.repairs(complete, shown: "abc", before: "", typed: "abc"))
 }
 
 if failures > 0 {

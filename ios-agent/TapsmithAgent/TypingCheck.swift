@@ -88,8 +88,79 @@ enum TypingCheck {
     /// takes focus, so its count cannot tell a lost key from a key that
     /// replaced the content (one bullet before, one after), and a resend
     /// could make the count right with the wrong text.
-    static func resendsFirstKey(before: String, secure: Bool) -> Bool {
-        !secure || before.isEmpty
+    /// Nor into a field that held just that key's character: a key that
+    /// replaced the field's selected text leaves it showing what it held, the
+    /// same as a key that was lost, and a resend would double it.
+    static func resendsFirstKey(before: String, key: String, secure: Bool) -> Bool {
+        (!secure || before.isEmpty) && before != key
+    }
+
+    /// Whether the first key replaced what the field held, rather than going
+    /// after it: the field shows that key alone. Its text was selected as it
+    /// took the focus (a React Native field with `selectTextOnFocus`, or text
+    /// the test selected), and typing replaces a selection, as it does for a
+    /// user. Typing then goes on as into an empty field. Not for a secure
+    /// field: iOS empties one typed into after it takes focus, which is
+    /// reported, not taken as a selection.
+    static func replacedSelection(_ shown: String, before: String, key: String, secure: Bool) -> Bool {
+        !secure && !before.isEmpty && shown == key
+    }
+
+    // ─── Typing with no delay (PILOT-1281) ───
+    //
+    // With no typing delay the text is sent unchecked, as it always was, then
+    // read back once: when a few keys were lost (an iPad
+    // field just focused lost the second key while its keyboard came up), the
+    // field is emptied and the text sent again. Anything else the field shows is
+    // left as it is: a field can format, filter or limit what is typed, and
+    // the read-back cannot tell that from lost keys.
+
+    /// The most keys a repair makes up for. More missing is a field that
+    /// limits what it takes (maxLength), not keys lost on the way.
+    static let maxRepairedKeys = 3
+
+    /// Whether typing `text` with no delay is read back: not text with a
+    /// control character (a tab, a backspace, a return), which the read-back
+    /// cannot model, and which can submit the field or move the focus.
+    static func repairs(_ text: String) -> Bool {
+        !text.unicodeScalars.contains { $0.properties.generalCategory == .control }
+    }
+
+    /// The element classes whose value is the text typed into them. A secure
+    /// field reads back only as bullets, so it is not among them.
+    static let repairedClassNames: Set<String> = [
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeTextView",
+        "XCUIElementTypeSearchField",
+    ]
+
+    /// Whether typing into an element of `className` is read back: only into
+    /// a text input itself. A wrapper around one reads back its descendants'
+    /// text, labels and placeholder included.
+    static func repairsInto(_ className: String) -> Bool {
+        repairedClassNames.contains(className)
+    }
+
+    /// Whether the field, read back as `reading` showing `shown`, lost a few
+    /// keys: every character it shows was typed,
+    /// at most `maxRepairedKeys` are missing, and fewer than half: a field
+    /// holding a small part of the text (one box of a code field that moves
+    /// the focus on) did not lose keys, the rest went elsewhere. Only a field that was empty
+    /// before typing (`before`): one that held text may have replaced it as
+    /// it took the focus (a select- or clear-on-focus field), and typing
+    /// that starts with the old text then reads as keys lost.
+    static func repairs(_ reading: Reading, shown: String, before: String, typed: String) -> Bool {
+        guard before.isEmpty else { return false }
+        switch reading {
+        case .short:
+            let missing = before.count + typed.count - shown.count
+            return missing <= maxRepairedKeys && missing * 2 < typed.count
+        case .scrambled, .complete, .changed:
+            // Keys out of order come from a field that falls behind them
+            // (a React Native controlled input): sent again at the same rate,
+            // they would come out of order again. A typing delay is for that.
+            return false
+        }
     }
 
     /// The text input with keyboard focus, as typing into a field that

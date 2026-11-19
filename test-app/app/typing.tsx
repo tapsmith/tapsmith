@@ -19,9 +19,28 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - The slow code boxes do the same half a second after each digit, as a
 //   busy app does: keys typed before the focus moves go to the box being
 //   left. What they hold is echoed in "slowcode=<digits>".
+// - "Lossy input" drops the second key of the first text typed into it, as an
+//   iPad field just focused did while its keyboard came up (PILOT-1281:
+//   "test@example.com" came out "tst@example.com"). Only once per visit, so
+//   typing it again gets every key. What it holds is echoed in "lossy=<value>".
+// - "Select-on-focus input" starts out holding "old" and selects its text as
+//   it takes the focus, so the first key typed replaces it, as it would for a
+//   user. What it holds is echoed in "select=<value>".
+// - "Formatted input" keeps digits only and puts a dash after the third, as
+//   an input mask does, so it never shows exactly what was typed. What it
+//   holds is echoed in "fmt=<value>".
+// - "Vanishing input" is removed once it holds four characters, as a code
+//   field that submits itself is. "vanish=<value>" echoes what it held.
 const BUSY_MS = 40
 const CODE_LENGTH = 4
 const SLOW_FOCUS_MS = 500
+const SELECT_START = "old"
+const VANISH_LENGTH = 4
+
+function formatDigits(text: string) {
+  const digits = text.replace(/\D/g, "").slice(0, 6)
+  return digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits
+}
 
 function busyWait(ms: number) {
   const end = Date.now() + ms
@@ -37,6 +56,14 @@ export default function TypingScreen() {
   const boxes = useRef<(TextInput | null)[]>([])
   const [slowCode, setSlowCode] = useState<string[]>(Array(CODE_LENGTH).fill(""))
   const slowBoxes = useRef<(TextInput | null)[]>([])
+  const [lossy, setLossy] = useState("")
+  const lossyDropped = useRef(false)
+  // Bumped to re-render when a key is dropped: the value stays the same, and
+  // the re-render is what puts it back into the native field.
+  const [lossyDrops, setLossyDrops] = useState(0)
+  const [select, setSelect] = useState(SELECT_START)
+  const [formatted, setFormatted] = useState("")
+  const [vanish, setVanish] = useState("")
 
   // A warm reset navigates here rather than remounting.
   const resetEpoch = useTapsmithResetEpoch()
@@ -46,6 +73,12 @@ export default function TypingScreen() {
     setSecure("")
     setCode(Array(CODE_LENGTH).fill(""))
     setSlowCode(Array(CODE_LENGTH).fill(""))
+    setLossy("")
+    lossyDropped.current = false
+    setLossyDrops(0)
+    setSelect(SELECT_START)
+    setFormatted("")
+    setVanish("")
   }, [resetEpoch])
 
   const setDigit = (index: number, text: string) => {
@@ -81,6 +114,28 @@ export default function TypingScreen() {
         testID="typing-slow-input"
       />
       <Text testID="typing-slow-value">{`slow=${slow}`}</Text>
+
+      <TextInput
+        style={styles.input}
+        value={lossy}
+        onChangeText={(text) => {
+          if (!lossyDropped.current && lossy.length === 1 && text.length >= 2) {
+            lossyDropped.current = true
+            setLossyDrops((n) => n + 1)
+            setLossy(text[0] + text.slice(2))
+            return
+          }
+          setLossy(text)
+        }}
+        placeholder="Lossy input"
+        autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
+        accessibilityLabel="Lossy input"
+        testID="typing-lossy-input"
+      />
+      <Text testID="typing-lossy-value">{`lossy=${lossy}`}</Text>
+      <Text testID="typing-lossy-drops">{`drops=${lossyDrops}`}</Text>
 
       <TextInput
         style={styles.input}
@@ -132,6 +187,51 @@ export default function TypingScreen() {
         ))}
       </View>
       <Text testID="typing-slow-code-value">{`slowcode=${slowCode.join("")}`}</Text>
+
+      <TextInput
+        style={styles.input}
+        value={select}
+        onChangeText={setSelect}
+        selectTextOnFocus
+        placeholder="Select-on-focus input"
+        autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
+        accessibilityLabel="Select-on-focus input"
+        testID="typing-select-input"
+      />
+      <Text testID="typing-select-value">{`select=${select}`}</Text>
+
+      <View style={styles.row}>
+        <TextInput
+          style={[styles.input, styles.half]}
+          value={formatted}
+          onChangeText={(text) => setFormatted(formatDigits(text))}
+          placeholder="Formatted input"
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          accessibilityLabel="Formatted input"
+          testID="typing-formatted-input"
+        />
+        {vanish.length < VANISH_LENGTH ? (
+          <TextInput
+            style={[styles.input, styles.half]}
+            value={vanish}
+            onChangeText={setVanish}
+            placeholder="Vanishing input"
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            accessibilityLabel="Vanishing input"
+            testID="typing-vanishing-input"
+          />
+        ) : null}
+      </View>
+      <View style={styles.row}>
+        <Text testID="typing-formatted-value">{`fmt=${formatted}`}</Text>
+        <Text testID="typing-vanishing-value">{`vanish=${vanish}`}</Text>
+      </View>
     </View>
   )
 }
@@ -154,6 +254,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
+  },
+  half: {
+    flex: 1,
   },
   box: {
     width: 48,
