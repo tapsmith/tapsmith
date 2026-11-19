@@ -1,5 +1,6 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
+import { settledBoundingBox, turnTo } from "../utils/orientation.js"
 
 describe("Gestures screen", () => {
   test.beforeEach(async ({ device, gesturesScreen }) => {
@@ -38,13 +39,16 @@ describe("Gestures screen", () => {
   // verify-trace-archive.mjs drives this test with tracing on and checks its
   // landscape captures against their hierarchy dumps.
   test("a landscape screen is captured upright", async ({ device, gesturesScreen }) => {
-    const portrait = await gesturesScreen.firstTapArea.boundingBox()
     try {
       // Inside the try: if turning fails part-way, the device may still have
       // turned, and the tests after this one must start in portrait.
-      await device.setOrientation("landscape")
+      // Portrait first: a landscape-native tablet starts out landscape.
+      await turnTo(device, "portrait")
       await expect(gesturesScreen.firstTapArea).toBeVisible()
-      const landscape = await gesturesScreen.firstTapArea.boundingBox()
+      const portrait = await settledBoundingBox(gesturesScreen.firstTapArea)
+      await turnTo(device, "landscape")
+      await expect(gesturesScreen.firstTapArea).toBeVisible()
+      const landscape = await settledBoundingBox(gesturesScreen.firstTapArea)
       // Some simulator runtimes turn the device but not the app: then there
       // is no landscape screen to capture.
       test.skip(

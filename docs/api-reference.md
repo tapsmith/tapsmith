@@ -589,7 +589,7 @@ const text = await device.getClipboard();
 
 ### `device.setOrientation(orientation: Orientation): Promise<void>`
 
-Set the device orientation. Accepts `"portrait"` or `"landscape"`. A turn made in a test, its `beforeEach` and `afterEach` hooks or its fixtures is undone after the test, whether it passed or failed, so the next test finds the device in the orientation the test found it in. A turn made in a `beforeAll` or `afterAll` hook is not undone.
+Set the device orientation. Accepts `"portrait"` or `"landscape"`, which name the screen's shape: `"portrait"` is taller than wide and `"landscape"` wider than tall, also on Android tablets whose screens are landscape when held the natural way. A turn made in a test, its `beforeEach` and `afterEach` hooks or its fixtures is undone after the test, whether it passed or failed, so the next test finds the device in the orientation the test found it in. A turn made in a `beforeAll` or `afterAll` hook is not undone.
 
 ```typescript
 await device.setOrientation("landscape");
@@ -598,7 +598,7 @@ await device.setOrientation("portrait");
 
 ### `device.getOrientation(): Promise<Orientation>`
 
-Get the current device orientation.
+Get the current device orientation, named by the screen's shape as for `setOrientation()`.
 
 ```typescript
 const orientation = await device.getOrientation(); // "portrait" | "landscape"
