@@ -275,6 +275,16 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/drag-plan-tests"
 "$OUT/drag-plan-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/TouchSpaceTests/main.swift \
+  TapsmithAgent/TouchSpace.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/PinchPlan.swift \
+  TapsmithAgent/TapTiming.swift \
+  -o "$OUT/touch-space-tests"
+"$OUT/touch-space-tests"
+
 # Pins XCTest's private region screenshot (the touch settle's sampler).
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
