@@ -214,8 +214,51 @@ class ActionExecutor {
         return drawn ? buffer : nil
     }
 
-    /// Tap at specific screen coordinates using event synthesis, holding the
-    /// touch `hold` seconds (`TapTiming.hold(for:)`, by what the tap lands on).
+    /// How the agent's synthesized touch places points planned in the app's
+    /// interface space now: `screen` is the app's window as the plan saw it
+    /// (`TouchSpace`).
+    static func touchSpace(screen: CGSize) -> TouchSpace {
+        TouchSpace(screen: screen, device: deviceTurn(XCUIDevice.shared.orientation))
+    }
+
+    /// `XCUIDevice.orientation` as `HidTouch` takes it.
+    static func deviceTurn(_ orientation: UIDeviceOrientation) -> HidTouch.DeviceTurn {
+        switch orientation {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return .other
+        }
+    }
+
+    /// An XCUICoordinate at `point` in the app's interface space, which
+    /// XCTest places by the app's own orientation: the fallback when a touch
+    /// cannot be synthesized.
+    private func interfaceCoordinate(_ point: CGPoint) -> XCUICoordinate {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: point.x, dy: point.y))
+    }
+
+    /// A planned point in whole points, as the touch has always been sent.
+    private static func whole(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x.rounded(), y: point.y.rounded())
+    }
+
+    /// Tap at `point`, planned in the app's interface space, holding the
+    /// touch `hold` seconds (`TapTiming.hold(for:)`, by what the tap lands
+    /// on). The synthesized touch presses it where `space` maps it.
+    func tap(at point: CGPoint, in space: TouchSpace, hold: TimeInterval) {
+        let point = Self.whole(point)
+        if !EventSynthesizer.tap(at: space.point(point), hold: hold) {
+            NSLog("[ActionExecutor] Event synthesis failed, falling back to XCUICoordinate.tap()")
+            interfaceCoordinate(point).tap()
+        }
+    }
+
+    /// Tap at a point in the device's native portrait space (`tapXY`, UI-mode
+    /// mirror taps), holding the touch `hold` seconds. Points the agent
+    /// planned itself go through `tap(at:in:hold:)`.
     func tapCoordinates(x: Int, y: Int, hold: TimeInterval) {
         if !EventSynthesizer.tap(at: CGPoint(x: x, y: y), hold: hold) {
             NSLog("[ActionExecutor] Event synthesis failed, falling back to XCUICoordinate.tap()")
@@ -233,24 +276,24 @@ class ActionExecutor {
         element.doubleTap()
     }
 
-    /// Double-tap at specific screen coordinates.
+    /// Double-tap at `point`, planned in the app's interface space (pressed
+    /// where `space` maps it).
     /// Prefers a single synthesized event record carrying both taps with
     /// precise offsets — the inter-tap gap is immune to scheduling jitter
     /// under CI load. Falls back to XCUICoordinate when synthesis is
     /// unavailable, completing a partially-delivered gesture with exactly one
     /// more tap rather than re-tapping twice (which would deliver three).
-    func doubleTapCoordinates(x: Int, y: Int, intervalMs: Int = 0, hold: TimeInterval) {
-        let normalized = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-        let point = normalized.withOffset(CGVector(dx: CGFloat(x), dy: CGFloat(y)))
-        switch EventSynthesizer.doubleTap(at: CGPoint(x: x, y: y), intervalMs: intervalMs, hold: hold) {
+    func doubleTap(at point: CGPoint, in space: TouchSpace, intervalMs: Int = 0, hold: TimeInterval) {
+        let point = Self.whole(point)
+        switch EventSynthesizer.doubleTap(at: space.point(point), intervalMs: intervalMs, hold: hold) {
         case .done:
             return
         case .firstTapOnly:
             NSLog("[ActionExecutor] Double-tap delivered only its first tap; completing with a single coordinate tap")
-            point.tap()
+            interfaceCoordinate(point).tap()
         case .notStarted:
             NSLog("[ActionExecutor] Double-tap synthesis failed, falling back to XCUICoordinate.doubleTap()")
-            point.doubleTap()
+            interfaceCoordinate(point).doubleTap()
         }
     }
 
@@ -262,7 +305,18 @@ class ActionExecutor {
         element.press(forDuration: TimeInterval(durationMs) / 1000.0)
     }
 
-    /// Long press at specific coordinates.
+    /// Long press at `point`, planned in the app's interface space (pressed
+    /// where `space` maps it).
+    func longPress(at point: CGPoint, in space: TouchSpace, durationMs: Int64) {
+        let point = Self.whole(point)
+        let duration = TimeInterval(durationMs) / 1000.0
+        if !EventSynthesizer.longPress(at: space.point(point), duration: duration) {
+            interfaceCoordinate(point).press(forDuration: duration)
+        }
+    }
+
+    /// Long press at a point in the device's native portrait space
+    /// (`longPressXY`).
     func longPressCoordinates(x: Int, y: Int, durationMs: Int64 = 1000) {
         let duration = TimeInterval(durationMs) / 1000.0
         if !EventSynthesizer.longPress(at: CGPoint(x: x, y: y), duration: duration) {
@@ -343,24 +397,26 @@ class ActionExecutor {
 
     // MARK: - Swipe Actions
 
-    /// Swipe on an element in a given direction using event synthesis.
-    func swipe(_ element: XCUIElement, direction: String, speed: Int = 5000, distance: Double = 0.5) throws {
+    /// Swipe on an element in a given direction using event synthesis. Its
+    /// frame is in the app's interface space, mapped by `space`.
+    func swipe(_ element: XCUIElement, direction: String, speed: Int = 5000, distance: Double = 0.5, in space: TouchSpace) throws {
         let frame = element.frame
         guard frame.width > 0 && frame.height > 0 else {
             throw AgentError.actionFailed("Element has zero frame — cannot swipe")
         }
-        try swipeRegion(frame, direction: direction, speed: speed, distance: distance)
+        try swipeRegion(frame, direction: direction, speed: speed, distance: distance, in: space)
     }
 
-    /// Swipe on the full screen using event synthesis.
-    func swipeScreen(direction: String, speed: Int = 5000, distance: Double = 0.5) throws {
-        let screenSize = cachedScreenSize ?? app.windows.firstMatch.frame.size
-        try swipeRegion(CGRect(origin: .zero, size: screenSize), direction: direction, speed: speed, distance: distance)
+    /// Swipe on the full screen (`space`'s window) using event synthesis.
+    func swipeScreen(direction: String, speed: Int = 5000, distance: Double = 0.5, in space: TouchSpace) throws {
+        try swipeRegion(CGRect(origin: .zero, size: space.screen), direction: direction, speed: speed, distance: distance, in: space)
     }
 
-    /// Swipe inside `region` (screen points) from its centre (SwipeGeometry).
+    /// Swipe inside `region` (the app's interface space) from its centre
+    /// (SwipeGeometry); the touch presses the swipe where `space` maps it,
+    /// so it still goes `direction` on the screen as it is turned.
     /// scrollIntoView() sends the scroll container it picked (PILOT-934).
-    func swipeRegion(_ region: CGRect, direction: String, speed: Int = 5000, distance: Double = 0.5) throws {
+    func swipeRegion(_ region: CGRect, direction: String, speed: Int = 5000, distance: Double = 0.5, in space: TouchSpace) throws {
         guard region.width > 0 && region.height > 0 else {
             throw AgentError.actionFailed(
                 "Cannot swipe in an empty region [\(Int(region.minX)),\(Int(region.minY))][\(Int(region.maxX)),\(Int(region.maxY))]"
@@ -371,7 +427,7 @@ class ActionExecutor {
         }
         // Map speed to duration: faster speed = shorter duration
         let duration = speed >= 10000 ? 0.1 : speed <= 1000 ? 0.8 : 0.3
-        if !EventSynthesizer.swipe(from: points.start, to: points.end, duration: duration) {
+        if !EventSynthesizer.swipe(from: space.point(points.start), to: space.point(points.end), duration: duration) {
             throw AgentError.actionFailed("Swipe event synthesis failed")
         }
     }
@@ -379,20 +435,20 @@ class ActionExecutor {
     // MARK: - Scroll
 
     /// Scroll a container in a direction, optionally until a target element becomes visible.
-    func scroll(_ element: XCUIElement, direction: String, targetSelector: ElementSelector? = nil) throws {
+    func scroll(_ element: XCUIElement, direction: String, targetSelector: ElementSelector? = nil, in space: TouchSpace) throws {
         if let target = targetSelector {
-            try scrollUntilVisible(container: element, direction: direction, targetSelector: target)
+            try scrollUntilVisible(container: element, direction: direction, targetSelector: target, in: space)
         } else {
             // Single scroll gesture: swipe in the opposite direction
             let swipeDir = invertDirection(direction)
-            try swipe(element, direction: swipeDir, speed: 5000, distance: 0.8)
+            try swipe(element, direction: swipeDir, speed: 5000, distance: 0.8, in: space)
         }
     }
 
     /// Scroll the full screen.
-    func scrollScreen(direction: String, targetSelector: ElementSelector? = nil) throws {
+    func scrollScreen(direction: String, targetSelector: ElementSelector? = nil, in space: TouchSpace) throws {
         let swipeDir = invertDirection(direction)
-        try swipeScreen(direction: swipeDir, speed: 5000, distance: 0.6)
+        try swipeScreen(direction: swipeDir, speed: 5000, distance: 0.6, in: space)
     }
 
     /// Scroll a container until a target element matching the selector becomes visible.
@@ -400,7 +456,8 @@ class ActionExecutor {
         container: XCUIElement,
         direction: String,
         targetSelector: ElementSelector,
-        maxScrolls: Int = 20
+        maxScrolls: Int = 20,
+        in space: TouchSpace
     ) throws {
         let swipeDir = invertDirection(direction)
 
@@ -410,7 +467,7 @@ class ActionExecutor {
                 if target.isHittable { return }
             }
 
-            try swipe(container, direction: swipeDir, speed: 5000, distance: 0.8)
+            try swipe(container, direction: swipeDir, speed: 5000, distance: 0.8, in: space)
             // Brief wait for UI to settle
             Thread.sleep(forTimeInterval: 0.25)
         }
@@ -483,17 +540,13 @@ class ActionExecutor {
         // Native can expose a text and the view around it).
         // Wait only while it is not in the tree at all.
         let deadline = Date().addingTimeInterval(3)
-        var option = findOption(optionText, excluding: shownBefore)
+        var (option, screen) = findOption(optionText, excluding: shownBefore)
         while option == .absent, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.1)
-            option = findOption(optionText, excluding: shownBefore)
+            (option, screen) = findOption(optionText, excluding: shownBefore)
         }
         if case .touchable(let point, let ancestorTypes) = option {
-            tapCoordinates(
-                x: Int(point.x.rounded()),
-                y: Int(point.y.rounded()),
-                hold: TapTiming.hold(for: .staticText, within: ancestorTypes)
-            )
+            tap(at: point, in: Self.touchSpace(screen: screen), hold: TapTiming.hold(for: .staticText, within: ancestorTypes))
             return
         }
         // Not touchable where it is (below the fold of a scrolling list):
@@ -532,18 +585,29 @@ class ActionExecutor {
         try tapOption(cells.element(boundBy: index))
     }
 
-    private func optionAnalyzer() -> OcclusionAnalyzer? {
+    /// An analyzer of the screen now, and the app's window as its snapshot
+    /// saw it: the interface space its frames are in.
+    private func optionAnalyzer() -> (analyzer: OcclusionAnalyzer, screen: CGSize)? {
         guard let snapshot = try? app.snapshot() else { return nil }
-        return OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+        return (analyzer, Self.windowSize(of: snapshot, fallback: cachedScreenSize))
     }
 
-    private func findOption(_ text: String, excluding: [CGRect]) -> OcclusionAnalyzer.OptionText {
-        optionAnalyzer()?.optionText(text, excluding: excluding) ?? .absent
+    /// The app's window as `snapshot` saw it (its frame follows a rotation),
+    /// or `fallback` when that frame is empty.
+    private static func windowSize(of snapshot: XCUIElementSnapshot, fallback: CGSize?) -> CGSize {
+        let size = snapshot.frame.size
+        return size.width > 0 && size.height > 0 ? size : (fallback ?? size)
+    }
+
+    private func findOption(_ text: String, excluding: [CGRect]) -> (OcclusionAnalyzer.OptionText, CGSize) {
+        guard let (analyzer, screen) = optionAnalyzer() else { return (.absent, .zero) }
+        return (analyzer.optionText(text, excluding: excluding), screen)
     }
 
     /// The frames of the texts on screen that show `text` now.
     func textFrames(_ text: String) -> [CGRect] {
-        optionAnalyzer()?.textFrames(text) ?? []
+        optionAnalyzer()?.analyzer.textFrames(text) ?? []
     }
 
     /// Tap a dropdown's option (a cell picked by index) at the uncovered
@@ -566,9 +630,9 @@ class ActionExecutor {
             option.tap()
             return
         }
-        tapCoordinates(
-            x: Int(point.x.rounded()),
-            y: Int(point.y.rounded()),
+        tap(
+            at: point,
+            in: Self.touchSpace(screen: Self.windowSize(of: appSnapshot, fallback: cachedScreenSize)),
             hold: TapTiming.hold(for: snap.elementType, within: analyzer.ancestorTypes(of: target))
         )
     }
@@ -598,11 +662,13 @@ class ActionExecutor {
         }
     }
 
-    /// Send `plan` as one two-finger gesture. Throws when XCTest cannot
-    /// synthesize it — never reports a pinch it did not send (PILOT-825).
-    func pinch(_ plan: PinchPlan) throws {
+    /// Send `plan` (made in the app's interface space, its fingers pressed
+    /// where `space` maps them) as one two-finger gesture. Throws when XCTest
+    /// cannot synthesize it — never reports a pinch it did not send
+    /// (PILOT-825).
+    func pinch(_ plan: PinchPlan, in space: TouchSpace) throws {
         guard EventSynthesizer.pinch(
-            plan,
+            space.pinch(plan),
             moveDuration: Self.pinchMoveDuration,
             holdDuration: Self.pinchHoldDuration
         ) else {
@@ -623,10 +689,11 @@ class ActionExecutor {
         Thread.sleep(forTimeInterval: Self.focusIdleTimeout)
     }
 
-    /// Blur an element by tapping outside its bounds.
-    func blur(_ element: XCUIElement) throws {
+    /// Blur an element by tapping outside its bounds, inside `space`'s
+    /// window.
+    func blur(_ element: XCUIElement, in space: TouchSpace) throws {
         let frame = element.frame
-        let screenSize = cachedScreenSize ?? app.windows.firstMatch.frame.size
+        let screenSize = space.screen
 
         let tapX: CGFloat
         let tapY: CGFloat
@@ -654,7 +721,7 @@ class ActionExecutor {
         }
 
         // Whatever is outside the element: an unknown target.
-        tapCoordinates(x: Int(tapX), y: Int(tapY), hold: TapTiming.hold(for: nil))
+        tap(at: CGPoint(x: tapX, y: tapY), in: space, hold: TapTiming.hold(for: nil))
         Thread.sleep(forTimeInterval: Self.focusIdleTimeout)
     }
 
@@ -740,9 +807,9 @@ class ActionExecutor {
             let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
             let resolution = BackButton.resolve(in: analyzer)
             if case .tap(let point, let ancestorTypes) = resolution {
-                tapCoordinates(
-                    x: Int(point.x.rounded()),
-                    y: Int(point.y.rounded()),
+                tap(
+                    at: point,
+                    in: Self.touchSpace(screen: Self.windowSize(of: snapshot, fallback: cachedScreenSize)),
                     hold: TapTiming.hold(for: .button, within: ancestorTypes)
                 )
                 return

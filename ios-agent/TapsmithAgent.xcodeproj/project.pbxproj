@@ -51,6 +51,7 @@
 		9970000000000000000000A1 /* RegionScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9970000000000000000000A2 /* RegionScreenshot.swift */; };
 		9970000000000000000000A3 /* UprightScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9970000000000000000000A4 /* UprightScreenshot.swift */; };
 		99D2000000000000000000B1 /* DragPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D2000000000000000000B2 /* DragPlan.swift */; };
+		99D3000000000000000000C1 /* TouchSpace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D3000000000000000000C2 /* TouchSpace.swift */; };
 		9990000000000000000000A1 /* DaemonOpenURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9990000000000000000000A2 /* DaemonOpenURL.swift */; };
 		9990000000000000000000A3 /* DeepLinkVerify.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9990000000000000000000A4 /* DeepLinkVerify.swift */; };
 		9980000000000000000000A1 /* ScrollStepWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9980000000000000000000A2 /* ScrollStepWatch.swift */; };
@@ -107,6 +108,7 @@
 		9970000000000000000000A2 /* RegionScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegionScreenshot.swift; sourceTree = "<group>"; };
 		9970000000000000000000A4 /* UprightScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UprightScreenshot.swift; sourceTree = "<group>"; };
 		99D2000000000000000000B2 /* DragPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragPlan.swift; sourceTree = "<group>"; };
+		99D3000000000000000000C2 /* TouchSpace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchSpace.swift; sourceTree = "<group>"; };
 		9990000000000000000000A2 /* DaemonOpenURL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonOpenURL.swift; sourceTree = "<group>"; };
 		9990000000000000000000A4 /* DeepLinkVerify.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkVerify.swift; sourceTree = "<group>"; };
 		9980000000000000000000A2 /* ScrollStepWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollStepWatch.swift; sourceTree = "<group>"; };
@@ -178,6 +180,7 @@
 				9970000000000000000000A2 /* RegionScreenshot.swift */,
 				9970000000000000000000A4 /* UprightScreenshot.swift */,
 				99D2000000000000000000B2 /* DragPlan.swift */,
+				99D3000000000000000000C2 /* TouchSpace.swift */,
 				9990000000000000000000A2 /* DaemonOpenURL.swift */,
 				9990000000000000000000A4 /* DeepLinkVerify.swift */,
 				9980000000000000000000A2 /* ScrollStepWatch.swift */,
@@ -336,6 +339,7 @@
 				9970000000000000000000A1 /* RegionScreenshot.swift in Sources */,
 				9970000000000000000000A3 /* UprightScreenshot.swift in Sources */,
 				99D2000000000000000000B1 /* DragPlan.swift in Sources */,
+				99D3000000000000000000C1 /* TouchSpace.swift in Sources */,
 				9990000000000000000000A1 /* DaemonOpenURL.swift in Sources */,
 				9990000000000000000000A3 /* DeepLinkVerify.swift in Sources */,
 				9980000000000000000000A1 /* ScrollStepWatch.swift in Sources */,
