@@ -194,8 +194,9 @@ struct ElementInfo {
     /// honours React Native `accessibilityRole` flags. A live element can't
     /// see its ancestors, so the caller says whether it is inside a tab bar
     /// (`inTabBar`, from find time), which makes a button a tab (PILOT-514),
-    /// whether it is the iPhone Duo's TabView host (`isTabBarHost`, from find
-    /// time), which is the tablist (PILOT-1260),
+    /// whether it is the iPhone Duo's TabView host or the iPad's floating
+    /// tab bar (`isTabBarHost`, from find time), which is the tablist
+    /// (PILOT-1260, PILOT-1282),
     /// or whether it is iOS 27's empty toolbar host (`isEmptyBarHost`, from
     /// find time), which has no role (PILOT-1219).
     static func makeFromXCUIElement(

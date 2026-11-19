@@ -63,8 +63,9 @@ class SnapshotElementFinder {
         /// (BarHost.markHosts, PILOT-1219), so a live re-read still
         /// reports no role for it.
         var isEmptyBarHost = false
-        /// Whether the element is the iPhone Duo's TabView host
-        /// (BarHost.markHosts, PILOT-1260), so a live re-read still reports
+        /// Whether the element is the iPhone Duo's TabView host or the
+        /// iPad's floating tab bar (BarHost.markHosts, PILOT-1260,
+        /// PILOT-1282), so a live re-read still reports
         /// it as the tablist.
         var isTabBarHost = false
     }

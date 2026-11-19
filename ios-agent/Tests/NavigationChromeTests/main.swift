@@ -8,6 +8,10 @@
 // some of the time, and its back button floats in the bar host with no label
 // (other devices label it with the previous screen's title).
 //
+// The iPad dumps (PILOT-1282, iPad Pro 11-inch) are of the fixture app's
+// TabView and the test app's expo-router NativeTabs (a UITabBarController):
+// iPadOS 18+ floats the tab bar at the top, with no tab bar node either.
+//
 // A dump carries no traits, so every title here is read without the header
 // trait, as the Duo often publishes it.
 
@@ -45,6 +49,8 @@ struct Seen {
     let inTabBar: Bool
     let isEmptyBarHost: Bool
     let isTabBarHost: Bool
+    let selected: Bool
+    let frame: CGRect
 }
 
 /// Every node of `tree` in pre-order, with the context the match walk
@@ -61,7 +67,9 @@ func walk(_ tree: [String: Any]) -> [Seen] {
             traits: node["traits"] as? UInt64 ?? 0,
             inTabBar: inTabBar,
             isEmptyBarHost: BarHost.isMarkedEmpty(node),
-            isTabBarHost: BarHost.isMarkedTabBarHost(node)
+            isTabBarHost: BarHost.isMarkedTabBarHost(node),
+            selected: node["selected"] as? Bool ?? false,
+            frame: CellFrames.frame(of: node)
         ))
         for child in node["children"] as? [[String: Any]] ?? [] {
             visit(child, inTabBar: inTabBar || BarHost.isTabBar(node))
@@ -206,6 +214,132 @@ check("17 Pro: the tab bar's items are tabs", matching("tab", in: proTabs), ["Fe
 check("17 Pro: the tab bar is the tablist", matching("tablist", in: proTabs), ["Tab Bar"])
 check("17 Pro: no tab-bar host", walk(proTabs).filter(\.isTabBarHost).count, 0)
 check("17 Pro: the TabView screen has no toolbar", matching("toolbar", in: proTabs), [])
+
+// ─── The iPad's floating tab bar ───
+
+// iPadOS 18+ floats a tab bar at the top with no tab bar node: a group under
+// the navigation bar holds one button per tab, and each button holds a
+// duplicate of itself (same label, frame and selected state). That group is
+// the tablist and its buttons are tabs, for a SwiftUI TabView and a
+// UITabBarController (expo-router NativeTabs) alike.
+
+/// The nodes getByRole(`role`) matches in `tree`, after the SDK folds
+/// same-target duplicates (same text and bounds) into one match
+/// (`collapseSameTargetDuplicates`).
+func collapsed(_ role: String, selected: Bool? = nil, in tree: [String: Any]) -> [String] {
+    var seen = Set<String>()
+    return walk(tree).filter {
+        RoleMapping.matches(
+            role: role, elementType: $0.type, traits: $0.traits, value: nil, hasNameFilter: false,
+            inTabBar: $0.inTabBar, inAlert: false, isEmptyBarHost: $0.isEmptyBarHost,
+            isTabBarHost: $0.isTabBarHost
+        ) && (selected == nil || $0.selected == selected)
+            && seen.insert("\($0.frame)|\($0.label)").inserted
+    }.map(\.label)
+}
+
+/// How many matches of getByRole(`role`, { name, exact: true }) in `tree`
+/// are left after the SDK's same-target collapse.
+func collapsedCount(_ role: String, _ name: String, in tree: [String: Any]) -> Int {
+    var seen = Set<String>()
+    return walk(tree).filter {
+        RoleMapping.matches(
+            role: role, elementType: $0.type, traits: $0.traits, value: nil, hasNameFilter: true,
+            inTabBar: $0.inTabBar, inAlert: false, isEmptyBarHost: $0.isEmptyBarHost,
+            isTabBarHost: $0.isTabBarHost
+        ) && RoleName.matches(
+            elementType: $0.type, label: $0.label, title: $0.title, placeholder: "", identifier: $0.identifier,
+            name: name, exact: true
+        ) && seen.insert("\($0.frame)|\($0.label)").inserted
+    }.count
+}
+
+for (name, file, tabs) in [
+    ("iPad 27.2 SwiftUI", "ipad-pro-11-27.2/tabs.xml", ["Feed", "Search", "Profile"]),
+    ("iPad 27.2 NativeTabs", "ipad-pro-11-27.2/native-tabs.xml", ["Home", "Explore"]),
+] {
+    let tree = prepared(file)
+    check("\(name): the floating bar's items are tabs", collapsed("tab", in: tree), tabs)
+    check("\(name): the floating bar's items report tab",
+          Array(Set(reported("tab", in: tree))).sorted(), tabs.sorted())
+    check("\(name): the selected tab is the first", collapsed("tab", selected: true, in: tree), [tabs[0]])
+    check("\(name): the other tabs are not selected",
+          collapsed("tab", selected: false, in: tree), Array(tabs.dropFirst()))
+    check("\(name): the floating bar is the one tablist", collapsed("tablist", in: tree).count, 1)
+    check("\(name): the floating bar reports tablist", reported("tablist", in: tree).count, 1)
+    check("\(name): the tablist holds the tabs",
+          walk(tree).filter { $0.isTabBarHost }.map(\.type), [.other])
+    check("\(name): no toolbar", collapsed("toolbar", in: tree), [])
+    check("\(name): the host is still empty", walk(tree).filter(\.isEmptyBarHost).count, 1)
+    check("\(name): a tab is one match by name", collapsedCount("tab", tabs[1], in: tree), 1)
+    check("\(name): a tab is one button match by name", collapsedCount("button", tabs[1], in: tree), 1)
+    check("\(name): the back button is no tab", collapsed("tab", in: tree).contains("Back"), false)
+}
+
+/// A group of tab-bar-sized button pairs, as the iPad's floating tab bar
+/// lays them out: `items` are (label, selected, nested duplicate).
+func floatingBar(_ items: [(String, Bool, Bool)], extra: [[String: Any]] = []) -> [String: Any] {
+    func button(_ label: String, _ selected: Bool, x: Int, _ children: [[String: Any]] = []) -> [String: Any] {
+        [
+            "elementType": XCUIElement.ElementType.button.rawValue, "label": label, "identifier": "",
+            "selected": selected,
+            "frame": ["X": Double(x), "Y": 142.0, "Width": 80.0, "Height": 36.0],
+            "children": children,
+        ]
+    }
+    let buttons = items.enumerated().map { i, item in
+        button(item.0, item.1, x: 300 + 80 * i, item.2 ? [button(item.0, item.1, x: 300 + 80 * i)] : [])
+    }
+    return [
+        "elementType": XCUIElement.ElementType.window.rawValue, "label": "", "identifier": "",
+        "frame": ["X": 0.0, "Y": 0.0, "Width": 834.0, "Height": 1210.0],
+        "children": [[
+            "elementType": XCUIElement.ElementType.other.rawValue, "label": "", "identifier": "",
+            "frame": ["X": 0.0, "Y": 138.0, "Width": 834.0, "Height": 44.0],
+            "children": buttons + extra,
+        ]],
+    ]
+}
+
+func marked(_ tree: [String: Any]) -> [String: Any] {
+    var tree = tree
+    BarHost.markHosts(in: &tree)
+    return tree
+}
+
+check("a group of button pairs, one selected, is a tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", true, true), ("B", false, true)]))).count, 1)
+check("its buttons are tabs",
+      collapsed("tab", in: marked(floatingBar([("A", true, true), ("B", false, true)]))), ["A", "B"])
+check("a group of button pairs with none selected is no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", false, true), ("B", false, true)]))), [])
+check("…and its buttons are no tabs",
+      collapsed("tab", in: marked(floatingBar([("A", false, true), ("B", false, true)]))), [])
+check("a group of button pairs with two selected is no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", true, true), ("B", true, true)]))), [])
+check("a single selected button pair is no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", true, true)]))), [])
+check("plain buttons, one selected, are no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", true, false), ("B", false, false)]))), [])
+check("a group with a button that holds no duplicate is no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", true, true), ("B", false, false)]))), [])
+check("a group holding something besides button pairs is no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", true, true), ("B", false, true)], extra: [staticText("C")]))),
+      [])
+check("a pair whose inner button has another label is no tab",
+      collapsed("tablist", in: marked({
+          var tree = floatingBar([("A", true, true), ("B", false, true)])
+          var window = tree["children"] as! [[String: Any]]
+          var group = window[0]
+          var buttons = group["children"] as! [[String: Any]]
+          var inner = buttons[1]["children"] as! [[String: Any]]
+          inner[0]["label"] = "Other"
+          buttons[1]["children"] = inner
+          group["children"] = buttons
+          window[0] = group
+          tree["children"] = window
+          return tree
+      }())), [])
 
 // ─── The back button's name ───
 

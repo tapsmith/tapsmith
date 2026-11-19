@@ -90,7 +90,9 @@ enum BarHost {
     /// Key under which `markHosts` marks a host that holds nothing.
     static let emptyHostKey = "tapsmithEmptyBarHost"
 
-    /// Key under which `markHosts` marks the iPhone Duo's TabView host.
+    /// Key under which `markHosts` marks a tab bar iOS exposes with no
+    /// `.tabBar` node: the iPhone Duo's TabView host, or the iPad's floating
+    /// tab bar (`isFloatingTabBar`).
     static let tabBarHostKey = "tapsmithTabBarHost"
 
     /// Mark the hosts in a snapshot dictionary that are no toolbar:
@@ -98,6 +100,8 @@ enum BarHost {
     ///   views and the system back button — with `emptyHostKey`. That is the
     ///   host of a screen with no toolbar: no locator matches it (what it
     ///   holds still matches as usual).
+    /// - the iPad's floating tab bar with `tabBarHostKey` too: a group, not a
+    ///   host (`isFloatingTabBar`).
     /// - the iPhone Duo's TabView host with `tabBarHostKey`: the Duo has no
     ///   tab bar, and lays a TabView's items out as buttons in a host alone in
     ///   a wrapper of its own size, one of them selected (PILOT-1260). That
@@ -138,6 +142,7 @@ enum BarHost {
                     children[i][tabBarHostKey] = true
                 }
             }
+            if isFloatingTabBar(children[i]) { children[i][tabBarHostKey] = true }
             ancestry.append(place)
             markHosts(in: &children[i], ancestry: &ancestry)
             ancestry.removeLast()
@@ -156,16 +161,43 @@ enum BarHost {
         dict[emptyHostKey] as? Bool == true
     }
 
-    /// Whether `markHosts` marked `dict` as the iPhone Duo's TabView host.
+    /// Whether `markHosts` marked `dict` as a tab bar with no `.tabBar` node:
+    /// the iPhone Duo's TabView host or the iPad's floating tab bar.
     static func isMarkedTabBarHost(_ dict: [String: Any]) -> Bool {
         dict[tabBarHostKey] as? Bool == true
     }
 
     /// Whether `dict` is a tab bar, which makes the buttons in it tabs
-    /// (`RoleMapping.isTabBarItem`): a `.tabBar`, or the iPhone Duo's TabView
-    /// host.
+    /// (`RoleMapping.isTabBarItem`): a `.tabBar`, the iPhone Duo's TabView
+    /// host, or the iPad's floating tab bar.
     static func isTabBar(_ dict: [String: Any]) -> Bool {
         CellFrames.elementType(of: dict) == .tabBar || isMarkedTabBarHost(dict)
+    }
+
+    /// Whether `dict` is the floating tab bar iPadOS 18 and later draw at the
+    /// top of a regular-width screen (PILOT-1282), for a SwiftUI `TabView` and
+    /// a `UITabBarController` alike. It has no `.tabBar` node: a generic group
+    /// holds one button per tab, each holding a duplicate of itself (same
+    /// label and frame) and nothing else, and exactly one tab is selected.
+    /// That group is the tab bar ("tablist") and its buttons are tabs. The
+    /// SDK folds each outer/inner pair into one match, as it does every
+    /// same-target duplicate. A single tab, a toolbar's buttons (none
+    /// selected) and a row of plain buttons are no tab bar.
+    static func isFloatingTabBar(_ dict: [String: Any]) -> Bool {
+        guard CellFrames.elementType(of: dict) == .other,
+              let items = dict["children"] as? [[String: Any]], items.count >= 2 else { return false }
+        var selected = 0
+        for item in items {
+            guard CellFrames.elementType(of: item) == .button,
+                  let inner = item["children"] as? [[String: Any]], inner.count == 1,
+                  CellFrames.elementType(of: inner[0]) == .button,
+                  (inner[0]["children"] as? [[String: Any]] ?? []).isEmpty,
+                  inner[0]["label"] as? String == item["label"] as? String,
+                  OcclusionAnalyzer.framesMatch(CellFrames.frame(of: inner[0]), CellFrames.frame(of: item))
+            else { return false }
+            if item["selected"] as? Bool == true { selected += 1 }
+        }
+        return selected == 1
     }
 
     /// Whether a descendant of `dict` is a selected button: a TabView's
