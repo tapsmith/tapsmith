@@ -192,7 +192,8 @@ do {
     let lost = TypingCheck.read("tst@example.com", before: "", typed: "test@example.com", secure: false)
     expect("a lost key is repaired", TypingCheck.repairs(lost, shown: "tst@example.com", before: "", typed: "test@example.com"))
     let scrambled = TypingCheck.read("sakerne", before: "", typed: "sneaker", secure: false)
-    expect("keys out of order are repaired", TypingCheck.repairs(scrambled, shown: "sakerne", before: "", typed: "sneaker"))
+    expect("keys out of order are not repaired: sent again at the same rate they would scramble again",
+           !TypingCheck.repairs(scrambled, shown: "sakerne", before: "", typed: "sneaker"))
     let limited = TypingCheck.read("1234", before: "", typed: "12345678", secure: false)
     expect("a field that keeps only some of the text is left as it is",
            !TypingCheck.repairs(limited, shown: "1234", before: "", typed: "12345678"))

@@ -103,8 +103,8 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
 // PILOT-1281: with no typing delay (the default), type() used to send the text
 // unchecked, and an iPad field just focused lost the second key while its
 // keyboard came up ("test@example.com" came out "tst@example.com") with the
-// action reporting success. The field is now read back once, and a few lost or
-// out-of-order keys make it empty the field and send the text again; anything else the field
+// action reporting success. The field is now read back once, and a few lost
+// keys make it empty the field and send the text again; anything else the field
 // shows (a mask, a filter, a replaced selection, a field the app removed) is
 // left as it is, as before. Each call passes `delay: 0`, so this runs whatever
 // the config's typingDelay is.
@@ -128,11 +128,6 @@ describe("type() with no typing delay types lost keys again (iOS)", () => {
     await typingScreen.lossyInput.clearAndType("smoke@test.com", { delay: 0 })
     await expect(typingScreen.lossyValue).toHaveText("lossy=smoke@test.com")
     await expect(typingScreen.lossyDrops).toHaveText("drops=1")
-  })
-
-  test("a controlled field that falls behind the keys still ends up with the text", async ({ typingScreen }) => {
-    await typingScreen.slowInput.type("sneaker", { delay: 0 })
-    await expect(typingScreen.slowValue).toHaveText("slow=sneaker")
   })
 
   test("a secure field gets every character", async ({ typingScreen }) => {

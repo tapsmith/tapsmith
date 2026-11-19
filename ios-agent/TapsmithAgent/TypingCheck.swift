@@ -109,7 +109,7 @@ enum TypingCheck {
     // ─── Typing with no delay (PILOT-1281) ───
     //
     // With no typing delay the text is sent unchecked, as it always was, then
-    // read back once: when a few keys were lost or came out of order (an iPad
+    // read back once: when a few keys were lost (an iPad
     // field just focused lost the second key while its keyboard came up), the
     // field is emptied and the text sent again. Anything else the field shows is
     // left as it is: a field can format, filter or limit what is typed, and
@@ -142,7 +142,7 @@ enum TypingCheck {
     }
 
     /// Whether the field, read back as `reading` showing `shown`, lost a few
-    /// keys or got them out of order: every character it shows was typed,
+    /// keys: every character it shows was typed,
     /// at most `maxRepairedKeys` are missing, and fewer than half: a field
     /// holding a small part of the text (one box of a code field that moves
     /// the focus on) did not lose keys, the rest went elsewhere. Only a field that was empty
@@ -152,10 +152,13 @@ enum TypingCheck {
     static func repairs(_ reading: Reading, shown: String, before: String, typed: String) -> Bool {
         guard before.isEmpty else { return false }
         switch reading {
-        case .short, .scrambled:
+        case .short:
             let missing = before.count + typed.count - shown.count
             return missing <= maxRepairedKeys && missing * 2 < typed.count
-        case .complete, .changed:
+        case .scrambled, .complete, .changed:
+            // Keys out of order come from a field that falls behind them
+            // (a React Native controlled input): sent again at the same rate,
+            // they would come out of order again. A typing delay is for that.
             return false
         }
     }

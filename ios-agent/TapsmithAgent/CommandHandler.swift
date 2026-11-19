@@ -1554,7 +1554,7 @@ class CommandHandler {
     }
 
     /// With no typing delay, read the field back once after typing and, when
-    /// a few keys were lost or came out of order (an iPad field just focused
+    /// a few keys were lost (an iPad field just focused
     /// lost the second key while its keyboard came up, PILOT-1281) and the
     /// field still has the focus, type the text again: select all, delete,
     /// and once the field shows empty, send the text as it was first sent.
@@ -1570,13 +1570,16 @@ class CommandHandler {
               let field = try? resolveElement(selectorParams), !field.className.isEmpty, isLiveFocused(field)
         else { return }
         NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: false)) after typing: typing it again")
+        // The last value read (a read can fail mid-animation); nil when no
+        // read succeeded.
         func waitUntilEmpty() -> String? {
             let emptyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
-            var left = readText(selectorParams)
-            while left?.isEmpty != true, Date() < emptyBy {
+            var left: String?
+            repeat {
+                if case .text(let value) = readField(selectorParams) { left = value }
+                if left?.isEmpty == true { break }
                 Thread.sleep(forTimeInterval: 0.02)
-                left = readText(selectorParams)
-            }
+            } while Date() < emptyBy
             return left
         }
         _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
@@ -1616,11 +1619,24 @@ class CommandHandler {
         }
     }
 
-    /// The text of the field `selectorParams` finds, or nil when it cannot be
-    /// read: not found, or known only by the bounds it had.
-    private func readText(_ selectorParams: [String: Any]) -> String? {
-        guard let field = try? resolveElement(selectorParams), !field.className.isEmpty else { return nil }
-        return field.text ?? ""
+    private enum FieldRead {
+        case text(String)
+        /// No element matched: the field is gone.
+        case gone
+        /// The read failed (a snapshot error) or knows the field only by the
+        /// bounds it had.
+        case unreadable
+    }
+
+    private func readField(_ selectorParams: [String: Any]) -> FieldRead {
+        do {
+            let field = try resolveElement(selectorParams)
+            return field.className.isEmpty ? .unreadable : .text(field.text ?? "")
+        } catch AgentError.elementNotFound(let message) where message.hasPrefix("No element found matching") {
+            return .gone
+        } catch {
+            return .unreadable
+        }
     }
 
     /// Read the field until it shows `text`, shows a character never typed
@@ -1632,7 +1648,13 @@ class CommandHandler {
         var last: String?
         var since = Date()
         while true {
-            guard let shown = readText(selectorParams) else {
+            let shown: String
+            switch readField(selectorParams) {
+            case .text(let value):
+                shown = value
+            case .gone:
+                return nil
+            case .unreadable:
                 // One read can fail (a snapshot mid-animation): read again.
                 if Date() >= deadline { return nil }
                 Thread.sleep(forTimeInterval: 0.05)
