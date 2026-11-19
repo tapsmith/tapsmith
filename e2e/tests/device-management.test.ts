@@ -1,5 +1,6 @@
 import { test, expect, describe } from "tapsmith";
 import type { Device } from "tapsmith";
+import { screenShape } from "../utils/orientation.js";
 
 const PKG = "dev.tapsmith.testapp";
 
@@ -58,16 +59,12 @@ describe("Orientation", () => {
   // device started, which is landscape on a landscape-native tablet.
   let before: string | undefined;
 
-  // The screen's shape as the screenshot shows it, upright. Checked on
-  // Android only: some iOS simulator runtimes turn the device but not the
-  // app, so its screen keeps its shape (the landscape tests skip there).
+  // The screen's shape as the screenshot shows it. Checked on Android only:
+  // some iOS simulator runtimes turn the device but not the app, so its
+  // screen keeps its shape (the landscape tests skip there).
   const expectShape = async (device: Device, wanted: string) => {
     if (device.platform !== "android") return;
-    const shape = async () => {
-      const shot = Buffer.from((await device.takeScreenshot()).data);
-      return shot.readUInt32BE(16) > shot.readUInt32BE(20) ? "landscape" : "portrait";
-    };
-    await expect.poll(shape).toBe(wanted);
+    await expect.poll(() => screenShape(device)).toBe(wanted);
   };
 
   test("setOrientation('landscape') changes to landscape", async ({

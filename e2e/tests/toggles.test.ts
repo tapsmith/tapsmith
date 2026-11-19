@@ -1,4 +1,5 @@
 import { describe, expect, test } from "../fixtures.js"
+import { settledBoundingBox, turnTo } from "../utils/orientation.js"
 
 describe("Toggles screen", () => {
   // Tests toggle persisted state and scroll the screen; the beforeEach
@@ -35,14 +36,14 @@ describe("Toggles screen", () => {
       // Inside the try: if turning fails part-way, the device may still have
       // turned, and the tests after this one must start in portrait.
       // Portrait first: a landscape-native tablet starts out landscape.
-      await device.setOrientation("portrait")
+      await turnTo(device, "portrait")
       await expect(togglesScreen.darkModeSwitch).toBeVisible()
-      const portrait = await togglesScreen.darkModeSwitch.boundingBox()
-      await device.setOrientation("landscape")
+      const portrait = await settledBoundingBox(togglesScreen.darkModeSwitch)
+      await turnTo(device, "landscape")
       await expect(togglesScreen.darkModeSwitch).toBeVisible()
       // Some simulator runtimes turn the device but not the app: then there
       // is no rotated screen to tap on.
-      const landscape = await togglesScreen.darkModeSwitch.boundingBox()
+      const landscape = await settledBoundingBox(togglesScreen.darkModeSwitch)
       test.skip(
         !portrait || !landscape || landscape.x <= portrait.x + 50,
         "the app's UI did not rotate on this device, so its touches are not rotated either",
