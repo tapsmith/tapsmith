@@ -154,7 +154,7 @@ impl DeviceBackend for AndroidBackend<'_> {
         };
         // Rotation 0 is the display's natural orientation, which is landscape
         // on most tablets: pick the rotation that gives the wanted shape.
-        let rotation = user_rotation_for(wanted, device_is_landscape_native(&serial).await);
+        let rotation = rotation_map(&serial).await?.user_rotation_for(wanted);
         if let Err(e) = adb::shell(&serial, "settings put system accelerometer_rotation 0").await {
             error!(error = %e, "Failed to disable auto-rotate");
         }
@@ -167,8 +167,9 @@ impl DeviceBackend for AndroidBackend<'_> {
         let output = adb::shell(&serial, "settings get system user_rotation")
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        let landscape_native = device_is_landscape_native(&serial).await;
-        Ok(orientation_for_rotation(&output, landscape_native)
+        Ok(rotation_map(&serial)
+            .await?
+            .orientation_of(&output)
             .as_str()
             .to_string())
     }
@@ -1575,6 +1576,85 @@ impl Orientation {
     }
 }
 
+/// Which `user_rotation` values show the default display portrait and which
+/// landscape. Rotation 0 is the display's natural orientation: portrait on a
+/// phone, landscape on most tablets. Rotations of the same parity give the
+/// same shape (landscape and seascape, portrait and upside down).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RotationMap {
+    portrait: u8,
+    landscape: u8,
+}
+
+impl RotationMap {
+    /// A phone: AOSP's defaults for a taller-than-wide natural display.
+    const PORTRAIT_NATIVE: Self = Self {
+        portrait: 0,
+        landscape: 1,
+    };
+    /// AOSP's defaults for a wider-than-tall natural display: portrait is
+    /// 270 degrees, as 90 is its upside-down portrait.
+    const LANDSCAPE_NATIVE: Self = Self {
+        portrait: 3,
+        landscape: 0,
+    };
+
+    fn user_rotation_for(self, orientation: Orientation) -> u8 {
+        match orientation {
+            Orientation::Portrait => self.portrait,
+            Orientation::Landscape => self.landscape,
+        }
+    }
+
+    /// The screen's shape at `user_rotation` `rotation` (unset reads as 0).
+    fn orientation_of(self, rotation: &str) -> Orientation {
+        let rotation: u8 = rotation.trim().parse().unwrap_or(0);
+        if rotation % 2 == self.landscape % 2 {
+            Orientation::Landscape
+        } else {
+            Orientation::Portrait
+        }
+    }
+}
+
+/// The shell command `rotation_map` reads: the window manager's rotation
+/// policy, then the display size as a fallback.
+const ROTATION_PROBE: &str =
+    "dumpsys window displays | grep -E 'mPortraitRotation=|mLandscapeRotation='; wm size";
+
+/// `0`–`3` from a rotation value as `dumpsys window` prints it: `ROTATION_270`
+/// on current releases, or a bare `3`.
+fn parse_rotation(value: &str) -> Option<u8> {
+    let value = value.trim();
+    let n = match value.strip_prefix("ROTATION_") {
+        Some(degrees) => degrees.parse::<u16>().ok().filter(|d| d % 90 == 0)? / 90,
+        None => value.parse::<u16>().ok()?,
+    };
+    u8::try_from(n).ok().filter(|n| *n < 4)
+}
+
+/// The first value of `key=` in `output` (the default display is listed
+/// first).
+fn rotation_field(output: &str, key: &str) -> Option<u8> {
+    let start = output.find(key)? + key.len();
+    let value: String = output[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    parse_rotation(&value)
+}
+
+/// The window manager's own portrait and landscape rotations, which also
+/// account for devices configured to turn the other way.
+fn rotation_policy(output: &str) -> Option<RotationMap> {
+    let portrait = rotation_field(output, "mPortraitRotation=")?;
+    let landscape = rotation_field(output, "mLandscapeRotation=")?;
+    (portrait % 2 != landscape % 2).then_some(RotationMap {
+        portrait,
+        landscape,
+    })
+}
+
 /// The default display's size at rotation 0 (its natural orientation), from
 /// `wm size`: the override size when one is set, else the physical size.
 /// Both are reported unrotated, whatever the current rotation.
@@ -1588,54 +1668,32 @@ fn natural_display_size(wm_size: &str) -> Option<(u32, u32)> {
     size_after("Override size:").or_else(|| size_after("Physical size:"))
 }
 
-/// Whether rotation 0 shows the screen wider than tall, as on most tablets.
-/// A square display, or one whose size could not be read, is treated as
-/// portrait-native like a phone.
-fn is_landscape_native(size: Option<(u32, u32)>) -> bool {
-    matches!(size, Some((w, h)) if w > h)
-}
-
-/// The `user_rotation` that shows the screen in `orientation`. Rotations 0
-/// and 2 keep the natural shape, 1 and 3 turn it a quarter.
-fn user_rotation_for(orientation: Orientation, landscape_native: bool) -> &'static str {
-    let natural = if landscape_native {
-        Orientation::Landscape
-    } else {
-        Orientation::Portrait
-    };
-    if orientation == natural {
-        "0"
-    } else {
-        "1"
-    }
-}
-
-/// The screen's shape at `user_rotation` `rotation` (unset reads as 0).
-fn orientation_for_rotation(rotation: &str, landscape_native: bool) -> Orientation {
-    let quarter_turn = matches!(rotation.trim(), "1" | "3");
-    if quarter_turn != landscape_native {
-        Orientation::Landscape
-    } else {
-        Orientation::Portrait
-    }
-}
-
-/// Whether `serial`'s default display is landscape-native. Read on every call:
-/// a foldable's default display changes shape as it folds.
-async fn device_is_landscape_native(serial: &str) -> bool {
-    match adb::shell(serial, "wm size").await {
-        Ok(output) => {
-            let size = natural_display_size(&output);
-            if size.is_none() {
-                warn!(output = %output.trim(), "Could not parse `wm size`; assuming a portrait-native display");
+/// The rotation map from `ROTATION_PROBE`'s output: the window manager's
+/// policy, else AOSP's defaults for the natural display's shape. `None` when
+/// neither can be read.
+fn rotation_map_from(output: &str) -> Option<RotationMap> {
+    rotation_policy(output).or_else(|| {
+        natural_display_size(output).map(|(w, h)| {
+            if w > h {
+                RotationMap::LANDSCAPE_NATIVE
+            } else {
+                RotationMap::PORTRAIT_NATIVE
             }
-            is_landscape_native(size)
-        }
-        Err(e) => {
-            warn!(error = %e, "Could not read `wm size`; assuming a portrait-native display");
-            false
-        }
-    }
+        })
+    })
+}
+
+/// `serial`'s rotation map. Read on every call: a foldable's default display
+/// changes shape as it folds. A device whose output can't be parsed gets the
+/// phone mapping, with a warning; an adb failure is an error.
+async fn rotation_map(serial: &str) -> Result<RotationMap, Status> {
+    let output = adb::shell(serial, ROTATION_PROBE)
+        .await
+        .map_err(|e| Status::internal(format!("Could not read the display's rotations: {e}")))?;
+    Ok(rotation_map_from(&output).unwrap_or_else(|| {
+        warn!(output = %output.trim(), "Could not read the display's rotations; assuming a portrait-native display");
+        RotationMap::PORTRAIT_NATIVE
+    }))
 }
 
 #[cfg(test)]
@@ -1694,55 +1752,91 @@ mod tests {
         assert_eq!(events[0].timestamp_ms, 0);
     }
 
+    // `dumpsys window displays` on a Pixel Tablet (API 36), as ROTATION_PROBE
+    // greps it, followed by `wm size`.
+    const TABLET_PROBE: &str = "    mLandscapeRotation=ROTATION_0 mSeascapeRotation=ROTATION_180\n    mPortraitRotation=ROTATION_270 mUpsideDownRotation=ROTATION_90\nPhysical size: 2560x1600\n";
+    const PHONE_PROBE: &str = "    mLandscapeRotation=ROTATION_90 mSeascapeRotation=ROTATION_270\r\n    mPortraitRotation=ROTATION_0 mUpsideDownRotation=ROTATION_180\r\nPhysical size: 1080x2400\r\n";
+
     #[test]
-    fn natural_size_prefers_the_override_size() {
+    fn the_window_managers_rotations_decide_the_map() {
         assert_eq!(
-            natural_display_size("Physical size: 2560x1600\n"),
-            Some((2560, 1600))
+            rotation_map_from(TABLET_PROBE),
+            Some(RotationMap::LANDSCAPE_NATIVE)
         );
         assert_eq!(
-            natural_display_size("Physical size: 1080x2400\r\nOverride size: 2400x1080\r\n"),
-            Some((2400, 1080))
+            rotation_map_from(PHONE_PROBE),
+            Some(RotationMap::PORTRAIT_NATIVE)
         );
-        assert_eq!(natural_display_size(""), None);
-        assert_eq!(natural_display_size("Error: no display"), None);
-        assert_eq!(natural_display_size("Physical size: widexhigh"), None);
+        // A device configured to turn the other way (config_reverseDefaultRotation).
+        assert_eq!(
+            rotation_map_from("mLandscapeRotation=ROTATION_0\nmPortraitRotation=ROTATION_90\nPhysical size: 2560x1600"),
+            Some(RotationMap { portrait: 1, landscape: 0 })
+        );
+        // Older releases print bare numbers.
+        assert_eq!(
+            rotation_map_from("mLandscapeRotation=1 mSeascapeRotation=3\nmPortraitRotation=0 mUpsideDownRotation=2"),
+            Some(RotationMap::PORTRAIT_NATIVE)
+        );
     }
 
     #[test]
-    fn only_a_wider_than_tall_natural_display_is_landscape_native() {
-        assert!(is_landscape_native(Some((2560, 1600))));
-        assert!(!is_landscape_native(Some((1080, 2400))));
-        // A square display, and one whose size can't be read, keep the
-        // phone mapping.
-        assert!(!is_landscape_native(Some((2000, 2000))));
-        assert!(!is_landscape_native(None));
+    fn without_a_rotation_policy_the_natural_size_decides() {
+        assert_eq!(
+            rotation_map_from("Physical size: 2560x1600\n"),
+            Some(RotationMap::LANDSCAPE_NATIVE)
+        );
+        assert_eq!(
+            rotation_map_from("Physical size: 1080x2400\n"),
+            Some(RotationMap::PORTRAIT_NATIVE)
+        );
+        // The override size wins over the physical one.
+        assert_eq!(
+            rotation_map_from("Physical size: 1080x2400\nOverride size: 2400x1080\n"),
+            Some(RotationMap::LANDSCAPE_NATIVE)
+        );
+        // A square display keeps the phone mapping.
+        assert_eq!(
+            rotation_map_from("Physical size: 2000x2000"),
+            Some(RotationMap::PORTRAIT_NATIVE)
+        );
+        // A policy whose two rotations give the same shape is not believed.
+        assert_eq!(
+            rotation_map_from("mLandscapeRotation=ROTATION_0 mPortraitRotation=ROTATION_180\nPhysical size: 1080x2400"),
+            Some(RotationMap::PORTRAIT_NATIVE)
+        );
+        for unreadable in [
+            "",
+            "Error: no display",
+            "Physical size: widexhigh",
+            "mPortraitRotation=ROTATION_45",
+        ] {
+            assert_eq!(rotation_map_from(unreadable), None, "{unreadable:?}");
+        }
     }
 
     #[test]
     fn phones_keep_rotation_0_for_portrait_and_1_for_landscape() {
-        assert_eq!(user_rotation_for(Orientation::Portrait, false), "0");
-        assert_eq!(user_rotation_for(Orientation::Landscape, false), "1");
+        let map = RotationMap::PORTRAIT_NATIVE;
+        assert_eq!(map.user_rotation_for(Orientation::Portrait), 0);
+        assert_eq!(map.user_rotation_for(Orientation::Landscape), 1);
         for (rotation, expected) in [
             ("0", Orientation::Portrait),
             ("1", Orientation::Landscape),
             ("2", Orientation::Portrait),
-            ("3", Orientation::Landscape),
+            ("3\n", Orientation::Landscape),
             ("null", Orientation::Portrait),
             ("", Orientation::Portrait),
         ] {
-            assert_eq!(
-                orientation_for_rotation(rotation, false),
-                expected,
-                "{rotation:?}"
-            );
+            assert_eq!(map.orientation_of(rotation), expected, "{rotation:?}");
         }
     }
 
     #[test]
     fn landscape_native_devices_turn_the_mapping_round() {
-        assert_eq!(user_rotation_for(Orientation::Portrait, true), "1");
-        assert_eq!(user_rotation_for(Orientation::Landscape, true), "0");
+        let map = RotationMap::LANDSCAPE_NATIVE;
+        // 270, not 90: 90 is a landscape-native display's upside-down portrait.
+        assert_eq!(map.user_rotation_for(Orientation::Portrait), 3);
+        assert_eq!(map.user_rotation_for(Orientation::Landscape), 0);
         for (rotation, expected) in [
             ("0", Orientation::Landscape),
             ("1", Orientation::Portrait),
@@ -1751,20 +1845,24 @@ mod tests {
             ("null", Orientation::Landscape),
             ("\n", Orientation::Landscape),
         ] {
-            assert_eq!(
-                orientation_for_rotation(rotation, true),
-                expected,
-                "{rotation:?}"
-            );
+            assert_eq!(map.orientation_of(rotation), expected, "{rotation:?}");
         }
     }
 
     #[test]
     fn every_orientation_set_reads_back_the_same() {
-        for landscape_native in [false, true] {
+        let reversed = RotationMap {
+            portrait: 1,
+            landscape: 0,
+        };
+        for map in [
+            RotationMap::PORTRAIT_NATIVE,
+            RotationMap::LANDSCAPE_NATIVE,
+            reversed,
+        ] {
             for wanted in [Orientation::Portrait, Orientation::Landscape] {
-                let rotation = user_rotation_for(wanted, landscape_native);
-                assert_eq!(orientation_for_rotation(rotation, landscape_native), wanted);
+                let rotation = map.user_rotation_for(wanted).to_string();
+                assert_eq!(map.orientation_of(&rotation), wanted, "{map:?}");
             }
         }
     }

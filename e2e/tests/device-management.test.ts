@@ -58,10 +58,16 @@ describe("Orientation", () => {
   // device started, which is landscape on a landscape-native tablet.
   let before: string | undefined;
 
-  // The screen's shape as the screenshot shows it, upright.
-  const shape = async (device: Device) => {
-    const shot = Buffer.from((await device.takeScreenshot()).data);
-    return shot.readUInt32BE(16) > shot.readUInt32BE(20) ? "landscape" : "portrait";
+  // The screen's shape as the screenshot shows it, upright. Checked on
+  // Android only: some iOS simulator runtimes turn the device but not the
+  // app, so its screen keeps its shape (the landscape tests skip there).
+  const expectShape = async (device: Device, wanted: string) => {
+    if (device.platform !== "android") return;
+    const shape = async () => {
+      const shot = Buffer.from((await device.takeScreenshot()).data);
+      return shot.readUInt32BE(16) > shot.readUInt32BE(20) ? "landscape" : "portrait";
+    };
+    await expect.poll(shape).toBe(wanted);
   };
 
   test("setOrientation('landscape') changes to landscape", async ({
@@ -71,11 +77,11 @@ describe("Orientation", () => {
     // From portrait, so the screen really turns on a device that starts out
     // landscape, and the shape check below can't pass before it has turned.
     await device.setOrientation("portrait");
-    await expect.poll(() => shape(device)).toBe("portrait");
+    await expectShape(device, "portrait");
     await device.setOrientation("landscape");
     const orientation = await device.getOrientation();
     expect(orientation).toBe("landscape");
-    await expect.poll(() => shape(device)).toBe("landscape");
+    await expectShape(device, "landscape");
   });
 
   // The test above leaves the device turned. A test's turn is undone after
@@ -88,7 +94,7 @@ describe("Orientation", () => {
     await device.setOrientation("portrait");
     const orientation = await device.getOrientation();
     expect(orientation).toBe("portrait");
-    await expect.poll(() => shape(device)).toBe("portrait");
+    await expectShape(device, "portrait");
   });
 });
 
