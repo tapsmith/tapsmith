@@ -186,8 +186,10 @@ struct KeyboardDismissPlanner {
         self.statusBar = statusBar
     }
 
-    init(snapshot: XCUIElementSnapshot, screenSize: CGSize, device: HidTouch.DeviceTurn, statusBar: CGRect? = nil) {
-        self.init(analyzer: OcclusionAnalyzer(snapshot: snapshot, screenSize: screenSize, device: device), statusBar: statusBar)
+    init(
+        snapshot: XCUIElementSnapshot, screenSize: CGSize, device: @autoclosure () -> HidTouch.DeviceTurn, statusBar: CGRect? = nil
+    ) {
+        self.init(analyzer: OcclusionAnalyzer(snapshot: snapshot, screenSize: screenSize, device: device()), statusBar: statusBar)
     }
 
     // MARK: - The system status bar

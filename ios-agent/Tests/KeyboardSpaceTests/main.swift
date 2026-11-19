@@ -101,16 +101,11 @@ do {
 // MARK: - Which turn
 
 do {
-    let wide = CGSize(width: 874, height: 402)
-    check("a known turn is used", KeyboardSpace.turn(device: .landscapeRight, keyboard: R(2, 75, 162, 724), screen: wide), .landscapeRight)
-    check("lying flat: a keyboard docked on the native left edge is landscapeLeft",
-          KeyboardSpace.turn(device: .other, keyboard: R(2, 75, 162, 724), screen: wide), .landscapeLeft)
-    check("lying flat: on the native right edge, landscapeRight",
-          KeyboardSpace.turn(device: .other, keyboard: R(238, 75, 162, 724), screen: wide), .landscapeRight)
-    check("lying flat with no keyboard: unknown",
-          KeyboardSpace.turn(device: .other, keyboard: nil, screen: wide), nil)
-    check("lying flat with an empty keyboard frame: unknown",
-          KeyboardSpace.turn(device: .portrait, keyboard: R(0, 0, 0, 0), screen: wide), nil)
+    check("landscapeLeft", KeyboardSpace.landscapeTurn(.landscapeLeft), .landscapeLeft)
+    check("landscapeRight", KeyboardSpace.landscapeTurn(.landscapeRight), .landscapeRight)
+    for device in [HidTouch.DeviceTurn.portrait, .portraitUpsideDown, .other] {
+        check("\(device): no landscape turn", KeyboardSpace.landscapeTurn(device), nil)
+    }
 }
 
 // MARK: - iPhone 17 Pro, iOS 26.5, landscapeLeft
@@ -149,9 +144,13 @@ do {
     }
     check("26.5 iPhone: no dismiss key on an iPhone", planner.dismissKey(), nil)
 
-    // Lying flat, the turn is read off the docked keyboard.
-    check("26.5 iPhone lying flat: turned as landscapeLeft",
-          frames(KeyboardSpace.turnIntoInterface(raw, screen: screen, device: .other), keyboardType), [B(75, 238, 799, 400)])
+    // Lying flat, the turn can't be told, and the agent's touches are not
+    // mapped either (TouchSpace): the frames stand, as they did.
+    check("26.5 iPhone lying flat: nothing is turned",
+          KeyboardSpace.turnIntoInterface(raw, screen: screen, device: .other).map(\.frame), raw.map(\.frame))
+    var flat = dict
+    KeyboardSpace.turnIntoInterface(in: &flat, device: .other)
+    check("26.5 iPhone lying flat: the dictionary is left alone", nodes(flat).map(\.frame), raw.map(\.frame))
 
     // The dictionary the dump and the locators read turns the same way.
     KeyboardSpace.turnIntoInterface(in: &dict, device: .landscapeLeft)
@@ -241,8 +240,6 @@ do {
         let turned = KeyboardSpace.turnIntoInterface(raw, screen: screen, device: turn)
         check("\(turn): the keyboard is turned back", frames(turned, keyboardType), [B(0, 240, 874, 402)])
         check("\(turn): its key too", frame(turned, label: "return"), B(700, 350, 800, 390))
-        check("\(turn) lying flat: read off the docked keyboard",
-              frames(KeyboardSpace.turnIntoInterface(raw, screen: screen, device: .other), keyboardType), [B(0, 240, 874, 402)])
     }
     let withAppContainer = syntheticTree(turn: .landscapeLeft, extraContainerInAppWindow: true)
     let turned = KeyboardSpace.turnIntoInterface(withAppContainer, screen: screen, device: .landscapeLeft)
@@ -251,6 +248,24 @@ do {
     check("upright screen: nothing is turned",
           KeyboardSpace.turnIntoInterface(withAppContainer, screen: CGSize(width: 402, height: 874), device: .portrait).map(\.frame),
           withAppContainer.map(\.frame))
+}
+
+// MARK: - The device's turn is read only when a snapshot needs it
+
+do {
+    var reads = 0
+    func readTurn() -> HidTouch.DeviceTurn { reads += 1; return .landscapeLeft }
+    for name in ["iphone-17-pro-26.5/portrait-keyboard.xml", "iphone-17-27.2/landscape-keyboard.xml"] {
+        var dict = fixture(name)
+        let size = CellFrames.frame(of: dict).size
+        _ = KeyboardSpace.turnIntoInterface(nodes(dict), screen: size, device: readTurn())
+        KeyboardSpace.turnIntoInterface(in: &dict, device: readTurn())
+    }
+    check("no native container: the turn is never read", reads, 0)
+    var dict = fixture("iphone-17-pro-26.5/landscape-keyboard.xml")
+    _ = KeyboardSpace.turnIntoInterface(nodes(dict), screen: CGSize(width: 874, height: 402), device: readTurn())
+    KeyboardSpace.turnIntoInterface(in: &dict, device: readTurn())
+    check("a native container: the turn is read once per snapshot", reads, 2)
 }
 
 if failures > 0 {

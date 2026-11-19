@@ -136,10 +136,11 @@ struct OcclusionAnalyzer {
         self.screen = screen
     }
 
-    /// `device` is the way the device is turned now (`XCUIDevice.orientation`):
-    /// on a turned screen, iOS 26 reports the keyboard's frames in native
-    /// portrait space, and they are turned into the app's (`KeyboardSpace`).
-    init(snapshot: XCUIElementSnapshot, screenSize: CGSize, device: HidTouch.DeviceTurn) {
+    /// `device` reads the way the device is turned now
+    /// (`XCUIDevice.orientation`), only when the snapshot needs it: on a
+    /// turned screen, iOS 26 reports the keyboard's frames in native portrait
+    /// space, and they are turned into the app's (`KeyboardSpace`).
+    init(snapshot: XCUIElementSnapshot, screenSize: CGSize, device: @autoclosure () -> HidTouch.DeviceTurn) {
         var nodes: [Node] = []
         func walk(_ s: XCUIElementSnapshot, window: Int?, parent: Int?) {
             let index = nodes.count
@@ -162,7 +163,7 @@ struct OcclusionAnalyzer {
         // miss a turn Tapsmith did not make.
         let window = snapshot.frame.size.width > 0 && snapshot.frame.size.height > 0 ? snapshot.frame.size : screenSize
         self.init(
-            nodes: KeyboardSpace.turnIntoInterface(nodes, screen: window, device: device),
+            nodes: KeyboardSpace.turnIntoInterface(nodes, screen: window, device: device()),
             screen: CGRect(origin: .zero, size: screenSize)
         )
     }

@@ -15,9 +15,12 @@ import XCTest
 ///
 /// Each frame in a native container is turned back with the inverse of
 /// `HidTouch.nativePoint`, for the way the device is turned. When that can't
-/// be told (lying flat), it is read off where the keyboard docks: at the
-/// interface's bottom edge, which is the native left edge in landscapeLeft
-/// and the native right edge in landscapeRight.
+/// be told (a device lying flat), the frames stand, as the agent's touches do
+/// (`TouchSpace`): a turn read off the keyboard alone would turn the keys
+/// into a space no touch maps back out of.
+///
+/// The device's turn is read only once a native container is found: it is a
+/// round trip to the test runner, and most snapshots have none.
 enum KeyboardSpace {
     /// Rounding slack when comparing a frame with the screen's size.
     static let tolerance: CGFloat = 1
@@ -32,17 +35,12 @@ enum KeyboardSpace {
             && abs(frame.height - screen.width) <= tolerance
     }
 
-    /// Which landscape turn a native container is laid out for: `device` when
-    /// it says, else read off the keyboard's native frame (nil when there is
-    /// no keyboard to read it from).
-    static func turn(device: HidTouch.DeviceTurn, keyboard: CGRect?, screen: CGSize) -> HidTouch.DeviceTurn? {
+    /// The landscape turn a native container is laid out for, or nil when
+    /// the device is not turned to landscape.
+    static func landscapeTurn(_ device: HidTouch.DeviceTurn) -> HidTouch.DeviceTurn? {
         switch device {
-        case .landscapeLeft, .landscapeRight:
-            return device
-        case .portrait, .portraitUpsideDown, .other:
-            guard let keyboard, keyboard.width > 0, keyboard.height > 0 else { return nil }
-            // The native portrait width is the screen's short side.
-            return keyboard.midX < screen.height / 2 ? .landscapeLeft : .landscapeRight
+        case .landscapeLeft, .landscapeRight: return device
+        case .portrait, .portraitUpsideDown, .other: return nil
         }
     }
 
@@ -84,18 +82,19 @@ enum KeyboardSpace {
     /// into interface space. `screen` is the app's window as the snapshot
     /// saw it.
     static func turnIntoInterface(
-        _ nodes: [OcclusionAnalyzer.Node], screen: CGSize, device: HidTouch.DeviceTurn
+        _ nodes: [OcclusionAnalyzer.Node], screen: CGSize, device: @autoclosure () -> HidTouch.DeviceTurn
     ) -> [OcclusionAnalyzer.Node] {
         guard screen.width > screen.height else { return nodes }
         var result = nodes
+        var deviceTurn: HidTouch.DeviceTurn?
         var i = 0
         while i < nodes.count {
             let end = nodes[i].subtreeEnd
-            guard isNativeContainer(nodes[i].frame, screen: screen) else { i += 1; continue }
-            let keyboard = nodes[i..<end].first { $0.elementType == .keyboard }
-            guard let keyboard,
-                  let turn = turn(device: device, keyboard: keyboard.frame, screen: screen)
+            guard isNativeContainer(nodes[i].frame, screen: screen),
+                  nodes[i..<end].contains(where: { $0.elementType == .keyboard })
             else { i += 1; continue }
+            if deviceTurn == nil { deviceTurn = device() }
+            guard let turn = deviceTurn.flatMap(landscapeTurn) else { return nodes }
             for j in i..<end {
                 let n = nodes[j]
                 result[j] = OcclusionAnalyzer.Node(
@@ -114,21 +113,25 @@ enum KeyboardSpace {
     /// The same for a snapshot's string-keyed dictionary (the tree the
     /// locators and the hierarchy dump read), whose root is the application:
     /// its frame is the app's window.
-    static func turnIntoInterface(in root: inout [String: Any], device: HidTouch.DeviceTurn) {
+    static func turnIntoInterface(in root: inout [String: Any], device: @autoclosure () -> HidTouch.DeviceTurn) {
         let screen = CellFrames.frame(of: root).size
         guard screen.width > screen.height else { return }
-        turnContainers(in: &root, screen: screen, device: device)
+        var deviceTurn: HidTouch.DeviceTurn?
+        turnContainers(in: &root, screen: screen) {
+            if deviceTurn == nil { deviceTurn = device() }
+            return deviceTurn.flatMap(landscapeTurn)
+        }
     }
 
-    private static func turnContainers(in node: inout [String: Any], screen: CGSize, device: HidTouch.DeviceTurn) {
-        if isNativeContainer(CellFrames.frame(of: node), screen: screen),
-           let keyboard = firstKeyboardFrame(in: node),
-           let turn = turn(device: device, keyboard: keyboard, screen: screen) {
-            turnAll(in: &node, screen: screen, turn: turn)
+    private static func turnContainers(
+        in node: inout [String: Any], screen: CGSize, turn: () -> HidTouch.DeviceTurn?
+    ) {
+        if isNativeContainer(CellFrames.frame(of: node), screen: screen), holdsKeyboard(node) {
+            if let turn = turn() { turnAll(in: &node, screen: screen, turn: turn) }
             return
         }
         guard var children = node["children"] as? [[String: Any]] else { return }
-        for k in children.indices { turnContainers(in: &children[k], screen: screen, device: device) }
+        for k in children.indices { turnContainers(in: &children[k], screen: screen, turn: turn) }
         node["children"] = children
     }
 
@@ -139,11 +142,8 @@ enum KeyboardSpace {
         node["children"] = children
     }
 
-    private static func firstKeyboardFrame(in node: [String: Any]) -> CGRect? {
-        if CellFrames.elementType(of: node) == .keyboard { return CellFrames.frame(of: node) }
-        for child in node["children"] as? [[String: Any]] ?? [] {
-            if let found = firstKeyboardFrame(in: child) { return found }
-        }
-        return nil
+    private static func holdsKeyboard(_ node: [String: Any]) -> Bool {
+        if CellFrames.elementType(of: node) == .keyboard { return true }
+        return (node["children"] as? [[String: Any]] ?? []).contains(where: holdsKeyboard)
     }
 }
