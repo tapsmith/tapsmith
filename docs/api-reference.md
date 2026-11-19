@@ -305,7 +305,7 @@ await device.dragXY({ x: 50, y: 200 }, { x: 50, y: 600 }, { duration: 400 });
 
 ### `device.inputText(text: string): Promise<void>`
 
-Type `text` into whatever element currently has focus (no locator). Useful for inserting text without first tapping a field. On iOS it checks what arrived in the focused text input, as `type()` does (see [`typingDelay`](configuration.md)).
+Type `text` into whatever element currently has focus (no locator). Useful for inserting text without first tapping a field.
 
 ```typescript
 await device.inputText("hello world");
@@ -1216,7 +1216,7 @@ await device.getByText("Item 1", { exact: true }).longPress({ duration: 2000, ti
 
 Type text into this element.
 
-- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay). On iOS, typing checks what arrived, with or without a delay (see [`typingDelay`](configuration.md)). iOS empties a secure (password) field that already holds text when it is typed into after taking focus. On iOS, `type()` then fails rather than leave the field holding something else. Appending to a secure field that still has focus works. Use `clearAndType()` to replace a password.
+- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay). On iOS a delay above `0` also checks what arrived; with no delay, a few keys lost on the way are typed again (see [`typingDelay`](configuration.md)). iOS empties a secure (password) field that already holds text when it is typed into after taking focus. On iOS, `type()` with a delay then fails rather than leave the field holding something else. Appending to a secure field that still has focus works. Use `clearAndType()` to replace a password.
 - `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript

@@ -103,9 +103,12 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
 // PILOT-1281: with no typing delay (the default), type() used to send the text
 // unchecked, and an iPad field just focused lost the second key while its
 // keyboard came up ("test@example.com" came out "tst@example.com") with the
-// action reporting success. It now checks what arrived as a delay does. Each
-// call passes `delay: 0`, so this runs whatever the config's typingDelay is.
-describe("type() with no typing delay checks what arrived too (iOS)", () => {
+// action reporting success. The field is now read back once, and a few lost or
+// out-of-order keys are typed again a key at a time; anything else the field
+// shows (a mask, a filter, a replaced selection, a field the app removed) is
+// left as it is, as before. Each call passes `delay: 0`, so this runs whatever
+// the config's typingDelay is.
+describe("type() with no typing delay types lost keys again (iOS)", () => {
   test.use({ appResetScope: "test" })
 
   test.beforeEach(async ({ device, typingScreen }) => {
@@ -151,7 +154,7 @@ describe("type() with no typing delay checks what arrived too (iOS)", () => {
   })
 
   test("a field that drops what it does not take keeps what it took, as before", async ({ typingScreen }) => {
-    // The field keeps six digits: the seventh is typed again once, then left out.
+    // The field keeps six digits: the seventh is left out.
     await typingScreen.formattedInput.type("1234567", { delay: 0 })
     await expect(typingScreen.formattedValue).toHaveText("fmt=123-456")
   })
@@ -160,12 +163,5 @@ describe("type() with no typing delay checks what arrived too (iOS)", () => {
     await typingScreen.vanishingInput.type("abcd", { delay: 0 })
     await expect(typingScreen.vanishingValue).toHaveText("vanish=abcd")
     await expect(typingScreen.vanishingInput).toBeHidden()
-  })
-
-  test("inputText() into a code field that moves the focus on gets one digit per box", async ({ device, typingScreen }) => {
-    // inputText() takes no delay of its own: this runs at the config's typingDelay.
-    await typingScreen.firstCodeBox.tap()
-    await device.inputText("1234")
-    await expect(typingScreen.codeValue).toHaveText("code=1234")
   })
 })

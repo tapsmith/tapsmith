@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// How `typeText` checks what it typed (PILOT-1012; with no typing delay too
-/// since PILOT-1281). It does not wait for the field to show each character in
+/// How a paced `typeText` (a typing delay above zero) checks what it typed
+/// (PILOT-1012). It no longer waits for the field to show each character in
 /// turn: it types the first key alone and waits for the field to take it
 /// (a field just focused can drop keys while the keyboard reacts to the
 /// first), sends the rest as one burst of key events, then reads the field
@@ -21,48 +21,6 @@ enum TypingCheck {
     static func charactersPerSecond(delayMs: Int) -> Int {
         guard delayMs > 0 else { return maxCharactersPerSecond }
         return min(maxCharactersPerSecond, max(1, 1000 / delayMs))
-    }
-
-    /// Whether typing `text` is checked. With a typing delay, always. With
-    /// none, too (an iPad field just focused dropped the second key of an
-    /// unchecked burst, and the action reported success), but only when the
-    /// read-back can tell what the field should hold. Otherwise the text is
-    /// sent unchecked, as it always was without a delay. That excludes a
-    /// control character other than a newline (a tab, a backspace, a
-    /// carriage return), and a newline before the end: a single-line field
-    /// takes Return as submit, and the keys after it go wherever the app
-    /// moves the focus. A newline at the end (type and submit) is checked.
-    static func checks(_ text: String, delayMs: Int) -> Bool {
-        if delayMs > 0 { return true }
-        let scalars = Array(text.unicodeScalars)
-        for (index, scalar) in scalars.enumerated() {
-            if scalar == "\n" {
-                if index != scalars.count - 1 { return false }
-            } else if scalar.properties.generalCategory == .control {
-                return false
-            }
-        }
-        return true
-    }
-
-    /// The element classes whose value is the text typed into them, so
-    /// typing into them can be read back.
-    static let textInputClassNames: Set<String> = [
-        "XCUIElementTypeTextField",
-        "XCUIElementTypeSecureTextField",
-        "XCUIElementTypeTextView",
-        "XCUIElementTypeSearchField",
-    ]
-
-    /// Whether typing with no delay into the element typing resolved is
-    /// checked: only into a text input itself. A wrapper around one (a
-    /// container with the input's test id) reads back its descendants' text,
-    /// labels and placeholder included, so it is typed into unchecked, as
-    /// before. The input typing into whatever has the focus resolved must
-    /// also be the one with the live focus: the snapshot's focus can be a
-    /// stale hint from an earlier tap after the app moved the focus on.
-    static func checksInto(className: String, focusedOnly: Bool, liveFocused: Bool) -> Bool {
-        textInputClassNames.contains(className) && (!focusedOnly || liveFocused)
     }
 
     /// What of `text` goes into the field as keys, and whether Return is
@@ -115,17 +73,6 @@ enum TypingCheck {
         return added.count == typed.count ? .scrambled : .short
     }
 
-    /// Whether the first key replaced what the field held, rather than going
-    /// after it: the field shows that key alone. Its text was selected as it
-    /// took the focus (a React Native field with `selectTextOnFocus`, or text
-    /// the test selected), and typing replaces a selection, as it does for a
-    /// user. Typing then goes on as into an empty field. Not for a secure
-    /// field: iOS empties one typed into after it takes focus, which is
-    /// reported, not taken as a selection.
-    static func replacedSelection(_ shown: String, before: String, key: String, secure: Bool) -> Bool {
-        !secure && !before.isEmpty && shown == key
-    }
-
     /// Whether a field showing `reading`, holding still, is worth emptying and
     /// typing again a key at a time. Only when what it should end up holding
     /// is known: a secure field's earlier content cannot be read back.
@@ -148,44 +95,62 @@ enum TypingCheck {
         (!secure || before.isEmpty) && before != key
     }
 
-    /// Whether typing settles for what the field shows instead of failing:
-    /// with no typing delay. A field can format, filter or limit what is
-    /// typed (an input mask, a digits-only filter, maxLength), and a read-back
-    /// cannot tell that from keys lost on the way. With no delay, which typed
-    /// unchecked before (PILOT-1281), a short, scrambled or changed result is
-    /// typed again a key at a time once, each key waited for, and whatever
-    /// the field then shows is left as it is. A delay fails it, as it always
-    /// did. Never a secure field: a change there is iOS emptying it.
-    static func settles(delayMs: Int, secure: Bool) -> Bool {
-        delayMs == 0 && !secure
+    /// Whether the first key replaced what the field held, rather than going
+    /// after it: the field shows that key alone. Its text was selected as it
+    /// took the focus (a React Native field with `selectTextOnFocus`, or text
+    /// the test selected), and typing replaces a selection, as it does for a
+    /// user. Typing then goes on as into an empty field. Not for a secure
+    /// field: iOS empties one typed into after it takes focus, which is
+    /// reported, not taken as a selection.
+    static func replacedSelection(_ shown: String, before: String, key: String, secure: Bool) -> Bool {
+        !secure && !before.isEmpty && shown == key
     }
 
-    /// Whether a lookup's "not found" says the field is gone: no element
-    /// matched. Not a snapshot that failed ("Snapshot failed after retries…"),
-    /// which says nothing about the field.
-    static func meansGone(_ notFoundMessage: String) -> Bool {
-        notFoundMessage.hasPrefix("No element found matching")
+    // ─── Typing with no delay (PILOT-1281) ───
+    //
+    // With no typing delay the text is sent unchecked, as it always was, then
+    // read back once: when a few keys were lost or came out of order (an iPad
+    // field just focused lost the second key while its keyboard came up), the
+    // text is typed again a key at a time. Anything else the field shows is
+    // left as it is: a field can format, filter or limit what is typed, and
+    // the read-back cannot tell that from lost keys.
+
+    /// The most keys a repair makes up for. More missing is a field that
+    /// limits what it takes (maxLength), not keys lost on the way.
+    static let maxRepairedKeys = 3
+
+    /// Whether typing `text` with no delay is read back: not text with a
+    /// control character (a tab, a backspace, a return), which the read-back
+    /// cannot model, and which can submit the field or move the focus.
+    static func repairs(_ text: String) -> Bool {
+        !text.unicodeScalars.contains { $0.properties.generalCategory == .control }
     }
 
-    /// Key-at-a-time retypes before typing with no delay settles.
-    static let settleRetypeTries = 1
+    /// The element classes whose value is the text typed into them. A secure
+    /// field reads back only as bullets, so it is not among them.
+    static let repairedClassNames: Set<String> = [
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeTextView",
+        "XCUIElementTypeSearchField",
+    ]
 
-    /// Whether the field shows the typed text with only characters added that
-    /// were never typed: what an input mask does ("5551234567" shown as
-    /// "(555) 123-4567"). That is left as it is, with no retype. A typed
-    /// character shown twice (a key that arrived twice) is not formatting.
-    static func looksFormatted(_ shown: String, before: String, typed: String) -> Bool {
-        guard shown.hasPrefix(before) else { return false }
-        let typedCharacters = Set(typed)
-        var pending = typed[...]
-        for character in shown.dropFirst(before.count) {
-            if let next = pending.first, character == next {
-                pending = pending.dropFirst()
-            } else if typedCharacters.contains(character) {
-                return false
-            }
+    /// Whether typing into an element of `className` is read back: only into
+    /// a text input itself. A wrapper around one reads back its descendants'
+    /// text, labels and placeholder included.
+    static func repairsInto(_ className: String) -> Bool {
+        repairedClassNames.contains(className)
+    }
+
+    /// Whether the field, read back as `reading` showing `shown`, lost a few
+    /// keys or got them out of order: every character it shows after
+    /// `before` was typed, and at most `maxRepairedKeys` are missing.
+    static func repairs(_ reading: Reading, shown: String, before: String, typed: String) -> Bool {
+        switch reading {
+        case .short, .scrambled:
+            return before.count + typed.count - shown.count <= maxRepairedKeys
+        case .complete, .changed:
+            return false
         }
-        return pending.isEmpty
     }
 
     /// The text input with keyboard focus, as typing into a field that
