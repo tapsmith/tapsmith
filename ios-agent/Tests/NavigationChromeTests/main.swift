@@ -370,6 +370,24 @@ check("a pair whose inner button has another label is no tab",
           return tree
       }())), [])
 
+// The SDK folds an outer/inner pair into one match only when their bounds
+// are identical, so an inner button inset in its outer one would make each
+// tab two matches: such a bar is not recognised.
+check("a pair whose inner button is inset in the outer one is no tab",
+      collapsed("tablist", in: marked({
+          var tree = floatingBar([("A", true, true), ("B", false, true)])
+          var window = tree["children"] as! [[String: Any]]
+          var group = window[0]
+          var buttons = group["children"] as! [[String: Any]]
+          var inner = buttons[1]["children"] as! [[String: Any]]
+          inner[0]["frame"] = ["X": 390.0, "Y": 146.0, "Width": 60.0, "Height": 28.0]
+          buttons[1]["children"] = inner
+          group["children"] = buttons
+          window[0] = group
+          tree["children"] = window
+          return tree
+      }())), [])
+
 // ─── The back button's name ───
 
 check("Duo: the unlabelled back button is named Back", named("button", "Back", exact: true, in: duoTabs), ["BackButton"])

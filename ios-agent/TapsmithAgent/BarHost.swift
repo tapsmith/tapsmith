@@ -212,16 +212,29 @@ enum BarHost {
     }
 
     /// Whether `item`, a button of a floating tab bar, is a tab: it holds
-    /// exactly one leaf, a button or an image with the same label, inside its
-    /// own frame.
+    /// exactly one leaf with the same label, a button with its own frame or
+    /// an image inside it. The SDK folds the outer/inner button pair into one
+    /// match only when their reported bounds are identical, so an inset inner
+    /// button would make the tab two matches.
     private static func isFloatingTab(_ item: [String: Any]) -> Bool {
         guard let inner = item["children"] as? [[String: Any]], inner.count == 1,
               (inner[0]["children"] as? [[String: Any]] ?? []).isEmpty,
-              [.button, .image].contains(CellFrames.elementType(of: inner[0])),
               let label = item["label"] as? String, !label.isEmpty,
               inner[0]["label"] as? String == label
         else { return false }
-        return CellFrames.frame(of: item).insetBy(dx: -1, dy: -1).contains(CellFrames.frame(of: inner[0]))
+        let outer = CellFrames.frame(of: item)
+        let leaf = CellFrames.frame(of: inner[0])
+        switch CellFrames.elementType(of: inner[0]) {
+        case .button: return reportedBounds(outer) == reportedBounds(leaf)
+        case .image: return outer.insetBy(dx: -1, dy: -1).contains(leaf)
+        default: return false
+        }
+    }
+
+    /// `frame` as the agent reports it (`ElementBounds`): whole points,
+    /// truncated. Two frames the SDK sees as one target have equal ones.
+    private static func reportedBounds(_ frame: CGRect) -> [Int] {
+        [Int(frame.minX), Int(frame.minY), Int(frame.minX + frame.width), Int(frame.minY + frame.height)]
     }
 
     /// Key under which `markHosts` marks a floating tab bar's buttons that
