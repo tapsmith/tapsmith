@@ -218,7 +218,12 @@ class ActionExecutor {
     /// interface space now: `screen` is the app's window as the plan saw it
     /// (`TouchSpace`).
     static func touchSpace(screen: CGSize) -> TouchSpace {
-        TouchSpace(screen: screen, device: deviceTurn(XCUIDevice.shared.orientation))
+        TouchSpace(screen: screen, device: currentDeviceTurn())
+    }
+
+    /// The way the device is turned now, as `HidTouch` takes it.
+    static func currentDeviceTurn() -> HidTouch.DeviceTurn {
+        deviceTurn(XCUIDevice.shared.orientation)
     }
 
     /// `XCUIDevice.orientation` as `HidTouch` takes it.
@@ -589,7 +594,7 @@ class ActionExecutor {
     /// saw it: the interface space its frames are in.
     private func optionAnalyzer() -> (analyzer: OcclusionAnalyzer, screen: CGSize)? {
         guard let snapshot = try? app.snapshot() else { return nil }
-        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size, device: Self.currentDeviceTurn())
         return (analyzer, Self.windowSize(of: snapshot, fallback: cachedScreenSize))
     }
 
@@ -622,7 +627,7 @@ class ActionExecutor {
             option.tap()
             return
         }
-        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: cachedScreenSize ?? appSnapshot.frame.size)
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: cachedScreenSize ?? appSnapshot.frame.size, device: Self.currentDeviceTurn())
         let target = OcclusionAnalyzer.Target(
             frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier
         )
@@ -804,7 +809,7 @@ class ActionExecutor {
                     "Could not read the screen to find its back button: \(error.localizedDescription)"
                 )
             }
-            let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+            let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size, device: Self.currentDeviceTurn())
             let resolution = BackButton.resolve(in: analyzer)
             if case .tap(let point, let ancestorTypes) = resolution {
                 tap(

@@ -1023,7 +1023,7 @@ class CommandHandler {
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
         plannedScreenSize = self.screenSize(of: appSnapshot)
-        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize, device: ActionExecutor.currentDeviceTurn())
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
         // A target identified from what was cached (its live read was another
         // element's, or none) is judged by the tree alone: the live element's
@@ -1098,7 +1098,7 @@ class CommandHandler {
                     "The UI hierarchy could not be read to check what covers the element, so it was not pinched"
                 )
             }
-            let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: snapshotFinder.screenSize)
+            let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: snapshotFinder.screenSize, device: ActionExecutor.currentDeviceTurn())
             guard let cover = analyzer.interactiveCover(of: target, at: plan.touchDownPoints) else { return plan }
             let elapsedMs = Int64(Date().timeIntervalSince(started) * 1000)
             if elapsedMs + Int64(TouchPlanClock.pollSeconds * 1000) >= timeoutMs {
@@ -3397,7 +3397,7 @@ class CommandHandler {
               let stepDeadline = KeyboardFirstGate.stepDeadline(now: Date(), readDeadline: commandReadDeadline)
         else { return }
         guard let snapshot = try? snapshotFinder.takeSnapshot() else { return }
-        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: snapshotFinder.screenSize, device: ActionExecutor.currentDeviceTurn())
         switch analyzer.keyboardFirst(cachedTarget(element)) {
         case .noKeyboard:
             keyboardFirstGate.sawNoKeyboard()
@@ -3468,7 +3468,9 @@ class CommandHandler {
             guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
             let screen = screenSize(of: snapshot)
             if statusBar == nil { statusBar = .some(systemStatusBarRegion(screen: screen)) }
-            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screen, statusBar: statusBar ?? nil)
+            let planner = KeyboardDismissPlanner(
+                snapshot: snapshot, screenSize: screen, device: ActionExecutor.currentDeviceTurn(), statusBar: statusBar ?? nil
+            )
             // A keyboard element with nothing on screen (zero-sized, off
             // screen, after the appearance wait above) covers nothing: there is
             // nothing to put away, and no reason to touch the app or submit the
@@ -3504,7 +3506,7 @@ class CommandHandler {
             return nil
         }
         let region = KeyboardDismissPlanner.statusBarRegion(
-            springboard: OcclusionAnalyzer(snapshot: snapshot, screenSize: screen)
+            springboard: OcclusionAnalyzer(snapshot: snapshot, screenSize: screen, device: ActionExecutor.currentDeviceTurn())
         )
         NSLog("[TapsmithCommand] hideKeyboard: status bar at \(region.map { NSCoder.string(for: $0) } ?? "nowhere known") (\(Int(Date().timeIntervalSince(started) * 1000)) ms)")
         return region
@@ -3561,10 +3563,9 @@ class CommandHandler {
     ) -> KeyboardDismissPlanner.Outcome {
         let screen = snapshotFinder.screenSize
         // The planner's points are in the app's interface space, as its
-        // snapshot saw it; the touch presses them where this maps them, so a
-        // drag still goes up the screen as it is turned. (The keyboard's own
-        // frames are another matter: in landscape iOS reports them in native
-        // portrait space; see the dismiss key below.)
+        // snapshot saw it (the keyboard's own frames too: `KeyboardSpace`
+        // turns them there); the touch presses them where this maps them, so
+        // a drag still goes up the screen as it is turned.
         let space = ActionExecutor.touchSpace(screen: planner.screen.size)
         switch strategy {
         case .scrollSwipe:
@@ -3585,7 +3586,8 @@ class CommandHandler {
             guard let snapshot = try? snapshotFinder.takeSnapshot(),
                   hasKeyboardInSnapshot(snapshot.dictionaryRepresentation),
                   let again = KeyboardDismissPlanner(
-                      snapshot: snapshot, screenSize: screenSize(of: snapshot), statusBar: planner.statusBar
+                      snapshot: snapshot, screenSize: screenSize(of: snapshot), device: ActionExecutor.currentDeviceTurn(),
+                      statusBar: planner.statusBar
                   ).scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
             else { return .keyboardStayed }
             let againSpace = ActionExecutor.touchSpace(screen: screenSize(of: snapshot))
@@ -3596,11 +3598,7 @@ class CommandHandler {
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
-            // Not mapped: in landscape iOS reports the keyboard's own frames
-            // in native portrait space already (unlike the app's), so the
-            // key's point is where the touch must press it. Map it here once
-            // those frames are turned into the app's interface space.
-            guard EventSynthesizer.tap(at: key, hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
+            guard EventSynthesizer.tap(at: space.point(key), hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .blankTap:
             guard let field = snapshotFinder.liveFocusedTextInput() else {
@@ -3662,7 +3660,9 @@ class CommandHandler {
         guard let snapshot = try? app.snapshot(),
               !snapshot.dictionaryRepresentation.isEmpty else { return nil }
         guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return (.absent, []) }
-        let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
+        let planner = KeyboardDismissPlanner(
+            snapshot: snapshot, screenSize: screenSize(of: snapshot), device: ActionExecutor.currentDeviceTurn()
+        )
         return (planner.keyboardRegion == nil ? .offScreen : .onScreen, planner.keyboardFrames)
     }
 

@@ -223,6 +223,9 @@ class SnapshotElementFinder {
         // an unloaded table row's contents report a placeholder frame on
         // screen (PILOT-800).
         CellFrames.placeDetachedNodes(in: &snapshotDict)
+        // The keyboard's frames in the app's interface space on a turned
+        // screen, so its keys stay out of what locators match (PILOT-1284).
+        KeyboardSpace.turnIntoInterface(in: &snapshotDict, device: ActionExecutor.currentDeviceTurn())
         // A table row's accessory indicator is enabled as its row, and no
         // part of the row's text (PILOT-895).
         CellAccessories.normalizeIndicators(in: &snapshotDict)

@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy>
+  <XCUIElementTypeApplication label="Tapsmith Test App" identifier="" value="" placeholderValue="" type="XCUIElementTypeApplication" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+    <XCUIElementTypeWindow label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeWindow" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                      <XCUIElementTypeNavigationBar label="" identifier="Turned Gestures" value="" placeholderValue="" type="XCUIElementTypeNavigationBar" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,24][874,78]">
+                        <XCUIElementTypeButton label="Back" identifier="BackButton" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[38,24][128,68]" />
+                        <XCUIElementTypeStaticText label="Turned Gestures" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="heading" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[370,35][503,56]" />
+                      </XCUIElementTypeNavigationBar>
+                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,54][874,402]">
+                            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,54][874,402]">
+                              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,78][874,402]">
+                                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,78][874,402]" />
+                                <XCUIElementTypeStaticText label="Pad 0: None" identifier="turned-pad-result" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,94][268,113]">
+                                  <XCUIElementTypeStaticText label="Pad 0: None" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,94][268,113]" />
+                                </XCUIElementTypeStaticText>
+                                <XCUIElementTypeOther label="Gesture pad" identifier="turned-pad" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[280,94][858,386]" />
+                                <XCUIElementTypeButton label="Pick a size" identifier="turned-size" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,121][268,158]" />
+                                <XCUIElementTypeStaticText label="Size: None" identifier="turned-size-chosen" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,166][268,185]">
+                                  <XCUIElementTypeStaticText label="Size: None" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,166][268,185]" />
+                                </XCUIElementTypeStaticText>
+                                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,193][268,230]">
+                                  <XCUIElementTypeTextField label="Turned field" identifier="turned-field" value="" placeholderValue="Turned field" type="XCUIElementTypeTextField" tapsmith-role="textfield" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[17,194][267,229]" />
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]" />
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                    <XCUIElementTypeStaticText label="tapsmith-hooks:1;epoch=0;nav=1;boot=1911a356;url=tapsmithtest:///;writes=0" identifier="tapsmith-hooks" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+                      <XCUIElementTypeStaticText label="tapsmith-hooks:1;epoch=0;nav=1;boot=1911a356;url=tapsmithtest:///;writes=0" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]" />
+                    </XCUIElementTypeStaticText>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeWindow>
+    <XCUIElementTypeWindow label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeWindow" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]" />
+        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,194][874,402]">
+          <XCUIElementTypeOther label="" identifier="inputView" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[75,194][799,402]" />
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeWindow>
+    <XCUIElementTypeWindow label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeWindow" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][874,402]">
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][402,874]">
+        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][208,874]">
+          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][208,874]">
+            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][208,874]">
+              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][208,874]" />
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+          <XCUIElementTypeOther label="" identifier="SystemInputAssistantView" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]" tapsmith-non-app="true">
+            <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]">
+              <XCUIElementTypeOther label="" identifier="CenterPageView" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]">
+                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[-436,75][808,799]">
+                  <XCUIElementTypeScrollView label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeScrollView" tapsmith-role="scrollview" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]" />
+                </XCUIElementTypeOther>
+                <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]">
+                  <XCUIElementTypeOther label="Typing Predictions" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]">
+                    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]">
+                      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,799]">
+                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,75][208,316]" />
+                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,316][208,557]" />
+                        <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[164,557][208,799]" />
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][164,874]">
+            <XCUIElementTypeButton label="Emoji" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[-3,8][65,76]">
+              <XCUIElementTypeStaticText label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[65,8][65,8]" />
+            </XCUIElementTypeButton>
+            <XCUIElementTypeButton label="Dictate" identifier="dictation" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[-3,797][65,865]">
+              <XCUIElementTypeStaticText label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[65,797][65,797]" />
+            </XCUIElementTypeButton>
+            <XCUIElementTypeButton label="Dictate" identifier="dictation" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[-3,797][65,865]">
+              <XCUIElementTypeStaticText label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[65,797][65,797]" />
+            </XCUIElementTypeButton>
+          </XCUIElementTypeOther>
+          <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[2,75][164,799]">
+            <XCUIElementTypeKeyboard label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeKeyboard" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[2,75][164,799]" tapsmith-non-app="true">
+              <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[2,75][164,799]">
+                <XCUIElementTypeOther label="" identifier="UIKeyboardLayoutStar Preview" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[2,75][164,799]">
+                  <XCUIElementTypeKey label="Padding-Left" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[164,75][164,75]" />
+                  <XCUIElementTypeKey label="q" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,77][159,149]" />
+                  <XCUIElementTypeKey label="w" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,149][159,221]" />
+                  <XCUIElementTypeKey label="e" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,221][159,293]" />
+                  <XCUIElementTypeKey label="r" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,293][159,365]" />
+                  <XCUIElementTypeKey label="t" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,365][159,438]" />
+                  <XCUIElementTypeKey label="y" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,438][159,510]" />
+                  <XCUIElementTypeKey label="u" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,510][159,582]" />
+                  <XCUIElementTypeKey label="i" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,582][159,654]" />
+                  <XCUIElementTypeKey label="o" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,654][159,726]" />
+                  <XCUIElementTypeKey label="p" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[123,726][159,799]" />
+                  <XCUIElementTypeKey label="Padding-Right" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[164,75][164,75]" />
+                  <XCUIElementTypeKey label="Padding-Left" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[164,75][164,75]" />
+                  <XCUIElementTypeKey label="a" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,113][123,185]" />
+                  <XCUIElementTypeKey label="s" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,185][123,257]" />
+                  <XCUIElementTypeKey label="d" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,257][123,329]" />
+                  <XCUIElementTypeKey label="f" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,329][123,402]" />
+                  <XCUIElementTypeKey label="g" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,402][123,474]" />
+                  <XCUIElementTypeKey label="h" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,474][123,546]" />
+                  <XCUIElementTypeKey label="j" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,546][123,618]" />
+                  <XCUIElementTypeKey label="k" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,618][123,690]" />
+                  <XCUIElementTypeKey label="l" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[88,690][123,763]" />
+                  <XCUIElementTypeKey label="Padding-Right" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[164,75][164,75]" />
+                  <XCUIElementTypeButton label="shift" identifier="shift" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,77][88,171]" />
+                  <XCUIElementTypeKey label="Padding-Left" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[164,75][164,75]" />
+                  <XCUIElementTypeKey label="z" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,185][88,257]" />
+                  <XCUIElementTypeKey label="x" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,257][88,329]" />
+                  <XCUIElementTypeKey label="c" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,329][88,402]" />
+                  <XCUIElementTypeKey label="v" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,402][88,474]" />
+                  <XCUIElementTypeKey label="b" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,474][88,546]" />
+                  <XCUIElementTypeKey label="n" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,546][88,618]" />
+                  <XCUIElementTypeKey label="m" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,618][88,690]" />
+                  <XCUIElementTypeKey label="Padding-Right" identifier="" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="false" selected="false" hasFocus="false" bounds="[164,75][164,75]" />
+                  <XCUIElementTypeKey label="delete" identifier="delete" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[53,705][88,799]" />
+                  <XCUIElementTypeKey label="numbers" identifier="more" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[18,77][53,221]" />
+                  <XCUIElementTypeKey label=" " identifier="space" value="" placeholderValue="" type="XCUIElementTypeKey" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[18,221][53,654]" />
+                  <XCUIElementTypeButton label="return" identifier="Return" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[18,654][53,799]" />
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeKeyboard>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeWindow>
+  </XCUIElementTypeApplication>
+</hierarchy>

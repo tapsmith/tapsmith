@@ -121,7 +121,7 @@ enum CellFrames {
         return CGRect(x: x, y: y, width: w, height: h)
     }
 
-    private static func setFrame(_ rect: CGRect, of dict: inout [String: Any]) {
+    static func setFrame(_ rect: CGRect, of dict: inout [String: Any]) {
         dict["frame"] = [
             "X": Double(rect.minX), "Y": Double(rect.minY),
             "Width": Double(rect.width), "Height": Double(rect.height),
