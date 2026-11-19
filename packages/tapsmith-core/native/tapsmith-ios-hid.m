@@ -96,7 +96,8 @@ static long long nowMs(void) {
 }
 
 /* Count a confirmation that took `ms`, if it was slow. Called on the
- * completion queue, and on the main thread for a wait that timed out. */
+ * completion queue; a wait that times out is reported on its own
+ * (`unconfirmed`), and counted here if its confirmation comes later. */
 static void noteConfirm(long long ms) {
   if (ms < kSlowConfirmMs) return;
   atomic_fetch_add(&gSlowConfirms, 1);
@@ -321,7 +322,7 @@ int main(int argc, char **argv) {
     const int64_t kTapLiftWaitSeconds = 4;
 
     // Fire-and-forget send for the intermediate events of a composite
-    // gesture (double-tap): the client delivers in order, and recognizers
+    // gesture (a tap's or double-tap's downs, a drag's down and moves): the client delivers in order, and recognizers
     // key on the message timestamps stamped at CREATION time — so pacing
     // the creations paces the gesture, while waiting on each completion
     // (up to 2s under CI load) stretched the app-visible inter-tap gap

@@ -58,6 +58,8 @@ struct Helper {
     replies: Arc<std::sync::Mutex<Replies>>,
     /// The last line the helper wrote to stderr, if any.
     last_stderr: Arc<std::sync::Mutex<Option<String>>>,
+    /// The task reading the helper's stderr: finished once it has ended.
+    stderr_done: tokio::task::JoinHandle<()>,
 }
 
 /// The helper's replies as they arrive, for the senders waiting on one.
@@ -99,8 +101,9 @@ impl std::fmt::Display for HidSendError {
 const MAX_HELPER_RESTARTS: u32 = 3;
 /// How long a given-up helper is left alone before a touch tries it again.
 const GIVE_UP_COOLDOWN: Duration = Duration::from_secs(30);
-/// Answered touches in a row that show the helper works again: its
-/// evictions are cleared.
+/// Answered touches since the last eviction that show the helper works
+/// again: its evictions are cleared. A line it answered with an error does
+/// not break the run: the helper was answering.
 const RECOVERY_SUCCESSES: u32 = 5;
 /// How long writing a line may block. The daemon reads every reply, so a
 /// write only blocks once the helper has stopped reading its input and the
@@ -157,7 +160,7 @@ struct Health {
     /// Set once evictions pass the cap: why the helper is not used, and
     /// since when (it is tried again after the cool-down).
     given_up: Option<(String, Instant)>,
-    /// Waited lines answered `ok` in a row since the last eviction.
+    /// Waited lines answered `ok` since the last eviction.
     ok_streak: u32,
     /// A lift for the next helper to send first: the evicted one may have
     /// left a finger down.
@@ -685,6 +688,7 @@ impl HidInjector {
                 sent,
                 replies,
                 last_stderr,
+                stderr_done,
             },
         );
         Ok(())
@@ -767,7 +771,12 @@ impl HidInjector {
                     None => failure,
                 }));
             }
-            Ok(Err(_)) => "the iOS HID helper exited before answering".to_string(),
+            Ok(Err(_)) => {
+                // Its output ended: let it finish exiting and saying why, so
+                // the message reports how it ended rather than a moment before.
+                self.settle_exit(udid, generation).await;
+                "the iOS HID helper exited before answering".to_string()
+            }
             Err(_) => format!(
                 "the iOS HID helper gave no reply within {} ms",
                 deadline.as_millis()
@@ -785,6 +794,29 @@ impl HidInjector {
                 None => failure,
             },
         ))
+    }
+
+    /// Wait, up to [`STDERR_SETTLE`], for helper `generation` of `udid`,
+    /// whose output has ended, to have exited and its stderr to have been
+    /// read to the end.
+    async fn settle_exit(&self, udid: &str, generation: u64) {
+        let deadline = Instant::now() + STDERR_SETTLE;
+        loop {
+            {
+                let mut map = self.helpers.lock().await;
+                let Some(helper) = map.get_mut(udid).filter(|h| h.generation == generation) else {
+                    return;
+                };
+                let exited = !matches!(helper.child.try_wait(), Ok(None));
+                if exited && helper.stderr_done.is_finished() {
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// After the simulator rejected a send of helper `generation`, ask it for
@@ -1657,8 +1689,9 @@ mod tests {
         {
             Err(HidSendError::Failed(msg)) => {
                 assert!(msg.contains("exited before answering"), "{msg}");
+                assert!(msg.contains("it had exited (exit status: 3)"), "{msg}");
                 assert!(
-                    msg.contains("lost the simulator") || msg.contains("exit"),
+                    msg.contains("it last said: fatal lost the simulator"),
                     "{msg}"
                 );
             }
