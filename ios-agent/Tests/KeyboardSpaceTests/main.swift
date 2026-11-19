@@ -200,6 +200,32 @@ do {
     check("27.2 iPad: the dismiss key, as reported", planner.dismissKey(), CGPoint(x: 1138, y: 771))
 }
 
+// MARK: - A landscape iPhone keyboard covers the screen's whole width
+
+// The keys sit inset between the safe areas (75–799 of 874), but the
+// keyboard's background, with its Emoji and Dictate keys, spans the screen:
+// a tap on an app element behind it at either side must count as covered,
+// not land on the keyboard.
+for (name, device) in [
+    ("iphone-17-pro-26.5/landscape-keyboard.xml", HidTouch.DeviceTurn.landscapeLeft),
+    ("iphone-17-27.2/landscape-keyboard.xml", .landscapeLeft),
+] {
+    let screen = R(0, 0, 874, 402)
+    let analyzer = OcclusionAnalyzer(
+        nodes: KeyboardSpace.turnIntoInterface(nodes(fixture(name)), screen: screen.size, device: device), screen: screen
+    )
+    let region = analyzer.keyboardRegion(keyboardWindows: analyzer.keyboardWindows())
+    checkTrue("\(name): the keyboard region spans the screen's width",
+              region.map { $0.minX == 0 && $0.maxX == 874 && $0.maxY == 402 } ?? false, "\(String(describing: region))")
+    let behind = OcclusionAnalyzer.Target(frame: R(0, 330, 874, 50), elementType: .button, label: "Bottom action", identifier: nil)
+    if case .covered = analyzer.analyze(behind, isHittable: true) {
+        checkTrue("\(name): a full-width button behind the keyboard is covered", true)
+    } else {
+        checkTrue("\(name): a full-width button behind the keyboard is covered", false,
+                  "\(analyzer.analyze(behind, isHittable: true))")
+    }
+}
+
 // MARK: - Synthetic trees
 
 /// A landscape tree whose keyboard window holds a native container, laid out

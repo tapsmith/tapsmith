@@ -62,6 +62,28 @@ describe("Occlusion", () => {
       await expect(occlusionScreen.counts).toHaveText(counts({}))
     })
 
+    // PILOT-1284: on a turned iPhone the keys sit inset between the safe
+    // areas, but the keyboard spans the screen. A full-width button behind
+    // it kept a strip at either side, and the tap landed on the keyboard
+    // there and reported success.
+    describe("on a turned screen", () => {
+      // Turning the screen takes part of the budget.
+      test.use({ timeout: 8_000 })
+
+      test("tap() on a button behind the keyboard fails and names the keyboard", async ({ device, platform, occlusionScreen }) => {
+        test.skip(platform !== "ios", "Android hides a view entirely behind the keyboard; the upright case covers it")
+        await device.setOrientation("landscape")
+        await occlusionScreen.openKeyboard()
+        await expectSoftwareKeyboardShown(device)
+
+        expect(await failureOf(occlusionScreen.bottomAction.tap())).toMatch(behindKeyboardFailure(platform))
+
+        await expect(occlusionScreen.input).toHaveValue("x")
+        await expectSoftwareKeyboardShown(device)
+        await expect(occlusionScreen.counts).toHaveText(counts({}))
+      })
+    })
+
     test("tap() on a button under an overlay fails and does not tap the overlay", async ({ occlusionScreen }) => {
       await occlusionScreen.showOverlayButton.tap()
       await expect(occlusionScreen.overlay).toBeVisible()

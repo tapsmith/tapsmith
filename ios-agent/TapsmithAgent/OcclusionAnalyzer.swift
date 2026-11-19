@@ -413,6 +413,12 @@ struct OcclusionAnalyzer {
         })?.frame else { return nil }
 
         var top = keyboard.minY
+        // How wide the keyboard's own UI is: in landscape on an iPhone the
+        // keys sit inset between the safe areas (83% of the screen), but the
+        // keyboard's background, with its Emoji and Dictate keys, spans the
+        // screen.
+        var left = keyboard.minX
+        var right = keyboard.maxX
         for node in nodes {
             guard let w = node.window, keyboardWindows.contains(w) else { continue }
             let f = node.frame
@@ -424,13 +430,15 @@ struct OcclusionAnalyzer {
                   f.maxX > keyboard.minX, f.minX < keyboard.maxX,
                   f.maxY > keyboard.minY else { continue }
             top = min(top, f.minY)
+            left = min(left, f.minX)
+            right = max(right, f.maxX)
         }
 
         // Docked: near the bottom and (nearly) full width. A hardware
         // keyboard's small assistant bar near the bottom is neither, and
         // covers only its own frame.
         if keyboard.maxY >= screen.maxY - Self.dockedKeyboardSlack,
-           keyboard.width >= screen.width * 0.9 {
+           right - left >= screen.width * 0.9 {
             return CGRect(x: screen.minX, y: top, width: screen.width, height: screen.maxY - top)
         }
         return CGRect(x: keyboard.minX, y: top, width: keyboard.width, height: keyboard.maxY - top)
