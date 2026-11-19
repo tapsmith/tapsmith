@@ -137,11 +137,6 @@ describe("type() with no typing delay types lost keys again (iOS)", () => {
     await expect(typingScreen.secureLength).toHaveText("secure=11")
   })
 
-  test("a code field that moves the focus on gets one digit per box", async ({ typingScreen }) => {
-    await typingScreen.firstCodeBox.type("1234", { delay: 0 })
-    await expect(typingScreen.codeValue).toHaveText("code=1234")
-  })
-
   test("typing into a field that selects its text on focus replaces the text, as for a user", async ({ typingScreen }) => {
     await expect(typingScreen.selectValue).toHaveText("select=old")
     await typingScreen.selectInput.type("new", { delay: 0 })

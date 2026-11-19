@@ -1556,26 +1556,83 @@ class CommandHandler {
     /// With no typing delay, read the field back once after typing and, when
     /// a few keys were lost or came out of order (an iPad field just focused
     /// lost the second key while its keyboard came up, PILOT-1281) and the
-    /// field still has the focus, type the text again a key at a time.
+    /// field still has the focus, type the text again: select all, delete,
+    /// and once the field shows empty, send the text as it was first sent.
     /// Anything else the field shows is left as it is, as unchecked typing
     /// always left it: a field can format, filter or limit what is typed, and
-    /// the app can move the focus on or remove the field. Fails only when
-    /// typing it again went wrong after the field was emptied for it.
-    private func repairDroppedKeys(_ text: String, before: String, selectorParams: [String: Any]) throws {
-        guard let (reading, shown) = try? waitForTyped(
-            text, before: before, secure: false, selectorParams: selectorParams, within: TypingCheck.burstWait
-        ), TypingCheck.repairs(reading, shown: shown, before: before, typed: text) else { return }
-        guard let field = try? resolveElement(selectorParams), isLiveFocused(field) else { return }
-        NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: false)) after typing: typing it again a key at a time")
-        do {
-            try retypeKeyByKey(before + text, secure: false, delayMs: 0, selectorParams: selectorParams)
-        } catch let error as AgentError {
-            // The field has the focus, so the retype went straight to
-            // emptying it: what it held is gone.
+    /// the app can move the focus on or remove the field. Fails only once
+    /// the field was changed for the repair: when it cannot be emptied, or
+    /// the text cannot be sent again into it.
+    private func repairDroppedKeys(_ text: String, selectorParams: [String: Any]) throws {
+        guard let shown = readBackUntilStill(text, selectorParams: selectorParams),
+              TypingCheck.repairs(TypingCheck.read(shown, before: "", typed: text, secure: false),
+                                  shown: shown, before: "", typed: text),
+              let field = try? resolveElement(selectorParams), !field.className.isEmpty, isLiveFocused(field)
+        else { return }
+        NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: false)) after typing: typing it again")
+        func waitUntilEmpty() -> String? {
+            let emptyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+            var left = readText(selectorParams)
+            while left?.isEmpty != true, Date() < emptyBy {
+                Thread.sleep(forTimeInterval: 0.02)
+                left = readText(selectorParams)
+            }
+            return left
+        }
+        _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+        _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+        var left = waitUntilEmpty()
+        if let rest = left, !rest.isEmpty {
+            // A field that does not take select-all: the delete took the
+            // last character (the caret is at the end after typing), so the
+            // rest goes a delete at a time.
+            _ = EventSynthesizer.typeKeys(String(repeating: "\u{8}", count: rest.count),
+                                          charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+            left = waitUntilEmpty()
+        }
+        if let rest = left, !rest.isEmpty {
+            NSLog("[typeText] the field did not empty to type it again: it shows \(TypingCheck.describe(rest, secure: false))")
+            throw AgentError.actionFailed(
+                "typeText: the field showed \(TypingCheck.describe(shown, secure: false)) after typing, and could not be " +
+                    "emptied to type it again: it shows \(TypingCheck.describe(rest, secure: false))"
+            )
+        }
+        if !actionExecutor.typeViaEventSynthesizer(text, delayMs: 0) {
             throw AgentError.actionFailed(
                 "typeText: the field showed \(TypingCheck.describe(shown, secure: false)) after typing, " +
-                    "and typing it again a key at a time failed: \(error.message)"
+                    "was emptied to type it again, and the text could not be sent again"
             )
+        }
+        if let again = readBackUntilStill(text, selectorParams: selectorParams), again != text {
+            NSLog("[typeText] the field shows \(TypingCheck.describe(again, secure: false)) after typing it again; left as it is")
+        }
+    }
+
+    /// The text of the field `selectorParams` finds, or nil when it cannot be
+    /// read: not found, or known only by the bounds it had.
+    private func readText(_ selectorParams: [String: Any]) -> String? {
+        guard let field = try? resolveElement(selectorParams), !field.className.isEmpty else { return nil }
+        return field.text ?? ""
+    }
+
+    /// Read the field until it shows `text`, or holds the same value for
+    /// `TypingCheck.stillWait`, or `TypingCheck.burstWait` ends. Nil when it
+    /// cannot be read.
+    private func readBackUntilStill(_ text: String, selectorParams: [String: Any]) -> String? {
+        let deadline = Date(timeIntervalSinceNow: TypingCheck.burstWait)
+        var last: String?
+        var since = Date()
+        while true {
+            guard let shown = readText(selectorParams) else { return nil }
+            if shown == text { return shown }
+            if shown != last {
+                last = shown
+                since = Date()
+            } else if Date().timeIntervalSince(since) >= TypingCheck.stillWait {
+                return shown
+            }
+            if Date() >= deadline { return shown }
+            Thread.sleep(forTimeInterval: 0.02)
         }
     }
 
@@ -2285,8 +2342,11 @@ class CommandHandler {
                     if !actionExecutor.typeViaEventSynthesizer(text, delayMs: delayMs) {
                         throw AgentError.actionFailed("typeText failed to synthesize input")
                     }
-                    if !isFocusedOnlySelector, TypingCheck.repairsInto(element.className), TypingCheck.repairs(text) {
-                        try repairDroppedKeys(text, before: element.text ?? "", selectorParams: selectorParams)
+                    // Only a text input that was empty: one that held text may
+                    // have replaced it as it took the focus (select- or
+                    // clear-on-focus), which reads the same as keys lost.
+                    if TypingCheck.repairsInto(element.className), (element.text ?? "").isEmpty, TypingCheck.repairs(text) {
+                        try repairDroppedKeys(text, selectorParams: selectorParams)
                     }
                 }
             } else {
