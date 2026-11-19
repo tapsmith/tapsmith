@@ -28,6 +28,10 @@ describe("Gestures on a turned screen", () => {
   test.beforeEach(async ({ device, turnedScreen }) => {
     await openScreen(device, "/turned")
     await expect(turnedScreen.padResult).toBeVisible()
+    // The screen keeps its state across tests, so type()'s field can still
+    // have the keyboard up. Turned, Android's keyboard then fills the whole
+    // screen and covers the pad.
+    await device.hideKeyboard()
     await turn(device, turnedScreen)
   })
 
