@@ -150,6 +150,12 @@ describe("type() with no typing delay checks what arrived too (iOS)", () => {
     await expect(typingScreen.formattedValue).toHaveText("fmt=123-456")
   })
 
+  test("a field that drops what it does not take keeps what it took, as before", async ({ typingScreen }) => {
+    // The field keeps six digits: the seventh is typed again once, then left out.
+    await typingScreen.formattedInput.type("1234567", { delay: 0 })
+    await expect(typingScreen.formattedValue).toHaveText("fmt=123-456")
+  })
+
   test("a field the app removes once it is full still counts as typed", async ({ typingScreen }) => {
     await typingScreen.vanishingInput.type("abcd", { delay: 0 })
     await expect(typingScreen.vanishingValue).toHaveText("vanish=abcd")

@@ -115,9 +115,18 @@ do {
            !TypingCheck.resendsFirstKey(before: "1", key: "1", secure: false))
     expect("into a field holding another single character",
            TypingCheck.resendsFirstKey(before: "1", key: "2", secure: false))
-    expect("with no delay a field that changed the text is left as it is", TypingCheck.acceptsChange(delayMs: 0, secure: false))
-    expect("with a delay it fails the action", !TypingCheck.acceptsChange(delayMs: 10, secure: false))
-    expect("a secure field that changed is never accepted", !TypingCheck.acceptsChange(delayMs: 0, secure: true))
+    expect("with no delay typing settles for what the field shows", TypingCheck.settles(delayMs: 0, secure: false))
+    expect("with a delay it fails the action", !TypingCheck.settles(delayMs: 10, secure: false))
+    expect("a secure field never settles", !TypingCheck.settles(delayMs: 0, secure: true))
+    expect("a mask's added characters look formatted",
+           TypingCheck.looksFormatted("(555) 123-4567", before: "", typed: "5551234567"))
+    expect("a dash after the third digit looks formatted", TypingCheck.looksFormatted("123-456", before: "", typed: "123456"))
+    expect("formatting after text the field held", TypingCheck.looksFormatted("ab12-3", before: "ab", typed: "123"))
+    expect("a key that arrived twice is not formatting", !TypingCheck.looksFormatted("ttest", before: "", typed: "test"))
+    expect("a lost key is not formatting", !TypingCheck.looksFormatted("tst", before: "", typed: "test"))
+    expect("scrambled keys are not formatting", !TypingCheck.looksFormatted("tset", before: "", typed: "test"))
+    expect("upper-casing is not formatting", !TypingCheck.looksFormatted("ABC", before: "", typed: "abc"))
+    expect("text the field lost before is not formatting", !TypingCheck.looksFormatted("x123", before: "ab", typed: "123"))
     expect("an empty secure field is typed again", TypingCheck.retypes(.short, before: "", secure: true))
     expect("a secure field with content is not (it cannot be read back)",
            !TypingCheck.retypes(.short, before: "••", secure: true))

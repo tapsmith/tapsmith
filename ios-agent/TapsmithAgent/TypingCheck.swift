@@ -148,13 +148,37 @@ enum TypingCheck {
         (!secure || before.isEmpty) && before != key
     }
 
-    /// Whether a field that changed what was typed (a mask, auto-capitalization,
-    /// smart punctuation) is left as it is rather than failing the action:
-    /// with no typing delay, as it always was before typing was checked with
-    /// no delay. A delay fails it, as it did before. Never a secure field: a
-    /// change there is iOS emptying it, not the app formatting the text.
-    static func acceptsChange(delayMs: Int, secure: Bool) -> Bool {
+    /// Whether typing settles for what the field shows instead of failing:
+    /// with no typing delay. A field can format, filter or limit what is
+    /// typed (an input mask, a digits-only filter, maxLength), and a read-back
+    /// cannot tell that from keys lost on the way. With no delay, which typed
+    /// unchecked before (PILOT-1281), a short, scrambled or changed result is
+    /// typed again a key at a time once, each key waited for, and whatever
+    /// the field then shows is left as it is. A delay fails it, as it always
+    /// did. Never a secure field: a change there is iOS emptying it.
+    static func settles(delayMs: Int, secure: Bool) -> Bool {
         delayMs == 0 && !secure
+    }
+
+    /// Key-at-a-time retypes before typing with no delay settles.
+    static let settleRetypeTries = 1
+
+    /// Whether the field shows the typed text with only characters added that
+    /// were never typed: what an input mask does ("5551234567" shown as
+    /// "(555) 123-4567"). That is left as it is, with no retype. A typed
+    /// character shown twice (a key that arrived twice) is not formatting.
+    static func looksFormatted(_ shown: String, before: String, typed: String) -> Bool {
+        guard shown.hasPrefix(before) else { return false }
+        let typedCharacters = Set(typed)
+        var pending = typed[...]
+        for character in shown.dropFirst(before.count) {
+            if let next = pending.first, character == next {
+                pending = pending.dropFirst()
+            } else if typedCharacters.contains(character) {
+                return false
+            }
+        }
+        return pending.isEmpty
     }
 
     /// The text input with keyboard focus, as typing into a field that

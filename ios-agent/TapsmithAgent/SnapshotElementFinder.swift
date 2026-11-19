@@ -94,6 +94,9 @@ class SnapshotElementFinder {
         let label: String
         let frame: CGRect
         let point: CGPoint?
+        /// Set by `pinFocusedTextInputHint`: while it holds, the hinted input
+        /// is the only focused one, keyboard or not.
+        var pinned = false
     }
 
     /// Parsed snapshot node from the accessibility tree.
@@ -288,7 +291,8 @@ class SnapshotElementFinder {
             }
             return cachedLiveFocusedTextInput
         }
-        let focusedHint = keyboardVisibleInSnapshot ? currentFocusedTextInputHint() : nil
+        let hint = currentFocusedTextInputHint()
+        let focusedHint = keyboardVisibleInSnapshot || hint?.pinned == true ? hint : nil
 
         // Flatten and search (pre-order — `.first()` callers depend on it).
         // Wrapper suppression happens inline via an ancestor stack so the
@@ -710,7 +714,9 @@ class SnapshotElementFinder {
     /// (until `unpinFocusedTextInputHint`), so the focused input resolved
     /// again stays that one when the app moves the focus on by itself (a
     /// field per digit): typing into whatever has the focus reads back the
-    /// field it typed into, not the next one (PILOT-1281 review).
+    /// field it typed into, not the next one (PILOT-1281 review). While
+    /// pinned, that input is the only one `focused` matches, wherever the
+    /// input the app moved the focus to sits in the tree.
     func pinFocusedTextInputHint(_ element: ElementInfo) -> FocusedTextInputHintPin {
         lock.lock()
         let previous = focusedTextInputHint
@@ -718,6 +724,7 @@ class SnapshotElementFinder {
         recordFocusedTextInputHint(element)
         lock.lock()
         defer { lock.unlock() }
+        focusedTextInputHint?.pinned = true
         return FocusedTextInputHintPin(previous: previous, generation: focusedTextInputHintGeneration)
     }
 
@@ -1114,6 +1121,10 @@ class SnapshotElementFinder {
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
         focusedHint: FocusedTextInputHint?
     ) -> Bool {
+        if let hint = focusedHint, hint.pinned {
+            return isTextFieldType(elementType)
+                && matchesFocusedTextInputHint(node, elementType: elementType, focusedHint: hint)
+        }
         let snapshotFocused = (node["hasFocus"] as? Bool)
             ?? (node["hasKeyboardFocus"] as? Bool)
         if snapshotFocused == true { return true }

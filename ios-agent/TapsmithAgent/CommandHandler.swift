@@ -1513,10 +1513,12 @@ class CommandHandler {
                 guard let landed = try typeFirstKey(
                     String(first), before: before, secure: secure, delayMs: delayMs, selectorParams: selectorParams
                 ) else {
-                    // The field changed the first key (a mask) with no delay:
-                    // the rest goes unchecked, as all of it did before.
+                    // With no delay, a first key that could not be confirmed
+                    // (the field refuses it, or a replaced selection reads
+                    // the same as a lost key): the rest goes unchecked, as
+                    // all of it did before.
                     let rest = String(plan.keys.dropFirst())
-                    if !rest.isEmpty && !sendRest(rest, delayMs: delayMs, lastSentAt: Date()) {
+                    if !rest.isEmpty && !actionExecutor.typeViaEventSynthesizer(rest, delayMs: 0) {
                         throw AgentError.actionFailed("typeText failed to synthesize input")
                     }
                     if plan.submit { try submitAfterTyping(delayMs: delayMs) }
@@ -1570,6 +1572,11 @@ class CommandHandler {
     /// (`TypingCheck.burstsAtOnce`).
     /// The delay counts from `lastSentAt` (when the first key showed).
     private func sendRest(_ keys: String, delayMs: Int, lastSentAt: Date) -> Bool {
+        // With no delay, at the rate unchecked typing always used: a burst
+        // of key events at 100 a second outruns a React Native field that
+        // re-renders on every key (a mask), and settled typing
+        // (`TypingCheck.settles`) repairs a short result only once.
+        if delayMs == 0 { return actionExecutor.typeViaEventSynthesizer(keys, delayMs: 0) }
         var lastSentAt = lastSentAt
         if TypingCheck.burstsAtOnce(delayMs: delayMs) {
             Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
@@ -1588,16 +1595,16 @@ class CommandHandler {
     /// (after refocusing the field) when nothing arrived.
     /// The field as read when it showed the key, and what it held before the
     /// key: `before`, or nothing when the key replaced it (a selection,
-    /// `TypingCheck.replacedSelection`). Nil when the field changed the key
-    /// and that is left as it is (`TypingCheck.acceptsChange`): nothing more
-    /// can be checked.
+    /// `TypingCheck.replacedSelection`). Nil, with no delay
+    /// (`TypingCheck.settles`), when the key could not be confirmed: the
+    /// rest is typed unchecked.
     private func typeFirstKey(
         _ key: String, before: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]
     ) throws -> (field: ElementInfo, before: String)? {
         var shown = before
         var field: ElementInfo?
         var base = before
-        var unchecked = false
+        let settles = TypingCheck.settles(delayMs: delayMs, secure: secure)
         func landed() throws -> Bool {
             let fresh = try resolveElement(selectorParams)
             field = fresh
@@ -1609,9 +1616,10 @@ class CommandHandler {
                 NSLog("[typeText] the first key replaced the field's text (it was selected): typing on as into an empty field")
                 base = ""
                 return true
-            case .changed where TypingCheck.acceptsChange(delayMs: delayMs, secure: secure):
-                NSLog("[typeText] the field changed the first key (it formats what is typed): typing the rest unchecked")
-                unchecked = true
+            case .changed where settles:
+                // The field formats what is typed (a mask): the read-back
+                // after the rest settles for what it shows.
+                NSLog("[typeText] the field changed the first key; typing on")
                 return true
             case .changed where secure && shown.count < before.count:
                 throw AgentError.actionFailed(
@@ -1633,13 +1641,14 @@ class CommandHandler {
             }
             let deadline = Date(timeIntervalSinceNow: TypingCheck.firstKeyWait)
             repeat {
-                if try landed() {
-                    if unchecked { return nil }
-                    if let field { return (field, base) }
-                }
+                if try landed(), let field { return (field, base) }
                 Thread.sleep(forTimeInterval: 0.02)
             } while Date() < deadline
             guard TypingCheck.resendsFirstKey(before: before, key: key, secure: secure) else {
+                if settles {
+                    NSLog("[typeText] the first key cannot be told from what the field held; typing the rest unchecked")
+                    return nil
+                }
                 guard secure else {
                     throw AgentError.actionFailed(
                         "typeText: the field still shows \(TypingCheck.describe(shown, secure: false)) after the first key, " +
@@ -1663,6 +1672,12 @@ class CommandHandler {
                 // label (which could contain anything).
                 throw AgentError.actionFailed("typeText could not refocus the field to type into it (\(error.type))")
             }
+        }
+        if settles {
+            // A field that refuses the key (a digits-only filter, a full
+            // field) shows the same as a lost one.
+            NSLog("[typeText] the first key did not show after \(TypingCheck.firstKeyTries) tries; typing the rest unchecked")
+            return nil
         }
         throw AgentError.actionFailed(
             "typeText could not deliver the first key: the field still shows " +
@@ -1848,17 +1863,26 @@ class CommandHandler {
                                                       selectorParams: selectorParams, within: window)
         else { return }
         var tries = 0
+        let settles = TypingCheck.settles(delayMs: delayMs, secure: secure)
         while reading != .complete {
-            if reading == .changed && TypingCheck.acceptsChange(delayMs: delayMs, secure: secure) {
-                NSLog("[typeText] the field changed what was typed (it formats it): left as it is")
-                return
-            }
-            guard TypingCheck.retypes(reading, before: before, secure: secure), tries < TypingCheck.retypeTries else {
-                throw AgentError.actionFailed(
-                    "typeText: the field shows \(TypingCheck.describe(shown, secure: secure)), " +
-                        "not \(TypingCheck.describe(before + keys, secure: secure))" +
-                        (reading == .changed ? ": it changed what was typed" : " after typing it \(tries + 1) time(s)")
-                )
+            if settles {
+                if TypingCheck.looksFormatted(shown, before: before, typed: keys) {
+                    NSLog("[typeText] the field formats what was typed: left as it is")
+                    return
+                }
+                if tries >= TypingCheck.settleRetypeTries {
+                    NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: false)) after typing it again " +
+                          "a key at a time: left as it is (it formats, filters or limits what is typed)")
+                    return
+                }
+            } else {
+                guard TypingCheck.retypes(reading, before: before, secure: secure), tries < TypingCheck.retypeTries else {
+                    throw AgentError.actionFailed(
+                        "typeText: the field shows \(TypingCheck.describe(shown, secure: secure)), " +
+                            "not \(TypingCheck.describe(before + keys, secure: secure))" +
+                            (reading == .changed ? ": it changed what was typed" : " after typing it \(tries + 1) time(s)")
+                    )
+                }
             }
             tries += 1
             guard let target = try readBackField(selectorParams) else { return }
