@@ -68,6 +68,10 @@ describe("Orientation", () => {
     device,
   }) => {
     before = await device.getOrientation();
+    // From portrait, so the screen really turns on a device that starts out
+    // landscape, and the shape check below can't pass before it has turned.
+    await device.setOrientation("portrait");
+    await expect.poll(() => shape(device)).toBe("portrait");
     await device.setOrientation("landscape");
     const orientation = await device.getOrientation();
     expect(orientation).toBe("landscape");
