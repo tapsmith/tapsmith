@@ -12,7 +12,11 @@
 //   u <x> <y>   touch up          c           cancel (lift at last point)
 // Prints "ok" or "err <msg>" per line: "err send rejected" when the simulator
 // refused a send, "err send failed" when one was not confirmed in time. Exits 0 on stdin EOF.
-// Startup failure: prints "fatal <msg>" to stderr and exits 1.
+// A down or move is not waited on (its reply is "ok" once it is sent): the
+// lift that ends the gesture waits, and reports a failure of any of them.
+// Startup failure: prints "fatal <msg>" to stderr and exits 1. While running,
+// stderr says when the simulator was slow to confirm touches, or did not
+// confirm one in time, so the daemon's log shows why a reply came late.
 //
 // HID mechanism is verbatim from the proven spike docs/superpowers/spikes/
 // ios-hid/hidpoke.m (SimDeviceLegacyHIDClient + Indigo 320-byte message).
@@ -80,6 +84,37 @@ static atomic_int gRejected;
 
 /* The IndigoHID target every touch addresses (hid_touch_screen). */
 static unsigned gTouchTarget = HID_LEGACY_TOUCH_TARGET;
+
+/* Confirmations slower than kSlowConfirmMs since the last report, and the
+ * slowest of them: reported on stderr after the next waited line. */
+static atomic_int gSlowConfirms;
+static atomic_llong gSlowestConfirmMs;
+static const long long kSlowConfirmMs = 500;
+
+static long long nowMs(void) {
+  return (long long)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000);
+}
+
+/* Count a confirmation that took `ms`, if it was slow. Called on the
+ * completion queue; a wait that times out is reported on its own
+ * (`unconfirmed`), and counted here if its confirmation comes later. */
+static void noteConfirm(long long ms) {
+  if (ms < kSlowConfirmMs) return;
+  atomic_fetch_add(&gSlowConfirms, 1);
+  long long prev = atomic_load(&gSlowestConfirmMs);
+  while (ms > prev && !atomic_compare_exchange_weak(&gSlowestConfirmMs, &prev, ms)) {
+  }
+}
+
+/* Say on stderr how many confirmations were slow since the last report. */
+static void reportSlowConfirms(void) {
+  int n = atomic_exchange(&gSlowConfirms, 0);
+  long long slowest = atomic_exchange(&gSlowestConfirmMs, 0);
+  if (n > 0) {
+    fprintf(stderr, "slow: the simulator took up to %lld ms to confirm %d touch event%s\n",
+            slowest, n, n == 1 ? "" : "s");
+  }
+}
 
 // Build the canonical 320-byte touch Indigo message (verbatim from the spike).
 static IndigoMessage *makeTouchMessage(double xRatio, double yRatio, int direction) {
@@ -257,9 +292,11 @@ int main(int argc, char **argv) {
       if (!m) return NO;  // couldn't build the touch message — report failure
       __block NSError *serr = nil;
       dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+      long long sentAt = nowMs();
       void (^completion)(NSError *) = ^(NSError *e) {
         serr = e;
         if (e) atomic_store(&gRejected, 1);
+        noteConfirm(nowMs() - sentAt);
         dispatch_semaphore_signal(sem);
       };
       ((void(*)(id, SEL, IndigoMessage *, BOOL, dispatch_queue_t, void(^)(NSError *)))objc_msgSend)(
@@ -270,6 +307,10 @@ int main(int argc, char **argv) {
       // the ARC-retained __block serr box and signals an unwaited semaphore — a
       // harmless no-op nobody reads.
       long rc = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, waitSeconds * NSEC_PER_SEC));
+      if (rc != 0) {
+        fprintf(stderr, "unconfirmed: the simulator did not confirm a touch %s within %lld ms\n",
+                dir == DirUp ? "lift" : "press", nowMs() - sentAt);
+      }
       return rc == 0 && serr == nil;
     };
     BOOL (^sendTouch)(double, double, int) = ^BOOL(double rx, double ry, int dir) {
@@ -281,7 +322,7 @@ int main(int argc, char **argv) {
     const int64_t kTapLiftWaitSeconds = 4;
 
     // Fire-and-forget send for the intermediate events of a composite
-    // gesture (double-tap): the client delivers in order, and recognizers
+    // gesture (a tap's or double-tap's downs, a drag's down and moves): the client delivers in order, and recognizers
     // key on the message timestamps stamped at CREATION time — so pacing
     // the creations paces the gesture, while waiting on each completion
     // (up to 2s under CI load) stretched the app-visible inter-tap gap
@@ -291,8 +332,10 @@ int main(int argc, char **argv) {
     BOOL (^sendTouchNoWait)(double, double, int) = ^BOOL(double rx, double ry, int dir) {
       IndigoMessage *m = makeTouchMessage(rx, ry, dir);
       if (!m) return NO;
+      long long sentAt = nowMs();
       ((void(*)(id, SEL, IndigoMessage *, BOOL, dispatch_queue_t, void(^)(NSError *)))objc_msgSend)(
           hidClient, sendSel, m, YES, cq, ^(NSError *e) {
+            noteConfirm(nowMs() - sentAt);
             if (e) {
               atomic_fetch_add(&gNoWaitFailures, 1);
               atomic_store(&gRejected, 1);
@@ -353,14 +396,27 @@ int main(int argc, char **argv) {
         contactDown = 0;
       }
       switch (ev.cmd) {
+        // A down and its moves are not waited on, as a tap's down is not: the
+        // client delivers in order, so the lift's confirmation covers them.
+        // Waiting on each made a scroll drag (~40 lines) as slow as 40 of the
+        // simulator's confirmations, which a busy simulator can stretch to
+        // seconds each: the lift's reply then missed the daemon's deadline,
+        // and every new helper hung on the same drag (PILOT-1293).
         case HID_DOWN:
+          atomic_store(&gNoWaitFailures, 0);
+          // fall through
         case HID_MOVE:  // moves keep contact: same DirDown direction as the spike
           lastX = ev.x; lastY = ev.y;
-          ok = sendTouch(hid_normalize(ev.x, widthPt), hid_normalize(ev.y, heightPt), DirDown);
+          ok = sendTouchNoWait(hid_normalize(ev.x, widthPt), hid_normalize(ev.y, heightPt), DirDown);
           break;
         case HID_UP:
+          // Waited like a tap's lift; `ok` also needs the gesture's unwaited
+          // down and moves to have been delivered.
           lastX = ev.x; lastY = ev.y;
-          ok = sendTouch(hid_normalize(ev.x, widthPt), hid_normalize(ev.y, heightPt), DirUp);
+          ok = sendTouchWithin(hid_normalize(ev.x, widthPt), hid_normalize(ev.y, heightPt), DirUp,
+                               kTapLiftWaitSeconds)
+              && atomic_load(&gNoWaitFailures) == 0;
+          atomic_store(&gNoWaitFailures, 0);
           break;
         case HID_CANCEL:
           ok = sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
@@ -415,6 +471,7 @@ int main(int argc, char **argv) {
       }
       lastInjectUs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
       contactDown = hid_contact_after(ev.cmd, contactDown, ok);
+      if (ev.cmd != HID_DOWN && ev.cmd != HID_MOVE) reportSlowConfirms();
       printf(ok ? "ok\n" : atomic_load(&gRejected) ? "err send rejected\n" : "err send failed\n");
       fflush(stdout);
     }

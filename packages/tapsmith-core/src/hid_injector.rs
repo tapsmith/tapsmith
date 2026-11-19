@@ -21,14 +21,23 @@
 //! never reached the helper (a broken pipe) is retried once on its
 //! replacement; one that did reach it is not, since part of it may have
 //! landed. After [`MAX_HELPER_RESTARTS`] evictions a device's helper is given
-//! up on for the session: `ensure` fails, and touches use the agent's
-//! synthesized ones.
+//! up on for [`GIVE_UP_COOLDOWN`]: `ensure` fails, and touches use the agent's
+//! synthesized ones. After the cool-down the next touch starts a helper again,
+//! and one more failure gives it up again. A run of answered touches clears
+//! the evictions (PILOT-1293): a simulator that was only busy for a while
+//! does not lose the helper for the rest of the session.
+//!
+//! The helper's stderr is logged (its startup `fatal` line, and when the
+//! simulator was slow to confirm touches), and an eviction's message says how
+//! far the helper had got, whether it was still running, and what it last
+//! said, so a log shows why it went quiet.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{oneshot, Mutex};
@@ -47,6 +56,10 @@ struct Helper {
     /// line (`ok` or `err …`), in order, so the nth reply answers the nth line.
     sent: u64,
     replies: Arc<std::sync::Mutex<Replies>>,
+    /// The last line the helper wrote to stderr, if any.
+    last_stderr: Arc<std::sync::Mutex<Option<String>>>,
+    /// The task reading the helper's stderr: finished once it has ended.
+    stderr_done: tokio::task::JoinHandle<()>,
 }
 
 /// The helper's replies as they arrive, for the senders waiting on one.
@@ -58,6 +71,8 @@ struct Replies {
     waiters: HashMap<u64, oneshot::Sender<String>>,
     /// The helper's output ended: no more replies will come.
     closed: bool,
+    /// When the last reply arrived.
+    last_at: Option<Instant>,
 }
 
 /// Why `send_and_wait` did not get an `ok`.
@@ -80,9 +95,16 @@ impl std::fmt::Display for HidSendError {
     }
 }
 
-/// How many times a device's helper may be evicted and replaced in one
-/// session. The next failure gives the helper up for the session.
+/// How many times a device's helper may be evicted and replaced without
+/// recovering in between. The next failure gives the helper up for
+/// [`GIVE_UP_COOLDOWN`].
 const MAX_HELPER_RESTARTS: u32 = 3;
+/// How long a given-up helper is left alone before a touch tries it again.
+const GIVE_UP_COOLDOWN: Duration = Duration::from_secs(30);
+/// Answered touches since the last eviction that show the helper works
+/// again: its evictions are cleared. A line it answered with an error does
+/// not break the run: the helper was answering.
+const RECOVERY_SUCCESSES: u32 = 5;
 /// How long writing a line may block. The daemon reads every reply, so a
 /// write only blocks once the helper has stopped reading its input and the
 /// pipe has filled: it is stuck, and holding the map lock on it would hold
@@ -126,15 +148,20 @@ pub struct HidInjector {
     /// Source of [`Helper::generation`].
     next_generation: std::sync::atomic::AtomicU64,
     max_restarts: u32,
+    give_up_cooldown: Duration,
 }
 
 /// A device's record of helpers that failed this session.
 #[derive(Default)]
 struct Health {
-    /// Helpers evicted for not answering or for a broken pipe.
+    /// Helpers evicted for not answering or for a broken pipe, since the
+    /// helper last recovered.
     evictions: u32,
-    /// Set once evictions pass the cap: why the helper is no longer used.
-    given_up: Option<String>,
+    /// Set once evictions pass the cap: why the helper is not used, and
+    /// since when (it is tried again after the cool-down).
+    given_up: Option<(String, Instant)>,
+    /// Waited lines answered `ok` since the last eviction.
+    ok_streak: u32,
     /// A lift for the next helper to send first: the evicted one may have
     /// left a finger down.
     pending_lift: Option<String>,
@@ -155,6 +182,74 @@ impl WriteError {
             WriteError::NoHelper(e) | WriteError::Broken(e) => e,
         }
     }
+}
+
+/// The state of `udid`'s helper `generation`, for the message of a line it
+/// did not answer: the replies it gave, how long ago the last came, whether
+/// it is still running, and the last thing it wrote to stderr. None when it
+/// has been replaced. The caller holds the map lock.
+fn describe_locked(
+    map: &mut HashMap<String, Helper>,
+    udid: &str,
+    generation: u64,
+) -> Option<String> {
+    let helper = map.get_mut(udid).filter(|h| h.generation == generation)?;
+    let mut parts = Vec::new();
+    {
+        let r = helper.replies.lock().unwrap_or_else(|e| e.into_inner());
+        let mut answered = format!("it had answered {} of {} lines", r.received, helper.sent);
+        if let Some(at) = r.last_at {
+            answered.push_str(&format!(", the last {} ms ago", at.elapsed().as_millis()));
+        }
+        parts.push(answered);
+    }
+    parts.push(match helper.child.try_wait() {
+        Ok(None) => "it was still running".to_string(),
+        Ok(Some(status)) => format!("it had exited ({status})"),
+        Err(e) => format!("its state could not be read: {e}"),
+    });
+    let said = helper
+        .last_stderr
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(said) = said {
+        parts.push(format!("it last said: {said}"));
+    }
+    Some(parts.join("; "))
+}
+
+/// How long a helper that failed to start is given to finish its stderr.
+const STDERR_SETTLE: Duration = Duration::from_millis(500);
+
+/// Log each line the helper writes to stderr, keeping the last in `last`.
+/// Once it is `running`, the helper writes only when something is wrong (or
+/// slow), so each is a warning. Before that, a line explains a failed start,
+/// which goes into the start's error (reported once, by `ensure`): logged
+/// quietly, as a helper that cannot start is tried again on later touches.
+/// The task ends with the helper's stderr.
+fn drain_stderr(
+    udid: &str,
+    stderr: tokio::process::ChildStderr,
+    last: Arc<std::sync::Mutex<Option<String>>>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+) -> tokio::task::JoinHandle<()> {
+    let udid = udid.to_string();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+            if running.load(std::sync::atomic::Ordering::Relaxed) {
+                warn!(udid, "iOS simulator HID helper: {line}");
+            } else {
+                debug!(udid, "iOS simulator HID helper: {line}");
+            }
+            *last.lock().unwrap_or_else(|e| e.into_inner()) = Some(line);
+        }
+    })
 }
 
 /// The point a protocol line puts a finger at (`d`/`m`/`t1`/`t2`) or lifts
@@ -203,6 +298,7 @@ impl HidInjector {
             health: std::sync::Mutex::new(HashMap::new()),
             next_generation: std::sync::atomic::AtomicU64::new(0),
             max_restarts: MAX_HELPER_RESTARTS,
+            give_up_cooldown: GIVE_UP_COOLDOWN,
         }
     }
 
@@ -219,6 +315,7 @@ impl HidInjector {
             health: std::sync::Mutex::new(HashMap::new()),
             next_generation: std::sync::atomic::AtomicU64::new(0),
             max_restarts: MAX_HELPER_RESTARTS,
+            give_up_cooldown: GIVE_UP_COOLDOWN,
         }
     }
 
@@ -269,10 +366,41 @@ impl HidInjector {
             .remove(udid);
     }
 
-    /// Why `udid`'s helper was given up on for the session, if it was.
+    /// Why `udid`'s helper is given up on, if it is. Once the cool-down has
+    /// passed it no longer is: the next start tries again, with its evictions
+    /// left at the cap, so one more failure gives it up again.
     fn given_up(&self, udid: &str) -> Option<String> {
-        let health = self.health.lock().unwrap_or_else(|e| e.into_inner());
-        health.get(udid).and_then(|h| h.given_up.clone())
+        let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+        let h = health.get_mut(udid)?;
+        let (why, since) = h.given_up.as_ref()?;
+        if since.elapsed() < self.give_up_cooldown {
+            return Some(why.clone());
+        }
+        info!(
+            udid,
+            "trying the iOS simulator HID helper again: {} s have passed since it was given up",
+            self.give_up_cooldown.as_secs()
+        );
+        h.given_up = None;
+        None
+    }
+
+    /// Record that `udid`'s helper answered a waited line `ok`. Enough in a
+    /// row clear its evictions: it works again.
+    fn note_answered(&self, udid: &str) {
+        let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(h) = health.get_mut(udid) else {
+            return;
+        };
+        h.ok_streak = h.ok_streak.saturating_add(1);
+        if h.evictions > 0 && h.ok_streak >= RECOVERY_SUCCESSES {
+            info!(
+                udid,
+                evictions = h.evictions,
+                "the iOS simulator HID helper is answering again; its failures are forgotten"
+            );
+            h.evictions = 0;
+        }
     }
 
     /// Kill and drop `udid`'s helper if it is still `generation` (a newer
@@ -294,6 +422,7 @@ impl HidInjector {
         let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
         let h = health.entry(udid.to_string()).or_default();
         h.evictions += 1;
+        h.ok_streak = 0;
         if h.evictions <= self.max_restarts {
             warn!(
                 udid,
@@ -306,9 +435,13 @@ impl HidInjector {
         }
         // The reason goes into errors too, which under TAPSMITH_REQUIRE_IOS_HID
         // refuse the touch: what happens instead is said only in the warning.
+        // It says whose problem it is, so a report reader doesn't blame the test.
+        let cooldown = self.give_up_cooldown.as_secs();
         let reason = format!(
-            "the iOS simulator HID helper failed {} times this session (last: {why}), so it is \
-             no longer used for this device",
+            "the iOS simulator HID helper failed {} times without recovering (last: {why}), so \
+             it is not used for this device for the next {cooldown} s. This is a problem with \
+             the simulator or the machine running it (its touch input stopped answering), not \
+             with what the test checks",
             h.evictions
         );
         warn!(
@@ -317,13 +450,21 @@ impl HidInjector {
              synthesized touches instead, which take a few hundred milliseconds longer a tap and \
              which some native gesture recognizers ignore"
         );
-        h.given_up = Some(reason);
-        Some("the helper has failed too often and is no longer used this session".to_string())
+        h.given_up = Some((reason, Instant::now()));
+        Some(format!(
+            "the helper has failed too often and is not used for the next {cooldown} s"
+        ))
     }
 
     #[cfg(test)]
     fn with_max_restarts(mut self, max: u32) -> Self {
         self.max_restarts = max;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_cooldown(mut self, cooldown: Duration) -> Self {
+        self.give_up_cooldown = cooldown;
         self
     }
 
@@ -421,10 +562,10 @@ impl HidInjector {
             .arg(udid)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Inherit (don't pipe) stderr: we never drain it, and a piped buffer
-            // could fill and block the helper. Inheriting also surfaces the
-            // helper's `fatal <msg>` startup diagnostics in the daemon log.
-            .stderr(Stdio::inherit())
+            // Piped and drained into the log, so the helper's `fatal <msg>`
+            // startup diagnostics and its notes about a slow simulator show
+            // in the daemon log and the trace, and say why it went quiet.
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| anyhow::anyhow!("spawn {:?} failed: {e}", self.helper_path))?;
@@ -438,29 +579,38 @@ impl HidInjector {
             .take()
             .ok_or_else(|| anyhow::anyhow!("helper has no stdout"))?;
         let mut reader = BufReader::new(stdout).lines();
+        let last_stderr = Arc::new(std::sync::Mutex::new(None));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stderr_done = match child.stderr.take() {
+            Some(stderr) => {
+                drain_stderr(udid, stderr, Arc::clone(&last_stderr), Arc::clone(&running))
+            }
+            None => tokio::spawn(async {}),
+        };
 
         // Bound the handshake so a stuck helper fails fast (caller falls back).
         let ready = tokio::time::timeout(bound, reader.next_line()).await;
-        match ready {
-            Err(_elapsed) => {
-                let _ = child.start_kill();
-                return Err(anyhow::anyhow!("helper startup timed out"));
-            }
+        let failure = match ready {
+            Err(_elapsed) => "helper startup timed out".to_string(),
             Ok(Ok(Some(line))) if line.starts_with("ready") => {
                 info!(udid, %line, "iOS HID helper ready");
+                running.store(true, std::sync::atomic::Ordering::Relaxed);
+                String::new()
             }
-            Ok(Ok(Some(line))) => {
-                let _ = child.start_kill();
-                return Err(anyhow::anyhow!("helper did not report ready: {line}"));
-            }
-            Ok(Ok(None)) => {
-                let _ = child.start_kill();
-                return Err(anyhow::anyhow!("helper exited before reporting ready"));
-            }
-            Ok(Err(e)) => {
-                let _ = child.start_kill();
-                return Err(anyhow::anyhow!("reading helper ready line: {e}"));
-            }
+            Ok(Ok(Some(line))) => format!("helper did not report ready: {line}"),
+            Ok(Ok(None)) => "helper exited before reporting ready".to_string(),
+            Ok(Err(e)) => format!("reading helper ready line: {e}"),
+        };
+        if !failure.is_empty() {
+            let _ = child.start_kill();
+            // What it said on its way out (a `fatal` line), once its stderr
+            // has ended with it.
+            let _ = tokio::time::timeout(STDERR_SETTLE, stderr_done).await;
+            let said = last_stderr.lock().unwrap_or_else(|e| e.into_inner()).take();
+            return Err(match said {
+                Some(said) => anyhow::anyhow!("{failure} ({said})"),
+                None => anyhow::anyhow!(failure),
+            });
         }
 
         // Re-acquire the lock to install the helper — unless the device was
@@ -514,6 +664,7 @@ impl HidInjector {
                 }
                 let mut r = drain_replies.lock().unwrap_or_else(|e| e.into_inner());
                 r.received += 1;
+                r.last_at = Some(Instant::now());
                 let seq = r.received;
                 if let Some(waiter) = r.waiters.remove(&seq) {
                     let _ = waiter.send(l);
@@ -536,6 +687,8 @@ impl HidInjector {
                 last_point: None,
                 sent,
                 replies,
+                last_stderr,
+                stderr_done,
             },
         );
         Ok(())
@@ -598,7 +751,10 @@ impl HidInjector {
             }
         };
         let failure = match tokio::time::timeout(deadline, rx).await {
-            Ok(Ok(reply)) if reply == "ok" => return Ok(()),
+            Ok(Ok(reply)) if reply == "ok" => {
+                self.note_answered(udid);
+                return Ok(());
+            }
             // Answering, and reported this line failed. A send the
             // simulator rejected may mean the helper cannot touch it at all:
             // check. One not confirmed in time is a loaded host, and a check
@@ -615,19 +771,52 @@ impl HidInjector {
                     None => failure,
                 }));
             }
-            Ok(Err(_)) => "the iOS HID helper exited before answering".to_string(),
+            Ok(Err(_)) => {
+                // Its output ended: let it finish exiting and saying why, so
+                // the message reports how it ended rather than a moment before.
+                self.settle_exit(udid, generation).await;
+                "the iOS HID helper exited before answering".to_string()
+            }
             Err(_) => format!(
                 "the iOS HID helper gave no reply within {} ms",
                 deadline.as_millis()
             ),
         };
         let mut map = self.helpers.lock().await;
+        // How far it had got, and what it last said: why it went quiet.
+        let failure = match describe_locked(&mut map, udid, generation) {
+            Some(state) => format!("{failure} ({state})"),
+            None => failure,
+        };
         Err(HidSendError::Failed(
             match self.evict_locked(&mut map, udid, generation, &failure) {
                 Some(note) => format!("{failure}; {note}"),
                 None => failure,
             },
         ))
+    }
+
+    /// Wait, up to [`STDERR_SETTLE`], for helper `generation` of `udid`,
+    /// whose output has ended, to have exited and its stderr to have been
+    /// read to the end.
+    async fn settle_exit(&self, udid: &str, generation: u64) {
+        let deadline = Instant::now() + STDERR_SETTLE;
+        loop {
+            {
+                let mut map = self.helpers.lock().await;
+                let Some(helper) = map.get_mut(udid).filter(|h| h.generation == generation) else {
+                    return;
+                };
+                let exited = !matches!(helper.child.try_wait(), Ok(None));
+                if exited && helper.stderr_done.is_finished() {
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// After the simulator rejected a send of helper `generation`, ask it for
@@ -1316,7 +1505,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_helper_that_keeps_failing_is_given_up_for_the_session() {
+    async fn a_helper_that_keeps_failing_is_given_up_for_a_while() {
         let log = tempfile::tempdir().unwrap();
         let starts = log.path().join("starts");
         let (_dir, path) = silent_stub(&starts);
@@ -1332,17 +1521,191 @@ mod tests {
             .send_and_wait("UDID-X", "t1 1 2 10", Duration::from_millis(100))
             .await
         {
-            Err(HidSendError::Failed(msg)) => assert!(msg.contains("no longer used"), "{msg}"),
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("not used for the next 30 s"), "{msg}")
+            }
             other => panic!("expected a timeout, got {other:?}"),
         }
-        // ...then touches fall back to the agent, with the reason.
-        let err = injector.ensure("UDID-X").await.unwrap_err();
-        assert!(err.to_string().contains("failed 2 times"), "{err}");
+        // ...then touches fall back to the agent, with the reason, which
+        // says it is the simulator's problem rather than the test's.
+        let err = injector.ensure("UDID-X").await.unwrap_err().to_string();
+        assert!(err.contains("failed 2 times"), "{err}");
+        assert!(err.contains("not with what the test checks"), "{err}");
         injector.warm("UDID-X", 0).await;
         assert_eq!(start_count(&starts), 2, "a given-up helper is not started");
         // Per device.
         injector.ensure("UDID-Y").await.unwrap();
         injector.shutdown("UDID-Y").await;
+    }
+
+    /// A stub that logs each start to `starts` and, by its start number:
+    /// `silent` starts never answer, and `flaky` starts answer six lines
+    /// `ok` (the lift a replacement sends first, then five) and then stop
+    /// answering. Other starts answer every line `ok`.
+    fn by_start_stub(
+        starts: &std::path::Path,
+        silent: &str,
+        flaky: &str,
+    ) -> (tempfile::TempDir, PathBuf) {
+        stub_helper(&format!(
+            "echo start >> '{s}'\necho 'ready 1 1 1'\n\
+             n=$(wc -l < '{s}' | tr -d ' ')\n\
+             case \" {silent} \" in *\" $n \"*) cat >/dev/null;; esac\n\
+             case \" {flaky} \" in *\" $n \"*) i=0; while [ $i -lt 6 ] && IFS= read -r line; do \
+             echo ok; i=$((i+1)); done; cat >/dev/null;; esac\n\
+             while IFS= read -r line; do echo ok; done\n",
+            s = starts.display(),
+        ))
+    }
+
+    async fn tap(injector: &HidInjector, udid: &str) -> Result<(), HidSendError> {
+        injector.ensure(udid).await.map_err(HidSendError::NotSent)?;
+        injector
+            .send_and_wait(udid, "t1 1 2 10", Duration::from_millis(300))
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_given_up_helper_is_tried_again_after_its_cool_down() {
+        // The CI failure (PILOT-1293): the simulator stopped answering for a
+        // while, the helper was given up, and every later touch of the shard
+        // was refused under TAPSMITH_REQUIRE_IOS_HID. A helper that works
+        // again is used again.
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = by_start_stub(&starts, "1 3", "");
+        let injector = HidInjector::with_helper_path(path)
+            .with_max_restarts(0)
+            .with_cooldown(Duration::from_millis(400));
+        assert!(matches!(
+            tap(&injector, "UDID-C1").await,
+            Err(HidSendError::Failed(_))
+        ));
+        // Given up: not even started during the cool-down.
+        assert!(tap(&injector, "UDID-C1").await.is_err());
+        assert_eq!(start_count(&starts), 1);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        tap(&injector, "UDID-C1").await.unwrap();
+        assert_eq!(start_count(&starts), 2);
+        // Still at the cap: one more failure gives it up again at once.
+        injector.shutdown("UDID-C1").await;
+        match tap(&injector, "UDID-C1").await {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("not used for the next"), "{msg}")
+            }
+            other => panic!("expected the helper to be given up again, got {other:?}"),
+        }
+        assert!(tap(&injector, "UDID-C1").await.is_err());
+        assert_eq!(start_count(&starts), 3);
+        injector.shutdown("UDID-C1").await;
+    }
+
+    #[tokio::test]
+    async fn a_run_of_answered_touches_clears_the_helpers_failures() {
+        // One eviction allowed. The second helper answers its first lift and
+        // five taps, then stops: without the reset that second eviction would
+        // give it up.
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = by_start_stub(&starts, "1", "2");
+        let injector = HidInjector::with_helper_path(path).with_max_restarts(1);
+        assert!(tap(&injector, "UDID-C2").await.is_err());
+        for _ in 0..5 {
+            tap(&injector, "UDID-C2").await.unwrap();
+        }
+        match tap(&injector, "UDID-C2").await {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("next touch starts a new one"), "{msg}")
+            }
+            other => panic!("expected an eviction, got {other:?}"),
+        }
+        tap(&injector, "UDID-C2").await.unwrap();
+        assert_eq!(start_count(&starts), 3);
+        injector.shutdown("UDID-C2").await;
+    }
+
+    #[tokio::test]
+    async fn answered_touches_short_of_a_run_do_not_clear_failures() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = by_start_stub(&starts, "1", "2");
+        let injector = HidInjector::with_helper_path(path).with_max_restarts(1);
+        assert!(tap(&injector, "UDID-C3").await.is_err());
+        for _ in 0..4 {
+            tap(&injector, "UDID-C3").await.unwrap();
+        }
+        // A line not waited on takes the last answer start 2 gives, so only
+        // four waited lines were answered before it went quiet.
+        injector.send("UDID-C3", "d 1 2").await.unwrap();
+        match tap(&injector, "UDID-C3").await {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("not used for the next"), "{msg}")
+            }
+            other => panic!("expected the helper to be given up, got {other:?}"),
+        }
+        injector.shutdown("UDID-C3").await;
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_line_says_how_far_the_helper_got_and_what_it_said() {
+        let (_dir, path) = stub_helper(
+            "echo 'ready 1 1 1'\nread -r line; echo ok\n\
+             echo 'slow: the simulator took up to 2900 ms to confirm 35 touch events' >&2\n\
+             cat >/dev/null\n",
+        );
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-D1").await.unwrap();
+        injector.send("UDID-D1", "d 1 2").await.unwrap();
+        match injector
+            .send_and_wait("UDID-D1", "u 1 2", Duration::from_millis(500))
+            .await
+        {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("no reply within 500 ms"), "{msg}");
+                assert!(
+                    msg.contains("it had answered 1 of 2 lines, the last"),
+                    "{msg}"
+                );
+                assert!(msg.contains("it was still running"), "{msg}");
+                assert!(
+                    msg.contains("it last said: slow: the simulator took up to 2900 ms"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_helper_that_dies_unanswered_says_how_it_exited() {
+        let (_dir, path) = stub_helper(
+            "echo 'ready 1 1 1'\nread -r line\necho 'fatal lost the simulator' >&2\nexit 3\n",
+        );
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-D2").await.unwrap();
+        match injector
+            .send_and_wait("UDID-D2", "t1 1 2 10", Duration::from_secs(5))
+            .await
+        {
+            Err(HidSendError::Failed(msg)) => {
+                assert!(msg.contains("exited before answering"), "{msg}");
+                assert!(msg.contains("it had exited (exit status: 3)"), "{msg}");
+                assert!(
+                    msg.contains("it last said: fatal lost the simulator"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_says_what_the_helper_said() {
+        let (_dir, path) = stub_helper("echo 'fatal no SimDeviceLegacyHIDClient' >&2\nexit 1\n");
+        let injector = HidInjector::with_helper_path(path);
+        let err = injector.ensure("UDID-D3").await.unwrap_err().to_string();
+        assert!(err.contains("exited before reporting ready"), "{err}");
+        assert!(err.contains("fatal no SimDeviceLegacyHIDClient"), "{err}");
     }
 
     #[tokio::test]
