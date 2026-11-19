@@ -977,14 +977,8 @@ class CommandHandler {
             // snapshot it was made from shows it; the screenshots read the
             // device's native portrait space. When the way the screen is
             // turned can't be told (a wide window on a device lying flat),
-            // the interface rect is used as it was before this mapping:
-            // right only on an upright screen.
-            let native = HidTouch.nativeRect(
-                visible,
-                screen: plannedScreenSize ?? snapshotFinder.screenSize,
-                device: Self.deviceTurn(XCUIDevice.shared.orientation)
-            )
-            return actionExecutor.waitUntilSettled(region: native ?? visible, deadline: deadline)
+            // every place the target could be is watched (`TouchSpace`).
+            return actionExecutor.waitUntilSettled(region: plannedTouchSpace().settleRect(visible), deadline: deadline)
         case .offScreen:
             return .unreadable
         }
@@ -1165,7 +1159,7 @@ class CommandHandler {
             xcElem.tap()
         case .point(let point, _, let hold):
             beforeTouch?()
-            actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
+            actionExecutor.tap(at: point, in: plannedTouchSpace(), hold: hold)
         case .offScreen:
             if scrollsIntoView, staleError == nil, let xcElem = try? getXCUIElement(element.elementId), xcElem.exists {
                 let before = xcElem.frame
@@ -1255,12 +1249,7 @@ class CommandHandler {
         putKeyboardAwayIfItWouldEatTheTouch(element)
         switch try planSettledTouch(element, timeoutMs: timeoutMs) {
         case .point(let point, _, let hold):
-            actionExecutor.doubleTapCoordinates(
-                x: Int(point.x.rounded()),
-                y: Int(point.y.rounded()),
-                intervalMs: intervalMs,
-                hold: hold
-            )
+            actionExecutor.doubleTap(at: point, in: plannedTouchSpace(), intervalMs: intervalMs, hold: hold)
         case .hittableElement, .offScreen:
             try actionExecutor.doubleTap(try getXCUIElement(element.elementId))
         }
@@ -1427,7 +1416,7 @@ class CommandHandler {
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
-        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: tapHold(on: element))
+        actionExecutor.tap(at: point, in: plannedTouchSpace(), hold: tapHold(on: element))
         snapshotFinder.recordFocusedTextInputHint(element)
     }
 
@@ -2110,11 +2099,7 @@ class CommandHandler {
                 let coverBudget = max(0, actionTimeoutMs(params) - duration)
                 switch try planSettledTouch(element, timeoutMs: coverBudget, reserveMs: duration) {
                 case .point(let point, _, _):
-                    actionExecutor.longPressCoordinates(
-                        x: Int(point.x.rounded()),
-                        y: Int(point.y.rounded()),
-                        durationMs: duration
-                    )
+                    actionExecutor.longPress(at: point, in: plannedTouchSpace(), durationMs: duration)
                 case .hittableElement, .offScreen:
                     let xcElem = try getXCUIElement(element.elementId)
                     try actionExecutor.longPress(xcElem, durationMs: duration)
@@ -2178,7 +2163,7 @@ class CommandHandler {
                     device: Self.deviceTurn(XCUIDevice.shared.orientation)
                 ) else {
                     guard forTap else { return ["useElement": true] }
-                    actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
+                    actionExecutor.tap(at: point, in: plannedTouchSpace(), hold: hold)
                     snapshotFinder.recordFocusedTextInputHint(element)
                     if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
                     touchBarrier()
@@ -2333,9 +2318,7 @@ class CommandHandler {
             if target == nil {
                 // Already first responder behind a cover: clear it as is.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(
-                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
-                )
+                actionExecutor.tap(at: CGPoint(x: area.midX, y: area.midY), in: plannedTouchSpace(), hold: tapHold(on: element))
                 Thread.sleep(forTimeInterval: 0.1)
             } else if let xcElem = try? getXCUIElement(element.elementId), xcElem.isHittable {
                 xcElem.tap()
@@ -2549,7 +2532,7 @@ class CommandHandler {
             waitForAnimationsIdle(reserveMs: 0)
             if let elementId = params["elementId"] as? String {
                 let xcElem = try getXCUIElement(elementId)
-                try actionExecutor.swipe(xcElem, direction: direction, speed: speed, distance: distance)
+                try actionExecutor.swipe(xcElem, direction: direction, speed: speed, distance: distance, in: currentTouchSpace())
             } else if let startElement = params["startElement"] as? [String: Any] {
                 let startSel = SelectorParser.parse(startElement)
                 let startEl = try waitEngine.waitForElement(
@@ -2559,7 +2542,7 @@ class CommandHandler {
                     snapshotFinder: snapshotFinder
                 )
                 let xcElem = try getXCUIElement(startEl.elementId)
-                try actionExecutor.swipe(xcElem, direction: direction, speed: speed, distance: distance)
+                try actionExecutor.swipe(xcElem, direction: direction, speed: speed, distance: distance, in: currentTouchSpace())
             } else if let region = params["region"] as? [String: Any] {
                 // The scroll container scrollIntoView() picked (PILOT-934).
                 func coord(_ key: String) -> CGFloat { CGFloat((region[key] as? NSNumber)?.doubleValue ?? 0) }
@@ -2569,12 +2552,13 @@ class CommandHandler {
                     width: coord("right") - coord("left"),
                     height: coord("bottom") - coord("top")
                 )
-                try actionExecutor.swipeRegion(rect, direction: direction, speed: speed, distance: distance)
+                try actionExecutor.swipeRegion(rect, direction: direction, speed: speed, distance: distance, in: currentTouchSpace())
             } else {
-                // Sync screen size to avoid quiescence-triggering
-                // app.windows.firstMatch.frame.size read inside swipeScreen().
+                // Sync screen size: other reads of it would otherwise query
+                // the app's window, which can trigger a quiescence wait.
                 actionExecutor.cachedScreenSize = snapshotFinder.screenSize
-                try actionExecutor.swipeScreen(direction: direction, speed: speed, distance: distance)
+                // Swiped over the screen as the last snapshot saw it.
+                try actionExecutor.swipeScreen(direction: direction, speed: speed, distance: distance, in: currentTouchSpace())
             }
             // Swipe generates scroll momentum that continues for 500ms+.
             // Use a longer settle than the standard touchBarrier so the
@@ -2604,12 +2588,12 @@ class CommandHandler {
                     snapshotFinder: snapshotFinder
                 )
                 let xcElem = try getXCUIElement(containerEl.elementId)
-                try actionExecutor.scroll(xcElem, direction: direction, targetSelector: targetSelector)
+                try actionExecutor.scroll(xcElem, direction: direction, targetSelector: targetSelector, in: currentTouchSpace())
             } else if let elementId = params["elementId"] as? String {
                 let xcElem = try getXCUIElement(elementId)
-                try actionExecutor.scroll(xcElem, direction: direction, targetSelector: targetSelector)
+                try actionExecutor.scroll(xcElem, direction: direction, targetSelector: targetSelector, in: currentTouchSpace())
             } else {
-                try actionExecutor.scrollScreen(direction: direction, targetSelector: targetSelector)
+                try actionExecutor.scrollScreen(direction: direction, targetSelector: targetSelector, in: currentTouchSpace())
             }
             return ["success": true]
 
@@ -2698,7 +2682,8 @@ class CommandHandler {
             putKeyboardAwayIfItWouldEatTheTouch(element)
             let gestureMs = Int64((ActionExecutor.pinchMoveDuration + ActionExecutor.pinchHoldDuration) * 1000)
             let coverBudget = max(0, actionTimeoutMs(params) - gestureMs)
-            try actionExecutor.pinch(try planPinch(element, scale: scale, timeoutMs: coverBudget, reserveMs: gestureMs))
+            let plan = try planPinch(element, scale: scale, timeoutMs: coverBudget, reserveMs: gestureMs)
+            try actionExecutor.pinch(plan, in: plannedTouchSpace())
             touchBarrier()
             return ["success": true]
 
@@ -2710,9 +2695,7 @@ class CommandHandler {
             if target == nil {
                 // Verified focused behind a cover: nothing to do.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(
-                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
-                )
+                actionExecutor.tap(at: CGPoint(x: area.midX, y: area.midY), in: plannedTouchSpace(), hold: tapHold(on: element))
             } else {
                 let xcElem = try getXCUIElement(element.elementId)
                 try actionExecutor.focus(xcElem)
@@ -2724,10 +2707,11 @@ class CommandHandler {
         case "blur":
             let element = try resolveElement(params)
             let xcElem = try getXCUIElement(element.elementId)
-            // Sync screen size to avoid quiescence-triggering
-            // app.windows.firstMatch.frame.size read inside blur().
+            // Sync screen size: other reads of it would otherwise query the
+            // app's window, which can trigger a quiescence wait.
             actionExecutor.cachedScreenSize = snapshotFinder.screenSize
-            try actionExecutor.blur(xcElem)
+            // Tapped beside it inside the screen as the last snapshot saw it.
+            try actionExecutor.blur(xcElem, in: currentTouchSpace())
             snapshotFinder.clearFocusedTextInputHint()
             return ["success": true]
 
@@ -3576,6 +3560,11 @@ class CommandHandler {
         deadline: Date? = nil
     ) -> KeyboardDismissPlanner.Outcome {
         let screen = snapshotFinder.screenSize
+        // The planner's points are in the app's interface space, as its
+        // snapshot saw it; the touch presses them where this maps them, so a
+        // drag still goes up the screen as it is turned. (The keyboard's own
+        // frames are another matter: in landscape iOS reports them unturned.)
+        let space = ActionExecutor.touchSpace(screen: planner.screen.size)
         switch strategy {
         case .scrollSwipe:
             let focusedFrame = snapshotFinder.liveFocusedTextInput()?.frame
@@ -3585,7 +3574,7 @@ class CommandHandler {
             let dy = CGFloat(screen.height) * KeyboardDismissPlanner.swipeFraction
             let dx = CGFloat(screen.width) * KeyboardDismissPlanner.swipeFraction
             guard EventSynthesizer.swipe(
-                from: start, to: CGPoint(x: start.x, y: start.y - dy), duration: 0.05
+                from: space.point(start), to: space.point(CGPoint(x: start.x, y: start.y - dy)), duration: 0.05
             ) else { return .notPossible("the drag could not be synthesized") }
             // Gone already: the caller's wait after this return sees that at once.
             if waitForKeyboardDismissed(timeout: Self.clipped(Self.dragWait, to: deadline)) { return .keyboardStayed }
@@ -3598,14 +3587,15 @@ class CommandHandler {
                       snapshot: snapshot, screenSize: screenSize(of: snapshot), statusBar: planner.statusBar
                   ).scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
             else { return .keyboardStayed }
+            let againSpace = ActionExecutor.touchSpace(screen: screenSize(of: snapshot))
             _ = EventSynthesizer.swipe(
-                from: again, to: CGPoint(x: again.x - dx, y: again.y), duration: 0.05
+                from: againSpace.point(again), to: againSpace.point(CGPoint(x: again.x - dx, y: again.y)), duration: 0.05
             )
             _ = waitForKeyboardDismissed(timeout: Self.clipped(Self.dragWait, to: deadline))
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
-            guard EventSynthesizer.tap(at: key, hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
+            guard EventSynthesizer.tap(at: space.point(key), hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .blankTap:
             guard let field = snapshotFinder.liveFocusedTextInput() else {
@@ -3615,7 +3605,7 @@ class CommandHandler {
                 return .notPossible("no blank spot beside the field above the keyboard")
             }
             // A blank spot: nothing known is there.
-            guard EventSynthesizer.tap(at: point, hold: TapTiming.hold(for: nil)) else { return .notPossible("the tap could not be synthesized") }
+            guard EventSynthesizer.tap(at: space.point(point), hold: TapTiming.hold(for: nil)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .returnKey:
             switch planner.returnKey(focusedInput: snapshotFinder.liveFocusedTextInput()?.elementType) {
@@ -3673,13 +3663,21 @@ class CommandHandler {
 
     /// `XCUIDevice.orientation` as `HidTouch` takes it.
     private static func deviceTurn(_ orientation: UIDeviceOrientation) -> HidTouch.DeviceTurn {
-        switch orientation {
-        case .portrait: return .portrait
-        case .portraitUpsideDown: return .portraitUpsideDown
-        case .landscapeLeft: return .landscapeLeft
-        case .landscapeRight: return .landscapeRight
-        default: return .other
-        }
+        ActionExecutor.deviceTurn(orientation)
+    }
+
+    /// How the agent's synthesized touch places the point of a touch planned
+    /// by `planTouch` (`TouchSpace`): by the app's window as the plan's
+    /// snapshot saw it (the cached screen size misses a rotation Tapsmith did
+    /// not make), and the way the device is turned now.
+    private func plannedTouchSpace() -> TouchSpace {
+        ActionExecutor.touchSpace(screen: plannedScreenSize ?? snapshotFinder.lastSnapshotFrameSize() ?? snapshotFinder.screenSize)
+    }
+
+    /// `plannedTouchSpace` for a gesture planned on the last snapshot or on
+    /// live frames (`XCUIElement.frame`), which follow the app's window now.
+    private func currentTouchSpace() -> TouchSpace {
+        ActionExecutor.touchSpace(screen: snapshotFinder.lastSnapshotFrameSize() ?? snapshotFinder.screenSize)
     }
 
     /// The screen as `snapshot` saw it: the application element's frame,
