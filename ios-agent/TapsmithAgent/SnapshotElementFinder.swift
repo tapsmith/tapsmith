@@ -43,7 +43,12 @@ class SnapshotElementFinder {
     private var queryPins: [String: LiveQueryPin] = [:]
     /// Counts commands, for checks made once per command.
     private var commandSerial = 0
-    private var focusedTextInputHint: FocusedTextInputHint?
+    private var focusedTextInputHint: FocusedTextInputHint? {
+        didSet { focusedTextInputHintGeneration += 1 }
+    }
+    /// Counts changes to `focusedTextInputHint`, so a pin is undone only when
+    /// nothing replaced it meanwhile.
+    private var focusedTextInputHintGeneration = 0
     private let lock = NSLock()
     /// The shape that last outlasted `NavigationTransition.settle`.
     private var outlastedTransition: String?
@@ -84,7 +89,7 @@ class SnapshotElementFinder {
         let frame: CGRect
     }
 
-    private struct FocusedTextInputHint {
+    fileprivate struct FocusedTextInputHint {
         let identifier: String
         let label: String
         let frame: CGRect
@@ -693,6 +698,36 @@ class SnapshotElementFinder {
             point: point
         )
         lock.unlock()
+    }
+
+    /// What `pinFocusedTextInputHint` replaced, for `unpinFocusedTextInputHint`.
+    struct FocusedTextInputHintPin {
+        fileprivate let previous: FocusedTextInputHint?
+        fileprivate let generation: Int
+    }
+
+    /// Make `element` the focused text input for the length of one command
+    /// (until `unpinFocusedTextInputHint`), so the focused input resolved
+    /// again stays that one when the app moves the focus on by itself (a
+    /// field per digit): typing into whatever has the focus reads back the
+    /// field it typed into, not the next one (PILOT-1281 review).
+    func pinFocusedTextInputHint(_ element: ElementInfo) -> FocusedTextInputHintPin {
+        lock.lock()
+        let previous = focusedTextInputHint
+        lock.unlock()
+        recordFocusedTextInputHint(element)
+        lock.lock()
+        defer { lock.unlock() }
+        return FocusedTextInputHintPin(previous: previous, generation: focusedTextInputHintGeneration)
+    }
+
+    /// Put back the hint `pin` replaced, unless the hint changed since (a tap
+    /// that focused a field records its own).
+    func unpinFocusedTextInputHint(_ pin: FocusedTextInputHintPin) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard focusedTextInputHintGeneration == pin.generation else { return }
+        focusedTextInputHint = pin.previous
     }
 
     func recordFocusedTextInputHint(at point: CGPoint) {

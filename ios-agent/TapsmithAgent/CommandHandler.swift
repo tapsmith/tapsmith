@@ -2266,6 +2266,12 @@ class CommandHandler {
                 )
                 if checked && checksInto {
                     let focused = isFocusedOnlySelector ? element : try resolveElement(selectorParams)
+                    // Typing into whatever has the focus reads back the input
+                    // it started in, even when the app moves the focus on
+                    // as a key arrives (no tap recorded it as focused when
+                    // the app focused it itself).
+                    let pin = isFocusedOnlySelector ? snapshotFinder.pinFocusedTextInputHint(focused) : nil
+                    defer { if let pin { snapshotFinder.unpinFocusedTextInputHint(pin) } }
                     try typeTextChecked(
                         text,
                         selectorParams: selectorParams,
