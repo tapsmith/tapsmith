@@ -1614,9 +1614,6 @@ class CommandHandler {
                     "was emptied to type it again, and the text could not be sent again"
             )
         }
-        if let again = readBackUntilStill(text, selectorParams: selectorParams), again != text {
-            NSLog("[typeText] the field shows \(TypingCheck.describe(again, secure: false)) after typing it again; left as it is")
-        }
     }
 
     /// The text of the field `selectorParams` finds, or nil when it cannot be
@@ -1635,7 +1632,12 @@ class CommandHandler {
         var last: String?
         var since = Date()
         while true {
-            guard let shown = readText(selectorParams) else { return nil }
+            guard let shown = readText(selectorParams) else {
+                // One read can fail (a snapshot mid-animation): read again.
+                if Date() >= deadline { return nil }
+                Thread.sleep(forTimeInterval: 0.05)
+                continue
+            }
             if shown == text || TypingCheck.read(shown, before: "", typed: text, secure: false) == .changed {
                 return shown
             }

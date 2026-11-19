@@ -210,6 +210,13 @@ do {
            !TypingCheck.repairs(replacedPrefix, shown: "10", before: "1", typed: "10"))
     let appendedLost = TypingCheck.read("abd", before: "ab", typed: "cd", secure: false)
     expect("nor when typing after its text lost a key", !TypingCheck.repairs(appendedLost, shown: "abd", before: "ab", typed: "cd"))
+    let oneBox = TypingCheck.read("1", before: "", typed: "1234", secure: false)
+    expect("one box of a code field is not repaired: the rest went to the next boxes",
+           !TypingCheck.repairs(oneBox, shown: "1", before: "", typed: "1234"))
+    let nothing = TypingCheck.read("", before: "", typed: "abc", secure: false)
+    expect("a field that shows nothing is not repaired", !TypingCheck.repairs(nothing, shown: "", before: "", typed: "abc"))
+    let filtered = TypingCheck.read("123", before: "", typed: "12a3", secure: false)
+    expect("one key short of four is repaired", TypingCheck.repairs(filtered, shown: "123", before: "", typed: "12a3"))
     let complete = TypingCheck.read("abc", before: "", typed: "abc", secure: false)
     expect("a complete field is left as it is", !TypingCheck.repairs(complete, shown: "abc", before: "", typed: "abc"))
 }

@@ -143,7 +143,9 @@ enum TypingCheck {
 
     /// Whether the field, read back as `reading` showing `shown`, lost a few
     /// keys or got them out of order: every character it shows was typed,
-    /// and at most `maxRepairedKeys` are missing. Only a field that was empty
+    /// at most `maxRepairedKeys` are missing, and fewer than half: a field
+    /// holding a small part of the text (one box of a code field that moves
+    /// the focus on) did not lose keys, the rest went elsewhere. Only a field that was empty
     /// before typing (`before`): one that held text may have replaced it as
     /// it took the focus (a select- or clear-on-focus field), and typing
     /// that starts with the old text then reads as keys lost.
@@ -151,7 +153,8 @@ enum TypingCheck {
         guard before.isEmpty else { return false }
         switch reading {
         case .short, .scrambled:
-            return before.count + typed.count - shown.count <= maxRepairedKeys
+            let missing = before.count + typed.count - shown.count
+            return missing <= maxRepairedKeys && missing * 2 < typed.count
         case .complete, .changed:
             return false
         }
