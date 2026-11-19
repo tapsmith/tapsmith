@@ -1618,9 +1618,9 @@ impl RotationMap {
 }
 
 /// The shell command `rotation_map` reads: the window manager's rotation
-/// policy, then the display size as a fallback.
-const ROTATION_PROBE: &str =
-    "dumpsys window displays | grep -E 'mPortraitRotation=|mLandscapeRotation='; wm size";
+/// policy for each display (with its `Display: mDisplayId=` header), then the
+/// default display's size as a fallback.
+const ROTATION_PROBE: &str = "dumpsys window displays | grep -E 'Display: mDisplayId=|mPortraitRotation=|mLandscapeRotation='; wm size";
 
 /// `0`–`3` from a rotation value as `dumpsys window` prints it: `ROTATION_270`
 /// on current releases, or a bare `3`.
@@ -1633,8 +1633,26 @@ fn parse_rotation(value: &str) -> Option<u8> {
     u8::try_from(n).ok().filter(|n| *n < 4)
 }
 
-/// The first value of `key=` in `output` (the default display is listed
-/// first).
+/// The part of `dumpsys window displays` that describes the default display:
+/// from its `Display: mDisplayId=0` header to the next display's. Displays
+/// are not listed in id order (a newly added one comes first). Output with
+/// no display headers at all is taken as the default display's.
+fn default_display_section(output: &str) -> Option<&str> {
+    const HEADER: &str = "Display: mDisplayId=";
+    let headers: Vec<usize> = output.match_indices(HEADER).map(|(i, _)| i).collect();
+    if headers.is_empty() {
+        return Some(output);
+    }
+    headers.iter().enumerate().find_map(|(n, &start)| {
+        let id: String = output[start + HEADER.len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        (id == "0").then(|| &output[start..headers.get(n + 1).copied().unwrap_or(output.len())])
+    })
+}
+
+/// The first value of `key=` in `output`.
 fn rotation_field(output: &str, key: &str) -> Option<u8> {
     let start = output.find(key)? + key.len();
     let value: String = output[start..]
@@ -1647,6 +1665,7 @@ fn rotation_field(output: &str, key: &str) -> Option<u8> {
 /// The window manager's own portrait and landscape rotations, which also
 /// account for devices configured to turn the other way.
 fn rotation_policy(output: &str) -> Option<RotationMap> {
+    let output = default_display_section(output)?;
     let portrait = rotation_field(output, "mPortraitRotation=")?;
     let landscape = rotation_field(output, "mLandscapeRotation=")?;
     (portrait % 2 != landscape % 2).then_some(RotationMap {
@@ -1754,7 +1773,7 @@ mod tests {
 
     // `dumpsys window displays` on a Pixel Tablet (API 36), as ROTATION_PROBE
     // greps it, followed by `wm size`.
-    const TABLET_PROBE: &str = "    mLandscapeRotation=ROTATION_0 mSeascapeRotation=ROTATION_180\n    mPortraitRotation=ROTATION_270 mUpsideDownRotation=ROTATION_90\nPhysical size: 2560x1600\n";
+    const TABLET_PROBE: &str = "  Display: mDisplayId=0 (organized)\n    mLandscapeRotation=ROTATION_0 mSeascapeRotation=ROTATION_180\n    mPortraitRotation=ROTATION_270 mUpsideDownRotation=ROTATION_90\nPhysical size: 2560x1600\n";
     const PHONE_PROBE: &str = "    mLandscapeRotation=ROTATION_90 mSeascapeRotation=ROTATION_270\r\n    mPortraitRotation=ROTATION_0 mUpsideDownRotation=ROTATION_180\r\nPhysical size: 1080x2400\r\n";
 
     #[test]
@@ -1776,6 +1795,29 @@ mod tests {
         assert_eq!(
             rotation_map_from("mLandscapeRotation=1 mSeascapeRotation=3\nmPortraitRotation=0 mUpsideDownRotation=2"),
             Some(RotationMap::PORTRAIT_NATIVE)
+        );
+    }
+
+    #[test]
+    fn only_the_default_displays_rotations_count() {
+        // A secondary display (here an overlay display) is listed before
+        // display 0, with a phone-shaped policy of its own.
+        let probe = "  Display: mDisplayId=2\n    mLandscapeRotation=ROTATION_90 mSeascapeRotation=ROTATION_270\n    mPortraitRotation=ROTATION_0 mUpsideDownRotation=ROTATION_180\n  Display: mDisplayId=0 (organized)\n    mLandscapeRotation=ROTATION_0 mSeascapeRotation=ROTATION_180\n    mPortraitRotation=ROTATION_270 mUpsideDownRotation=ROTATION_90\nPhysical size: 2560x1600\n";
+        assert_eq!(
+            rotation_map_from(probe),
+            Some(RotationMap::LANDSCAPE_NATIVE)
+        );
+        // Display 10 is not display 0.
+        let probe = "  Display: mDisplayId=10\n    mLandscapeRotation=ROTATION_90 mPortraitRotation=ROTATION_0\n  Display: mDisplayId=0\n    mLandscapeRotation=ROTATION_0 mPortraitRotation=ROTATION_270\n";
+        assert_eq!(
+            rotation_map_from(probe),
+            Some(RotationMap::LANDSCAPE_NATIVE)
+        );
+        // Headers but no display 0 block: the size decides instead.
+        let probe = "  Display: mDisplayId=2\n    mLandscapeRotation=ROTATION_90 mPortraitRotation=ROTATION_0\nPhysical size: 2560x1600\n";
+        assert_eq!(
+            rotation_map_from(probe),
+            Some(RotationMap::LANDSCAPE_NATIVE)
         );
     }
 
