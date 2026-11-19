@@ -158,8 +158,10 @@ impl DeviceBackend for AndroidBackend<'_> {
         if let Err(e) = adb::shell(&serial, "settings put system accelerometer_rotation 0").await {
             error!(error = %e, "Failed to disable auto-rotate");
         }
+        // Write to the device whose rotation map was read, even if the active
+        // device changed meanwhile.
         let cmd = format!("settings put system user_rotation {rotation}");
-        self.svc.adb_action(request_id, &cmd).await
+        self.svc.adb_action_on(request_id, &serial, &cmd).await
     }
 
     async fn get_orientation(&self) -> Result<String, Status> {

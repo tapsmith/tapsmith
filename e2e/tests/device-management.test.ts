@@ -79,6 +79,9 @@ describe("Orientation", () => {
     const orientation = await device.getOrientation();
     expect(orientation).toBe("landscape");
     await expectShape(device, "landscape");
+    // End opposite to how the device started, so the next test can tell a
+    // turn that was undone from one that never happened.
+    if (before === "landscape") await device.setOrientation("portrait");
   });
 
   // The test above leaves the device turned. A test's turn is undone after
