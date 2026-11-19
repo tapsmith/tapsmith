@@ -2228,14 +2228,31 @@ class CommandHandler {
                 (params["focused"] as? Bool) == true
                 && selectorKeys.allSatisfy { $0 == "focused" || params[$0] == nil }
             )
-            if hasSelector && !(isFocusedOnlySelector && delayMs == 0) {
+            // Checked typing (`TypingCheck`) reads the field back, with or
+            // without a delay: unchecked, an iPad field just focused lost the
+            // second key while its keyboard came up, and the action reported
+            // success (PILOT-1281).
+            let checked = TypingCheck.checks(text, delayMs: delayMs)
+            if hasSelector && !(isFocusedOnlySelector && !checked) {
                 var selectorParams = params
                 selectorParams.removeValue(forKey: "text")
                 selectorParams.removeValue(forKey: "typingDelayMs")
                 if isFocusedOnlySelector {
                     waitForKeyboardAppearance(maxWait: 1.0)
                 }
-                let element = try resolveElement(selectorParams)
+                let element: ElementInfo
+                do {
+                    element = try resolveElement(selectorParams)
+                } catch AgentError.elementNotFound where isFocusedOnlySelector && delayMs == 0 {
+                    // Typing into whatever has the focus with no input found
+                    // to read back: typed unchecked, as it always was with no
+                    // delay (a delay has always required the focused input).
+                    NSLog("[typeText] no focused input to read back; typing unchecked")
+                    if !actionExecutor.typeTextWithoutFocus(text, delayMs: delayMs) {
+                        throw AgentError.actionFailed("typeText failed to synthesize input")
+                    }
+                    return ["success": true]
+                }
                 if !isFocusedOnlySelector {
                     // Half the budget at most for a cover, so the typing
                     // after it still fits the daemon's read timeout.
@@ -2248,7 +2265,7 @@ class CommandHandler {
                         break
                     }
                 }
-                if delayMs > 0 {
+                if checked {
                     let focused = isFocusedOnlySelector ? element : try resolveElement(selectorParams)
                     try typeTextChecked(
                         text,
