@@ -20,6 +20,7 @@ import { ScrollScreen } from "./screens/scroll.screen.js"
 import { SlowLoadScreen } from "./screens/slow-load.screen.js"
 import { SpinnerScreen } from "./screens/spinner.screen.js"
 import { TogglesScreen } from "./screens/toggles.screen.js"
+import { TurnedScreen } from "./screens/turned.screen.js"
 import { TypingScreen } from "./screens/typing.screen.js"
 import { VisibilityScreen } from "./screens/visibility.screen.js"
 
@@ -45,6 +46,7 @@ type ScreenFixtures = {
   slowLoadScreen: SlowLoadScreen
   spinnerScreen: SpinnerScreen
   togglesScreen: TogglesScreen
+  turnedScreen: TurnedScreen
   typingScreen: TypingScreen
   visibilityScreen: VisibilityScreen
 }
@@ -112,6 +114,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   togglesScreen: async ({ device }, use) => {
     await use(new TogglesScreen(device))
+  },
+  turnedScreen: async ({ device }, use) => {
+    await use(new TurnedScreen(device))
   },
   typingScreen: async ({ device }, use) => {
     await use(new TypingScreen(device))

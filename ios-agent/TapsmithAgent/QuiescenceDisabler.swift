@@ -244,16 +244,15 @@ enum QuiescenceDisabler {
 /// private XCPointerEventPath/XCSynthesizedEventRecord methods from Swift.
 enum EventSynthesizer {
 
-    /// Detect the current interface orientation for event synthesis records.
-    /// Falls back to `.portrait` if the orientation can't be determined.
-    private static var currentOrientation: Int {
-        var orientation = UIInterfaceOrientation.portrait
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first {
-            orientation = scene.interfaceOrientation
-        }
-        return orientation.rawValue
-    }
+    /// The interface orientation every event record is made with: upright,
+    /// so a record's points are in the device's native portrait space however
+    /// the device and the app are turned. Callers map points the agent
+    /// planned in the app's interface space first (`TouchSpace`); points given
+    /// in native space (`tapXY`, UI-mode mirror touches) go as they are. The
+    /// records once took this test runner's own scene orientation, which is
+    /// not the app's: it read portrait on a turned iPhone (so touches already
+    /// took native points), but nothing kept it there.
+    private static let recordOrientation = UIInterfaceOrientation.portrait.rawValue
 
     /// Tap at a screen coordinate, lifting the touch `hold` seconds after it
     /// lands: `TapTiming.hold(for:)` picks it from what the tap lands on.
@@ -453,7 +452,7 @@ enum EventSynthesizer {
                 recordRaw,
                 recordInitSel,
                 "tapsmith-double-tap" as NSString,
-                currentOrientation
+                recordOrientation
             )?.takeRetainedValue() else { return false }
             record = r
         } else {
@@ -513,7 +512,7 @@ enum EventSynthesizer {
         if recordObj.responds(to: recordInitSel) {
             let imp = recordObj.method(for: recordInitSel)
             typealias RMethod = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
-            record = unsafeBitCast(imp, to: RMethod.self)(recordObj, recordInitSel, "tapsmith-swipe" as NSString, currentOrientation)
+            record = unsafeBitCast(imp, to: RMethod.self)(recordObj, recordInitSel, "tapsmith-swipe" as NSString, recordOrientation)
         } else {
             record = (recordClass as! NSObject.Type).init()
         }
@@ -595,7 +594,7 @@ enum EventSynthesizer {
             typealias AllocFn = @convention(c) (AnyClass, Selector) -> UnsafeMutableRawPointer
             typealias RMethod = @convention(c) (UnsafeMutableRawPointer, Selector, NSString, Int) -> Unmanaged<NSObject>?
             let raw = unsafeBitCast(allocImp, to: AllocFn.self)(recordClass, recordAllocSel)
-            guard let r = unsafeBitCast(initImp, to: RMethod.self)(raw, recordInitSel, "tapsmith-swipe-path" as NSString, currentOrientation)?.takeRetainedValue() else { return false }
+            guard let r = unsafeBitCast(initImp, to: RMethod.self)(raw, recordInitSel, "tapsmith-swipe-path" as NSString, recordOrientation)?.takeRetainedValue() else { return false }
             record = r
         } else {
             record = (recordClass as! NSObject.Type).init()
@@ -684,7 +683,7 @@ enum EventSynthesizer {
                 raw,
                 recordInitSel,
                 "tapsmith-drag" as NSString,
-                currentOrientation
+                recordOrientation
             )?.takeRetainedValue() else { return false }
             record = r
         } else {
@@ -730,7 +729,7 @@ enum EventSynthesizer {
         if recordObj.responds(to: recordInitSel) {
             let imp = recordObj.method(for: recordInitSel)
             typealias RecordInitMethod = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
-            record = unsafeBitCast(imp, to: RecordInitMethod.self)(recordObj, recordInitSel, "tapsmith-longpress" as NSString, currentOrientation)
+            record = unsafeBitCast(imp, to: RecordInitMethod.self)(recordObj, recordInitSel, "tapsmith-longpress" as NSString, recordOrientation)
         } else {
             record = (recordClass as! NSObject.Type).init()
         }
@@ -831,7 +830,7 @@ enum EventSynthesizer {
                 recordRaw,
                 recordInitSel,
                 "tapsmith-pinch" as NSString,
-                currentOrientation
+                recordOrientation
             )?.takeRetainedValue() else { return false }
             record = r
         } else {
@@ -892,7 +891,7 @@ enum EventSynthesizer {
         if recordObj.responds(to: recordInitSel) {
             let rImp = recordObj.method(for: recordInitSel)
             typealias RMethod = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
-            record = unsafeBitCast(rImp, to: RMethod.self)(recordObj, recordInitSel, "tapsmith-key" as NSString, currentOrientation)
+            record = unsafeBitCast(rImp, to: RMethod.self)(recordObj, recordInitSel, "tapsmith-key" as NSString, recordOrientation)
         } else {
             record = (recordClass as! NSObject.Type).init()
         }
@@ -1036,7 +1035,7 @@ enum EventSynthesizer {
         if recordObj.responds(to: recordInitSel) {
             let rImp = recordObj.method(for: recordInitSel)
             typealias RMethod = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
-            record = unsafeBitCast(rImp, to: RMethod.self)(recordObj, recordInitSel, "tapsmith-type" as NSString, currentOrientation)
+            record = unsafeBitCast(rImp, to: RMethod.self)(recordObj, recordInitSel, "tapsmith-type" as NSString, recordOrientation)
         } else {
             record = (recordClass as! NSObject.Type).init()
         }
@@ -1111,7 +1110,7 @@ enum EventSynthesizer {
             let imp = recordObj.method(for: recordInitSel)
             typealias RecordInitMethod = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
             let initFunc = unsafeBitCast(imp, to: RecordInitMethod.self)
-            record = initFunc(recordObj, recordInitSel, "tapsmith-tap" as NSString, currentOrientation)
+            record = initFunc(recordObj, recordInitSel, "tapsmith-tap" as NSString, recordOrientation)
         } else {
             record = (recordClass as! NSObject.Type).init()
         }
