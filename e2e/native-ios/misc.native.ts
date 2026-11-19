@@ -18,7 +18,7 @@ describe("Native: TabView", () => {
     await expect(tabs.content("Feed")).toBeHidden()
   })
 
-  // iPadOS 18+ floats the tab bar at the top with no tab bar node: each tab is
+  // iPadOS 26+ floats the tab bar at the top with no tab bar node: each tab is
   // a button holding a duplicate of itself. Run on an iPad destination
   // (TAPSMITH_IOS_SIMULATOR, see tapsmith.config.native-ios.mjs) as well as
   // an iPhone.

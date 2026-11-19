@@ -188,7 +188,7 @@ struct TabsView: View {
 
 // ─── Sidebar-adaptable tabs (iOS 18+) ───
 
-// iPadOS 18+ draws this TabView as the floating tab bar with a sidebar
+// iPadOS 26+ draws this TabView as the floating tab bar with a sidebar
 // toggle beside the tabs; one tab carries a badge.
 struct SidebarTabsView: View {
     var body: some View {

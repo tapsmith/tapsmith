@@ -180,7 +180,7 @@ enum BarHost {
         CellFrames.elementType(of: dict) == .tabBar || isMarkedTabBarHost(dict)
     }
 
-    /// Whether `dict` is the floating tab bar iPadOS 18 and later draw at the
+    /// Whether `dict` is the floating tab bar iPadOS 26 and later draw at the
     /// top of a regular-width screen (PILOT-1282), for a SwiftUI `TabView` and
     /// a `UITabBarController` alike. It has no `.tabBar` node: a generic group
     /// holds one button per tab, each holding a copy of itself and nothing
@@ -191,6 +191,8 @@ enum BarHost {
     /// (`holdsTab`). The SDK folds each outer/inner pair into one match, as
     /// it does every same-target duplicate. A single tab, a toolbar's buttons
     /// (none selected) and a row of plain buttons are no tab bar.
+    /// iPadOS 18 draws the same bar but marks no tab selected, so it is not
+    /// recognised there.
     static func isFloatingTabBar(_ dict: [String: Any]) -> Bool {
         guard CellFrames.elementType(of: dict) == .other,
               let items = dict["children"] as? [[String: Any]] else { return false }

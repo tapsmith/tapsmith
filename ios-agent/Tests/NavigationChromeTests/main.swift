@@ -10,7 +10,7 @@
 //
 // The iPad dumps (PILOT-1282, iPad Pro 11-inch, iOS 26.5 and 27.2) are of the fixture app's
 // TabView and the test app's expo-router NativeTabs (a UITabBarController):
-// iPadOS 18+ floats the tab bar at the top, with no tab bar node either.
+// iPadOS 26+ floats the tab bar at the top, with no tab bar node either.
 //
 // A dump carries no traits, so every title here is read without the header
 // trait, as the Duo often publishes it.
@@ -217,7 +217,7 @@ check("17 Pro: the TabView screen has no toolbar", matching("toolbar", in: proTa
 
 // ─── The iPad's floating tab bar ───
 
-// iPadOS 18+ floats a tab bar at the top with no tab bar node: a group under
+// iPadOS 26+ floats a tab bar at the top with no tab bar node: a group under
 // the navigation bar holds one button per tab, and each button holds a
 // duplicate of itself (same label, frame and selected state). That group is
 // the tablist and its buttons are tabs, for a SwiftUI TabView and a
