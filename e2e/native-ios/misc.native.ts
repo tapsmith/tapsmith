@@ -17,6 +17,28 @@ describe("Native: TabView", () => {
     await expect(tabs.content("Profile")).toBeVisible()
     await expect(tabs.content("Feed")).toBeHidden()
   })
+
+  // iPadOS 18+ floats the tab bar at the top with no tab bar node: each tab is
+  // a button holding a duplicate of itself. Run on an iPad destination
+  // (TAPSMITH_IOS_SIMULATOR, see tapsmith.config.native-ios.mjs) as well as
+  // an iPhone.
+  test("each tab is one element, in one tablist", async ({ tabs }) => {
+    await expect(tabs.tabBar).toHaveCount(1)
+    await expect(tabs.tabBar).toHaveRole("tablist")
+    await expect(tabs.tabs).toHaveCount(3)
+    await expect(tabs.tabsInBar).toHaveCount(3)
+    await expect(tabs.tabButton("Search")).toHaveCount(1)
+    await expect(tabs.tab("Search", { selected: false })).toBeVisible()
+
+    await tabs.tab("Search").tap()
+    await expect(tabs.content("Search")).toBeVisible()
+    await expect(tabs.tab("Search", { selected: true })).toBeVisible()
+    await expect(tabs.tab("Feed", { selected: false })).toBeVisible()
+
+    // A role-only match re-binds the right live element for the action.
+    await tabs.tabs.first().tap()
+    await expect(tabs.content("Feed")).toBeVisible()
+  })
 })
 
 describe("Native: gestures", () => {

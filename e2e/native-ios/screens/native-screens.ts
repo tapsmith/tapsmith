@@ -110,7 +110,10 @@ export class NativeTabsScreen {
   constructor(private device: Device) {}
 
   get tabBar() { return this.device.getByRole("tablist") }
+  get tabs() { return this.device.getByRole("tab") }
+  get tabsInBar() { return this.tabBar.getByRole("tab") }
   tab(name: string, options: { selected?: boolean } = {}) { return this.device.getByRole("tab", { name, ...options }) }
+  tabButton(name: string) { return this.device.getByRole("button", { name, exact: true }) }
   content(name: string) { return this.device.getByText(`${name} tab content`, { exact: true }) }
 }
 
