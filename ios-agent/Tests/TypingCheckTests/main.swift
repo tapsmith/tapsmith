@@ -158,6 +158,21 @@ do {
     expect("secure text is a count", TypingCheck.describe("•••", secure: true) == "3 character(s)")
 }
 
+// Every typeText is checked, with or without a typing delay: an iPad field
+// just focused dropped the second key of an unchecked burst. Only a text
+// with a control character other than a newline goes unchecked without a
+// delay, as before, since the read-back cannot predict what it does.
+do {
+    expect("no delay is checked", TypingCheck.checks("test@example.com", delayMs: 0))
+    expect("a delay is checked", TypingCheck.checks("test@example.com", delayMs: 10))
+    expect("a newline (submit) is checked without a delay", TypingCheck.checks("foo\nbar", delayMs: 0))
+    expect("a tab goes unchecked without a delay", !TypingCheck.checks("a\tb", delayMs: 0))
+    expect("a backspace goes unchecked without a delay", !TypingCheck.checks("ab\u{8}", delayMs: 0))
+    expect("a carriage return goes unchecked without a delay", !TypingCheck.checks("a\r\nb", delayMs: 0))
+    expect("a control character with a delay is still checked, as before", TypingCheck.checks("a\tb", delayMs: 10))
+    expect("emoji and accents are checked", TypingCheck.checks("café 😀", delayMs: 0))
+}
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)

@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// How a paced `typeText` (a typing delay above zero) checks what it typed
-/// (PILOT-1012). It no longer waits for the field to show each character in
+/// How `typeText` checks what it typed (PILOT-1012; with no typing delay too
+/// since PILOT-1281). It does not wait for the field to show each character in
 /// turn: it types the first key alone and waits for the field to take it
 /// (a field just focused can drop keys while the keyboard reacts to the
 /// first), sends the rest as one burst of key events, then reads the field
@@ -21,6 +21,18 @@ enum TypingCheck {
     static func charactersPerSecond(delayMs: Int) -> Int {
         guard delayMs > 0 else { return maxCharactersPerSecond }
         return min(maxCharactersPerSecond, max(1, 1000 / delayMs))
+    }
+
+    /// Whether typing `text` is checked. With a typing delay, always. With
+    /// none, too (an iPad field just focused dropped the second key of an
+    /// unchecked burst, and the action reported success), except for a text
+    /// holding a control character other than a newline (a tab, a
+    /// backspace, a carriage return): what the field makes of one cannot be
+    /// predicted for the read-back, so such a text is still sent unchecked,
+    /// as it always was without a delay.
+    static func checks(_ text: String, delayMs: Int) -> Bool {
+        if delayMs > 0 { return true }
+        return !text.unicodeScalars.contains { $0 != "\n" && $0.properties.generalCategory == .control }
     }
 
     /// What of `text` goes into the field as keys, and whether Return is
