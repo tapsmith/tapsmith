@@ -143,15 +143,18 @@ impl DeviceBackend for AndroidBackend<'_> {
 
     async fn set_orientation(&self, request_id: String, orientation: &str) -> ActionResult {
         let serial = self.svc.active_serial().await?;
-        let rotation = match orientation {
-            "portrait" => "0",
-            "landscape" => "1",
+        let wanted = match orientation {
+            "portrait" => Orientation::Portrait,
+            "landscape" => Orientation::Landscape,
             other => {
                 return Err(Status::invalid_argument(format!(
                     "orientation must be 'portrait' or 'landscape', got '{other}'"
                 )));
             }
         };
+        // Rotation 0 is the display's natural orientation, which is landscape
+        // on most tablets: pick the rotation that gives the wanted shape.
+        let rotation = user_rotation_for(wanted, device_is_landscape_native(&serial).await);
         if let Err(e) = adb::shell(&serial, "settings put system accelerometer_rotation 0").await {
             error!(error = %e, "Failed to disable auto-rotate");
         }
@@ -164,11 +167,10 @@ impl DeviceBackend for AndroidBackend<'_> {
         let output = adb::shell(&serial, "settings get system user_rotation")
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        let orientation = match output.trim() {
-            "1" | "3" => "landscape",
-            _ => "portrait",
-        };
-        Ok(orientation.to_string())
+        let landscape_native = device_is_landscape_native(&serial).await;
+        Ok(orientation_for_rotation(&output, landscape_native)
+            .as_str()
+            .to_string())
     }
 
     async fn set_color_scheme(&self, request_id: String, scheme: &str) -> ActionResult {
@@ -1558,6 +1560,84 @@ pub(super) fn system_dialog_events_from(data: &Value) -> Vec<proto::SystemDialog
         .unwrap_or_default()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Orientation {
+    Portrait,
+    Landscape,
+}
+
+impl Orientation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Orientation::Portrait => "portrait",
+            Orientation::Landscape => "landscape",
+        }
+    }
+}
+
+/// The default display's size at rotation 0 (its natural orientation), from
+/// `wm size`: the override size when one is set, else the physical size.
+/// Both are reported unrotated, whatever the current rotation.
+fn natural_display_size(wm_size: &str) -> Option<(u32, u32)> {
+    let size_after = |label: &str| {
+        wm_size.lines().find_map(|line| {
+            let (w, h) = line.trim().strip_prefix(label)?.trim().split_once('x')?;
+            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+        })
+    };
+    size_after("Override size:").or_else(|| size_after("Physical size:"))
+}
+
+/// Whether rotation 0 shows the screen wider than tall, as on most tablets.
+/// A square display, or one whose size could not be read, is treated as
+/// portrait-native like a phone.
+fn is_landscape_native(size: Option<(u32, u32)>) -> bool {
+    matches!(size, Some((w, h)) if w > h)
+}
+
+/// The `user_rotation` that shows the screen in `orientation`. Rotations 0
+/// and 2 keep the natural shape, 1 and 3 turn it a quarter.
+fn user_rotation_for(orientation: Orientation, landscape_native: bool) -> &'static str {
+    let natural = if landscape_native {
+        Orientation::Landscape
+    } else {
+        Orientation::Portrait
+    };
+    if orientation == natural {
+        "0"
+    } else {
+        "1"
+    }
+}
+
+/// The screen's shape at `user_rotation` `rotation` (unset reads as 0).
+fn orientation_for_rotation(rotation: &str, landscape_native: bool) -> Orientation {
+    let quarter_turn = matches!(rotation.trim(), "1" | "3");
+    if quarter_turn != landscape_native {
+        Orientation::Landscape
+    } else {
+        Orientation::Portrait
+    }
+}
+
+/// Whether `serial`'s default display is landscape-native. Read on every call:
+/// a foldable's default display changes shape as it folds.
+async fn device_is_landscape_native(serial: &str) -> bool {
+    match adb::shell(serial, "wm size").await {
+        Ok(output) => {
+            let size = natural_display_size(&output);
+            if size.is_none() {
+                warn!(output = %output.trim(), "Could not parse `wm size`; assuming a portrait-native display");
+            }
+            is_landscape_native(size)
+        }
+        Err(e) => {
+            warn!(error = %e, "Could not read `wm size`; assuming a portrait-native display");
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1612,6 +1692,81 @@ mod tests {
         assert_eq!(events[0].owner, "");
         assert!(!events[0].owned_by_target);
         assert_eq!(events[0].timestamp_ms, 0);
+    }
+
+    #[test]
+    fn natural_size_prefers_the_override_size() {
+        assert_eq!(
+            natural_display_size("Physical size: 2560x1600\n"),
+            Some((2560, 1600))
+        );
+        assert_eq!(
+            natural_display_size("Physical size: 1080x2400\r\nOverride size: 2400x1080\r\n"),
+            Some((2400, 1080))
+        );
+        assert_eq!(natural_display_size(""), None);
+        assert_eq!(natural_display_size("Error: no display"), None);
+        assert_eq!(natural_display_size("Physical size: widexhigh"), None);
+    }
+
+    #[test]
+    fn only_a_wider_than_tall_natural_display_is_landscape_native() {
+        assert!(is_landscape_native(Some((2560, 1600))));
+        assert!(!is_landscape_native(Some((1080, 2400))));
+        // A square display, and one whose size can't be read, keep the
+        // phone mapping.
+        assert!(!is_landscape_native(Some((2000, 2000))));
+        assert!(!is_landscape_native(None));
+    }
+
+    #[test]
+    fn phones_keep_rotation_0_for_portrait_and_1_for_landscape() {
+        assert_eq!(user_rotation_for(Orientation::Portrait, false), "0");
+        assert_eq!(user_rotation_for(Orientation::Landscape, false), "1");
+        for (rotation, expected) in [
+            ("0", Orientation::Portrait),
+            ("1", Orientation::Landscape),
+            ("2", Orientation::Portrait),
+            ("3", Orientation::Landscape),
+            ("null", Orientation::Portrait),
+            ("", Orientation::Portrait),
+        ] {
+            assert_eq!(
+                orientation_for_rotation(rotation, false),
+                expected,
+                "{rotation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn landscape_native_devices_turn_the_mapping_round() {
+        assert_eq!(user_rotation_for(Orientation::Portrait, true), "1");
+        assert_eq!(user_rotation_for(Orientation::Landscape, true), "0");
+        for (rotation, expected) in [
+            ("0", Orientation::Landscape),
+            ("1", Orientation::Portrait),
+            ("2", Orientation::Landscape),
+            ("3", Orientation::Portrait),
+            ("null", Orientation::Landscape),
+            ("\n", Orientation::Landscape),
+        ] {
+            assert_eq!(
+                orientation_for_rotation(rotation, true),
+                expected,
+                "{rotation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_orientation_set_reads_back_the_same() {
+        for landscape_native in [false, true] {
+            for wanted in [Orientation::Portrait, Orientation::Landscape] {
+                let rotation = user_rotation_for(wanted, landscape_native);
+                assert_eq!(orientation_for_rotation(rotation, landscape_native), wanted);
+            }
+        }
     }
 
     #[test]
