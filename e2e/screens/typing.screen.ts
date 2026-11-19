@@ -7,6 +7,10 @@ export class TypingScreen {
   get slowInput() { return this.device.getByRole("textfield", { name: "Slow input" }) }
   /** What the slow field holds, as `slow=<value>`. */
   get slowValue() { return this.device.getByTestId("typing-slow-value") }
+  /** Drops the second key of the first text typed into it, once per visit (an iPad field just focused). */
+  get lossyInput() { return this.device.getByRole("textfield", { name: "Lossy input" }) }
+  /** What the lossy field holds, as `lossy=<value>`. */
+  get lossyValue() { return this.device.getByTestId("typing-lossy-value") }
   get secureInput() { return this.device.getByTestId("typing-secure-input") }
   /** How many characters the secure field holds, as `secure=<length>`. */
   get secureLength() { return this.device.getByTestId("typing-secure-length") }

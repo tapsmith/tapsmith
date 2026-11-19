@@ -19,6 +19,10 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - The slow code boxes do the same half a second after each digit, as a
 //   busy app does: keys typed before the focus moves go to the box being
 //   left. What they hold is echoed in "slowcode=<digits>".
+// - "Lossy input" drops the second key of the first text typed into it, as an
+//   iPad field just focused did while its keyboard came up (PILOT-1281:
+//   "test@example.com" came out "tst@example.com"). Only once per visit, so
+//   typing it again gets every key. What it holds is echoed in "lossy=<value>".
 const BUSY_MS = 40
 const CODE_LENGTH = 4
 const SLOW_FOCUS_MS = 500
@@ -37,6 +41,11 @@ export default function TypingScreen() {
   const boxes = useRef<(TextInput | null)[]>([])
   const [slowCode, setSlowCode] = useState<string[]>(Array(CODE_LENGTH).fill(""))
   const slowBoxes = useRef<(TextInput | null)[]>([])
+  const [lossy, setLossy] = useState("")
+  const lossyDropped = useRef(false)
+  // Bumped to re-render when a key is dropped: the value stays the same, and
+  // the re-render is what puts it back into the native field.
+  const [, setLossyDrops] = useState(0)
 
   // A warm reset navigates here rather than remounting.
   const resetEpoch = useTapsmithResetEpoch()
@@ -46,6 +55,8 @@ export default function TypingScreen() {
     setSecure("")
     setCode(Array(CODE_LENGTH).fill(""))
     setSlowCode(Array(CODE_LENGTH).fill(""))
+    setLossy("")
+    lossyDropped.current = false
   }, [resetEpoch])
 
   const setDigit = (index: number, text: string) => {
@@ -81,6 +92,27 @@ export default function TypingScreen() {
         testID="typing-slow-input"
       />
       <Text testID="typing-slow-value">{`slow=${slow}`}</Text>
+
+      <TextInput
+        style={styles.input}
+        value={lossy}
+        onChangeText={(text) => {
+          if (!lossyDropped.current && lossy.length === 1 && text.length >= 2) {
+            lossyDropped.current = true
+            setLossyDrops((n) => n + 1)
+            setLossy(text[0] + text.slice(2))
+            return
+          }
+          setLossy(text)
+        }}
+        placeholder="Lossy input"
+        autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
+        accessibilityLabel="Lossy input"
+        testID="typing-lossy-input"
+      />
+      <Text testID="typing-lossy-value">{`lossy=${lossy}`}</Text>
 
       <TextInput
         style={styles.input}

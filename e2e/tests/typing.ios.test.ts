@@ -93,3 +93,43 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
     })
   }
 })
+
+// PILOT-1281: with no typing delay (the default), type() used to send the text
+// unchecked, and an iPad field just focused lost the second key while its
+// keyboard came up ("test@example.com" came out "tst@example.com") with the
+// action reporting success. It now checks what arrived as a delay does. Each
+// call passes `delay: 0`, so this runs whatever the config's typingDelay is.
+describe("type() with no typing delay checks what arrived too (iOS)", () => {
+  test.use({ appResetScope: "test" })
+
+  test.beforeEach(async ({ device, typingScreen }) => {
+    await openScreen(device, "/typing")
+    await expect(typingScreen.lossyValue).toHaveText("lossy=")
+  })
+
+  test("a field that drops the second key still ends up with the text", async ({ typingScreen }) => {
+    await typingScreen.lossyInput.type("test@example.com", { delay: 0 })
+    await expect(typingScreen.lossyValue).toHaveText("lossy=test@example.com")
+    await expect(typingScreen.lossyInput).toHaveValue("test@example.com")
+  })
+
+  test("clearAndType() into a field that drops the second key still ends up with the text", async ({ typingScreen }) => {
+    await typingScreen.lossyInput.clearAndType("smoke@test.com", { delay: 0 })
+    await expect(typingScreen.lossyValue).toHaveText("lossy=smoke@test.com")
+  })
+
+  test("a controlled field that falls behind the keys still ends up with the text", async ({ typingScreen }) => {
+    await typingScreen.slowInput.type("sneaker", { delay: 0 })
+    await expect(typingScreen.slowValue).toHaveText("slow=sneaker")
+  })
+
+  test("a secure field gets every character", async ({ typingScreen }) => {
+    await typingScreen.secureInput.type("password123", { delay: 0 })
+    await expect(typingScreen.secureLength).toHaveText("secure=11")
+  })
+
+  test("a code field that moves the focus on gets one digit per box", async ({ typingScreen }) => {
+    await typingScreen.firstCodeBox.type("1234", { delay: 0 })
+    await expect(typingScreen.codeValue).toHaveText("code=1234")
+  })
+})
