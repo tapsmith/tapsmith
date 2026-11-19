@@ -8,7 +8,7 @@
 // some of the time, and its back button floats in the bar host with no label
 // (other devices label it with the previous screen's title).
 //
-// The iPad dumps (PILOT-1282, iPad Pro 11-inch) are of the fixture app's
+// The iPad dumps (PILOT-1282, iPad Pro 11-inch, iOS 26.5 and 27.2) are of the fixture app's
 // TabView and the test app's expo-router NativeTabs (a UITabBarController):
 // iPadOS 18+ floats the tab bar at the top, with no tab bar node either.
 //
@@ -254,9 +254,12 @@ func collapsedCount(_ role: String, _ name: String, in tree: [String: Any]) -> I
     }.count
 }
 
-for (name, file, tabs) in [
-    ("iPad 27.2 SwiftUI", "ipad-pro-11-27.2/tabs.xml", ["Feed", "Search", "Profile"]),
-    ("iPad 27.2 NativeTabs", "ipad-pro-11-27.2/native-tabs.xml", ["Home", "Explore"]),
+// iOS 26.5 lays no bar host over the screen; 27.2 lays an empty one.
+for (name, file, tabs, hosts) in [
+    ("iPad 27.2 SwiftUI", "ipad-pro-11-27.2/tabs.xml", ["Feed", "Search", "Profile"], 1),
+    ("iPad 27.2 NativeTabs", "ipad-pro-11-27.2/native-tabs.xml", ["Home", "Explore"], 1),
+    ("iPad 26.5 SwiftUI", "ipad-pro-11-26.5/tabs.xml", ["Feed", "Search", "Profile"], 0),
+    ("iPad 26.5 NativeTabs", "ipad-pro-11-26.5/native-tabs.xml", ["Home", "Explore"], 0),
 ] {
     let tree = prepared(file)
     check("\(name): the floating bar's items are tabs", collapsed("tab", in: tree), tabs)
@@ -270,7 +273,7 @@ for (name, file, tabs) in [
     check("\(name): the tablist holds the tabs",
           walk(tree).filter { $0.isTabBarHost }.map(\.type), [.other])
     check("\(name): no toolbar", collapsed("toolbar", in: tree), [])
-    check("\(name): the host is still empty", walk(tree).filter(\.isEmptyBarHost).count, 1)
+    check("\(name): the bar host, if any, is still empty", walk(tree).filter(\.isEmptyBarHost).count, hosts)
     check("\(name): a tab is one match by name", collapsedCount("tab", tabs[1], in: tree), 1)
     check("\(name): a tab is one button match by name", collapsedCount("button", tabs[1], in: tree), 1)
     check("\(name): the back button is no tab", collapsed("tab", in: tree).contains("Back"), false)
