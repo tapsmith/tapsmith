@@ -160,6 +160,13 @@ enum TypingCheck {
         delayMs == 0 && !secure
     }
 
+    /// Whether a lookup's "not found" says the field is gone: no element
+    /// matched. Not a snapshot that failed ("Snapshot failed after retries…"),
+    /// which says nothing about the field.
+    static func meansGone(_ notFoundMessage: String) -> Bool {
+        notFoundMessage.hasPrefix("No element found matching")
+    }
+
     /// Key-at-a-time retypes before typing with no delay settles.
     static let settleRetypeTries = 1
 

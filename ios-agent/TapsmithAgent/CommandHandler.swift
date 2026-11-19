@@ -1910,6 +1910,23 @@ class CommandHandler {
         }
     }
 
+    /// A selector for `element` by its identifier, when that finds it again
+    /// where it is (an identifier the screen gives one input). Nil for an
+    /// input with no identifier, or one it shares: typing into it with no
+    /// delay goes unchecked, as before.
+    private func identityParams(of element: ElementInfo) -> [String: Any]? {
+        guard let id = element.resourceId, !id.isEmpty else { return nil }
+        let params: [String: Any] = ["resourceId": id]
+        guard let found = try? resolveElement(params) else { return nil }
+        let a = found.bounds, b = element.bounds
+        guard OcclusionAnalyzer.framesMatch(
+            CGRect(x: a.left, y: a.top, width: a.width, height: a.height),
+            CGRect(x: b.left, y: b.top, width: b.width, height: b.height),
+            tolerance: 1.5
+        ) else { return nil }
+        return params
+    }
+
     /// The field typing reads back, or nil when it is gone after keys went
     /// in: the app removed it (a code field that submits once it is full, a
     /// screen that moves on), or one addressed by id is known only by the
@@ -1920,15 +1937,26 @@ class CommandHandler {
         let field: ElementInfo
         do {
             field = try resolveElement(selectorParams)
-        } catch AgentError.elementNotFound {
+        } catch AgentError.elementNotFound(let message) where TypingCheck.meansGone(message) {
             NSLog("[typeText] the field is gone after typing; not reading the text back")
             return nil
         }
-        guard !field.className.isEmpty else {
-            NSLog("[typeText] the field is known only by its old bounds after typing; not reading the text back")
+        guard field.className.isEmpty else { return field }
+        // Known only by the bounds it had (its live read failed): read the
+        // text input that is there now; none there means it is gone.
+        let b = field.bounds
+        let frame = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
+        guard let input = textInputs(at: [frame])?.first else {
+            NSLog("[typeText] no text input is where the field was after typing; not reading the text back")
             return nil
         }
-        return field
+        return ElementInfo(
+            elementId: field.elementId, className: input.secure ? "XCUIElementTypeSecureTextField" : "XCUIElementTypeTextField",
+            text: input.value, contentDescription: nil, resourceId: nil, hint: nil, bounds: field.bounds,
+            isEnabled: true, isChecked: false, isFocused: false, isClickable: true, isFocusable: true,
+            isScrollable: false, isVisible: true, isSelected: false, childCount: 0, role: field.role,
+            viewportRatio: field.viewportRatio
+        )
     }
 
     /// Read the field until it shows the text, or holds the same value for
@@ -2346,17 +2374,16 @@ class CommandHandler {
                     focusedOnly: isFocusedOnlySelector,
                     liveFocused: isFocusedOnlySelector && isLiveFocused(element)
                 )
-                if checked && checksInto {
+                // Typing into whatever has the focus reads back the input it
+                // started in, by its identifier: "the focused input" read
+                // again can be the next one, when the app moves the focus on
+                // as a key arrives (a field per digit).
+                let readBack = isFocusedOnlySelector ? identityParams(of: element) : selectorParams
+                if checked && checksInto && (readBack != nil || delayMs > 0) {
                     let focused = isFocusedOnlySelector ? element : try resolveElement(selectorParams)
-                    // Typing into whatever has the focus reads back the input
-                    // it started in, even when the app moves the focus on
-                    // as a key arrives (no tap recorded it as focused when
-                    // the app focused it itself).
-                    let pin = isFocusedOnlySelector ? snapshotFinder.pinFocusedTextInputHint(focused) : nil
-                    defer { if let pin { snapshotFinder.unpinFocusedTextInputHint(pin) } }
                     try typeTextChecked(
                         text,
-                        selectorParams: selectorParams,
+                        selectorParams: readBack ?? selectorParams,
                         initialElement: focused,
                         delayMs: delayMs
                     )

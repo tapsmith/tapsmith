@@ -118,6 +118,9 @@ do {
     expect("with no delay typing settles for what the field shows", TypingCheck.settles(delayMs: 0, secure: false))
     expect("with a delay it fails the action", !TypingCheck.settles(delayMs: 10, secure: false))
     expect("a secure field never settles", !TypingCheck.settles(delayMs: 0, secure: true))
+    expect("no element matching means the field is gone", TypingCheck.meansGone("No element found matching: id=otp"))
+    expect("a failed snapshot does not", !TypingCheck.meansGone("Snapshot failed after retries: timeout"))
+    expect("an empty tree does not", !TypingCheck.meansGone("Snapshot returned empty tree after retries"))
     expect("a mask's added characters look formatted",
            TypingCheck.looksFormatted("(555) 123-4567", before: "", typed: "5551234567"))
     expect("a dash after the third digit looks formatted", TypingCheck.looksFormatted("123-456", before: "", typed: "123456"))

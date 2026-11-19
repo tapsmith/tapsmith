@@ -43,12 +43,7 @@ class SnapshotElementFinder {
     private var queryPins: [String: LiveQueryPin] = [:]
     /// Counts commands, for checks made once per command.
     private var commandSerial = 0
-    private var focusedTextInputHint: FocusedTextInputHint? {
-        didSet { focusedTextInputHintGeneration += 1 }
-    }
-    /// Counts changes to `focusedTextInputHint`, so a pin is undone only when
-    /// nothing replaced it meanwhile.
-    private var focusedTextInputHintGeneration = 0
+    private var focusedTextInputHint: FocusedTextInputHint?
     private let lock = NSLock()
     /// The shape that last outlasted `NavigationTransition.settle`.
     private var outlastedTransition: String?
@@ -89,14 +84,11 @@ class SnapshotElementFinder {
         let frame: CGRect
     }
 
-    fileprivate struct FocusedTextInputHint {
+    private struct FocusedTextInputHint {
         let identifier: String
         let label: String
         let frame: CGRect
         let point: CGPoint?
-        /// Set by `pinFocusedTextInputHint`: while it holds, the hinted input
-        /// is the only focused one, keyboard or not.
-        var pinned = false
     }
 
     /// Parsed snapshot node from the accessibility tree.
@@ -291,8 +283,7 @@ class SnapshotElementFinder {
             }
             return cachedLiveFocusedTextInput
         }
-        let hint = currentFocusedTextInputHint()
-        let focusedHint = keyboardVisibleInSnapshot || hint?.pinned == true ? hint : nil
+        let focusedHint = keyboardVisibleInSnapshot ? currentFocusedTextInputHint() : nil
 
         // Flatten and search (pre-order — `.first()` callers depend on it).
         // Wrapper suppression happens inline via an ancestor stack so the
@@ -704,39 +695,6 @@ class SnapshotElementFinder {
         lock.unlock()
     }
 
-    /// What `pinFocusedTextInputHint` replaced, for `unpinFocusedTextInputHint`.
-    struct FocusedTextInputHintPin {
-        fileprivate let previous: FocusedTextInputHint?
-        fileprivate let generation: Int
-    }
-
-    /// Make `element` the focused text input for the length of one command
-    /// (until `unpinFocusedTextInputHint`), so the focused input resolved
-    /// again stays that one when the app moves the focus on by itself (a
-    /// field per digit): typing into whatever has the focus reads back the
-    /// field it typed into, not the next one (PILOT-1281 review). While
-    /// pinned, that input is the only one `focused` matches, wherever the
-    /// input the app moved the focus to sits in the tree.
-    func pinFocusedTextInputHint(_ element: ElementInfo) -> FocusedTextInputHintPin {
-        lock.lock()
-        let previous = focusedTextInputHint
-        lock.unlock()
-        recordFocusedTextInputHint(element)
-        lock.lock()
-        defer { lock.unlock() }
-        focusedTextInputHint?.pinned = true
-        return FocusedTextInputHintPin(previous: previous, generation: focusedTextInputHintGeneration)
-    }
-
-    /// Put back the hint `pin` replaced, unless the hint changed since (a tap
-    /// that focused a field records its own).
-    func unpinFocusedTextInputHint(_ pin: FocusedTextInputHintPin) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard focusedTextInputHintGeneration == pin.generation else { return }
-        focusedTextInputHint = pin.previous
-    }
-
     func recordFocusedTextInputHint(at point: CGPoint) {
         lock.lock()
         focusedTextInputHint = FocusedTextInputHint(
@@ -1121,10 +1079,6 @@ class SnapshotElementFinder {
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
         focusedHint: FocusedTextInputHint?
     ) -> Bool {
-        if let hint = focusedHint, hint.pinned {
-            return isTextFieldType(elementType)
-                && matchesFocusedTextInputHint(node, elementType: elementType, focusedHint: hint)
-        }
         let snapshotFocused = (node["hasFocus"] as? Bool)
             ?? (node["hasKeyboardFocus"] as? Bool)
         if snapshotFocused == true { return true }
