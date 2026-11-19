@@ -15,6 +15,14 @@ export class TypingScreen {
   get selectInput() { return this.device.getByRole("textfield", { name: "Select-on-focus input" }) }
   /** What the select-on-focus field holds, as `select=<value>`. */
   get selectValue() { return this.device.getByTestId("typing-select-value") }
+  /** Keeps digits only, with a dash after the third, as an input mask does. */
+  get formattedInput() { return this.device.getByRole("textfield", { name: "Formatted input" }) }
+  /** What the formatted field holds, as `fmt=<value>`. */
+  get formattedValue() { return this.device.getByTestId("typing-formatted-value") }
+  /** Removed once it holds four characters, as a code field that submits itself is. */
+  get vanishingInput() { return this.device.getByRole("textfield", { name: "Vanishing input" }) }
+  /** What the vanishing field held, as `vanish=<value>`. */
+  get vanishingValue() { return this.device.getByTestId("typing-vanishing-value") }
   get secureInput() { return this.device.getByTestId("typing-secure-input") }
   /** How many characters the secure field holds, as `secure=<length>`. */
   get secureLength() { return this.device.getByTestId("typing-secure-length") }

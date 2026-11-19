@@ -144,4 +144,22 @@ describe("type() with no typing delay checks what arrived too (iOS)", () => {
     await typingScreen.selectInput.type("new", { delay: 0 })
     await expect(typingScreen.selectValue).toHaveText("select=new")
   })
+
+  test("a field that formats what is typed keeps its formatting, as before", async ({ typingScreen }) => {
+    await typingScreen.formattedInput.type("123456", { delay: 0 })
+    await expect(typingScreen.formattedValue).toHaveText("fmt=123-456")
+  })
+
+  test("a field the app removes once it is full still counts as typed", async ({ typingScreen }) => {
+    await typingScreen.vanishingInput.type("abcd", { delay: 0 })
+    await expect(typingScreen.vanishingValue).toHaveText("vanish=abcd")
+    await expect(typingScreen.vanishingInput).toBeHidden()
+  })
+
+  test("inputText() into a code field that moves the focus on gets one digit per box", async ({ device, typingScreen }) => {
+    // inputText() takes no delay of its own: this runs at the config's typingDelay.
+    await typingScreen.firstCodeBox.tap()
+    await device.inputText("1234")
+    await expect(typingScreen.codeValue).toHaveText("code=1234")
+  })
 })

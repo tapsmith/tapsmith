@@ -107,10 +107,17 @@ do {
     expect("scrambled is typed again", TypingCheck.retypes(.scrambled, before: "x", secure: false))
     expect("a change is not", !TypingCheck.retypes(.changed, before: "", secure: false))
     expect("complete is not", !TypingCheck.retypes(.complete, before: "", secure: false))
-    expect("the first key is sent again into a plain field", TypingCheck.resendsFirstKey(before: "ab", secure: false))
-    expect("and into an empty secure field", TypingCheck.resendsFirstKey(before: "", secure: true))
+    expect("the first key is sent again into a plain field", TypingCheck.resendsFirstKey(before: "ab", key: "c", secure: false))
+    expect("and into an empty secure field", TypingCheck.resendsFirstKey(before: "", key: "c", secure: true))
     expect("not into a secure field that held text (iOS may have emptied it: one bullet can be the new key)",
-           !TypingCheck.resendsFirstKey(before: "•", secure: true))
+           !TypingCheck.resendsFirstKey(before: "•", key: "c", secure: true))
+    expect("not into a field holding just that key: a replaced selection reads the same as a lost key",
+           !TypingCheck.resendsFirstKey(before: "1", key: "1", secure: false))
+    expect("into a field holding another single character",
+           TypingCheck.resendsFirstKey(before: "1", key: "2", secure: false))
+    expect("with no delay a field that changed the text is left as it is", TypingCheck.acceptsChange(delayMs: 0, secure: false))
+    expect("with a delay it fails the action", !TypingCheck.acceptsChange(delayMs: 10, secure: false))
+    expect("a secure field that changed is never accepted", !TypingCheck.acceptsChange(delayMs: 0, secure: true))
     expect("an empty secure field is typed again", TypingCheck.retypes(.short, before: "", secure: true))
     expect("a secure field with content is not (it cannot be read back)",
            !TypingCheck.retypes(.short, before: "••", secure: true))

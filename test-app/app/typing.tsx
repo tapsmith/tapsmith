@@ -26,10 +26,21 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Select-on-focus input" starts out holding "old" and selects its text as
 //   it takes the focus, so the first key typed replaces it, as it would for a
 //   user. What it holds is echoed in "select=<value>".
+// - "Formatted input" keeps digits only and puts a dash after the third, as
+//   an input mask does, so it never shows exactly what was typed. What it
+//   holds is echoed in "fmt=<value>".
+// - "Vanishing input" is removed once it holds four characters, as a code
+//   field that submits itself is. "vanish=<value>" echoes what it held.
 const BUSY_MS = 40
 const CODE_LENGTH = 4
 const SLOW_FOCUS_MS = 500
 const SELECT_START = "old"
+const VANISH_LENGTH = 4
+
+function formatDigits(text: string) {
+  const digits = text.replace(/\D/g, "").slice(0, 6)
+  return digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits
+}
 
 function busyWait(ms: number) {
   const end = Date.now() + ms
@@ -51,6 +62,8 @@ export default function TypingScreen() {
   // the re-render is what puts it back into the native field.
   const [, setLossyDrops] = useState(0)
   const [select, setSelect] = useState(SELECT_START)
+  const [formatted, setFormatted] = useState("")
+  const [vanish, setVanish] = useState("")
 
   // A warm reset navigates here rather than remounting.
   const resetEpoch = useTapsmithResetEpoch()
@@ -63,6 +76,8 @@ export default function TypingScreen() {
     setLossy("")
     lossyDropped.current = false
     setSelect(SELECT_START)
+    setFormatted("")
+    setVanish("")
   }, [resetEpoch])
 
   const setDigit = (index: number, text: string) => {
@@ -184,6 +199,37 @@ export default function TypingScreen() {
         testID="typing-select-input"
       />
       <Text testID="typing-select-value">{`select=${select}`}</Text>
+
+      <View style={styles.row}>
+        <TextInput
+          style={[styles.input, styles.half]}
+          value={formatted}
+          onChangeText={(text) => setFormatted(formatDigits(text))}
+          placeholder="Formatted input"
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          accessibilityLabel="Formatted input"
+          testID="typing-formatted-input"
+        />
+        {vanish.length < VANISH_LENGTH ? (
+          <TextInput
+            style={[styles.input, styles.half]}
+            value={vanish}
+            onChangeText={setVanish}
+            placeholder="Vanishing input"
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            accessibilityLabel="Vanishing input"
+            testID="typing-vanishing-input"
+          />
+        ) : null}
+      </View>
+      <View style={styles.row}>
+        <Text testID="typing-formatted-value">{`fmt=${formatted}`}</Text>
+        <Text testID="typing-vanishing-value">{`vanish=${vanish}`}</Text>
+      </View>
     </View>
   )
 }
@@ -206,6 +252,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
+  },
+  half: {
+    flex: 1,
   },
   box: {
     width: 48,

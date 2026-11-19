@@ -1510,10 +1510,20 @@ class CommandHandler {
             // From the first key on, part of the text can be in the field: no
             // error may read as a stale element (`TypingCheck.notStale`).
             do {
-                let field: ElementInfo
-                (field, before) = try typeFirstKey(
-                    String(first), before: before, secure: secure, selectorParams: selectorParams
-                )
+                guard let landed = try typeFirstKey(
+                    String(first), before: before, secure: secure, delayMs: delayMs, selectorParams: selectorParams
+                ) else {
+                    // The field changed the first key (a mask) with no delay:
+                    // the rest goes unchecked, as all of it did before.
+                    let rest = String(plan.keys.dropFirst())
+                    if !rest.isEmpty && !sendRest(rest, delayMs: delayMs, lastSentAt: Date()) {
+                        throw AgentError.actionFailed("typeText failed to synthesize input")
+                    }
+                    if plan.submit { try submitAfterTyping(delayMs: delayMs) }
+                    return
+                }
+                let field = landed.field
+                before = landed.before
                 let rest = String(plan.keys.dropFirst())
                 // Wait out the delay before the focus check: an app can move
                 // the focus on a while after the key shows (a React Native
@@ -1545,12 +1555,14 @@ class CommandHandler {
         }
         // Return submits a single-line field, which then usually gives up
         // focus: nothing after it reaches the field, so nothing is checked.
-        if plan.submit {
-            if !actionExecutor.typeViaEventSynthesizer("\n") {
-                throw AgentError.actionFailed("typeText failed to synthesize Return key")
-            }
-            Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
+        if plan.submit { try submitAfterTyping(delayMs: delayMs) }
+    }
+
+    private func submitAfterTyping(delayMs: Int) throws {
+        if !actionExecutor.typeViaEventSynthesizer("\n") {
+            throw AgentError.actionFailed("typeText failed to synthesize Return key")
         }
+        Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
     }
 
     /// Send the keys after the first, `delayMs` apart: one burst of key
@@ -1576,13 +1588,16 @@ class CommandHandler {
     /// (after refocusing the field) when nothing arrived.
     /// The field as read when it showed the key, and what it held before the
     /// key: `before`, or nothing when the key replaced it (a selection,
-    /// `TypingCheck.replacedSelection`).
+    /// `TypingCheck.replacedSelection`). Nil when the field changed the key
+    /// and that is left as it is (`TypingCheck.acceptsChange`): nothing more
+    /// can be checked.
     private func typeFirstKey(
-        _ key: String, before: String, secure: Bool, selectorParams: [String: Any]
-    ) throws -> (field: ElementInfo, before: String) {
+        _ key: String, before: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]
+    ) throws -> (field: ElementInfo, before: String)? {
         var shown = before
         var field: ElementInfo?
         var base = before
+        var unchecked = false
         func landed() throws -> Bool {
             let fresh = try resolveElement(selectorParams)
             field = fresh
@@ -1593,6 +1608,10 @@ class CommandHandler {
             case .changed where TypingCheck.replacedSelection(shown, before: before, key: key, secure: secure):
                 NSLog("[typeText] the first key replaced the field's text (it was selected): typing on as into an empty field")
                 base = ""
+                return true
+            case .changed where TypingCheck.acceptsChange(delayMs: delayMs, secure: secure):
+                NSLog("[typeText] the field changed the first key (it formats what is typed): typing the rest unchecked")
+                unchecked = true
                 return true
             case .changed where secure && shown.count < before.count:
                 throw AgentError.actionFailed(
@@ -1614,10 +1633,20 @@ class CommandHandler {
             }
             let deadline = Date(timeIntervalSinceNow: TypingCheck.firstKeyWait)
             repeat {
-                if try landed(), let field { return (field, base) }
+                if try landed() {
+                    if unchecked { return nil }
+                    if let field { return (field, base) }
+                }
                 Thread.sleep(forTimeInterval: 0.02)
             } while Date() < deadline
-            guard TypingCheck.resendsFirstKey(before: before, secure: secure) else {
+            guard TypingCheck.resendsFirstKey(before: before, key: key, secure: secure) else {
+                guard secure else {
+                    throw AgentError.actionFailed(
+                        "typeText: the field still shows \(TypingCheck.describe(shown, secure: false)) after the first key, " +
+                            "the same character: the key may have replaced the field's selected text, or been lost, " +
+                            "and the two cannot be told apart; use clearAndType() to replace its text"
+                    )
+                }
                 throw AgentError.actionFailed(
                     "typeText: the secure field still shows \(before.count) character(s) after the first key: " +
                         "iOS may have emptied it as the key went in (it empties a secure field typed into after it " +
@@ -1815,10 +1844,15 @@ class CommandHandler {
         _ keys: String, before: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]
     ) throws {
         let window = TypingCheck.burstWait + TypingCheck.typingDuration(count: keys.count, delayMs: delayMs)
-        var (reading, shown) = try waitForTyped(keys, before: before, secure: secure,
-                                                selectorParams: selectorParams, within: window)
+        guard var (reading, shown) = try waitForTyped(keys, before: before, secure: secure,
+                                                      selectorParams: selectorParams, within: window)
+        else { return }
         var tries = 0
         while reading != .complete {
+            if reading == .changed && TypingCheck.acceptsChange(delayMs: delayMs, secure: secure) {
+                NSLog("[typeText] the field changed what was typed (it formats it): left as it is")
+                return
+            }
             guard TypingCheck.retypes(reading, before: before, secure: secure), tries < TypingCheck.retypeTries else {
                 throw AgentError.actionFailed(
                     "typeText: the field shows \(TypingCheck.describe(shown, secure: secure)), " +
@@ -1827,7 +1861,7 @@ class CommandHandler {
                 )
             }
             tries += 1
-            let target = try resolveElement(selectorParams)
+            guard let target = try readBackField(selectorParams) else { return }
             if focusMovedOn(from: target) {
                 // The field moved the focus on by itself after the first key
                 // was checked (its app was slow to): the burst went astray
@@ -1845,22 +1879,46 @@ class CommandHandler {
             }
             NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: secure)) after typing: typing it again a key at a time (try \(tries))")
             try retypeKeyByKey(before + keys, secure: secure, delayMs: delayMs, selectorParams: selectorParams)
-            (reading, shown) = try waitForTyped(keys, before: before, secure: secure, selectorParams: selectorParams,
-                                                within: TypingCheck.keyWait + TypingCheck.stillWait)
+            guard let again = try waitForTyped(keys, before: before, secure: secure, selectorParams: selectorParams,
+                                               within: TypingCheck.keyWait + TypingCheck.stillWait)
+            else { return }
+            (reading, shown) = again
         }
+    }
+
+    /// The field typing reads back, or nil when it is gone after keys went
+    /// in: the app removed it (a code field that submits once it is full, a
+    /// screen that moves on), or one addressed by id is known only by the
+    /// bounds it had (`resolveElement`'s fallback). Nothing is left to check
+    /// then, as when the fields typing went through moved
+    /// (`checkTypedAcross`).
+    private func readBackField(_ selectorParams: [String: Any]) throws -> ElementInfo? {
+        let field: ElementInfo
+        do {
+            field = try resolveElement(selectorParams)
+        } catch AgentError.elementNotFound {
+            NSLog("[typeText] the field is gone after typing; not reading the text back")
+            return nil
+        }
+        guard !field.className.isEmpty else {
+            NSLog("[typeText] the field is known only by its old bounds after typing; not reading the text back")
+            return nil
+        }
+        return field
     }
 
     /// Read the field until it shows the text, or holds the same value for
     /// `TypingCheck.stillWait`, or `window` ends: the last reading, and the
-    /// value it was taken from.
+    /// value it was taken from. Nil when the field is gone (`readBackField`).
     private func waitForTyped(
         _ keys: String, before: String, secure: Bool, selectorParams: [String: Any], within window: TimeInterval
-    ) throws -> (TypingCheck.Reading, String) {
+    ) throws -> (TypingCheck.Reading, String)? {
         let deadline = Date(timeIntervalSinceNow: window)
         var last: String?
         var since = Date()
         while true {
-            let shown = try resolveElement(selectorParams).text ?? ""
+            guard let field = try readBackField(selectorParams) else { return nil }
+            let shown = field.text ?? ""
             let reading = TypingCheck.read(shown, before: before, typed: keys, secure: secure)
             if reading == .complete { return (reading, shown) }
             if shown != last {

@@ -141,8 +141,20 @@ enum TypingCheck {
     /// takes focus, so its count cannot tell a lost key from a key that
     /// replaced the content (one bullet before, one after), and a resend
     /// could make the count right with the wrong text.
-    static func resendsFirstKey(before: String, secure: Bool) -> Bool {
-        !secure || before.isEmpty
+    /// Nor into a field that held just that key's character: a key that
+    /// replaced the field's selected text leaves it showing what it held, the
+    /// same as a key that was lost, and a resend would double it.
+    static func resendsFirstKey(before: String, key: String, secure: Bool) -> Bool {
+        (!secure || before.isEmpty) && before != key
+    }
+
+    /// Whether a field that changed what was typed (a mask, auto-capitalization,
+    /// smart punctuation) is left as it is rather than failing the action:
+    /// with no typing delay, as it always was before typing was checked with
+    /// no delay. A delay fails it, as it did before. Never a secure field: a
+    /// change there is iOS emptying it, not the app formatting the text.
+    static func acceptsChange(delayMs: Int, secure: Bool) -> Bool {
+        delayMs == 0 && !secure
     }
 
     /// The text input with keyboard focus, as typing into a field that
