@@ -2360,7 +2360,13 @@ class CommandHandler {
                     // have replaced it as it took the focus (select- or
                     // clear-on-focus), which reads the same as keys lost.
                     if TypingCheck.repairsInto(element.className), (element.text ?? "").isEmpty, TypingCheck.repairs(text) {
-                        try repairDroppedKeys(text, selectorParams: selectorParams)
+                        do {
+                            try repairDroppedKeys(text, selectorParams: selectorParams)
+                        } catch let error as AgentError where TypingCheck.readsAsStale(error.message) {
+                            // The field's text, quoted, must not read as a
+                            // stale element: the SDK would type it all again.
+                            throw AgentError.actionFailed(TypingCheck.notStale(error.message))
+                        }
                     }
                 }
             } else {

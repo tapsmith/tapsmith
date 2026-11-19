@@ -119,12 +119,15 @@ describe("type() with no typing delay types lost keys again (iOS)", () => {
   test("a field that drops the second key still ends up with the text", async ({ typingScreen }) => {
     await typingScreen.lossyInput.type("test@example.com", { delay: 0 })
     await expect(typingScreen.lossyValue).toHaveText("lossy=test@example.com")
+    // The field did drop a key: the text is there because it was typed again.
+    await expect(typingScreen.lossyDrops).toHaveText("drops=1")
     await expect(typingScreen.lossyInput).toHaveValue("test@example.com")
   })
 
   test("clearAndType() into a field that drops the second key still ends up with the text", async ({ typingScreen }) => {
     await typingScreen.lossyInput.clearAndType("smoke@test.com", { delay: 0 })
     await expect(typingScreen.lossyValue).toHaveText("lossy=smoke@test.com")
+    await expect(typingScreen.lossyDrops).toHaveText("drops=1")
   })
 
   test("a controlled field that falls behind the keys still ends up with the text", async ({ typingScreen }) => {

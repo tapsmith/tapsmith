@@ -11,6 +11,8 @@ export class TypingScreen {
   get lossyInput() { return this.device.getByRole("textfield", { name: "Lossy input" }) }
   /** What the lossy field holds, as `lossy=<value>`. */
   get lossyValue() { return this.device.getByTestId("typing-lossy-value") }
+  /** How many keys the lossy field has dropped, as `drops=<n>`. */
+  get lossyDrops() { return this.device.getByTestId("typing-lossy-drops") }
   /** Starts out holding "old", and selects its text as it takes the focus. */
   get selectInput() { return this.device.getByRole("textfield", { name: "Select-on-focus input" }) }
   /** What the select-on-focus field holds, as `select=<value>`. */

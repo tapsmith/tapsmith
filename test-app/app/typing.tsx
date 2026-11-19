@@ -60,7 +60,7 @@ export default function TypingScreen() {
   const lossyDropped = useRef(false)
   // Bumped to re-render when a key is dropped: the value stays the same, and
   // the re-render is what puts it back into the native field.
-  const [, setLossyDrops] = useState(0)
+  const [lossyDrops, setLossyDrops] = useState(0)
   const [select, setSelect] = useState(SELECT_START)
   const [formatted, setFormatted] = useState("")
   const [vanish, setVanish] = useState("")
@@ -75,6 +75,7 @@ export default function TypingScreen() {
     setSlowCode(Array(CODE_LENGTH).fill(""))
     setLossy("")
     lossyDropped.current = false
+    setLossyDrops(0)
     setSelect(SELECT_START)
     setFormatted("")
     setVanish("")
@@ -134,6 +135,7 @@ export default function TypingScreen() {
         testID="typing-lossy-input"
       />
       <Text testID="typing-lossy-value">{`lossy=${lossy}`}</Text>
+      <Text testID="typing-lossy-drops">{`drops=${lossyDrops}`}</Text>
 
       <TextInput
         style={styles.input}
