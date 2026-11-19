@@ -159,6 +159,13 @@ describe("type() with no typing delay types lost keys again (iOS)", () => {
     await expect(typingScreen.formattedValue).toHaveText("fmt=123-456")
   })
 
+  test("a field that filters out a typed character keeps what it took", async ({ typingScreen }) => {
+    // The "a" is filtered out: the field reads one key short, is typed again a
+    // key at a time, and is then left with what it takes.
+    await typingScreen.formattedInput.type("12a3", { delay: 0 })
+    await expect(typingScreen.formattedValue).toHaveText("fmt=123")
+  })
+
   test("a field the app removes once it is full still counts as typed", async ({ typingScreen }) => {
     await typingScreen.vanishingInput.type("abcd", { delay: 0 })
     await expect(typingScreen.vanishingValue).toHaveText("vanish=abcd")

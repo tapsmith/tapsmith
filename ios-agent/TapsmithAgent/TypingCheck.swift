@@ -142,9 +142,13 @@ enum TypingCheck {
     }
 
     /// Whether the field, read back as `reading` showing `shown`, lost a few
-    /// keys or got them out of order: every character it shows after
-    /// `before` was typed, and at most `maxRepairedKeys` are missing.
+    /// keys or got them out of order: every character it shows was typed,
+    /// and at most `maxRepairedKeys` are missing. Only a field that was empty
+    /// before typing (`before`): one that held text may have replaced it as
+    /// it took the focus (a select- or clear-on-focus field), and typing
+    /// that starts with the old text then reads as keys lost.
     static func repairs(_ reading: Reading, shown: String, before: String, typed: String) -> Bool {
+        guard before.isEmpty else { return false }
         switch reading {
         case .short, .scrambled:
             return before.count + typed.count - shown.count <= maxRepairedKeys

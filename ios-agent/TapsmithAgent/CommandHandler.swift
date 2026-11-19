@@ -1559,8 +1559,9 @@ class CommandHandler {
     /// field still has the focus, type the text again a key at a time.
     /// Anything else the field shows is left as it is, as unchecked typing
     /// always left it: a field can format, filter or limit what is typed, and
-    /// the app can move the focus on or remove the field. Never fails.
-    private func repairDroppedKeys(_ text: String, before: String, selectorParams: [String: Any]) {
+    /// the app can move the focus on or remove the field. Fails only when
+    /// typing it again went wrong after the field was emptied for it.
+    private func repairDroppedKeys(_ text: String, before: String, selectorParams: [String: Any]) throws {
         guard let (reading, shown) = try? waitForTyped(
             text, before: before, secure: false, selectorParams: selectorParams, within: TypingCheck.burstWait
         ), TypingCheck.repairs(reading, shown: shown, before: before, typed: text) else { return }
@@ -1568,8 +1569,13 @@ class CommandHandler {
         NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: false)) after typing: typing it again a key at a time")
         do {
             try retypeKeyByKey(before + text, secure: false, delayMs: 0, selectorParams: selectorParams)
-        } catch {
-            NSLog("[typeText] typing it again a key at a time stopped: \(error)")
+        } catch let error as AgentError {
+            // The field has the focus, so the retype went straight to
+            // emptying it: what it held is gone.
+            throw AgentError.actionFailed(
+                "typeText: the field showed \(TypingCheck.describe(shown, secure: false)) after typing, " +
+                    "and typing it again a key at a time failed: \(error.message)"
+            )
         }
     }
 
@@ -2280,7 +2286,7 @@ class CommandHandler {
                         throw AgentError.actionFailed("typeText failed to synthesize input")
                     }
                     if !isFocusedOnlySelector, TypingCheck.repairsInto(element.className), TypingCheck.repairs(text) {
-                        repairDroppedKeys(text, before: element.text ?? "", selectorParams: selectorParams)
+                        try repairDroppedKeys(text, before: element.text ?? "", selectorParams: selectorParams)
                     }
                 }
             } else {

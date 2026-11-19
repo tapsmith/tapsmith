@@ -202,6 +202,14 @@ do {
     let replaced = TypingCheck.read("new", before: "old", typed: "new", secure: false)
     expect("a field whose selected text was replaced is left as it is",
            !TypingCheck.repairs(replaced, shown: "new", before: "old", typed: "new"))
+    let threeLost = TypingCheck.read("tst@xampl.com", before: "", typed: "test@example.com", secure: false)
+    expect("up to three lost keys are repaired",
+           TypingCheck.repairs(threeLost, shown: "tst@xampl.com", before: "", typed: "test@example.com"))
+    let replacedPrefix = TypingCheck.read("10", before: "1", typed: "10", secure: false)
+    expect("a field that held text is not repaired: it may have replaced that text as it took the focus",
+           !TypingCheck.repairs(replacedPrefix, shown: "10", before: "1", typed: "10"))
+    let appendedLost = TypingCheck.read("abd", before: "ab", typed: "cd", secure: false)
+    expect("nor when typing after its text lost a key", !TypingCheck.repairs(appendedLost, shown: "abd", before: "ab", typed: "cd"))
     let complete = TypingCheck.read("abc", before: "", typed: "abc", secure: false)
     expect("a complete field is left as it is", !TypingCheck.repairs(complete, shown: "abc", before: "", typed: "abc"))
 }
