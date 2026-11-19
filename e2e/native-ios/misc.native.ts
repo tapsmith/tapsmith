@@ -41,6 +41,27 @@ describe("Native: TabView", () => {
   })
 })
 
+describe("Native: sidebar-adaptable TabView", () => {
+  test.beforeEach(async ({ device, sidebarTabs }) => {
+    await openScreen(device, "sidebartabs")
+    await expect(sidebarTabs.content("Inbox")).toBeVisible()
+  })
+
+  // On an iPad the floating tab bar also holds the sidebar toggle, which is
+  // no tab, and the search tab, a button holding an image.
+  test("every tab, search included, is a tab in one tablist", async ({ sidebarTabs }) => {
+    await expect(sidebarTabs.tabBar).toHaveCount(1)
+    await expect(sidebarTabs.tabs).toHaveCount(4)
+    await expect(sidebarTabs.tab("Inbox", { selected: true })).toBeVisible()
+    await expect(sidebarTabs.tab("Toggle sidebar")).toHaveCount(0)
+
+    await sidebarTabs.tab("Drafts").tap()
+    await expect(sidebarTabs.content("Drafts")).toBeVisible()
+    await sidebarTabs.tab("Search").tap()
+    await expect(sidebarTabs.content("Search")).toBeVisible()
+  })
+})
+
 describe("Native: gestures", () => {
   test.beforeEach(async ({ device, gestures }) => {
     await openScreen(device, "gestures")

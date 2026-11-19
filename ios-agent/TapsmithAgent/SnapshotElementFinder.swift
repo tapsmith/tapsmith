@@ -1714,7 +1714,6 @@ class SnapshotElementFinder {
         }
 
         if let children = nodeDict["children"] as? [[String: Any]] {
-            let childrenInTabBar = inTabBar || BarHost.isTabBar(nodeDict)
             // A keyboard's top edge only applies within its own window.
             let outerKeyboardTop = keyboardTop
             if nodeType == .window { keyboardTop = nil }
@@ -1726,7 +1725,7 @@ class SnapshotElementFinder {
             for child in children {
                 findMatches(
                     in: child,
-                    inTabBar: childrenInTabBar,
+                    inTabBar: inTabBar || BarHost.holdsTab(nodeDict, child),
                     insideSwitch: insideSwitch || NonAppElements.isSwitch(nodeType),
                     // Inside a native alert only the alert is an alert
                     // (RoleMapping.matches, PILOT-919).

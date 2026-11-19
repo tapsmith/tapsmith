@@ -117,6 +117,15 @@ export class NativeTabsScreen {
   content(name: string) { return this.device.getByText(`${name} tab content`, { exact: true }) }
 }
 
+export class NativeSidebarTabsScreen {
+  constructor(private device: Device) {}
+
+  get tabBar() { return this.device.getByRole("tablist") }
+  get tabs() { return this.device.getByRole("tab") }
+  tab(name: string, options: { selected?: boolean } = {}) { return this.device.getByRole("tab", { name, ...options }) }
+  content(name: string) { return this.device.getByText(`${name} tab content`, { exact: true }) }
+}
+
 export class NativeGesturesScreen {
   constructor(private device: Device) {}
 

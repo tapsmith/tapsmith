@@ -72,7 +72,7 @@ func walk(_ tree: [String: Any]) -> [Seen] {
             frame: CellFrames.frame(of: node)
         ))
         for child in node["children"] as? [[String: Any]] ?? [] {
-            visit(child, inTabBar: inTabBar || BarHost.isTabBar(node))
+            visit(child, inTabBar: inTabBar || BarHost.holdsTab(node, child))
         }
     }
     visit(tree, inTabBar: false)
@@ -279,6 +279,23 @@ for (name, file, tabs, hosts) in [
     check("\(name): the back button is no tab", collapsed("tab", in: tree).contains("Back"), false)
 }
 
+// A sidebar-adaptable TabView (iOS 18's `Tab` API): the bar also holds the
+// sidebar toggle, a plain button, and the search tab, a button holding an
+// image of itself. The first tab has a badge.
+for (name, file) in [
+    ("iPad 27.2 sidebar-adaptable", "ipad-pro-11-27.2/sidebar-tabs.xml"),
+    ("iPad 26.5 sidebar-adaptable", "ipad-pro-11-26.5/sidebar-tabs.xml"),
+] {
+    let tree = prepared(file)
+    check("\(name): the tabs, search included, are tabs",
+          collapsed("tab", in: tree), ["Inbox", "Drafts", "Sent", "Search"])
+    check("\(name): the badged tab is selected", collapsed("tab", selected: true, in: tree), ["Inbox"])
+    check("\(name): the bar is the one tablist", collapsed("tablist", in: tree).count, 1)
+    check("\(name): the sidebar toggle is no tab", collapsed("tab", in: tree).contains("Toggle sidebar"), false)
+    check("\(name): the sidebar toggle reports button", reported("button", in: tree).contains("Toggle sidebar"), true)
+    check("\(name): the search tab is one match by name", collapsedCount("tab", "Search", in: tree), 1)
+}
+
 /// A group of tab-bar-sized button pairs, as the iPad's floating tab bar
 /// lays them out: `items` are (label, selected, nested duplicate).
 func floatingBar(_ items: [(String, Bool, Bool)], extra: [[String: Any]] = []) -> [String: Any] {
@@ -324,11 +341,20 @@ check("a single selected button pair is no tablist",
       collapsed("tablist", in: marked(floatingBar([("A", true, true)]))), [])
 check("plain buttons, one selected, are no tablist",
       collapsed("tablist", in: marked(floatingBar([("A", true, false), ("B", false, false)]))), [])
-check("a group with a button that holds no duplicate is no tablist",
-      collapsed("tablist", in: marked(floatingBar([("A", true, true), ("B", false, false)]))), [])
-check("a group holding something besides button pairs is no tablist",
+check("a group holding something besides buttons is no tablist",
       collapsed("tablist", in: marked(floatingBar([("A", true, true), ("B", false, true)], extra: [staticText("C")]))),
       [])
+let withControl = marked(floatingBar([("A", true, true), ("B", false, true)], extra: [[
+    "elementType": XCUIElement.ElementType.button.rawValue, "label": "Toggle", "identifier": "",
+    "frame": ["X": 200.0, "Y": 142.0, "Width": 50.0, "Height": 36.0],
+]]))
+check("a plain button beside the pairs keeps the bar a tablist", collapsed("tablist", in: withControl).count, 1)
+check("…and is no tab itself", collapsed("tab", in: withControl), ["A", "B"])
+check("…but a button", collapsed("button", in: withControl).contains("Toggle"), true)
+check("a selected plain button beside unselected pairs is no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", false, true), ("B", false, true), ("C", true, false)]))), [])
+check("one pair beside a plain button is no tablist",
+      collapsed("tablist", in: marked(floatingBar([("A", true, true), ("B", false, false)]))), [])
 check("a pair whose inner button has another label is no tab",
       collapsed("tablist", in: marked({
           var tree = floatingBar([("A", true, true), ("B", false, true)])

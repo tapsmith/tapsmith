@@ -186,6 +186,28 @@ struct TabsView: View {
     }
 }
 
+// ─── Sidebar-adaptable tabs (iOS 18+) ───
+
+// iPadOS 18+ draws this TabView as the floating tab bar with a sidebar
+// toggle beside the tabs; one tab carries a badge.
+struct SidebarTabsView: View {
+    var body: some View {
+        if #available(iOS 18.0, *) {
+            TabView {
+                Tab("Inbox", systemImage: "tray") { Text("Inbox tab content") }
+                    .badge(3)
+                Tab("Drafts", systemImage: "doc") { Text("Drafts tab content") }
+                Tab("Sent", systemImage: "paperplane") { Text("Sent tab content") }
+                Tab(role: .search) { Text("Search tab content") }
+            }
+            .tabViewStyle(.sidebarAdaptable)
+            .navigationTitle("Sidebar Tabs")
+        } else {
+            Text("Needs iOS 18").navigationTitle("Sidebar Tabs")
+        }
+    }
+}
+
 // ─── Gestures ───
 
 struct GesturesView: View {

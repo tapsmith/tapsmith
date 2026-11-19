@@ -190,7 +190,7 @@ enum RoleMapping {
 
     /// Whether an element is an item of a tab bar: a button with a `.tabBar`
     /// ancestor, the iPhone Duo's TabView host or the iPad's floating tab bar
-    /// (`inTabBar`, `BarHost.isTabBar`). UIKit and SwiftUI tab bars expose
+    /// (`inTabBar`, `BarHost.holdsTab`). UIKit and SwiftUI tab bars expose
     /// their items as buttons, never as `.tab` elements, so this is how
     /// getByRole("tab") finds them (PILOT-514, PILOT-1260, PILOT-1282).
     static func isTabBarItem(_ elementType: XCUIElement.ElementType, inTabBar: Bool) -> Bool {

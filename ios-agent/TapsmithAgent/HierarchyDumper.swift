@@ -66,7 +66,7 @@ class HierarchyDumper {
 
     // MARK: - Snapshot-based dump (fast path)
 
-    /// `inTabBar`: whether the node has a tab bar ancestor (BarHost.isTabBar),
+    /// `inTabBar`: whether the node has a tab bar ancestor (BarHost.holdsTab),
     /// which makes a button a tab (RoleMapping.isTabBarItem, PILOT-514). `nonApp`: whether
     /// an ancestor is keyboard UI no locator matches, and the window's
     /// keyboard top so far (NonAppElements.excludesSubtree). Each such
@@ -165,7 +165,7 @@ class HierarchyDumper {
                 dumpNode(
                     child,
                     depth: depth + 1,
-                    inTabBar: inTabBar || BarHost.isTabBar(node),
+                    inTabBar: inTabBar || BarHost.holdsTab(node, child),
                     insideNonApp: insideNonApp || nonApp,
                     insideSwitch: insideSwitch || NonAppElements.isSwitch(elType),
                     keyboardTop: &keyboardTop,
