@@ -408,7 +408,8 @@ jobs:
         run: npx tapsmith merge-reports all-blob-reports
 
       # always(): with a shard missing, merge-reports exits 1 but still
-      # writes the report for the shards that finished.
+      # writes the report for the shards that finished. tapsmith-report/ is
+      # the default; a config that lists reporters must include "html".
       - name: Upload HTML report
         if: always()
         uses: actions/upload-artifact@v4
@@ -433,7 +434,7 @@ npx tapsmith merge-reports ./all-blob-reports
 npx tapsmith show-report
 ```
 
-The `merge-reports` command reads all blob files from the specified directory and produces a unified HTML report in `tapsmith-report/`. This report contains results from every shard, ordered and grouped as if the suite had run on a single machine.
+The `merge-reports` command reads all blob files from the specified directory and produces a unified HTML report in `tapsmith-report/` (under the config's `rootDir`), with the `list` output in the terminal. This report contains results from every shard, ordered and grouped as if the suite had run on a single machine. That is the default when the config sets no reporter, as the config `tapsmith init` writes, or only `blob`. A config that names other reporters gets those instead, so list `html` among them, or pick reporters for the merge alone with `--reporter`, comma-separated as in Playwright: `npx tapsmith merge-reports ./all-blob-reports --reporter html,junit`.
 
 `merge-reports` refuses a merge it can't trust, with exit status 1: an empty directory, a corrupt
 blob, a duplicated shard, or blobs from different runs. If a shard is missing, it still reports

@@ -1913,10 +1913,10 @@ const cliHandlers: CliHandlers = {
     }
   },
 
-  mergeReports: async ({ dir, config: configFile }) => {
+  mergeReports: async ({ dir, config: configFile, reporter }) => {
     const { runMergeReports } = await import('./merge-reports.js');
     const config = await loadConfig(undefined, configFile);
-    const code = await runMergeReports(dir ?? 'blob-report', config);
+    const code = await runMergeReports(dir ?? 'blob-report', config, { reporter });
     if (code !== 0) process.exit(code);
   },
 

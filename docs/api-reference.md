@@ -2518,6 +2518,8 @@ export default defineConfig({
 | `outputFolder` | `string` | `"tapsmith-report"` |
 | `open` | `"always" \| "never" \| "on-failure"` | `"on-failure"` |
 
+The report is never opened when the `CI` environment variable is set, as in Playwright.
+
 The HTML report is a self-contained page with pass/fail summary, filtering, and per-test durations, with links to each failure's trace and video:
 
 ![HTML report with a pass/fail summary, filter chips, and per-test rows including trace and video links for a failed test](images/html-report.png)
@@ -3135,16 +3137,33 @@ npx tapsmith test --video retain-on-failure     # Only keep videos for failed te
 
 ### `tapsmith merge-reports [dir]`
 
-Merge blob reports from sharded CI runs into a single HTML report.
+Merge blob reports from sharded CI runs into a single report: by default the HTML report in
+`tapsmith-report/` plus the `list` output in the terminal.
 
 ```bash
 # After collecting all shard blob-report/ directories:
 npx tapsmith merge-reports           # reads from blob-report/
 npx tapsmith merge-reports ./blobs   # custom directory
+npx tapsmith merge-reports ./blobs --reporter html,junit   # pick the reporters
 npx tapsmith merge-reports -c tapsmith.config.ci.ts   # reporters from a specific config
 ```
 
-The merged results go to the reporters in the config (`-c` / `--config` picks the file).
+The merged results go to:
+
+1. the reporters named by `--reporter`, comma-separated as in Playwright (for example
+   `--reporter html,list`), in place of the config's;
+2. otherwise the reporters in the config (`-c` / `--config` picks the file), leaving out `blob`;
+3. otherwise, when the config sets no `reporter` (as the config `tapsmith init` writes) or only
+   `blob`, `list` and `html`. This HTML report is written to `tapsmith-report/index.html` under
+   the config's `rootDir` (the directory you run in when there is no config) and is never opened
+   automatically.
+
+`html` keeps the options it has in the config, such as `outputFolder`, only when it comes from the
+config; `--reporter html` uses the defaults (`tapsmith-report/`, opened when the merged run failed,
+except in CI).
+A config whose reporters include anything besides `blob` gets just those, so add `html` to it
+(or pass `--reporter`) to get an HTML report from the merge. `--reporter blob` is refused, as is an
+unknown reporter name, with a one-line error and exit status 1 before anything is merged.
 
 It checks the blobs before merging. It refuses to merge, printing a one-line error and exiting
 with status 1, when:
@@ -3165,8 +3184,7 @@ Once a complete set is merged, the command exits 0 even if the merged run has fa
 Playwright's `merge-reports` does the same, since the shard jobs already carry the failure. The
 last line gives the merged status, e.g.
 `Merged 3 blob reports (shards 1–3 of 3): failed — 41 passed, 2 failed`.
-A `blob` reporter in the config is skipped here, because merging reads blobs and never writes one. If
-`blob` is the only reporter configured, the merge falls back to `list`.
+A `blob` reporter in the config is skipped here, because merging reads blobs and never writes one.
 
 ### `tapsmith show-report [dir]`
 
