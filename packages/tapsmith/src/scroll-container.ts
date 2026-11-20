@@ -178,29 +178,26 @@ function scanScrollables(xml: string): ScrollScan | undefined {
  * Whether a swipe along `axis` in the scrollable at `region` had content to
  * scroll, so that the swipe moving nothing means the content is at its end.
  * Only the scrollable the swipe ran in counts (a chip bar or carousel beside
- * a list still loading has nothing to do with it), and, with an `axis`,
- * only along it: a list laid out across the swipe cannot move with it.
- * Without one (the caller asked for that direction), along either axis.
+ * a list still loading has nothing to do with it), and not when it is seen
+ * to lie across the swipe: a horizontal list cannot move up and down.
  *
  * - Android marks a view `scrollable` only while its content overflows it.
- *   Its axis comes from its class (a `HorizontalScrollView`, a pager, a
- *   `ScrollView`) or, failing that, from how its children lie: all side by
- *   side at one top is a horizontal list, all stacked at one left a vertical
- *   one. Along an axis, one whose axis cannot be told does not count.
+ *   It counts unless its class (a `HorizontalScrollView`, a pager, a
+ *   `ScrollView`) or the way its children lie (spread over more columns than
+ *   rows, or the other way) says it scrolls the other way.
  * - An iOS scroll view, table or collection view is one by type, so it
  *   counts only when something in it reaches past its frame along the axis
- *   (iOS frames are not clipped): an empty table, or a scroll view holding
- *   just a spinner, does not.
+ *   (iOS frames are not clipped): an empty table, a scroll view holding just
+ *   a spinner, or a carousel swiped up and down does not.
  *
  * `false` when nothing on screen scrolls, or no scrollable is at `region`:
  * a screen still loading its content, or one with nothing to scroll at all.
  * Without a `region` (the swipe crossed the screen), `false`.
  */
-export function hasScrollableContent(xml: string, region: Rect | undefined, axis?: 'vertical' | 'horizontal'): boolean {
+export function hasScrollableContent(xml: string, region: Rect | undefined, axis: 'vertical' | 'horizontal'): boolean {
   if (!region) return false;
   const scan = scanScrollables(xml);
   if (!scan) return false;
-  const vertical = axis === 'vertical';
   // The region a swipe ran in is one of these scrollables' regions, as
   // computed here or (an Android step's) by the agent, which may round or
   // trim an edge differently: then the one under its centre.
@@ -208,19 +205,16 @@ export function hasScrollableContent(xml: string, region: Rect | undefined, axis
   if (swiped.length === 0) swiped = scan.candidates.filter(({ r }) => contains(r, centre(region)));
   return swiped.some(({ e }) => {
     if (e.node.attributes.get('scrollable') === 'true') {
-      // Along an axis, only a list seen to lie along it is evidence: one
-      // whose axis cannot be told (a pager showing its one page) may be a
-      // pager or a carousel around a list still loading.
-      return !axis || layoutAxis(e, scan.entries) === axis;
+      const along = layoutAxis(e, scan.entries);
+      return along === undefined || along === axis;
     }
     const f = e.bounds!;
     return scan.entries.some((d) => {
       if (d.nonApp || !d.bounds || !isAncestor(e, d)) return false;
       const b = d.bounds;
-      const past = (lo: number, hi: number, min: number, max: number) =>
-        lo < min - FRAME_TOLERANCE || hi > max + FRAME_TOLERANCE;
-      if (axis === undefined) return past(b.top, b.bottom, f.top, f.bottom) || past(b.left, b.right, f.left, f.right);
-      return vertical ? past(b.top, b.bottom, f.top, f.bottom) : past(b.left, b.right, f.left, f.right);
+      return axis === 'vertical'
+        ? b.top < f.top - FRAME_TOLERANCE || b.bottom > f.bottom + FRAME_TOLERANCE
+        : b.left < f.left - FRAME_TOLERANCE || b.right > f.right + FRAME_TOLERANCE;
     });
   });
 }
@@ -235,9 +229,17 @@ const ANDROID_VERTICAL_CLASSES: ReadonlySet<string> = new Set([
   'android.widget.ScrollView',
   'androidx.core.widget.NestedScrollView',
   'android.widget.ListView',
+  'android.widget.ExpandableListView',
+  'android.widget.GridView',
 ]);
 
-/** The axis an Android scrollable lays its content along, when its class or its children say. */
+/**
+ * The axis an Android scrollable lays its content along, when its class or
+ * its children say: children spread over more distinct tops than lefts (a
+ * list, a grid, a chat's bubbles at both edges) lie vertically, over more
+ * lefts than tops (a chip bar) horizontally. `undefined` when it cannot be
+ * told (one child, as many rows as columns).
+ */
 function layoutAxis(e: Entry, entries: readonly Entry[]): 'vertical' | 'horizontal' | undefined {
   const cls = e.node.attributes.get('class') ?? '';
   if (ANDROID_HORIZONTAL_CLASSES.has(cls)) return 'horizontal';
@@ -245,13 +247,19 @@ function layoutAxis(e: Entry, entries: readonly Entry[]): 'vertical' | 'horizont
   // A ViewPager2 scrolls through the RecyclerView inside it.
   if (e.parent?.node.attributes.get('class') === 'androidx.viewpager2.widget.ViewPager2') return 'horizontal';
   const kids = entries.filter((c) => c.parent === e && c.bounds && c.bounds.right > c.bounds.left && c.bounds.bottom > c.bounds.top);
-  if (kids.length < 2) return undefined;
-  const near = (a: number, b: number) => Math.abs(a - b) <= FRAME_TOLERANCE;
-  const oneTop = kids.every((c) => near(c.bounds!.top, kids[0].bounds!.top));
-  const oneLeft = kids.every((c) => near(c.bounds!.left, kids[0].bounds!.left));
-  if (oneTop && !oneLeft) return 'horizontal';
-  if (oneLeft && !oneTop) return 'vertical';
+  const tops = distinct(kids.map((c) => c.bounds!.top));
+  const lefts = distinct(kids.map((c) => c.bounds!.left));
+  if (tops > lefts) return 'vertical';
+  if (lefts > tops) return 'horizontal';
   return undefined;
+}
+
+/** How many different values, counting those within rounding of each other as one. */
+function distinct(values: number[]): number {
+  const sorted = [...values].sort((x, y) => x - y);
+  let n = 0;
+  for (let i = 0; i < sorted.length; i++) if (i === 0 || sorted[i] - sorted[i - 1] > FRAME_TOLERANCE) n++;
+  return n;
 }
 
 function isScrollable(node: HierarchyNode): boolean {

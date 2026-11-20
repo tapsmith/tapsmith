@@ -4216,11 +4216,9 @@ export class ElementHandle {
       // until the deadline. True to scroll on (the element, when it showed,
       // stands as the next probe); false at the deadline.
       // The axis the container must have content along for a swipe that
-      // moved nothing to be its end: the swipe's, when scrollIntoView() chose
-      // the direction (a chip bar is not the list it was looking for), and
-      // either when the caller asked for this one.
-      const contentAxis = (): 'vertical' | 'horizontal' | undefined =>
-        explicitDirection !== undefined ? undefined : isVertical(direction) ? 'vertical' : 'horizontal';
+      // moved nothing to be its end: the swipe's (a chip bar swiped up and
+      // down is not the list being looked for).
+      const contentAxis = (): 'vertical' | 'horizontal' => (isVertical(direction) ? 'vertical' : 'horizontal');
       const waitForContent = async (still: string): Promise<boolean> => {
         const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
         for (;;) {
@@ -4567,8 +4565,11 @@ export class ElementHandle {
       if (stillLoading) {
         throw new Error(
           `scrollIntoView: ${this._describe()} was not on screen after waiting ${timeoutMs}ms: ` +
-            `the screen stopped changing after ${swipes} scroll(s) ${how}, and nothing on it has content to scroll, ` +
-            'so it may still be loading. If it loads later, pass a longer timeout; ' +
+            `the screen stopped changing after ${swipes} scroll(s) ${how}, and ` +
+            (region
+              ? `the scrollable at ${formatRect(region)} that the swipe ran in was not seen to have content to scroll that way, `
+              : 'nothing on it has content to scroll, ') +
+            'so its content may still be loading. If it loads later, pass a longer timeout; ' +
             `if the content can scroll, scroll() the list that holds the element ${scrollExample}.`,
         );
       }

@@ -6235,7 +6235,11 @@ describe('scrollIntoView() waits for content that is still loading (PILOT-1324)'
     const client = makeMockClient({ findElements: absent(), swipe, getUiHierarchy: vi.fn(hierarchySequence([chips])) });
 
     await expect(new ElementHandle(client, _text('Fake Podcast 7'), 400).scrollIntoView()).rejects.toThrow(
-      /was not on screen after waiting 400ms: .* nothing on it has content to scroll/,
+      /was not on screen after waiting 400ms: .* the scrollable at \[0,200\]\[1080,350\] that the swipe ran in was not seen to have content to scroll that way/,
+    );
+    // The same with the direction given: a chip bar has nothing to scroll up and down either way.
+    await expect(new ElementHandle(client, _text('Fake Podcast 7'), 400).scrollIntoView({ direction: 'down' })).rejects.toThrow(
+      /was not on screen after waiting 400ms/,
     );
   });
 
@@ -6249,7 +6253,7 @@ describe('scrollIntoView() waits for content that is still loading (PILOT-1324)'
         'the screen stopped changing after 1 scroll(s) in direction "down" ' +
         '(the default: the element was not on screen or in the tree, so its position was not known; ' +
         'pass { direction: "up" } for an element above the screen), and nothing on it has content to scroll, ' +
-        'so it may still be loading. If it loads later, pass a longer timeout; ' +
+        'so its content may still be loading. If it loads later, pass a longer timeout; ' +
         'if the content can scroll, scroll() the list that holds the element (for example getByRole("scrollview").scroll("down")).',
     );
     expect(Date.now() - began).toBeGreaterThanOrEqual(380);
@@ -7006,7 +7010,9 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
         getUiHierarchy: vi.fn(hierarchySequence([table(0)])),
       });
 
-      await expect(handle(client, 'ios').scrollIntoView({ direction: 'left', maxScrolls: 1 })).rejects.toThrow(/after 1 scroll/);
+      // The table has nothing to scroll sideways, so the unchanged screen is
+      // waited on rather than taken for its end (PILOT-1324): a short timeout.
+      await expect(handle(client, 'ios').scrollIntoView({ direction: 'left', maxScrolls: 1, timeout: 300 })).rejects.toThrow(/after 1 scroll/);
       expect(scrollStep).not.toHaveBeenCalled();
       // A fling, as before steps: not a drag, not a slow gentle swipe.
       expect(swipe).toHaveBeenCalledWith('right', { speed: 2000, distance: 0.6, region: tableRegion });

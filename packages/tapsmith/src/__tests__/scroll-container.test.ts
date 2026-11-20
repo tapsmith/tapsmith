@@ -260,14 +260,13 @@ describe('hasScrollableContent', () => {
       node('android.widget.ProgressBar', '[480,1140][600,1260]')));
     expect(hasScrollableContent(xml, chipBar, 'vertical')).toBe(false);
     expect(hasScrollableContent(xml, chipBar, 'horizontal')).toBe(true);
-    expect(hasScrollableContent(xml, chipBar)).toBe(true);
     // A HorizontalScrollView says so by its class, whatever its one child.
     const hsv = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
       node('android.widget.HorizontalScrollView', '[0,200][1080,350]', scrollable, node('android.widget.LinearLayout', '[0,200][2400,350]'))));
     expect(hasScrollableContent(hsv, chipBar, 'vertical')).toBe(false);
   });
 
-  it('is false along an axis for a list whose axis it cannot tell, such as a pager showing its one page', () => {
+  it('is false up and down for a pager showing its one page, which it tells by its class', () => {
     const page = node('android.view.ViewGroup', '[0,350][1080,2400]', '', node('android.widget.ProgressBar', '[480,1140][600,1260]'));
     const pager = { left: 0, top: 350, right: 1080, bottom: 2400 };
     const vp2 = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
@@ -275,11 +274,24 @@ describe('hasScrollableContent', () => {
         node('androidx.recyclerview.widget.RecyclerView', '[0,350][1080,2400]', scrollable, page))));
     expect(hasScrollableContent(vp2, pager, 'vertical')).toBe(false);
     expect(hasScrollableContent(vp2, pager, 'horizontal')).toBe(true);
-    const unknown = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
-      node('android.view.View', '[0,350][1080,2400]', scrollable, page)));
-    expect(hasScrollableContent(unknown, pager, 'vertical')).toBe(false);
-    // The caller chose the direction: a scrollable is evidence whichever way.
-    expect(hasScrollableContent(unknown, pager)).toBe(true);
+    const vp = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('androidx.viewpager.widget.ViewPager', '[0,350][1080,2400]', scrollable, page)));
+    expect(hasScrollableContent(vp, pager, 'vertical')).toBe(false);
+  });
+
+  // A scrollable is the end of its content unless it is seen to lie across
+  // the swipe, so a list at its end fails promptly (PILOT-929) whatever its rows.
+  const listEnd = (children: string) => android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+    node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable, children)));
+  const cell = (b: string) => node('android.widget.TextView', b, 'text="Cell"');
+  it.each([
+    ['a two-column grid', cell('[0,200][540,700]') + cell('[540,200][1080,700]') + cell('[0,700][540,1200]') + cell('[540,700][1080,1200]') + cell('[0,1200][540,1700]')],
+    ['a chat with bubbles at both edges', cell('[20,220][700,320]') + cell('[380,340][1060,440]') + cell('[20,460][700,560]')],
+    ['a list with an inset header', cell('[40,200][1040,280]') + cell('[0,280][1080,480]') + cell('[0,480][1080,680]')],
+    ['one tall card', cell('[0,200][1080,2400]')],
+    ['rows its class does not name, under a Compose list', cell('[0,200][1080,400]') + cell('[0,400][1080,600]')],
+  ])('is true up and down at the end of %s', (_name, children) => {
+    expect(hasScrollableContent(listEnd(children), listAt, 'vertical')).toBe(true);
   });
 
   it('is false for a scrollable inside the system UI', () => {
@@ -314,8 +326,6 @@ describe('hasScrollableContent', () => {
     expect(hasScrollableContent(xml, { left: 0, top: 300, right: 402, bottom: 874 }, 'vertical')).toBe(false);
     expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 }, 'vertical')).toBe(false);
     expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 }, 'horizontal')).toBe(true);
-    // With no axis (the caller chose the direction), content either way counts.
-    expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 })).toBe(true);
   });
 
   it('is false for a dump with no bounds at all', () => {
