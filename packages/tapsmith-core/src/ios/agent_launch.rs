@@ -280,7 +280,9 @@ async fn prepare_app_launch(udid: &str, bundle_id: &str, wipe: bool) -> Prepared
     }
     let wiped = wipe
         && match super::device::get_app_container(udid, bundle_id).await {
-            Ok(container) => super::device::wipe_simulator_app_data(udid, &container).await,
+            Ok(container) => {
+                super::device::wipe_simulator_app_data(udid, bundle_id, &container).await
+            }
             Err(e) => {
                 debug!(udid, error = %e, "no app container to wipe before the launch");
                 false

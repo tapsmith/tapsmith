@@ -890,6 +890,27 @@ pub async fn grant_permission(udid: &str, bundle_id: &str, service: &str) -> Res
     Ok(())
 }
 
+/// Reset every privacy (TCC) decision a simulator holds for `bundle_id` —
+/// camera, photos, location, contacts and the rest — so the app asks again,
+/// as it would after a fresh install.
+#[instrument]
+pub async fn reset_permissions(udid: &str, bundle_id: &str) -> Result<()> {
+    let output = bounded_output(
+        "simctl privacy reset",
+        Command::new("xcrun").args(["simctl", "privacy", udid, "reset", "all", bundle_id]),
+        SIMCTL_TIMEOUT,
+    )
+    .await?;
+    if !output.status.success() {
+        bail!(
+            "simctl privacy reset exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 /// Revoke a privacy permission on a simulator.
 #[instrument]
 pub async fn revoke_permission(udid: &str, bundle_id: &str, service: &str) -> Result<()> {
@@ -1344,43 +1365,310 @@ pub async fn clear_container(container_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Wipe a simulator app's data — the `ClearAppData` RPC's simulator steps:
-/// its data container, then (unless keychain state is turned off) the
-/// simulator's device-global keychain, so keychain-backed auth state (e.g.
-/// Firebase Auth) does not survive a full clear and leave a half-signed-in
-/// app. Best-effort: each failure is logged and the rest still runs.
-/// Returns whether every step succeeded.
-pub async fn wipe_simulator_app_data(udid: &str, container: &str) -> bool {
+// ─── Simulator UserDefaults (cfprefsd) ───
+//
+// An app's `UserDefaults` live in plists under its container's
+// `Library/Preferences`, but the app never touches those files: the
+// simulator's `cfprefsd` daemon does, and keeps each domain in memory. It
+// writes changes to disk seconds later and keeps serving the cached domain
+// for a while after the app exits, without noticing the file being deleted
+// or replaced under it. So a clear that only unlinks the plists is undone —
+// the next launch reads the old values, and the pending write puts the file
+// back — and a restore that only extracts them is masked by the cache. Every
+// change to these domains therefore goes through `cfprefsd` itself, by
+// addressing each domain by its plist path (`defaults <verb> <container>/
+// Library/Preferences/<name>`), which is the domain the app sees.
+// (Killing `cfprefsd` also drops the cache, but launchd throttles its
+// respawn, so a clear within ~10 s of the previous one stalls the next
+// launch for up to ~10 s.)
+
+/// The `UserDefaults` domains an app's data container holds, each as the
+/// plist path without its `.plist` extension (how `defaults` addresses a
+/// domain by path): the app's own (`<bundle_id>`), which `cfprefsd` may hold
+/// before its plist is written, and one per plist under
+/// `Library/Preferences` (suites such as `UserDefaults(suiteName:)`).
+pub async fn preference_domains(container: &str, bundle_id: &str) -> Vec<std::path::PathBuf> {
+    let dir = std::path::Path::new(container)
+        .join("Library")
+        .join("Preferences");
+    let mut domains = vec![dir.join(bundle_id)];
+    if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "plist") {
+                let domain = path.with_extension("");
+                if !domains.contains(&domain) {
+                    domains.push(domain);
+                }
+            }
+        }
+    }
+    domains
+}
+
+/// The plist file of a `UserDefaults` domain addressed by path: the path
+/// plus `.plist`. Not `with_extension`, which would replace the last dotted
+/// part of a domain name like `com.example.app` and name another domain's file.
+fn domain_plist(domain: &std::path::Path) -> std::path::PathBuf {
+    let mut path = domain.as_os_str().to_owned();
+    path.push(".plist");
+    path.into()
+}
+
+/// Run `defaults <args…>` inside the simulator, so it talks to the
+/// simulator's `cfprefsd`.
+async fn simulator_defaults(udid: &str, args: &[&str]) -> Result<std::process::Output> {
+    bounded_output(
+        "simctl spawn defaults",
+        Command::new("xcrun")
+            .args(["simctl", "spawn", udid, "defaults"])
+            .args(args),
+        SIMCTL_TIMEOUT,
+    )
+    .await
+}
+
+/// Run `op` on every item at once (each is one `simctl spawn`, most of whose
+/// cost is waiting), and fail with the first error once all have finished.
+async fn run_all<T, F, Fut>(items: Vec<T>, op: F) -> Result<()>
+where
+    F: Fn(T) -> Fut,
+    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    let mut tasks = tokio::task::JoinSet::new();
+    for item in items {
+        tasks.spawn(op(item));
+    }
+    let mut first_error = None;
+    while let Some(joined) = tasks.join_next().await {
+        let result = joined
+            .map_err(|e| anyhow!("task failed: {e}"))
+            .and_then(|r| r);
+        if let Err(e) = result {
+            first_error.get_or_insert(e);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+/// Whether `defaults` failed only because the domain holds nothing.
+fn is_missing_domain_error(stderr: &str) -> bool {
+    stderr.contains("not found") || stderr.contains("does not exist")
+}
+
+/// Empty every `UserDefaults` domain of the app whose data container is
+/// `container`, through the simulator's `cfprefsd`, so neither its cache nor a
+/// write it has not made yet brings the values back (see the module notes
+/// above [`preference_domains`]). Run before the container's files are
+/// deleted, with the app stopped. The domains are deleted in parallel.
+pub async fn delete_app_preferences(udid: &str, container: &str, bundle_id: &str) -> Result<()> {
+    let domains = preference_domains(container, bundle_id).await;
+    let udid = udid.to_string();
+    run_all(domains, |domain| {
+        let udid = udid.clone();
+        async move {
+            let domain = domain.to_string_lossy();
+            let output = simulator_defaults(&udid, &["delete", &domain]).await?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if output.status.success() || is_missing_domain_error(&stderr) {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "defaults delete {domain} exited with {}: {}",
+                    output.status,
+                    stderr.trim()
+                ))
+            }
+        }
+    })
+    .await
+}
+
+/// Load the plists now under the container's `Library/Preferences` (just
+/// extracted from an app-state archive) into the simulator's `cfprefsd`, so
+/// the app reads them rather than what `cfprefsd` cached before the restore.
+pub async fn import_app_preferences(udid: &str, container: &str) -> Result<()> {
+    let dir = std::path::Path::new(container)
+        .join("Library")
+        .join("Preferences");
+    let mut plists = Vec::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "plist") {
+                plists.push(path);
+            }
+        }
+    }
+    let udid = udid.to_string();
+    run_all(plists, |plist| {
+        let udid = udid.clone();
+        async move {
+            let domain = plist.with_extension("");
+            let domain = domain.to_string_lossy();
+            let plist = plist.to_string_lossy();
+            let output = simulator_defaults(&udid, &["import", &domain, &plist]).await?;
+            if output.status.success() {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "defaults import {domain} exited with {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ))
+            }
+        }
+    })
+    .await
+}
+
+/// Write what the simulator's `cfprefsd` holds for each of the app's
+/// `UserDefaults` domains to its plist, so an archive of the container has
+/// the values the app last wrote, not the copy `cfprefsd` last flushed to
+/// disk (seconds older). A domain that holds nothing is left as it is.
+pub async fn write_back_app_preferences(
+    udid: &str,
+    container: &str,
+    bundle_id: &str,
+) -> Result<()> {
+    let domains = preference_domains(container, bundle_id).await;
+    let udid = udid.to_string();
+    run_all(domains, |domain| {
+        let udid = udid.clone();
+        async move {
+            let domain_str = domain.to_string_lossy().into_owned();
+            let output = simulator_defaults(&udid, &["export", &domain_str, "-"]).await?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                if is_missing_domain_error(&stderr) {
+                    return Ok(());
+                }
+                bail!(
+                    "defaults export {domain_str} exited with {}: {}",
+                    output.status,
+                    stderr.trim()
+                );
+            }
+            let plist = domain_plist(&domain);
+            let on_disk = tokio::fs::read(&plist).await.ok();
+            if !should_write_back_preferences(on_disk.as_deref(), &output.stdout) {
+                return Ok(());
+            }
+            if let Some(parent) = plist.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::write(&plist, &output.stdout)
+                .await
+                .with_context(|| format!("Failed to write {}", plist.display()))
+        }
+    })
+    .await
+}
+
+/// Whether [`write_back_app_preferences`] should replace a domain's plist
+/// (`on_disk`, `None` when there is none) with what `defaults export` printed.
+/// `export` succeeds with an empty dictionary for a path it cannot read as
+/// preferences — a missing file, or a `.plist` that is not a dictionary (an
+/// app's own array or data file kept in that folder) — so an empty export
+/// only replaces a file that is itself a dictionary, and anything that is not
+/// a dictionary is never overwritten.
+fn should_write_back_preferences(on_disk: Option<&[u8]>, exported: &[u8]) -> bool {
+    let is_dictionary = |bytes: &[u8]| {
+        matches!(
+            plist::Value::from_reader(std::io::Cursor::new(bytes)),
+            Ok(plist::Value::Dictionary(_))
+        )
+    };
+    let exported_is_empty = match plist::Value::from_reader(std::io::Cursor::new(exported)) {
+        Ok(plist::Value::Dictionary(dict)) => dict.is_empty(),
+        _ => return false,
+    };
+    match on_disk {
+        Some(bytes) => is_dictionary(bytes),
+        None => !exported_is_empty,
+    }
+}
+
+/// Clear a simulator app's data container: its `UserDefaults` through
+/// `cfprefsd` ([`delete_app_preferences`]), then the files
+/// ([`clear_container`]). The app must not be running.
+pub async fn clear_simulator_container(udid: &str, bundle_id: &str, container: &str) -> Result<()> {
+    let preferences = delete_app_preferences(udid, container, bundle_id).await;
+    let cleared = clear_container(container).await;
+    preferences.context("Failed to clear the app's UserDefaults")?;
+    cleared
+}
+
+/// Wipe a simulator app's data — the `ClearAppData` RPC's simulator steps,
+/// which leave the app as a fresh install would find it: its `UserDefaults`
+/// and data container (as [`clear_simulator_container`]), its privacy
+/// permissions ([`reset_permissions`]), and (unless keychain state is
+/// turned off) the simulator's device-global keychain, all at once, so
+/// keychain-backed auth state (e.g. Firebase Auth) does not survive a full
+/// clear and leave a half-signed-in app. The app must not be running.
+/// Best-effort: each failure is logged and the rest still runs. Returns
+/// whether every step succeeded.
+pub async fn wipe_simulator_app_data(udid: &str, bundle_id: &str, container: &str) -> bool {
     let started = std::time::Instant::now();
+    // The three steps touch separate state (the container, TCC, the
+    // device-global keychain), so they run together.
+    let (cleared, permissions, keychain) = tokio::join!(
+        async {
+            let preferences = delete_app_preferences(udid, container, bundle_id).await;
+            let prefs_ms = started.elapsed().as_millis();
+            let cleared = clear_container(container).await;
+            (
+                preferences,
+                prefs_ms,
+                cleared,
+                started.elapsed().as_millis() - prefs_ms,
+            )
+        },
+        async {
+            let reset = reset_permissions(udid, bundle_id).await;
+            (reset, started.elapsed().as_millis())
+        },
+        async {
+            let keychain: Result<&str, String> = if keychain_state_disabled() {
+                Ok("disabled")
+            } else {
+                match simulator_keychain_dir(container) {
+                    Some(keychain_dir) => clear_keychain(udid, &keychain_dir)
+                        .await
+                        .map(|how| how.as_str())
+                        .map_err(|e| e.to_string()),
+                    None => Err(format!(
+                        "could not derive the simulator keychain dir from {container}"
+                    )),
+                }
+            };
+            (keychain, started.elapsed().as_millis())
+        },
+    );
     let mut complete = true;
-    if let Err(e) = clear_container(container).await {
+    let (preferences, prefs_ms, cleared, container_ms) = cleared;
+    if let Err(e) = preferences {
+        warn!(error = %e, "Failed to clear the app's UserDefaults through cfprefsd; it may read the values the clear deleted");
+        complete = false;
+    }
+    if let Err(e) = cleared {
         warn!(error = %e, "Failed to clear app container, continuing anyway");
         complete = false;
     }
-    let container_ms = started.elapsed().as_millis();
-    let keychain = if keychain_state_disabled() {
-        "disabled"
-    } else {
-        match simulator_keychain_dir(container) {
-            Some(keychain_dir) => match clear_keychain(udid, &keychain_dir).await {
-                Ok(how) => how.as_str(),
-                Err(e) => {
-                    warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                    complete = false;
-                    "failed"
-                }
-            },
-            None => {
-                warn!(container = %container, "Could not derive simulator keychain dir; keychain not cleared");
-                complete = false;
-                "no_dir"
-            }
-        }
-    };
+    let (permissions, permissions_ms) = permissions;
+    if let Err(e) = permissions {
+        warn!(error = %e, "Failed to reset the app's privacy permissions, continuing anyway");
+        complete = false;
+    }
+    let (keychain, keychain_ms) = keychain;
+    let keychain = keychain.unwrap_or_else(|e| {
+        warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
+        complete = false;
+        "failed"
+    });
     let total_ms = started.elapsed().as_millis();
     crate::timing::timing_log!(
-        "kind=appstate name=clear dur_ms={total_ms} ok={complete} container_ms={container_ms} keychain={keychain} keychain_ms={}",
-        total_ms - container_ms
+        "kind=appstate name=clear dur_ms={total_ms} ok={complete} container_ms={container_ms} prefs_ms={prefs_ms} permissions_ms={permissions_ms} keychain={keychain} keychain_ms={keychain_ms}"
     );
     complete
 }
@@ -2594,6 +2882,94 @@ mod tests {
         assert_ne!(a, b);
         // Both live under the OS temp dir so they get auto-cleaned.
         assert!(a.starts_with(std::env::temp_dir()));
+    }
+
+    #[tokio::test]
+    async fn preference_domains_are_the_apps_own_and_each_plist_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefs = dir.path().join("Library/Preferences");
+        std::fs::create_dir_all(&prefs).unwrap();
+        std::fs::write(prefs.join("com.example.app.plist"), b"x").unwrap();
+        std::fs::write(prefs.join("group.suite.plist"), b"x").unwrap();
+        std::fs::write(prefs.join("notes.txt"), b"x").unwrap();
+
+        let mut domains = preference_domains(dir.path().to_str().unwrap(), "com.example.app").await;
+        // The app's own domain comes first, once, even though its plist exists.
+        assert_eq!(domains[0], prefs.join("com.example.app"));
+        domains.sort();
+        assert_eq!(
+            domains,
+            vec![prefs.join("com.example.app"), prefs.join("group.suite")]
+        );
+    }
+
+    #[tokio::test]
+    async fn preference_domains_include_the_apps_own_before_its_plist_exists() {
+        // cfprefsd can hold the app's domain before writing its plist, and
+        // a cleared container has no Preferences directory at all.
+        let dir = tempfile::tempdir().unwrap();
+        let domains = preference_domains(dir.path().to_str().unwrap(), "com.example.app").await;
+        assert_eq!(
+            domains,
+            vec![dir.path().join("Library/Preferences/com.example.app")]
+        );
+    }
+
+    #[test]
+    fn preferences_write_back_never_replaces_what_is_not_a_dictionary() {
+        let xml = |v: plist::Value| {
+            let mut bytes = Vec::new();
+            v.to_writer_xml(&mut bytes).unwrap();
+            bytes
+        };
+        let mut values = plist::Dictionary::new();
+        values.insert("session".into(), plist::Value::String("jordan".into()));
+        let full = xml(plist::Value::Dictionary(values));
+        let empty = xml(plist::Value::Dictionary(plist::Dictionary::new()));
+        let array = xml(plist::Value::Array(vec![plist::Value::Integer(1.into())]));
+
+        // A dictionary on disk takes what cfprefsd holds, values or none.
+        assert!(should_write_back_preferences(Some(&empty), &full));
+        assert!(should_write_back_preferences(Some(&full), &empty));
+        // No file: written only when cfprefsd holds values.
+        assert!(should_write_back_preferences(None, &full));
+        assert!(!should_write_back_preferences(None, &empty));
+        // An app's own non-dictionary file, or one that is not a plist at
+        // all, is what `export` reports as empty: left alone.
+        assert!(!should_write_back_preferences(Some(&array), &empty));
+        assert!(!should_write_back_preferences(Some(b"not a plist"), &empty));
+        // Output that is not a dictionary plist is never written.
+        assert!(!should_write_back_preferences(Some(&full), b"garbage"));
+    }
+
+    #[test]
+    fn domain_plist_appends_the_extension_to_dotted_domain_names() {
+        let prefs = std::path::Path::new("/c/Library/Preferences");
+        assert_eq!(
+            domain_plist(&prefs.join("dev.jordan.onboardc")),
+            prefs.join("dev.jordan.onboardc.plist")
+        );
+        assert_eq!(
+            domain_plist(&prefs.join("group.com.acme.shared")),
+            prefs.join("group.com.acme.shared.plist")
+        );
+        assert_eq!(
+            domain_plist(&prefs.join("session")),
+            prefs.join("session.plist")
+        );
+    }
+
+    #[test]
+    fn missing_domain_errors_are_recognised() {
+        assert!(is_missing_domain_error(
+            "Domain (/x/Library/Preferences/app) not found.\nDefaults have not been changed."
+        ));
+        assert!(is_missing_domain_error(
+            "Domain /x/Library/Preferences/app does not exist"
+        ));
+        assert!(!is_missing_domain_error(
+            "Could not write domain /x; exiting"
+        ));
     }
 
     /// PILOT-462: clearing must keep the container manager's metadata plist.

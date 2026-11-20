@@ -233,7 +233,7 @@ A test that passes, or passes on a retry, leaves nothing to redo, and a failure 
 
 - `device.resetApp()` — the same ladder the runner uses (warm hook → restart → clear); returns what actually ran. See [API reference](api-reference.md#deviceresetappoptions-promiseappresetresult).
 - `device.restartApp()` — restart, keep persisted data.
-- `device.clearAppData(pkg)` then `device.launchApp(pkg)`, or `device.launchApp(pkg, { clearData: true })` — full wipe.
+- `device.clearAppData(pkg)` then `device.launchApp(pkg)` — full wipe. `device.launchApp(pkg, { clearData: true })` wipes the app's data too, but on an iOS simulator it keeps the keychain and the app's privacy permissions.
 - `device.openDeepLink(resetLink)` — trigger your app's own reset hook.
 
 ### Choosing the right approach
