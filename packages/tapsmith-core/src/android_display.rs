@@ -145,6 +145,12 @@ pub fn is_multi_display_warning(prefix: &str) -> bool {
     lower.contains("multiple displays") || lower.contains("display id should be specified")
 }
 
+/// Whether a capture should be redone on a looked-up display: it was not
+/// pinned to one (`screencap -d`) and screencap said it had to guess.
+pub fn should_rediscover(pinned: bool, prefix: &str) -> bool {
+    !pinned && is_multi_display_warning(prefix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +266,16 @@ Display 4619827551948147201 (HWC display 1): port=1 pnpId=GGL displayName=\"EMU_
         let long = "x".repeat(1000);
         let err = split_screencap_output(long.as_bytes()).unwrap_err();
         assert!(err.chars().count() <= 301, "{}", err.len());
+    }
+
+    #[test]
+    fn rediscovers_only_an_unpinned_capture_that_guessed() {
+        // Covers the plain retry after a failed pinned capture too: it is
+        // unpinned, so its guess warning is acted on.
+        assert!(should_rediscover(false, WARNING));
+        assert!(!should_rediscover(true, WARNING));
+        assert!(!should_rediscover(false, ""));
+        assert!(!should_rediscover(true, ""));
     }
 
     #[test]

@@ -466,6 +466,8 @@ pub async fn screencap(serial: &str) -> Result<Vec<u8>> {
         None => probe_physical_displays(serial).await,
     };
     let display_id = capture_display(serial, &physical).await;
+    // Whether the capture that answered was pinned to a display.
+    let mut pinned = display_id.is_some();
     let (prefix, png) = match screencap_once(serial, display_id.as_deref()).await {
         Ok(captured) => captured,
         // The display went away between the lookup and the capture (a
@@ -475,15 +477,17 @@ pub async fn screencap(serial: &str) -> Result<Vec<u8>> {
                 ?display_id,
                 "screencap -d failed, retrying without it: {e:#}"
             );
+            pinned = false;
             screencap_once(serial, None).await?
         }
         Err(e) => return Err(e),
     };
 
-    // A display this daemon did not know about (the probe failed, or one was
-    // attached later): screencap guessed and said so. Learn the displays and
-    // capture the right one; the guess is the fallback.
-    if display_id.is_none() && android_display::is_multi_display_warning(&prefix) {
+    // An unpinned capture on a display this daemon did not know about (the
+    // probe failed, one was attached later, or the pinned capture above
+    // failed): screencap guessed and said so. Learn the displays and capture
+    // the right one; the guess is the fallback.
+    if android_display::should_rediscover(pinned, &prefix) {
         let physical = probe_physical_displays(serial).await;
         if let Some(display_id) = capture_display(serial, &physical).await {
             match screencap_once(serial, Some(&display_id)).await {
@@ -500,9 +504,10 @@ pub async fn screencap(serial: &str) -> Result<Vec<u8>> {
     Ok(png)
 }
 
-/// Bound on the display lookups around a capture; they answer in tens of
-/// milliseconds, and a capture without them still works.
-const DISPLAY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Bound on each display lookup around a capture. They answer in tens of
+/// milliseconds, and a capture without them still works, so a hung lookup
+/// must leave the capture most of the trace's 5 s capture budget.
+const DISPLAY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// One `screencap -p` (with `-d <display>` when given): the text printed
 /// before the PNG, and the PNG.
@@ -535,8 +540,10 @@ async fn screencap_once(serial: &str, display_id: Option<&str>) -> Result<(Strin
     Ok((prefix, png.to_vec()))
 }
 
-/// The device's physical display ids, cached for the serial when the probe
-/// answers. An unanswered probe is not cached and reads as one display.
+/// The device's physical display ids, cached for the serial. An unanswered
+/// probe reads as one display and is cached as that too, so a hung probe is
+/// not paid again on every capture: a multi-display device still recovers,
+/// since screencap's guess warning sends [`screencap`] back to probing.
 async fn probe_physical_displays(serial: &str) -> Vec<String> {
     match run_adb(
         Some(serial),
@@ -554,6 +561,7 @@ async fn probe_physical_displays(serial: &str) -> Vec<String> {
         }
         Err(e) => {
             debug!(serial, "Could not list physical displays: {e:#}");
+            android_display::cache_physical_displays(serial, Vec::new());
             Vec::new()
         }
     }
