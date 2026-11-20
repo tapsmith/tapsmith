@@ -94,7 +94,7 @@ class CommandHandler {
     /// What a warm delivery's wait loop does about an "Open in" prompt: Open
     /// when the delivery may have raised it (`acceptOpenInAppDialogIfPresent`),
     /// Cancel when it cannot have (SystemAlert.deliveryMayRaiseOwnPrompt), so
-    /// a leftover is never opened. Either way one query when none is up.
+    /// a leftover is not opened. Either way one query when none is up.
     private func answerOpenInPrompt(springboard: XCUIApplication, ownPossible: Bool) -> Bool {
         if ownPossible {
             return acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0)

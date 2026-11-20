@@ -95,7 +95,7 @@ struct SystemAlertEvents {
 /// check (a launch, a link delivery: `checked(at:)`) also restarts. Warm
 /// link deliveries check on the same clock; in between, their wait loops
 /// cancel any prompt the delivery cannot have raised
-/// (`deliveryMayRaiseOwnPrompt`), so a leftover is never opened. A prompt a
+/// (`deliveryMayRaiseOwnPrompt`), so a leftover is not opened. A prompt a
 /// readiness check skips stays up and is named in errors.
 struct LeftoverPromptCheck {
     let interval: TimeInterval
