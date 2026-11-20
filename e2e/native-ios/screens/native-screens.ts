@@ -221,7 +221,6 @@ export class UIKitSettingsScreen {
   /** A row's switch by its title, the getByLabel label. */
   labelled(text: string) { return this.device.getByLabel(text) }
   get switches() { return this.device.getByRole("switch") }
-  row(title: string) { return this.device.getByRole("listitem").filter({ hasText: title }) }
   get status() { return this.device.getByTestId("uikit-settings-status") }
 }
 
