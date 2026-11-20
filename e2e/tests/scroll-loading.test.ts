@@ -7,14 +7,14 @@ import { describe, expect, test } from "../fixtures.js"
 describe("scrollIntoView() on a list that is still loading", () => {
   // The swipes and settle reads are not progress-tracked, so they count
   // against the test timeout (slow software-GPU CI emulators, PILOT-345).
-  test.use({ timeout: 60_000 })
+  test.use({ timeout: 90_000 })
 
   test("waits for the list to load, then scrolls to the row", async ({ device, delayedListScreen }) => {
     await device.openDeepLink("tapsmithtest:///delayed-list")
     await delayedListScreen.loadButton.tap()
 
     const row = delayedListScreen.row(30)
-    await row.scrollIntoView({ timeout: 20_000 })
+    await row.scrollIntoView({ timeout: 40_000 })
 
     await expect(row).toBeVisible()
   })

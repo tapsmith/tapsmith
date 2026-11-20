@@ -5,10 +5,12 @@ const ROWS = Array.from({ length: 40 }, (_, i) => `Delayed row ${i + 1}`)
 
 /**
  * A list that loads late: "Load list" shows a spinner, and nothing that
- * scrolls, for five seconds, then 40 rows. scrollIntoView() on a row, called
+ * scrolls, for twelve seconds, then 40 rows. scrollIntoView() on a row, called
  * straight after the tap, has to wait for the list rather than take the
  * unchanging spinner for the end of the content (PILOT-1324). The spinner
- * screen holds still on purpose: no progress text that would change it.
+ * screen holds still on purpose: no progress text that would change it. The
+ * delay outlasts the swipes and settle waits scrollIntoView() makes before it
+ * judges the end, even on a slow emulator, so the wait is always what is tested.
  */
 export default function DelayedListScreen() {
   const [state, setState] = useState<"idle" | "loading" | "loaded">("idle")
@@ -18,7 +20,7 @@ export default function DelayedListScreen() {
   const load = () => {
     setState("loading")
     clearTimeout(timer.current)
-    timer.current = setTimeout(() => setState("loaded"), 5000)
+    timer.current = setTimeout(() => setState("loaded"), 12000)
   }
 
   if (state === "loaded") {

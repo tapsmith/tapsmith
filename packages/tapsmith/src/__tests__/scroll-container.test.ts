@@ -243,12 +243,12 @@ describe('hasScrollableContent', () => {
   });
 
   it('is true for the Android view swiped in, marked scrollable, which it is only while its content overflows it', () => {
-    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable)));
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable, node('android.widget.TextView', '[0,200][1080,400]', 'text="Row 1"') + node('android.widget.TextView', '[0,400][1080,600]', 'text="Row 2"'))));
     expect(hasScrollableContent(xml, listAt, 'vertical')).toBe(true);
   });
 
   it('finds the scrollable under the centre of a region its agent trimmed differently', () => {
-    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable)));
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable, node('android.widget.TextView', '[0,200][1080,400]', 'text="Row 1"') + node('android.widget.TextView', '[0,400][1080,600]', 'text="Row 2"'))));
     expect(hasScrollableContent(xml, { left: 0, top: 200, right: 1080, bottom: 2274 }, 'vertical')).toBe(true);
   });
 
@@ -265,6 +265,21 @@ describe('hasScrollableContent', () => {
     const hsv = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
       node('android.widget.HorizontalScrollView', '[0,200][1080,350]', scrollable, node('android.widget.LinearLayout', '[0,200][2400,350]'))));
     expect(hasScrollableContent(hsv, chipBar, 'vertical')).toBe(false);
+  });
+
+  it('is false along an axis for a list whose axis it cannot tell, such as a pager showing its one page', () => {
+    const page = node('android.view.ViewGroup', '[0,350][1080,2400]', '', node('android.widget.ProgressBar', '[480,1140][600,1260]'));
+    const pager = { left: 0, top: 350, right: 1080, bottom: 2400 };
+    const vp2 = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('androidx.viewpager2.widget.ViewPager2', '[0,350][1080,2400]', '',
+        node('androidx.recyclerview.widget.RecyclerView', '[0,350][1080,2400]', scrollable, page))));
+    expect(hasScrollableContent(vp2, pager, 'vertical')).toBe(false);
+    expect(hasScrollableContent(vp2, pager, 'horizontal')).toBe(true);
+    const unknown = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('android.view.View', '[0,350][1080,2400]', scrollable, page)));
+    expect(hasScrollableContent(unknown, pager, 'vertical')).toBe(false);
+    // The caller chose the direction: a scrollable is evidence whichever way.
+    expect(hasScrollableContent(unknown, pager)).toBe(true);
   });
 
   it('is false for a scrollable inside the system UI', () => {

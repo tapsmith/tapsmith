@@ -183,9 +183,10 @@ function scanScrollables(xml: string): ScrollScan | undefined {
  * Without one (the caller asked for that direction), along either axis.
  *
  * - Android marks a view `scrollable` only while its content overflows it.
- *   Its axis comes from its class (a `HorizontalScrollView`, a `ScrollView`)
- *   or, failing that, from how its children lie: all side by side at one top
- *   is a horizontal list, all stacked at one left a vertical one.
+ *   Its axis comes from its class (a `HorizontalScrollView`, a pager, a
+ *   `ScrollView`) or, failing that, from how its children lie: all side by
+ *   side at one top is a horizontal list, all stacked at one left a vertical
+ *   one. Along an axis, one whose axis cannot be told does not count.
  * - An iOS scroll view, table or collection view is one by type, so it
  *   counts only when something in it reaches past its frame along the axis
  *   (iOS frames are not clipped): an empty table, or a scroll view holding
@@ -207,8 +208,10 @@ export function hasScrollableContent(xml: string, region: Rect | undefined, axis
   if (swiped.length === 0) swiped = scan.candidates.filter(({ r }) => contains(r, centre(region)));
   return swiped.some(({ e }) => {
     if (e.node.attributes.get('scrollable') === 'true') {
-      const along = axis && layoutAxis(e, scan.entries);
-      return !along || along === axis;
+      // Along an axis, only a list seen to lie along it is evidence: one
+      // whose axis cannot be told (a pager showing its one page) may be a
+      // pager or a carousel around a list still loading.
+      return !axis || layoutAxis(e, scan.entries) === axis;
     }
     const f = e.bounds!;
     return scan.entries.some((d) => {
@@ -223,7 +226,11 @@ export function hasScrollableContent(xml: string, region: Rect | undefined, axis
 }
 
 /** Android scroll views whose class says which way they scroll. */
-const ANDROID_HORIZONTAL_CLASSES: ReadonlySet<string> = new Set(['android.widget.HorizontalScrollView']);
+const ANDROID_HORIZONTAL_CLASSES: ReadonlySet<string> = new Set([
+  'android.widget.HorizontalScrollView',
+  'androidx.viewpager.widget.ViewPager',
+  'android.support.v4.view.ViewPager',
+]);
 const ANDROID_VERTICAL_CLASSES: ReadonlySet<string> = new Set([
   'android.widget.ScrollView',
   'androidx.core.widget.NestedScrollView',
@@ -235,6 +242,8 @@ function layoutAxis(e: Entry, entries: readonly Entry[]): 'vertical' | 'horizont
   const cls = e.node.attributes.get('class') ?? '';
   if (ANDROID_HORIZONTAL_CLASSES.has(cls)) return 'horizontal';
   if (ANDROID_VERTICAL_CLASSES.has(cls)) return 'vertical';
+  // A ViewPager2 scrolls through the RecyclerView inside it.
+  if (e.parent?.node.attributes.get('class') === 'androidx.viewpager2.widget.ViewPager2') return 'horizontal';
   const kids = entries.filter((c) => c.parent === e && c.bounds && c.bounds.right > c.bounds.left && c.bounds.bottom > c.bounds.top);
   if (kids.length < 2) return undefined;
   const near = (a: number, b: number) => Math.abs(a - b) <= FRAME_TOLERANCE;

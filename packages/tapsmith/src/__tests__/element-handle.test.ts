@@ -6198,7 +6198,8 @@ describe('scrollIntoView() waits for content that is still loading (PILOT-1324)'
   const list = (n: number) =>
     '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">' +
     `<node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,200][1080,2400]">` +
-    `<node class="android.widget.TextView" text="Fake Podcast ${n}" bounds="[0,200][1080,400]"/></node></node></hierarchy>`;
+    `<node class="android.widget.TextView" text="Fake Podcast ${n}" bounds="[0,200][1080,400]"/>` +
+    '<node class="android.widget.TextView" text="Fake Podcast 20" bounds="[0,400][1080,600]"/></node></node></hierarchy>';
   const absent = () => vi.fn(async () => makeFindElementsResponse([]));
 
   it('keeps waiting while a spinner is all there is, then scrolls the list that replaces it to the element', async () => {
