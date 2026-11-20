@@ -67,3 +67,53 @@ describe("a SwiftUI Toggle's knob (PILOT-790)", () => {
     expect(semanticNodes([toggle])).toEqual([toggle, text]);
   });
 });
+
+describe('WebView content (PILOT-1329)', () => {
+  // A native WebView's content reaches the hierarchy as its accessibility
+  // projection: the tree says where it starts, so the reader knows the
+  // `webview.` locators apply there.
+  function ios(type: string, attrs: Record<string, string> = {}, children: HierarchyNode[] = []): HierarchyNode {
+    return { tagName: type, attributes: new Map(Object.entries({ type, ...attrs })), children, depth: 0 };
+  }
+  const email = ios('XCUIElementTypeTextField', { label: 'Email', 'tapsmith-role': 'textfield' });
+  const signIn = ios('XCUIElementTypeButton', { label: 'Sign in', 'tapsmith-role': 'button' });
+  // WKWebView nests three WebView elements on iOS: one marker, not three.
+  const web = ios('XCUIElementTypeWebView', {}, [ios('XCUIElementTypeWebView', {}, [ios('XCUIElementTypeWebView', {}, [
+    ios('XCUIElementTypeOther', {}, [email, signIn]),
+  ])])]);
+  const heading = ios('XCUIElementTypeStaticText', { label: 'Embedded WebView', 'tapsmith-role': 'heading' });
+  const screen = ios('XCUIElementTypeOther', {}, [heading, web]);
+
+  it('marks the WebView once, with its content under it', () => {
+    const { tree, hasWebView } = formatHierarchy([screen], new Map([[signIn, [s('device.getByRole("button", { name: "Sign in" })')]]]));
+    expect(tree).toBe([
+      '- heading "Embedded WebView"',
+      '- webview (web content: device.webview() locators)',
+      '  - textfield "Email"',
+      '  - [1] button "Sign in"',
+    ].join('\n'));
+    expect(hasWebView).toBe(true);
+  });
+
+  it('marks an Android WebView', () => {
+    const page = node({ class: 'android.widget.Button', text: 'Login', clickable: 'true' });
+    const wv = node({ class: 'android.webkit.WebView' }, [page]);
+    const { tree, hasWebView } = formatHierarchy([node({ class: 'android.widget.FrameLayout' }, [title, wv])], new Map());
+    expect(tree).toBe('- text "Settings"\n- webview (web content: device.webview() locators)\n  - button "Login"');
+    expect(hasWebView).toBe(true);
+  });
+
+  it('marks nothing on a screen with no WebView', () => {
+    expect(formatHierarchy([root], new Map()).hasWebView).toBe(false);
+  });
+
+  it('marks nothing for an empty WebView', () => {
+    const { tree, hasWebView } = formatHierarchy([ios('XCUIElementTypeOther', {}, [heading, ios('XCUIElementTypeWebView')])], new Map());
+    expect(tree).toBe('- heading "Embedded WebView"');
+    expect(hasWebView).toBe(false);
+  });
+
+  it('offers no WebView node for suggestions', () => {
+    expect(semanticNodes([screen])).toEqual([heading, email, signIn]);
+  });
+});
