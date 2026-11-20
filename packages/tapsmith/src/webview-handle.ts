@@ -669,7 +669,7 @@ export class WebViewHandle {
           ariaLabel: el.getAttribute('aria-label') || '',
           role: el.getAttribute('role') || '',
           text: (el.textContent || '').trim().slice(0, 80),
-          leaf: el.children.length === 0,
+          leaf: el.firstElementChild === null,
           inShadow: el.getRootNode() !== document,
         })),
         target: ${targetJs},
@@ -963,23 +963,40 @@ export class WebViewHandle {
       // Evaluate JS to walk the DOM and produce a hierarchy
       const domData = await this._evaluate(withDomHelpers(`(() => {
         const dpr = ${useDpr ? 'window.devicePixelRatio || 1' : '1'};
+        const elementsOf = (parent) => {
+          const out = [];
+          // Not parent.children, which Stencil's scoped components patch.
+          for (let c = parent.firstElementChild; c; c = c.nextElementSibling) out.push(c);
+          return out;
+        };
+        // The flattened tree, as the page renders it: a shadow host's children
+        // are its shadow root's, and a slot's are the elements assigned to it
+        // (or its fallback content), so slotted content nests where it shows.
+        const kidsOf = (el) => {
+          if (el.shadowRoot) return elementsOf(el.shadowRoot);
+          if (el.localName === 'slot' && el.getRootNode().host && typeof el.assignedElements === 'function') {
+            const assigned = el.assignedElements({ flatten: true });
+            return assigned.length ? assigned : elementsOf(el);
+          }
+          return elementsOf(el);
+        };
         // The nodes for el: itself, or, when it has no box of its own (a
         // <slot> or other display: contents element), its children's nodes in
-        // its place, so a slot's fallback content can still be picked.
+        // its place, so a slot's content can still be picked.
         function walk(el, depth) {
           if (depth > 20) return [];
           const tag = el.tagName?.toLowerCase() || '';
           if (!tag || tag === 'script' || tag === 'style' || tag === 'head') return [];
-          // Shadow-including tree order, as the locators match: the open
-          // shadow root's contents, then the element's own children.
-          const kids = el.shadowRoot ? [...el.shadowRoot.children, ...el.children] : [...el.children];
+          const kids = kidsOf(el);
           const r = el.getBoundingClientRect();
           if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth + 1));
           const node = {
             tag: tag,
             id: el.id || '',
             cls: el.className || '',
-            text: el.children.length === 0 ? (el.textContent || '').trim().slice(0, 200) : '',
+            text: __ts.isLeaf(el) ? (el.textContent || '').trim().slice(0, 200) : '',
+            // In a shadow root, where an id need only be unique per tree.
+            shadow: el.getRootNode() !== document,
             // The attribute, which getByPlaceholder matches: a component's
             // host carries it without the input element's property.
             placeholder: el.getAttribute('placeholder') || '',
@@ -996,7 +1013,7 @@ export class WebViewHandle {
               // (the <button> inside an ion-button holds a <slot>): the name
               // getByRole matches it by, read through slots and shadow roots.
               // The match is exact, so a name too long to keep whole is left out.
-              if ((el.children.length > 0 || el.shadowRoot) && el.matches(${JSON.stringify(NAME_FROM_CONTENT_SELECTOR)})) {
+              if ((!__ts.isLeaf(el) || el.shadowRoot) && el.matches(${JSON.stringify(NAME_FROM_CONTENT_SELECTOR)})) {
                 const name = __ts.name(el);
                 return name.length <= 200 ? name : '';
               }
@@ -1044,6 +1061,7 @@ export class WebViewHandle {
         if (node.testId) attrs.push(`webview-testid="${escapeXmlAttr(node.testId)}"`);
         if (node.type) attrs.push(`webview-type="${escapeXmlAttr(node.type)}"`);
         if (node.href) attrs.push(`webview-href="${escapeXmlAttr(node.href)}"`);
+        if (node.shadow) attrs.push('webview-shadow="true"');
         attrs.push('webview="true"');
 
         if (node.children.length === 0) {
@@ -1250,7 +1268,7 @@ export class WebViewHandle {
     // never a <script> or <style> (Stencil puts one in every shadow root).
     const test = options?.exact ? `(el.textContent ?? '').trim() === ${escaped}` : `(el.textContent ?? '').includes(${escaped})`;
     const finderAllJs = withDomHelpers(
-      `__ts.all(document).filter((el) => el.children.length === 0 && !__ts.skipText(el) && ${test})`);
+      `__ts.all(document).filter((el) => __ts.isLeaf(el) && !__ts.skipText(el) && ${test})`);
     return new WebViewLocator(this, `text=${text}`, this._timeoutMs, finderAllJs);
   }
 
@@ -1269,7 +1287,7 @@ export class WebViewHandle {
         ? ` && (__ts.name(el) === ${JSON.stringify(options!.name)} || __ts.flatText(el).trim() === ${JSON.stringify(options!.name)})`
         : '';
       const finderAllJs = withDomHelpers(
-        `__ts.queryAll('[role]').filter((el) => el.getAttribute('role') === ${roleEscaped}${nameTest})`);
+        `__ts.queryAll('[role]').filter((el) => el.getAttribute('role') === ${roleEscaped}${nameTest} && !__ts.a11yHidden(el))`);
       return new WebViewLocator(this, `role=${role}${displaySuffix}`, this._timeoutMs, finderAllJs);
     }
 
@@ -1277,7 +1295,8 @@ export class WebViewHandle {
     const displayName = `role=${role}${displaySuffix}`;
 
     if (!hasName) {
-      return new WebViewLocator(this, displayName, this._timeoutMs, deepQueryAllJs(selectorList));
+      return new WebViewLocator(this, displayName, this._timeoutMs,
+        withDomHelpers(`__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => !__ts.a11yHidden(el))`));
     }
 
     // Non-null: hasName guarantees options.name is set (TS can't narrow through the const).
@@ -1287,7 +1306,7 @@ export class WebViewHandle {
     // 3. <label> (for or wrapping) 4. title 5. placeholder 6. text content,
     // flattened through slots and shadow roots.
     const finderAllJs = withDomHelpers(
-      `__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => __ts.name(el) === ${nameEscaped})`);
+      `__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => __ts.name(el) === ${nameEscaped} && !__ts.a11yHidden(el))`);
     return new WebViewLocator(this, displayName, this._timeoutMs, finderAllJs);
   }
 
@@ -1368,6 +1387,7 @@ interface DomNode {
   testId: string
   type: string
   href: string
+  shadow?: boolean
   bounds: { left: number; top: number; right: number; bottom: number }
   children: DomNode[]
 }

@@ -17,5 +17,7 @@ export class WebViewShadowScreen {
   get nativeButtons() { return this.webview.locator("button.button-native") }
   /** Only inside x-closed-button's closed shadow root. */
   get hiddenAction() { return this.webview.getByText("Hidden action") }
+  /** x-toggle is the switch; the hidden checkbox inside it must not count. */
+  get notificationsSwitch() { return this.webview.getByRole("switch", { name: "Email notifications" }) }
   get status() { return this.webview.locator("#shadow-status") }
 }

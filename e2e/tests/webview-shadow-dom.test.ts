@@ -38,6 +38,9 @@ describe("WebView shadow DOM", () => {
 
     await screen.dismissButton.click()
     await expect(screen.status).toHaveText("Banner dismissed")
+
+    await screen.notificationsSwitch.click()
+    await expect(screen.status).toHaveText("Notifications on")
     await device.native()
   })
 

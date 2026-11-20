@@ -25,6 +25,8 @@ const HTML_CONTENT = `
 
   <x-icon-button id="dismiss" aria-label="Dismiss banner"></x-icon-button>
 
+  <x-toggle id="notifications">Email notifications</x-toggle>
+
   <x-closed-button id="closed"></x-closed-button>
 
   <p id="shadow-status">Nothing yet</p>
@@ -73,6 +75,24 @@ const HTML_CONTENT = `
         this.removeAttribute('aria-label');
         button.addEventListener('click', function () {
           statusEl.textContent = 'Banner dismissed';
+        });
+      }
+    });
+
+    // ion-toggle: the host is the switch, and a hidden native checkbox inside
+    // carries the same role and, through its label, the same name.
+    customElements.define('x-toggle', class extends HTMLElement {
+      connectedCallback() {
+        if (this.shadowRoot) return;
+        this.setAttribute('role', 'switch');
+        this.setAttribute('aria-checked', 'false');
+        var root = this.attachShadow({ mode: 'open' });
+        root.innerHTML = '<label><input type="checkbox" role="switch" style="display:none"><span><slot></slot></span></label>';
+        var host = this;
+        this.addEventListener('click', function () {
+          var on = host.getAttribute('aria-checked') !== 'true';
+          host.setAttribute('aria-checked', String(on));
+          statusEl.textContent = on ? 'Notifications on' : 'Notifications off';
         });
       }
     });

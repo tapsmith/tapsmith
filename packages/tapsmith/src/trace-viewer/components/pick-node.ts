@@ -6,7 +6,7 @@
  */
 
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
-import { getNodeBounds, hitTest } from './hierarchy-utils.js';
+import { getNodeBounds, getNodeRole, hitTest } from './hierarchy-utils.js';
 import { findBetterDescendant, hasGoodSelectors } from './selector-generation.js';
 import { isHooksMarkerCarrier, isNonAppSubtree, isSwitchPartNode } from './non-app-nodes.js';
 
@@ -34,6 +34,20 @@ function owningSwitch(roots: HierarchyNode[], part: HierarchyNode): HierarchyNod
     current = findParent(roots, current);
   }
   return current;
+}
+
+/**
+ * The web button or link a WebView node is part of (a span or icon inside
+ * it, such as the inner parts of an ion-button), or null. A pick there picks
+ * the control, as Playwright's picker does.
+ */
+function owningWebViewControl(roots: HierarchyNode[], node: HierarchyNode): HierarchyNode | null {
+  if (node.attributes.get('webview') !== 'true') return null;
+  for (let current = findParent(roots, node); current?.attributes.get('webview') === 'true'; current = findParent(roots, current)) {
+    const role = getNodeRole(current);
+    if ((role === 'button' || role === 'link') && getNodeBounds(current)) return current;
+  }
+  return null;
 }
 
 function boundsOverlap(a: Bounds, b: Bounds): boolean {
@@ -78,6 +92,7 @@ export function pickNodeAt(
     }
   }
   if (!betterNode) betterNode = hitNode;
+  betterNode = owningWebViewControl(roots, betterNode) ?? betterNode;
   const bounds = getNodeBounds(betterNode);
   return bounds ? { node: betterNode, bounds } : null;
 }

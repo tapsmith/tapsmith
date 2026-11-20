@@ -3538,7 +3538,7 @@ Playwright-style locators for DOM elements, mirroring the native `device.getBy*`
 | Method | Matches |
 |---|---|
 | `webview.getByText(text, { exact? })` | Leaf elements by visible text (substring by default; unlike `device.getByText`, case-sensitive) |
-| `webview.getByRole(role, { name? })` | ARIA/HTML role, optionally filtered by accessible name |
+| `webview.getByRole(role, { name? })` | ARIA/HTML role, optionally filtered by accessible name. Like Playwright's, skips elements hidden from assistive technology (`display: none`, `visibility: hidden`, `aria-hidden`) |
 | `webview.getByPlaceholder(text)` | `placeholder` attribute |
 | `webview.getByTestId(testId)` | `data-testid` attribute |
 | `webview.getByLabel(text)` | `aria-label` attribute |

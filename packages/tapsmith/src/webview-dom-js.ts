@@ -55,6 +55,21 @@ const HELPERS_JS = `(() => {
     return queryAll(css)[0] ?? null;
   }
   function skipText(el) { return SKIP.has(el.nodeName.toUpperCase()); }
+  // No element children. Not el.children: Stencil's scoped components
+  // (ion-input) patch it to list only their slotted content.
+  function isLeaf(el) { return el.firstElementChild === null; }
+  // Hidden from assistive technology, which getByRole skips as Playwright's
+  // does: aria-hidden on it or a shadow-including ancestor, no box (display:
+  // none on it or an ancestor; display: contents has none but is shown), or
+  // visibility: hidden.
+  function a11yHidden(el) {
+    for (let n = el; n; n = n.parentElement || n.getRootNode().host || null) {
+      if (n.getAttribute('aria-hidden') === 'true') return true;
+    }
+    const style = getComputedStyle(el);
+    if (el.getClientRects().length === 0 && style.display !== 'contents') return true;
+    return style.visibility === 'hidden';
+  }
   function flatText(node, skipControls) {
     let s = '';
     const visit = (n) => {
@@ -107,7 +122,7 @@ const HELPERS_JS = `(() => {
     if (placeholder) return placeholder;
     return flatText(el).trim();
   }
-  return { all, queryAll, first, skipText, flatText, labelledBy, labelFor, wrappingLabel, name };
+  return { all, queryAll, first, skipText, isLeaf, a11yHidden, flatText, labelledBy, labelFor, wrappingLabel, name };
 })()`;
 
 /**

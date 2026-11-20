@@ -16,6 +16,7 @@ import { isStrictModeViolation } from '../element-handle.js';
 import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { findMatchingNodes, parseSelectorString } from '../trace-viewer/components/selector-matching.js';
+import { pickNodeAt } from '../trace-viewer/components/pick-node.js';
 
 const SHADOW_PAGE = `<!DOCTYPE html><html><body>
   <button id="light">Light</button>
@@ -70,9 +71,24 @@ function handleOn(html: string, setup?: (doc: Document) => void) {
   setup?.(dom.window.document);
   // jsdom does no layout: give every rendered element a box, and none to the
   // elements a browser gives none (a <slot> is display: contents).
-  dom.window.Element.prototype.getBoundingClientRect = function (this: Element) {
-    const size = ['STYLE', 'SLOT', 'SCRIPT'].includes(this.nodeName) ? 0 : 10;
-    return { left: 0, top: 0, right: size, bottom: size, width: size, height: size, x: 0, y: 0 } as DOMRect;
+  // An element can pin its box with data-rect="left,top,right,bottom".
+  // display: none (on it or a shadow-including ancestor) leaves it no box.
+  const win = dom.window;
+  const undisplayed = (el: Element): boolean => {
+    for (let n: Element | null = el; n; n = n.parentElement ?? ((n.getRootNode() as ShadowRoot).host ?? null)) {
+      if (win.getComputedStyle(n).display === 'none') return true;
+    }
+    return false;
+  };
+  win.Element.prototype.getBoundingClientRect = function (this: Element) {
+    const pinned = this.getAttribute('data-rect')?.split(',').map(Number);
+    const [left, top, right, bottom] = pinned
+      ?? (['STYLE', 'SLOT', 'SCRIPT'].includes(this.nodeName) || undisplayed(this) ? [0, 0, 0, 0] : [0, 0, 10, 10]);
+    return { left, top, right, bottom, width: right - left, height: bottom - top, x: left, y: top } as DOMRect;
+  };
+  win.Element.prototype.getClientRects = function (this: Element) {
+    const r = this.getBoundingClientRect();
+    return (r.width === 0 && r.height === 0 && (this.nodeName === 'SLOT' || undisplayed(this)) ? [] : [r]) as unknown as DOMRectList;
   };
   // The native WebView's place on screen, which the DOM dump offsets by.
   const client = {
@@ -245,6 +261,33 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
     expect(host.attributes.get('hint')).toBe('Search');
   });
 
+  it('getByRole skips a control hidden from assistive technology, as Playwright\'s does', async () => {
+    // ion-toggle: the host is the switch; a display:none native input inside
+    // carries the same role and, through its label and the slot, the same name.
+    const { handle } = handleOn('<!DOCTYPE html><body><x-toggle role="switch">Email notifications</x-toggle>'
+      + '<button style="display:none">Gone</button><button style="visibility:hidden">Ghost</button>'
+      + '<button aria-hidden="true">Muted</button><button>Shown</button></body>', (doc) => {
+      doc.querySelector('x-toggle')!.attachShadow({ mode: 'open' }).innerHTML =
+        '<label><input type="checkbox" role="switch" style="display:none"><span><slot></slot></span></label>';
+    });
+    expect(await handle.getByRole('switch', { name: 'Email notifications' }).count()).toBe(1);
+    expect(await handle.getByRole('button').count()).toBe(1);
+    // Other locators still find hidden elements, as Playwright's do.
+    expect(await handle.locator('button').count()).toBe(4);
+  });
+
+  it('treats an element as a leaf only when it has no element children, whatever its children property says', async () => {
+    // Stencil's scoped components (ion-input) patch `children` to list
+    // slotted content only, hiding the label and input they render.
+    const { handle } = handleOn('<!DOCTYPE html><body><x-input id="h"><label><span>Email</span><input></label></x-input></body>',
+      (doc) => { Object.defineProperty(doc.getElementById('h')!, 'children', { get: () => [] }); });
+    expect(await handle.getByText('Email', { exact: true }).count()).toBe(1);
+    const nodes = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+    const host = nodes[0]!.children[0]!;
+    expect(host.attributes.get('webview-tag')).toBe('x-input');
+    expect(host.children.map((c) => c.attributes.get('webview-tag'))).toEqual(['label']);
+  });
+
   it('keeps document order and results on a page without shadow roots', async () => {
     const { handle } = handleOn('<!DOCTYPE html><body><div id="a"><p id="b"></p></div><p id="c"></p></body>');
     expect(await idsOf(handle, handle.locator('p, div')._finderAllJs)).toEqual(['a', 'b', 'c']);
@@ -324,6 +367,44 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
       expect(count('webview.locator("x-button#sign-in")')).toBe(1);
       expect(count('webview.locator("x-icon.icon-host")')).toBe(1);
       expect(await handle.locator('x-icon.icon-host').count()).toBe(1);
+    });
+
+    it('nests slotted content where it renders, so a pick on it is not taken by the component\'s own layers', async () => {
+      // ion-content: a screen-sized background layer and a scroll container
+      // whose slot holds the page's content.
+      const { handle } = handleOn('<!DOCTYPE html><body data-rect="0,0,100,100">'
+        + '<x-content id="c" data-rect="0,0,100,100"><h2 data-rect="10,10,90,20">Welcome</h2></x-content></body>', (doc) => {
+        doc.getElementById('c')!.attachShadow({ mode: 'open' }).innerHTML =
+          '<div id="background-content" data-rect="0,0,100,100"></div>'
+          + '<main class="inner-scroll" data-rect="0,0,100,100"><slot></slot></main>';
+      });
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      const main = flatten(roots).find((n) => n.attributes.get('webview-tag') === 'main')!;
+      expect(main.children.map((c) => c.attributes.get('webview-tag'))).toEqual(['h2']);
+      const picked = pickNodeAt(roots, 50, 15)!.node;
+      expect(picked.attributes.get('webview-tag')).toBe('h2');
+      expect(generateSelectors(picked)[0]?.code).toBe('webview.getByRole("heading", { name: "Welcome" })');
+    });
+
+    it('a pick inside a button\'s own parts picks the button', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body data-rect="0,0,100,100">'
+        + '<x-button id="b" data-rect="0,0,100,40">Sign in</x-button></body>', (doc) => {
+        doc.getElementById('b')!.attachShadow({ mode: 'open' }).innerHTML =
+          '<button class="button-native" data-rect="0,0,100,40"><span class="button-inner" data-rect="3,3,97,37"><slot></slot></span></button>';
+      });
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      const picked = pickNodeAt(roots, 50, 20)!.node;
+      expect(picked.attributes.get('webview-tag')).toBe('button');
+      expect(generateSelectors(picked)[0]?.code).toBe('webview.getByRole("button", { name: "Sign in" })');
+    });
+
+    it('never suggests an id from inside a shadow root', async () => {
+      const { handle } = shadowPage();
+      const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
+      const lab = nodes.find((n) => n.attributes.get('webview-id') === 'lab' && n.attributes.get('text') === 'Volume')!;
+      expect(generateSelectors(lab).map((g) => g.code)).not.toContain('webview.locator("#lab")');
+      const light = nodes.find((n) => n.attributes.get('webview-id') === 'result')!;
+      expect(generateSelectors(light).map((g) => g.code)).toContain('webview.locator("#result")');
     });
   });
 });
