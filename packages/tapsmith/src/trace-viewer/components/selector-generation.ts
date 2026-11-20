@@ -4,6 +4,7 @@ import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
 import { isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
+import { resourceIdEntryName } from './resource-id.js';
 import { placeholderName } from './selector-matching.js';
 import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
 
@@ -369,9 +370,13 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   // 8. Locator fallbacks for elements with no accessible attributes. A
   // native package-qualified id has no getByTestId (PILOT-659), so its
   // locator({ id }) takes the test-id slot: it still names this element.
+  // An Android id is offered by its bare entry name, which survives a
+  // build's applicationIdSuffix; the full id pins it when another package
+  // shares the name.
   if (resourceId) {
+    const entryName = ios ? null : resourceIdEntryName(resourceId);
     selectors.push({
-      code: `device.locator({ id: "${escapeJsString(resourceId)}" })`,
+      code: `device.locator({ id: "${escapeJsString(entryName ?? resourceId)}" })`,
       label: 'Resource ID',
       priority: testIdFromResource ? 8 : 7,
     });

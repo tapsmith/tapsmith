@@ -12,6 +12,7 @@ import { parseSelectorString, findMatchingNodes, getNodeBounds } from './selecto
 import type { GeneratedSelector } from './selector-generation.js';
 import { glyphAware, roleNameFor } from './selector-generation.js';
 import { escapeJsString } from '../../js-string-escape.js';
+import { fullResourceIdUpgrade } from './resource-id.js';
 
 /**
  * Identity check across separately parsed hierarchy trees: reference equality
@@ -63,6 +64,22 @@ function uniquelyMatches(code: string, roots: HierarchyNode[], node: HierarchyNo
 }
 
 /** (a) Ambiguous substring getByText → try the { exact: true } variant. */
+/**
+ * A bare `locator({ id })` that another package's id shares → the node's
+ * full package-qualified id, if that pins it.
+ */
+function tryFullResourceIdUpgrade(
+  s: GeneratedSelector,
+  roots: HierarchyNode[],
+  node: HierarchyNode,
+): GeneratedSelector | null {
+  const parsed = parseSelectorString(s.code);
+  if (!parsed || parsed.type !== 'id') return null;
+  const upgraded = fullResourceIdUpgrade(parsed.value, node);
+  if (!upgraded || !uniquelyMatches(upgraded, roots, node)) return null;
+  return { ...s, code: upgraded };
+}
+
 function tryExactTextUpgrade(
   s: GeneratedSelector,
   roots: HierarchyNode[],
@@ -162,7 +179,8 @@ export function disambiguateSelectors(
     }
     if (matches.length <= 1) return s;
 
-    const upgraded = tryExactTextUpgrade(s, roots, node)
+    const upgraded = tryFullResourceIdUpgrade(s, roots, node)
+      ?? tryExactTextUpgrade(s, roots, node)
       ?? tryExactRoleNameUpgrade(s, roots, node)
       ?? tryRoleNameUpgrade(s, roots, node);
     if (upgraded) return upgraded;

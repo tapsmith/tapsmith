@@ -1,4 +1,5 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
+import { androidResourceIdMatches } from './resource-id.js';
 import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
@@ -637,8 +638,12 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector): boo
     case 'contentDesc':
       return getNodeContentDesc(node) === selector.value;
     case 'id': {
-      const rid = getNodeId(node);
-      return rid === selector.value;
+      // An Android resource name also matches its bare entry name; an iOS
+      // accessibilityIdentifier only whole, as the agents match them.
+      const rid = node.attributes.get('resource-id');
+      return rid !== undefined
+        ? androidResourceIdMatches(rid, selector.value)
+        : getNodeId(node) === selector.value;
     }
     case 'className':
       return getNodeClassName(node) === selector.value;

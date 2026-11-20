@@ -755,7 +755,7 @@ describe('getByTestId parity with the Android agent (PILOT-659)', () => {
   it('does not suggest getByTestId from a package-qualified resource id', () => {
     const codes = generateSelectors(view('com.android.systemui:id/mobile_signal')).map((s) => s.code);
     expect(codes.some((c) => c.startsWith('device.getByTestId('))).toBe(false);
-    expect(codes).toContain('device.locator({ id: "com.android.systemui:id/mobile_signal" })');
+    expect(codes).toContain('device.locator({ id: "mobile_signal" })');
   });
 
   it('does not match getByTestId against the name part of a package-qualified id', () => {
@@ -773,7 +773,7 @@ describe('getByTestId parity with the Android agent (PILOT-659)', () => {
     const roots = [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout', bounds: '[0,0][1000,2000]' }, [row])];
     const picked = handlePickFromScreenshot(roots, 50, 20);
     expect(picked?.node).toBe(row);
-    expect(picked?.selector).toBe('device.locator({ id: "com.app:id/profile_row" })');
+    expect(picked?.selector).toBe('device.locator({ id: "profile_row" })');
   });
 
   it('still suggests and matches an RN testID', () => {
@@ -821,5 +821,46 @@ describe('substring getByText ignores case in the playground, like the agents (P
     expect(count([root], suggestion[0].code)).toBe(2);
     const result = disambiguateSelectors([root], button, suggestion);
     expect(result[0].code).toBe('device.getByText("Sign in", { exact: true })');
+  });
+});
+
+describe('locator({ id }) parity with the Android agent', () => {
+  // A bare entry name matches that id under any package (an R.id name with
+  // any applicationIdSuffix); a package-qualified id matches only itself.
+  const view = (rid: string, bounds = '[0,0][10,10]') => makeNode('android.widget.ImageView', {
+    class: 'android.widget.ImageView', 'resource-id': rid, bounds,
+  });
+  const count = (roots: HierarchyNode[], code: string) => findMatchingNodes(roots, parseSelectorString(code)!).length;
+  const screen = (...children: HierarchyNode[]) => [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout', bounds: '[0,0][1000,2000]' }, children)];
+
+  it('matches a bare entry name under any package, and the full id only whole', () => {
+    const roots = screen(view('de.danoeh.antennapod.debug:id/titleLabel'));
+    expect(count(roots, 'device.locator({ id: "titleLabel" })')).toBe(1);
+    expect(count(roots, 'device.locator({ id: "de.danoeh.antennapod.debug:id/titleLabel" })')).toBe(1);
+    expect(count(roots, 'device.locator({ id: "de.danoeh.antennapod:id/titleLabel" })')).toBe(0);
+    expect(count(roots, 'device.locator({ id: "Label" })')).toBe(0);
+    expect(count(roots, 'device.locator({ id: "id/titleLabel" })')).toBe(0);
+  });
+
+  it('still matches an unprefixed React Native id whole', () => {
+    const roots = screen(view('email-input'));
+    expect(count(roots, 'device.locator({ id: "email-input" })')).toBe(1);
+    expect(count(roots, 'device.locator({ id: "email" })')).toBe(0);
+  });
+
+  it('matches an iOS accessibilityIdentifier whole', () => {
+    const cell = makeNode('XCUIElementTypeCell', { type: 'XCUIElementTypeCell', identifier: 'com.app:id/row', bounds: '[0,0][10,10]' });
+    const roots = [makeNode('XCUIElementTypeWindow', { type: 'XCUIElementTypeWindow' }, [cell])];
+    expect(count(roots, 'device.locator({ id: "row" })')).toBe(0);
+    expect(count(roots, 'device.locator({ id: "com.app:id/row" })')).toBe(1);
+    expect(generateSelectors(cell).map((s) => s.code)).not.toContain('device.locator({ id: "row" })');
+  });
+
+  it('pins the full id in the playground when two packages share the entry name', () => {
+    const mine = view('com.app:id/title', '[0,0][10,10]');
+    const roots = screen(mine, view('android:id/title', '[0,20][10,30]'));
+    const codes = disambiguateSelectors(roots, mine, generateSelectors(mine)).map((s) => s.code);
+    expect(codes).toContain('device.locator({ id: "com.app:id/title" })');
+    expect(codes.some((c) => c.startsWith('device.locator({ id: "title" })'))).toBe(false);
   });
 });
