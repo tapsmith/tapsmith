@@ -70,3 +70,31 @@ struct SystemAlertEvents {
         return events
     }
 }
+
+/// When a readiness check (`waitForAppReady`) looks for a leftover "Open in"
+/// prompt. Not on every call: warm resets wait for readiness every test, and
+/// the SpringBoard query costs tens of milliseconds. Not once per agent
+/// process either: UI mode, watch and the MCP server keep one agent across
+/// runs, and a prompt `npx expo run:ios` raised between two runs must be
+/// cancelled when the next one starts. So at most once per `interval`, which
+/// a launch's own check (`checked(at:)`) also restarts.
+struct LeftoverPromptCheck {
+    let interval: TimeInterval
+    private var last: Date?
+
+    init(interval: TimeInterval = 15) {
+        self.interval = interval
+    }
+
+    /// Whether to look now; when it says yes, the interval restarts.
+    mutating func due(now: Date) -> Bool {
+        if let last, now.timeIntervalSince(last) < interval { return false }
+        last = now
+        return true
+    }
+
+    /// A check made elsewhere (a launch) at `now`.
+    mutating func checked(at now: Date) {
+        last = now
+    }
+}

@@ -123,8 +123,8 @@ class CommandHandler {
     /// The alerts the agent answered on its own, for `takeSystemDialogEvents`.
     private var systemAlertEvents = SystemAlertEvents()
 
-    /// Whether `waitForAppReady` has looked for a leftover "Open in" prompt.
-    private var checkedLeftoverPromptAtReadiness = false
+    /// When `waitForAppReady` next looks for a leftover "Open in" prompt.
+    private var leftoverPromptCheck = LeftoverPromptCheck()
 
     /// Cancel a leftover "Open in “App”?" prompt before a launch, or before
     /// the session's first use of an app it found already running.
@@ -138,6 +138,7 @@ class CommandHandler {
     /// bundle it loads), and the launch that follows brings the app up
     /// anyway. Recorded for the daemon to report (`takeSystemDialogEvents`).
     private func cancelLeftoverOpenInPrompt() {
+        leftoverPromptCheck.checked(at: Date())
         guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { return }
         NSLog("[SystemDialog] Cancelling a leftover %@ before using the app", alert.description)
         var gone = false
@@ -3145,13 +3146,10 @@ class CommandHandler {
         case "waitForAppReady":
             let bundleId = targetBundleId(fallback: params)
             let timeoutMs = (params["timeout"] as? NSNumber)?.intValue ?? 10_000
-            // The session's first readiness check can adopt an app that is
-            // already running, with no launchApp: cancel a leftover prompt
-            // here too. Once per agent process: the SpringBoard query costs
-            // tens of milliseconds, and warm resets wait for readiness every
-            // test, while relaunches check in launchApp.
-            if !checkedLeftoverPromptAtReadiness {
-                checkedLeftoverPromptAtReadiness = true
+            // A session can adopt an app that is already running, and a warm
+            // reset reuses it, with no launchApp: cancel a leftover prompt
+            // here too, at most once per LeftoverPromptCheck interval.
+            if leftoverPromptCheck.due(now: Date()) {
                 cancelLeftoverOpenInPrompt()
             }
             // A process launched outside the runner (simctl launch / openurl)

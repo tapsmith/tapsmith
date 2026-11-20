@@ -80,6 +80,20 @@ do {
            queue.take().map { $0["title"] as? String } == ["t2", "t3", "t4"])
 }
 
+do {
+    var check = LeftoverPromptCheck(interval: 15)
+    let t0 = Date(timeIntervalSince1970: 1_000)
+    expect("the first readiness check of a process looks", check.due(now: t0))
+    expect("one soon after does not (warm resets wait for readiness every test)",
+           !check.due(now: t0.addingTimeInterval(5)))
+    expect("one after the interval looks again (a long-lived session's next run)",
+           check.due(now: t0.addingTimeInterval(16)))
+    expect("and restarts the interval", !check.due(now: t0.addingTimeInterval(20)))
+    check.checked(at: t0.addingTimeInterval(40))
+    expect("a launch's own check restarts it too", !check.due(now: t0.addingTimeInterval(50)))
+    expect("until the interval has passed since it", check.due(now: t0.addingTimeInterval(56)))
+}
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)
