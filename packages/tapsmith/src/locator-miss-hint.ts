@@ -15,7 +15,7 @@
  * @internal
  */
 
-import type { EvaluateSelectorsResponse } from './grpc-client.js';
+import type { EvaluateSelectorsResponse, GetSystemAlertResponse } from './grpc-client.js';
 import { collapseSameTargetDuplicates } from './element-handle.js';
 import { formatSelector, makeSelector, type RoleSelectorValue, type Selector } from './selectors.js';
 
@@ -145,7 +145,52 @@ export async function nearMissHint(
   budgetMs = NEAR_MISS_BUDGET_MS,
 ): Promise<string> {
   const probes = nearMissProbes(selector);
-  if (probes.length === 0 || typeof client.evaluateSelectors !== 'function' || signal?.aborted) return '';
+  if (probes.length === 0 || typeof client.evaluateSelectors !== 'function') return '';
+  const evaluate = client.evaluateSelectors.bind(client);
+  const response = await withinBudget(() => evaluate(probes.map((p) => p.selector)), signal, budgetMs);
+  try {
+    return response ? formatNearMisses(selector, probes, response) : '';
+  } catch {
+    return '';
+  }
+}
+
+/** The RPC the system-alert check needs (a TapsmithGrpcClient in production). */
+export interface SystemAlertReader {
+  getSystemAlert?(deadlineMs?: number): Promise<GetSystemAlertResponse>;
+}
+
+/**
+ * The sentence a not-found message leads with when a system alert covers the
+ * app: on iOS, a SpringBoard alert ("Open in “App”?", a permission prompt)
+ * hides every element behind it without appearing in the app's hierarchy, so
+ * the miss is the alert's doing, not the locator's. '' when none is up, the
+ * device cannot say (an older agent, Android), or it does not answer within
+ * `budgetMs`.
+ */
+export async function systemAlertHint(
+  client: SystemAlertReader,
+  signal?: AbortSignal,
+  budgetMs = NEAR_MISS_BUDGET_MS,
+): Promise<string> {
+  if (typeof client.getSystemAlert !== 'function') return '';
+  const read = client.getSystemAlert.bind(client);
+  const alert = await withinBudget(() => read(budgetMs), signal, budgetMs);
+  if (!alert?.present) return '';
+  const name = alert.title ? `"${alert.title}"` : 'an untitled alert';
+  const buttons = alert.buttons?.length ? `buttons: ${alert.buttons.join(', ')}` : 'no buttons';
+  return `A system alert is covering the app: ${name} (${buttons}). `
+    + 'Locators only see the app under test, so nothing behind the alert can be found, tapped or typed into '
+    + 'until it is closed: close it on the device, or tap one of its buttons with device.tapXY().';
+}
+
+/** `call`'s result, or undefined when it rejects, `budgetMs` passes first, or `signal` aborts. */
+async function withinBudget<T>(
+  call: () => Promise<T>,
+  signal: AbortSignal | undefined,
+  budgetMs: number,
+): Promise<T | undefined> {
+  if (signal?.aborted) return undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const giveUp = new Promise<undefined>((resolve) => {
@@ -155,13 +200,9 @@ export async function nearMissHint(
     signal?.addEventListener('abort', onAbort, { once: true });
   });
   try {
-    const response = await Promise.race([
-      client.evaluateSelectors(probes.map((p) => p.selector)).catch(() => undefined),
-      giveUp,
-    ]);
-    return response ? formatNearMisses(selector, probes, response) : '';
+    return await Promise.race([call().catch(() => undefined), giveUp]);
   } catch {
-    return '';
+    return undefined;
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort) signal?.removeEventListener('abort', onAbort);

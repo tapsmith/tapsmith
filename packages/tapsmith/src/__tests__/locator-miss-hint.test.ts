@@ -8,7 +8,7 @@ import { expect as tapsmithExpect } from "../expect.js";
 import { Device } from "../device.js";
 import { LOCATOR_PICKER_HINT, nearMissHint, nearMissProbes } from "../locator-miss-hint.js";
 import { _contentDesc, _hint, _label, _role, _text, _textContains, _testId, formatSelector, withParent } from "../selectors.js";
-import type { ElementInfo, EvaluateSelectorsResponse, TapsmithGrpcClient } from "../grpc-client.js";
+import type { ElementInfo, EvaluateSelectorsResponse, GetSystemAlertResponse, TapsmithGrpcClient } from "../grpc-client.js";
 import type { Selector } from "../selectors.js";
 
 function element(id: string, text: string, top = 0): ElementInfo {
@@ -229,6 +229,74 @@ describe("a not-found error lists the near misses the agent finds", () => {
     const message = await err(tapsmithExpect(d.getByText("Hi")).not.toBeVisible({ timeout: 50 }));
     vitestExpect(message).not.toContain(LOCATOR_PICKER_HINT);
     vitestExpect(evaluateSelectors).not.toHaveBeenCalled();
+  });
+});
+
+describe("a not-found error names a system alert covering the app (iOS)", () => {
+  const OPEN_IN = {
+    requestId: "a", present: true, title: "Open in “priya-app”?", buttons: ["Cancel", "Open"],
+  } as GetSystemAlertResponse;
+  const COVERING = 'A system alert is covering the app: "Open in “priya-app”?" (buttons: Cancel, Open). ' +
+    "Locators only see the app under test, so nothing behind the alert can be found, tapped or typed into " +
+    "until it is closed: close it on the device, or tap one of its buttons with device.tapXY().";
+
+  function alertClient(alert: () => Promise<GetSystemAlertResponse>) {
+    const { client, evaluateSelectors } = missingClient();
+    const getSystemAlert = vi.fn(alert);
+    (client as unknown as { getSystemAlert: typeof getSystemAlert }).getSystemAlert = getSystemAlert;
+    return { client, evaluateSelectors, getSystemAlert };
+  }
+
+  it("first, before the near misses and the picker", async () => {
+    const { client } = alertClient(async () => OPEN_IN);
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    vitestExpect(await err(d.getByText("Sign in", { exact: true }).find())).toBe(
+      `Element getByText("Sign in", { exact: true }) was not found after waiting 50ms. ${COVERING} ${LOCATOR_PICKER_HINT}`,
+    );
+  });
+
+  it("in assertions and for a modified locator too: the alert does not depend on the locator", async () => {
+    const { client } = alertClient(async () => OPEN_IN);
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    vitestExpect(await err(tapsmithExpect(d.getByText("Go")).toBeVisible({ timeout: 50 }))).toContain(COVERING);
+    vitestExpect(await err(d.getByText("Row").first().find())).toContain(COVERING);
+  });
+
+  it("says nothing when no alert is up, or the device cannot say (an older agent)", async () => {
+    for (const alert of [
+      async () => ({ requestId: "a", present: false, title: "", buttons: [] }),
+      async () => { throw new Error("12 UNIMPLEMENTED"); },
+    ]) {
+      const { client } = alertClient(alert);
+      const d = new Device(client, { platform: "ios", timeout: 50 });
+      vitestExpect(await err(d.getByText("Nope", { exact: true }).find())).toBe(
+        `Element getByText("Nope", { exact: true }) was not found after waiting 50ms. ${LOCATOR_PICKER_HINT}`,
+      );
+    }
+  });
+
+  it("names an untitled alert, and one without buttons", async () => {
+    const { client } = alertClient(async () => ({ requestId: "a", present: true, title: "", buttons: [] }));
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    vitestExpect(await err(d.getByText("Go").find())).toContain(
+      "A system alert is covering the app: an untitled alert (no buttons).",
+    );
+  });
+
+  it("does not ask an Android device, a no-wait read, or past the locator's wait", async () => {
+    const android = alertClient(async () => OPEN_IN);
+    await err(new Device(android.client, { platform: "android", timeout: 50 }).getByText("Go").find());
+    vitestExpect(android.getSystemAlert).not.toHaveBeenCalled();
+
+    const noWait = alertClient(async () => OPEN_IN);
+    await err(new Device(noWait.client, { platform: "ios", timeout: 0 }).getByText("Go").find());
+    vitestExpect(noWait.getSystemAlert).not.toHaveBeenCalled();
+
+    const hung = alertClient(() => new Promise<GetSystemAlertResponse>(() => {}));
+    const started = Date.now();
+    vitestExpect(await err(new Device(hung.client, { platform: "ios", timeout: 50 }).getByText("Go").find()))
+      .toContain(LOCATOR_PICKER_HINT);
+    vitestExpect(Date.now() - started).toBeLessThan(1000);
   });
 });
 

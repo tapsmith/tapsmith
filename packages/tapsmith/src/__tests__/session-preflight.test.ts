@@ -2915,10 +2915,46 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
     expect(ctx.notices).toEqual([]);
   });
 
-  it('does not ask an iOS device, which has no such dialogs', async () => {
+  it('reports a leftover "Open in" prompt the iOS agent cancelled, with an info line', async () => {
     const ctx = makeContext({ config: { package: 'com.example.app', platform: 'ios' } });
-    await collectAnsweredSystemDialogs(ctx);
-    expect(ctx.client.takeSystemDialogEvents).not.toHaveBeenCalled();
+    vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({
+      requestId: '1',
+      events: [event({
+        title: 'Open in “priya-app”?',
+        owner: 'com.apple.springboard',
+        kind: 'open-in-prompt',
+        button: 'Cancel',
+      })],
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await collectAnsweredSystemDialogs(ctx);
+      const message = 'A system alert left on the device, "Open in “priya-app”?", was covering the app; '
+        + 'Tapsmith pressed Cancel before launching the app. Something outside the test opened a link to the app '
+        + '(npx expo run:ios does when it finishes).';
+      expect(ctx.notices).toEqual([{
+        kind: 'foreign-dialog',
+        title: 'Open in “priya-app”?',
+        owner: 'com.apple.springboard',
+        message,
+        timestamp: 1_793_463_831_403,
+      }]);
+      expect(stderr).toHaveBeenCalledWith(`[tapsmith] ${message}\n`);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('prints no line for an Android dialog the agent answered (its trace row reports it)', async () => {
+    const ctx = makeContext();
+    vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({ requestId: '1', events: [event()] });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await collectAnsweredSystemDialogs(ctx);
+      expect(stderr).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('asks with a short deadline, so a wedged agent cannot hold the end of the test', async () => {

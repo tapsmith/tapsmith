@@ -63,12 +63,14 @@ export interface SessionPreflightContext {
   relaunches: { count: number }
 }
 
-/** A system ANR/crash dialog the Android preflight (or, mid-test, the agent)
- *  dealt with, or a session-level finding about the app. */
+/** A system dialog the preflight or the agent dealt with (an Android ANR/crash
+ *  dialog, an iOS leftover "Open in" prompt), or a session-level finding
+ *  about the app. */
 export interface PreflightNotice {
   /** `app-dialog`: the app under test's own, or one whose owner could not be
    *  read (dismissed, session recovered; its test gets a warning).
-   *  `foreign-dialog`: another package's (dismissed; trace row only).
+   *  `foreign-dialog`: another package's, or iOS SpringBoard's (dismissed;
+   *  trace row only).
    *  `hooks-missing`: `@tapsmith/react-native` is installed but its hooks
    *  never showed up (its test gets a warning; no trace row). */
   kind: 'app-dialog' | 'foreign-dialog' | 'hooks-missing'
@@ -82,21 +84,26 @@ export interface PreflightNotice {
   timestamp: number
 }
 
+/** The iOS agent's event kind for a leftover "Open in “App”?" prompt it cancelled. */
+const OPEN_IN_PROMPT_KIND = 'open-in-prompt';
+
 /** Deadline for taking the agent's answered dialogs at the end of a test: a
  *  queue read on the device, so anything slower is a wedged agent, and the
  *  report must not hold the test's end for it. */
 const ANSWERED_DIALOGS_DEADLINE_MS = 3_000;
 
 /**
- * Take the system ANR / crash dialogs the Android agent answered on its own
- * (during a test, or a lookup or tap outside one) and add them to {@link SessionPreflightContext.notices},
- * so the runner reports them like the preflight's: a trace row for each, and a
- * warning on the test for the app under test's own ANR (a finding, not noise).
- * Best effort: an agent that cannot say (an older one, a dead session) adds
- * nothing, and the test's own outcome stands.
+ * Take the system dialogs the agent answered on its own and add them to
+ * {@link SessionPreflightContext.notices}, so the runner reports them like the
+ * preflight's: a trace row for each, and a warning on the test for the app
+ * under test's own ANR (a finding, not noise). On Android these are ANR /
+ * crash dialogs answered during a test, or a lookup or tap outside one; on iOS,
+ * a leftover "Open in “App”?" prompt the agent cancelled before launching the
+ * app, which also gets an info line, since it explains what was wrong with
+ * the device. Best effort: an agent that cannot say (an older one, a dead
+ * session) adds nothing, and the test's own outcome stands.
  */
 export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext): Promise<void> {
-  if (ctx.config.platform === 'ios') return;
   let events;
   try {
     ({ events } = await ctx.client.takeSystemDialogEvents(ANSWERED_DIALOGS_DEADLINE_MS));
@@ -107,6 +114,14 @@ export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext)
     const title = event.title || GENERIC_BLOCKING_DIALOG;
     const owner = event.owner || undefined;
     const timestamp = Number(event.timestampMs) || Date.now();
+    if (event.kind === OPEN_IN_PROMPT_KIND) {
+      const message = `A system alert left on the device, "${title}", was covering the app; `
+        + `Tapsmith pressed ${event.button} before launching the app. Something outside the test opened a link to the app `
+        + '(npx expo run:ios does when it finishes).';
+      ctx.notices.push({ kind: 'foreign-dialog', title, owner, message, timestamp });
+      process.stderr.write(`[tapsmith] ${message}\n`);
+      continue;
+    }
     ctx.notices.push(event.ownedByTarget
       ? {
         kind: 'app-dialog',

@@ -419,6 +419,27 @@ The owner comes from the dialog's window title in `dumpsys window`, as in the pr
         ⚠ The app under test (com.example.app) stopped responding and showed "Example isn't responding"; Tapsmith pressed Wait. Check the app's logs (adb logcat) for what blocked its main thread.
 ```
 
+### A system alert is covering the app (iOS)
+
+```
+Element getByRole("button", { name: "Sign in" }) was not found after waiting 5000ms. A system alert is covering the app: "Open in “my-app”?" (buttons: Cancel, Open). Locators only see the app under test, so nothing behind the alert can be found, tapped or typed into until it is closed: close it on the device, or tap one of its buttons with device.tapXY(). …
+```
+
+**What happened:** iOS draws some alerts outside your app, in SpringBoard (the home screen process): "Open in “App”?" confirmations for links, and permission prompts. Locators only see the app under test, so while such an alert is up they cannot find anything behind it, and `type()` cannot focus a field (its error names the alert the same way). The failure screenshot shows the alert.
+
+The usual one is **"Open in “App”?"**. `npx expo run:ios` ends by opening a link to your app (`<scheme>://?__expo_url=…`) with `xcrun simctl openurl`, and the simulator asks for confirmation. The alert stays up when the app is closed and relaunched, so it would cover every test. Tapsmith cancels a leftover "Open in" prompt before it launches the app, at the start of the run and at each relaunch, and says so:
+
+```
+[tapsmith] A system alert left on the device, "Open in “my-app”?", was covering the app; Tapsmith pressed Cancel before launching the app. Something outside the test opened a link to the app (npx expo run:ios does when it finishes).
+```
+
+The trace also shows it, as a `systemDialog` step on the test that was running when Tapsmith collected it. Tapsmith presses **Cancel**, not **Open**: Open would deliver a link no test asked for. Prompts that Tapsmith's own `device.openDeepLink()` raises are answered with Open, as before. Tapsmith recognises the English prompt only.
+
+**Fixes**, for any other alert that the error names:
+
+- Close it on the simulator (or device), then run again
+- If your test raises it on purpose, tap one of its buttons with `device.tapXY()` at the button's position on the failure screenshot
+
 ### "SpringBoard quit unexpectedly" (iOS simulator)
 
 Now and then, as an iOS simulator run or session ends, macOS shows a crash dialog: **SpringBoard quit unexpectedly**. The crash report (in `~/Library/Logs/DiagnosticReports/SpringBoard-*.ips`) is an `EXC_BAD_ACCESS` in `XCTAutomationSupport`, in `-[XCTAutomationSession initWithAccessibilityFramework:dataSource:]`.

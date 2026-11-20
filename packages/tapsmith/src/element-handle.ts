@@ -37,7 +37,7 @@ import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
-import { LOCATOR_PICKER_HINT, NEAR_MISS_BUDGET_MS, nearMissHint } from './locator-miss-hint.js';
+import { LOCATOR_PICKER_HINT, NEAR_MISS_BUDGET_MS, nearMissHint, systemAlertHint } from './locator-miss-hint.js';
 import { elementAccessibleName } from './accessible-name.js';
 import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 
@@ -1659,10 +1659,14 @@ export class ElementHandle {
     if (positionalDetail || (nth !== undefined && nth !== 0 && nth !== -1)) return '';
     const hints = options.hints ?? this._missHintSentence(positionalDetail);
     const budgetMs = Math.min(NEAR_MISS_BUDGET_MS, options.waitedMs);
-    const near = this._hasModifiers() || budgetMs <= 0
-      ? ''
-      : await nearMissHint(this._client, this._selector, this._client._getAbortSignal?.(), budgetMs);
-    return `. ${[near, hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
+    const signal = this._client._getAbortSignal?.();
+    // On iOS a SpringBoard alert hides the whole app from locators, so the
+    // miss may be the alert's, whatever the locator.
+    const [alert, near] = await Promise.all([
+      this._options.platform === 'ios' && budgetMs > 0 ? systemAlertHint(this._client, signal, budgetMs) : '',
+      this._hasModifiers() || budgetMs <= 0 ? '' : nearMissHint(this._client, this._selector, signal, budgetMs),
+    ]);
+    return `. ${[alert, near, hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
   }
 
   /** {@link _missHint} as a bare sentence (with its leading space), to follow one that ends in a full stop. */
