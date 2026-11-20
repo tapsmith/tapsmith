@@ -1016,13 +1016,21 @@ Plain-HTTP requests from a Flutter app on Android need `android:usesCleartextTra
 
 Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time a session selects an Android device or captures traffic. On rootable Android emulators it switches `adbd` to root and installs that CA into the device's system trust store when a test session selects the device, before the agent starts and the app launches. It does this whether or not the trace records network, since any test can start the proxy on demand. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
 
+The system trust store is the one every app trusts, release builds included. Tapsmith overlays it with a temporary copy that holds the device's own CAs plus Tapsmith's: `/system/etc/security/cacerts` up to Android 13, and the Conscrypt APEX store from Android 14. This needs no `-writable-system` emulator option. The copy lasts until the device reboots, so it stays after the session ends. An emulator that saves a quick-boot snapshot when it closes, as Android Studio's do by default, keeps it in that snapshot too. Emulators that Tapsmith launches itself don't save one. If the store cannot be overlaid, Tapsmith falls back to the device's user store and warns once per run:
+
+```
+[tapsmith] Network capture warning: Tapsmith's CA certificate went only into the device's user certificate store, because its system trust store could not be changed. …
+```
+
+Only apps whose `network_security_config.xml` trusts user CAs accept a CA in the user store. Release builds rarely do, so their HTTPS requests fail or pass through uncaptured, and routes and network waiters do not see them.
+
 When an HTTPS client on the device still refuses Tapsmith's certificate, those requests do not appear in the trace and `device.route()` cannot intercept them. Tapsmith then names the hosts in the run output, once per run, and adds the same warning to each affected test's trace as a daemon console message. Hosts excluded by `networkHosts` or `networkIgnoreHosts` are left out, and there is no warning on the iOS simulator's macOS system-proxy fallback, where other Mac processes' traffic reaches the proxy too:
 
 ```
 [tapsmith] Network capture warning: an HTTPS client on the device rejected Tapsmith's certificate for api.example.com, so those requests were not captured and device.route() could not intercept them. …
 ```
 
-If every host your app uses is rejected, the device or app does not trust the current CA. For example, the CA could only be installed in Android's user store, which apps ignore unless their `network_security_config.xml` opts in. If only some hosts are rejected, those clients probably pin their certificates. List your app's pinned hosts in `trace.networkPassthroughHosts` so they are tunnelled without capture instead of failing. On system-wide capture routes the hosts can also belong to background services, which you can drop with `trace.networkIgnoreHosts`.
+If every host your app uses is rejected, the device or app does not trust the current CA. For example, the CA could only be installed in Android's user store (the warning above says so), which apps ignore unless their `network_security_config.xml` opts in. If only some hosts are rejected, those clients probably pin their certificates. List your app's pinned hosts in `trace.networkPassthroughHosts` so they are tunnelled without capture instead of failing. On system-wide capture routes the hosts can also belong to background services, which you can drop with `trace.networkIgnoreHosts`.
 
 OS services that pin or distrust the CA are left out of the warning: with Android transparent capture (a rootable emulator), system UIDs and preinstalled system apps such as Google Play services, the Play Store and Chrome; on the iOS simulator, system daemons such as `trustd` and iCloud's. Their rejects say nothing about your app, so they only get a one-line `info` note in the trace. Background `URLSession`s and `WKWebView` traffic on the iOS simulator count as the app's. Routes that cannot tell which process opened a connection (the Android system HTTP proxy fallback, a physical iOS device) still name every rejected host.
 
