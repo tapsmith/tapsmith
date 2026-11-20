@@ -241,6 +241,8 @@ await expect(webview.getByTestId("status")).toHaveText("Ready")
 await expect(webview.getByLabel("Close dialog")).toBeVisible()
 ```
 
+Locators also find elements inside open shadow roots, as Playwright's do, so they work on Ionic, Stencil, Lit and Shoelace components: `webview.getByRole("button", { name: "Sign in" })` finds the native `<button>` inside `<ion-button>Sign in</ion-button>`. Closed shadow roots stay out of reach, and a CSS selector's combinators don't cross a shadow boundary (`webview.locator("button")` finds the button inside an `ion-button`, `webview.locator("ion-button button")` does not). See [Shadow DOM](api-reference.md#webviewgetbytexttext-options-and-friends) in the API reference.
+
 A `WebViewLocator` supports the same actions as the direct methods:
 
 ```typescript
