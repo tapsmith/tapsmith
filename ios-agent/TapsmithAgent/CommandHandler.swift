@@ -2086,6 +2086,12 @@ class CommandHandler {
             let elements = try elementFinder.findElements(selector, parentId: parentId)
             return ["elements": elements.map { $0.toDict() }]
 
+        case "hidTouchInput":
+            // Whether the daemon's HID helper can reach the touchscreen
+            // (HidTouchInput): asked once a session, before its first HID
+            // touch.
+            return HidTouchInput.answer()
+
         case "scrollStepPoints":
             // An iOS scroll step's drag (PILOT-998), before the daemon makes
             // it: its points in the app's interface space, mapped into the

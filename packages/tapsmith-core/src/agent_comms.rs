@@ -478,6 +478,12 @@ pub enum AgentCommand {
     ScrollStepPoints {
         points: Vec<[f64; 2]>,
     },
+    /// Whether the iOS simulator's HID helper can reach its touchscreen
+    /// (PILOT-1313): the agent reads the simulator's input services and
+    /// answers `{"known": true, "legacyTouchscreen": bool,
+    /// "coreDeviceTouchscreen": bool}`, or `{"known": false}`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    HidTouchInput {},
     /// The find half of an iOS scroll step (PILOT-998), after the daemon's
     /// HID drag: wait for `region` to stop changing (unless the element is
     /// still far off), find `selector`, and report whether the tree inside
@@ -726,6 +732,7 @@ impl AgentCommand {
             AgentCommand::FindElements { .. } => "findElements",
             AgentCommand::ScrollStep { .. } => "scrollStep",
             AgentCommand::ScrollStepPoints { .. } => "scrollStepPoints",
+            AgentCommand::HidTouchInput {} => "hidTouchInput",
             AgentCommand::ScrollStepFind { .. } => "scrollStepFind",
             AgentCommand::EvaluateSelectors { .. } => "evaluateSelectors",
             AgentCommand::Tap { .. } => "tap",
@@ -820,6 +827,7 @@ impl AgentCommand {
             AgentCommand::ScrollStepPoints { points } => {
                 ("scrollStepPoints", json!({ "points": points }))
             }
+            AgentCommand::HidTouchInput {} => ("hidTouchInput", json!({})),
             AgentCommand::ScrollStepFind { selector, region } => (
                 "scrollStepFind",
                 json!({"selector": selector, "region": region}),
@@ -1876,6 +1884,7 @@ mod tests {
                 region: json!({}),
             },
             AgentCommand::ScrollStepPoints { points: vec![] },
+            AgentCommand::HidTouchInput {},
             AgentCommand::Tap {
                 selector: json!({}),
                 timeout_ms: None,

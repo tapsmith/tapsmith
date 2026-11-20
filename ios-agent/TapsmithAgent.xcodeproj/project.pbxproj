@@ -47,6 +47,7 @@
 		B4C1E2250A7D4F1B9E3C6A12 /* BackButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4C1E2250A7D4F1B9E3C6A13 /* BackButton.swift */; };
 		9740000000000000000000A1 /* TapTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9740000000000000000000A2 /* TapTiming.swift */; };
 		9960000000000000000000A1 /* HidTouch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960000000000000000000A2 /* HidTouch.swift */; };
+		99D3000000000000000000C5 /* HidTouchInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D3000000000000000000C6 /* HidTouchInput.swift */; };
 		9960000000000000000000A3 /* RotationSettle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960000000000000000000A4 /* RotationSettle.swift */; };
 		9970000000000000000000A1 /* RegionScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9970000000000000000000A2 /* RegionScreenshot.swift */; };
 		9970000000000000000000A3 /* UprightScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9970000000000000000000A4 /* UprightScreenshot.swift */; };
@@ -105,6 +106,7 @@
 		F4C1E2250A7D4F1B9E3C6A13 /* BackButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackButton.swift; sourceTree = "<group>"; };
 		9740000000000000000000A2 /* TapTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapTiming.swift; sourceTree = "<group>"; };
 		9960000000000000000000A2 /* HidTouch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HidTouch.swift; sourceTree = "<group>"; };
+		99D3000000000000000000C6 /* HidTouchInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HidTouchInput.swift; sourceTree = "<group>"; };
 		9960000000000000000000A4 /* RotationSettle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationSettle.swift; sourceTree = "<group>"; };
 		9970000000000000000000A2 /* RegionScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegionScreenshot.swift; sourceTree = "<group>"; };
 		9970000000000000000000A4 /* UprightScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UprightScreenshot.swift; sourceTree = "<group>"; };
@@ -178,6 +180,7 @@
 				F4C1E2250A7D4F1B9E3C6A13 /* BackButton.swift */,
 				9740000000000000000000A2 /* TapTiming.swift */,
 				9960000000000000000000A2 /* HidTouch.swift */,
+				99D3000000000000000000C6 /* HidTouchInput.swift */,
 				9960000000000000000000A4 /* RotationSettle.swift */,
 				9970000000000000000000A2 /* RegionScreenshot.swift */,
 				9970000000000000000000A4 /* UprightScreenshot.swift */,
@@ -338,6 +341,7 @@
 				B4C1E2250A7D4F1B9E3C6A12 /* BackButton.swift in Sources */,
 				9740000000000000000000A1 /* TapTiming.swift in Sources */,
 				9960000000000000000000A1 /* HidTouch.swift in Sources */,
+				99D3000000000000000000C5 /* HidTouchInput.swift in Sources */,
 				9960000000000000000000A3 /* RotationSettle.swift in Sources */,
 				9970000000000000000000A1 /* RegionScreenshot.swift in Sources */,
 				9970000000000000000000A3 /* UprightScreenshot.swift in Sources */,

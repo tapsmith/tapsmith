@@ -302,6 +302,13 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/HidTouchInputTests/main.swift \
+  TapsmithAgent/HidTouchInput.swift \
+  -o "$OUT/hid-touch-input-tests"
+"$OUT/hid-touch-input-tests"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/DragPlanTests/main.swift \
   TapsmithAgent/DragPlan.swift \
   TapsmithAgent/HidTouch.swift \
