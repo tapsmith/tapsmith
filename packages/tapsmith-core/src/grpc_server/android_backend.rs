@@ -1776,17 +1776,18 @@ fn display_rotation(section: &str) -> Option<u8> {
 /// [`TURN_PROBE`]'s output, or [`LEGACY_TURN_PROBE`]'s where the display's
 /// section shows no rotation. The display has turned once the window manager
 /// has taken the user rotation, its current size (`cur=`) is its natural
-/// size (`init=`) turned by its rotation, and no rotation animation (a
-/// `ScreenRotationAnimation`, or with shell transitions an
+/// size (`base=`, else `init=`) turned by its rotation, and no rotation
+/// animation (a `ScreenRotationAnimation`, or with shell transitions an
 /// `AsyncRotationController`) is running. Without a rotation in the output,
 /// the current size alone tells whether it turned.
 fn turn_state(output: &str, wanted: u8) -> TurnState {
     let Some(section) = default_display_section(output) else {
         return TurnState::Unknown;
     };
-    let (Some(natural), Some(current)) =
-        (size_field(section, "init="), size_field(section, "cur="))
-    else {
+    // `base=` (shown only when a `wm size` override differs from `init=`)
+    // is the size at rotation 0 that `cur=` turns from.
+    let natural = size_field(section, "base=").or_else(|| size_field(section, "init="));
+    let (Some(natural), Some(current)) = (natural, size_field(section, "cur=")) else {
         return TurnState::Unknown;
     };
     let rotation = display_rotation(section);
@@ -2037,6 +2038,32 @@ mod tests {
             turn_state(held, 1),
             TurnState::Settled {
                 turned: false,
+                setting_seen: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_size_override_of_the_other_shape_is_the_natural_size() {
+        // `wm size 2400x1080` on a portrait phone: `base=` (printed only when
+        // it differs from `init=`) is the size at rotation 0.
+        let overridden = "  Display: mDisplayId=0\n    init=1080x2400 420dpi base=2400x1080 420dpi cur=2400x1080 app=2400x1080\n  DisplayRotation\n    mRotation=0 mDeferredRotationPauseCount=0\n    mUserRotation=ROTATION_0\n";
+        assert_eq!(
+            turn_state(overridden, 0),
+            TurnState::Settled {
+                turned: true,
+                setting_seen: true
+            }
+        );
+        let turning = overridden
+            .replace("mUserRotation=ROTATION_0", "mUserRotation=ROTATION_90")
+            .replace("mRotation=0", "mRotation=1");
+        assert_eq!(turn_state(&turning, 1), TurnState::Turning);
+        let turned = turning.replace("cur=2400x1080", "cur=1080x2400");
+        assert_eq!(
+            turn_state(&turned, 1),
+            TurnState::Settled {
+                turned: true,
                 setting_seen: true
             }
         );
