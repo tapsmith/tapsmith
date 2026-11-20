@@ -2392,6 +2392,18 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       console.error(red(`No tests found: ${marks} ${listed} ${focusFiles.length === 1 ? 'selects' : 'select'} no test, and a run with a .only runs nothing else.`));
       process.exit(1);
     }
+    // Said out loud: with no forbidOnly yet, a .only left in by mistake would
+    // otherwise pass a CI run that ran one file.
+    const suiteFiles = new Set(unshardedFiles
+      .filter(({ project }) => !setupProjects.has(project.name))
+      .flatMap(({ files }) => files));
+    const leftOut = suiteFiles.size - focusFiles.length;
+    if (leftOut > 0) {
+      const notice = `Running only the tests marked .only, in ${focusFiles.length} of ${suiteFiles.size} test files: `
+        + `the other ${leftOut === 1 ? 'file does' : `${leftOut} files do`} not run.`;
+      console.error(yellow(`⚠ ${notice}`));
+      if (process.env.GITHUB_ACTIONS) console.log(`::warning title=.only::${notice}`);
+    }
     testFiles = focusProjects(projects, focusedFile);
     if (config.shard) {
       const { current, total } = config.shard;

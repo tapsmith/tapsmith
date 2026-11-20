@@ -259,6 +259,8 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     focusLogin();
     const { output, reachedDevice } = run('--workers', '2');
     expect(output).toContain('Config: 1 worker | 1 test file');
+    // Said out loud, so a .only left in by mistake can't pass a run unnoticed.
+    expect(output).toContain('Running only the tests marked .only, in 1 of 2 test files: the other file does not run.');
     expect(reachedDevice).toBe(true);
   });
 
@@ -270,6 +272,7 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     expect(first.reachedDevice).toBe(true);
     fs.rmSync(marker, { force: true });
     const second = run('--shard=2/2');
+    expect(second.output).toContain('Running only the tests marked .only, in 1 of 2 test files: the other file does not run.');
     expect(second.output).toContain('Shard 2/2: no test file in this shard holds a focused (.only) test.');
     expect(second.status).toBe(0);
     expect(second.reachedDevice).toBe(false);

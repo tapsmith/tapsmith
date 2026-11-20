@@ -1841,7 +1841,7 @@ test("user can log in", async ({ device }) => {
 
 Run only this test, and the other tests and describes marked with `.only`. As in Playwright, focus applies to the whole run:
 
-- **Across files.** When any test file of a `tapsmith test` run holds a `.only`, the files that hold none don't run at all, with or without `--workers` and `--shard` (every shard decides from the whole suite, and a shard left with no focused file exits 0). A `.only` in a setup project (one another project lists in `dependencies`) focuses only its own file, and setup projects still run whole.
+- **Across files.** When any test file of a `tapsmith test` run holds a `.only`, the files that hold none don't run at all, with or without `--workers` and `--shard` (every shard decides from the whole suite, and a shard left with no focused file exits 0). The run prints a warning saying how many files it leaves out (a GitHub Actions annotation on GitHub), so a `.only` left in by mistake is visible in CI. A `.only` in a setup project (one another project lists in `dependencies`) focuses only its own file, and setup projects still run whole.
 - **Within a file.** A `.only` inside a describe also leaves out the tests and describes beside that describe. The tests it leaves out are reported as skipped.
 
 A `--grep` that matches only tests a `.only` leaves out fails the run with "No tests found", and so do `.only` marks that select no test at all (an empty `describe.only`). UI mode and watch mode (and the MCP server's runs) load one file at a time, so there each file applies only its own `.only`.
