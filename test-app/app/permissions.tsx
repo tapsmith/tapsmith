@@ -16,6 +16,16 @@ export default function PermissionsScreen() {
     }
   }
 
+  // Reads the camera permission without prompting.
+  const checkCamera = async () => {
+    try {
+      const { status } = await Camera.getCameraPermissionsAsync()
+      setCameraStatus(status)
+    } catch {
+      setCameraStatus("error")
+    }
+  }
+
   const requestLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync()
@@ -61,6 +71,17 @@ export default function PermissionsScreen() {
           <Text style={styles.buttonText}>Request</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Outside the card: an accessible card hides its children on iOS. */}
+      <TouchableOpacity
+        style={[styles.button, styles.checkButton]}
+        onPress={checkCamera}
+        accessibilityRole="button"
+        accessibilityLabel="Check camera permission"
+        testID="check-camera"
+      >
+        <Text style={styles.buttonText}>Check camera permission</Text>
+      </TouchableOpacity>
 
       <View
         style={styles.permissionCard}
@@ -134,6 +155,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#999",
     marginTop: 4,
+  },
+  checkButton: {
+    alignItems: "center",
+    marginBottom: 12,
   },
   statusGranted: {
     color: "#34C759",
