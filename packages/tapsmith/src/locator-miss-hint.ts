@@ -27,6 +27,10 @@ export const LOCATOR_PICKER_HINT =
 /** How long the near-miss check may add to a failure, past the action's own timeout. */
 export const NEAR_MISS_BUDGET_MS = 2000;
 
+/** How long the system-alert check may add to a failure (iOS): one
+ *  SpringBoard query, tens of milliseconds unless the simulator is loaded. */
+export const SYSTEM_ALERT_BUDGET_MS = 1000;
+
 /** Near misses listed at most. */
 const MAX_NEAR_MISSES = 3;
 

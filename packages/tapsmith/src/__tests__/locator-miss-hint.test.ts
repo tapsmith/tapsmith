@@ -283,6 +283,31 @@ describe("a not-found error names a system alert covering the app (iOS)", () => 
     );
   });
 
+  it("gives the near-miss check its own window: the device answers one agent call at a time", async () => {
+    // The daemon and the agent serialise agent calls, so two sent at once
+    // share one window only on paper. Model that: each call waits for the last.
+    let queue: Promise<unknown> = Promise.resolve();
+    const serial = <T>(ms: number, value: T) => {
+      const next = queue.then(() => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms)));
+      queue = next;
+      return next;
+    };
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: false, errorMessage: "" })),
+      findElements: vi.fn(async () => ({ requestId: "1", elements: [] as ElementInfo[], errorMessage: "" })),
+      getSystemAlert: vi.fn(() => serial(300, { requestId: "a", present: false, title: "", buttons: [] })),
+      evaluateSelectors: vi.fn((selectors: Selector[]) => serial(300, {
+        requestId: "e",
+        errorMessage: "",
+        results: selectors.map((s) => ({ elements: s.kind.type === "textContains" ? [element("t", "Sign in")] : [], errorMessage: "" })),
+      })),
+    } as unknown as TapsmithGrpcClient;
+    const d = new Device(client, { platform: "ios", timeout: 500 });
+    vitestExpect(await err(d.getByRole("button", { name: "Sign in" }).find())).toContain(
+      'Nothing matches it, but on screen now this locator matches: getByText("Sign in") (1 element).',
+    );
+  });
+
   it("does not ask an Android device, a no-wait read, or past the locator's wait", async () => {
     const android = alertClient(async () => OPEN_IN);
     await err(new Device(android.client, { platform: "android", timeout: 50 }).getByText("Go").find());

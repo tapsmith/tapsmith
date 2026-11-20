@@ -37,7 +37,7 @@ import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
-import { LOCATOR_PICKER_HINT, NEAR_MISS_BUDGET_MS, nearMissHint, systemAlertHint } from './locator-miss-hint.js';
+import { LOCATOR_PICKER_HINT, NEAR_MISS_BUDGET_MS, nearMissHint, SYSTEM_ALERT_BUDGET_MS, systemAlertHint } from './locator-miss-hint.js';
 import { elementAccessibleName } from './accessible-name.js';
 import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 
@@ -1661,11 +1661,15 @@ export class ElementHandle {
     const budgetMs = Math.min(NEAR_MISS_BUDGET_MS, options.waitedMs);
     const signal = this._client._getAbortSignal?.();
     // On iOS a SpringBoard alert hides the whole app from locators, so the
-    // miss may be the alert's, whatever the locator.
-    const [alert, near] = await Promise.all([
-      this._options.platform === 'ios' && budgetMs > 0 ? systemAlertHint(this._client, signal, budgetMs) : '',
-      this._hasModifiers() || budgetMs <= 0 ? '' : nearMissHint(this._client, this._selector, signal, budgetMs),
-    ]);
+    // miss may be the alert's, whatever the locator. One call after the
+    // other, each in its own window: the daemon and the agent answer one
+    // agent call at a time, so two sent together would share one window.
+    const alert = this._options.platform === 'ios' && budgetMs > 0
+      ? await systemAlertHint(this._client, signal, Math.min(SYSTEM_ALERT_BUDGET_MS, budgetMs))
+      : '';
+    const near = this._hasModifiers() || budgetMs <= 0
+      ? ''
+      : await nearMissHint(this._client, this._selector, signal, budgetMs);
     return `. ${[alert, near, hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
   }
 
