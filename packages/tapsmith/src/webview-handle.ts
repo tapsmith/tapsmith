@@ -13,6 +13,7 @@ import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 import type { TraceCollector } from './trace/trace-collector.js';
 import { extractStack } from './trace/trace-collector.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
+import { deepQueryAllJs, deepQueryJs, withDomHelpers } from './webview-dom-js.js';
 
 const WEB_SOCKET_CONNECT_TIMEOUT_MS = 5_000;
 const WEBVIEW_CLOSE_RPC_TIMEOUT_MS = 2_000;
@@ -38,6 +39,15 @@ const ROLE_CSS_MAP: Record<string, string[]> = {
   image: ['img', '[role="img"]'],
 };
 
+/**
+ * Roles whose accessible name comes from their content. The DOM dump gives
+ * such an element its flattened text as its name when that text is not its
+ * own leaf text, so the Playground suggests the name getByRole matches.
+ */
+const NAME_FROM_CONTENT_SELECTOR = ['button', 'link', 'heading', 'tab', 'checkbox', 'radio', 'switch']
+  .flatMap((role) => ROLE_CSS_MAP[role]!)
+  .join(', ');
+
 // ─── Strict mode (PILOT-227) ───
 
 /** @internal — DOM-derived description of one matched element. */
@@ -50,6 +60,9 @@ interface WebViewDomDescription {
   text: string
   /** No child elements: the only kind of element webview.getByText finds. */
   leaf: boolean
+  /** Inside a shadow root, where an id or test id need only be unique within
+   * that one tree, so neither picks this element out of the whole page. */
+  inShadow: boolean
 }
 
 /** @internal — Single-tick snapshot of a locator's full match set. */
@@ -74,8 +87,8 @@ function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string
   if (!d) return undefined;
   // Copy-paste-safe string literals, like the native suggestions (PILOT-659).
   const lit = (v: string): string => `"${escapeJsString(v)}"`;
-  if (d.testId) return `webview.getByTestId(${lit(d.testId)})`;
-  if (d.id) return `webview.locator(${lit(cssIdSelector(d.id))})`;
+  if (d.testId && !d.inShadow) return `webview.getByTestId(${lit(d.testId)})`;
+  if (d.id && !d.inShadow) return `webview.locator(${lit(cssIdSelector(d.id))})`;
   if (d.ariaLabel) return `webview.getByLabel(${lit(d.ariaLabel)})`;
   // getByText finds leaf elements only: a parent's text would resolve to the
   // child holding it, or to nothing when it spans several (PILOT-666).
@@ -236,7 +249,7 @@ export class WebViewHandle {
   /** @internal — Get the screen-space bounds of an element inside the WebView. */
   async _getElementBounds(selectorOrFinderJs: string, finderJs?: string): Promise<{ left: number; top: number; right: number; bottom: number } | undefined> {
     try {
-      const finder = finderJs ?? `document.querySelector(${JSON.stringify(selectorOrFinderJs)})`;
+      const finder = finderJs ?? deepQueryJs(selectorOrFinderJs);
       // On Android, XCUITest returns bounds in px so we scale by devicePixelRatio.
       // On iOS, XCUITest returns bounds in points (= CSS px), so no scaling needed.
       const useDpr = this._platform === 'android';
@@ -589,7 +602,7 @@ export class WebViewHandle {
       let found: unknown;
       try {
         found = await this._evaluate(
-          `document.querySelector(${JSON.stringify(selector)}) !== null`,
+          `(${deepQueryJs(selector)}) !== null`,
           remaining,
         );
       } catch (err) {
@@ -656,7 +669,8 @@ export class WebViewHandle {
           ariaLabel: el.getAttribute('aria-label') || '',
           role: el.getAttribute('role') || '',
           text: (el.textContent || '').trim().slice(0, 80),
-          leaf: el.children.length === 0,
+          leaf: el.firstElementChild === null,
+          inShadow: el.getRootNode() !== document,
         })),
         target: ${targetJs},
       };
@@ -857,7 +871,7 @@ export class WebViewHandle {
       await this._evaluate(`(() => {
         const el = (${loc._finderJs});
         el.value = ${escaped};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       })()`, remainingUntil(deadline));
     }, loc._finderJs, timeoutMs);
@@ -947,27 +961,66 @@ export class WebViewHandle {
       const useDpr = this._platform === 'android';
 
       // Evaluate JS to walk the DOM and produce a hierarchy
-      const domData = await this._evaluate(`(() => {
+      const domData = await this._evaluate(withDomHelpers(`(() => {
         const dpr = ${useDpr ? 'window.devicePixelRatio || 1' : '1'};
+        const elementsOf = (parent) => {
+          const out = [];
+          // Not parent.children, which Stencil's scoped components patch.
+          for (let c = parent.firstElementChild; c; c = c.nextElementSibling) out.push(c);
+          return out;
+        };
+        // The flattened tree, as the page renders it: a shadow host's children
+        // are its shadow root's, and a slot's are the elements assigned to it
+        // (or its fallback content), so slotted content nests where it shows.
+        const kidsOf = (el) => {
+          if (el.shadowRoot) return elementsOf(el.shadowRoot);
+          if (el.localName === 'slot' && el.getRootNode().host && typeof el.assignedElements === 'function') {
+            const assigned = el.assignedElements({ flatten: true });
+            return assigned.length ? assigned : elementsOf(el);
+          }
+          return elementsOf(el);
+        };
+        // The nodes for el: itself, or, when it has no box of its own (a
+        // <slot> or other display: contents element), its children's nodes in
+        // its place, so a slot's content can still be picked.
+        // depth counts the nodes emitted above el, not the shadow roots and
+        // box-less elements walked through, which component trees are full of.
         function walk(el, depth) {
-          if (depth > 20) return null;
+          if (depth > 40) return [];
           const tag = el.tagName?.toLowerCase() || '';
-          if (!tag || tag === 'script' || tag === 'style' || tag === 'head') return null;
+          if (!tag || tag === 'script' || tag === 'style' || tag === 'head') return [];
+          const kids = kidsOf(el);
           const r = el.getBoundingClientRect();
-          if (r.width === 0 && r.height === 0) return null;
+          if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth));
           const node = {
             tag: tag,
             id: el.id || '',
             cls: el.className || '',
-            text: el.children.length === 0 ? (el.textContent || '').trim().slice(0, 200) : '',
-            placeholder: el.placeholder || '',
+            text: __ts.isLeaf(el) ? (el.textContent || '').trim().slice(0, 200) : '',
+            // In a shadow root, where an id need only be unique per tree.
+            shadow: el.getRootNode() !== document,
+            // Hidden from assistive technology, which getByRole skips.
+            a11yHidden: __ts.a11yHidden(el),
+            // The attribute, which getByPlaceholder matches: a component's
+            // host carries it without the input element's property.
+            placeholder: el.getAttribute('placeholder') || '',
             role: el.getAttribute('role') || '',
             ariaLabel: (() => {
-              var lblBy = el.getAttribute('aria-labelledby');
-              if (lblBy) { var ref = document.getElementById(lblBy); if (ref) return ref.textContent?.trim() || ''; }
+              const by = __ts.labelledBy(el);
+              if (by !== null) return by;
               if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
-              if (el.id) { var lbl = document.querySelector('label[for=' + JSON.stringify(el.id) + ']'); if (lbl) return lbl.textContent?.trim() || ''; }
-              if (el.closest && el.closest('label')) { var wrapper = el.closest('label'); var clone = wrapper.cloneNode(true); clone.querySelectorAll('input,select,textarea').forEach(function(c){c.remove();}); var t = clone.textContent?.trim(); if (t) return t; }
+              const lbl = __ts.labelFor(el);
+              if (lbl) return __ts.flatText(lbl).trim();
+              const wrapped = __ts.wrappingLabel(el);
+              if (wrapped) return wrapped;
+              // A control named by its content that holds more than text
+              // (the <button> inside an ion-button holds a <slot>): the name
+              // getByRole matches it by, read through slots and shadow roots.
+              // The match is exact, so a name too long to keep whole is left out.
+              if ((!__ts.isLeaf(el) || el.shadowRoot) && el.matches(${JSON.stringify(NAME_FROM_CONTENT_SELECTOR)})) {
+                const name = __ts.name(el);
+                return name.length <= 200 ? name : '';
+              }
               return '';
             })(),
             // The attribute alone: what webview.getByLabel matches (PILOT-666).
@@ -983,14 +1036,11 @@ export class WebViewHandle {
             },
             children: [],
           };
-          for (const child of el.children) {
-            const c = walk(child, depth + 1);
-            if (c) node.children.push(c);
-          }
-          return node;
+          for (const child of kids) node.children.push(...walk(child, depth + 1));
+          return [node];
         }
-        return walk(document.body, 0);
-      })()`, WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS) as DomNode | null;
+        return walk(document.body, 0)[0] ?? null;
+      })()`), WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS) as DomNode | null;
 
       if (!domData) return undefined;
 
@@ -1015,6 +1065,8 @@ export class WebViewHandle {
         if (node.testId) attrs.push(`webview-testid="${escapeXmlAttr(node.testId)}"`);
         if (node.type) attrs.push(`webview-type="${escapeXmlAttr(node.type)}"`);
         if (node.href) attrs.push(`webview-href="${escapeXmlAttr(node.href)}"`);
+        if (node.shadow) attrs.push('webview-shadow="true"');
+        if (node.a11yHidden) attrs.push('webview-a11y-hidden="true"');
         attrs.push('webview="true"');
 
         if (node.children.length === 0) {
@@ -1048,7 +1100,7 @@ export class WebViewHandle {
     return this._traced('click', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).click()`,
+        `(${deepQueryJs(selector)}).click()`,
         remainingUntil(deadline),
       );
     }, undefined, timeout);
@@ -1066,9 +1118,9 @@ export class WebViewHandle {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const escaped = JSON.stringify(value);
       await this._evaluate(`(() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
+        const el = (${deepQueryJs(selector)});
         el.value = ${escaped};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       })()`, remainingUntil(deadline));
     }, undefined, timeout);
@@ -1085,7 +1137,7 @@ export class WebViewHandle {
     return this._traced('textContent', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).textContent`,
+        `(${deepQueryJs(selector)}).textContent`,
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
@@ -1103,7 +1155,7 @@ export class WebViewHandle {
     return this._traced('innerHTML', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).innerHTML`,
+        `(${deepQueryJs(selector)}).innerHTML`,
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
@@ -1121,7 +1173,7 @@ export class WebViewHandle {
     return this._traced('getAttribute', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).getAttribute(${JSON.stringify(name)})`,
+        `(${deepQueryJs(selector)}).getAttribute(${JSON.stringify(name)})`,
         remainingUntil(deadline),
       );
       return result as string | null;
@@ -1139,7 +1191,7 @@ export class WebViewHandle {
     return this._traced('inputValue', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).value`,
+        `(${deepQueryJs(selector)}).value`,
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
@@ -1172,7 +1224,7 @@ export class WebViewHandle {
   /** Single DOM read behind the string-selector visibility probes. */
   private async _isVisibleSelector(selector: string): Promise<boolean> {
     const result = await this._evaluate(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
+      const el = (${deepQueryJs(selector)});
       if (!el) return false;
       if (el.getClientRects().length === 0) return false;
       const style = window.getComputedStyle(el);
@@ -1217,9 +1269,11 @@ export class WebViewHandle {
   /** Locate an element by its visible text content. Substring match by default. */
   getByText(text: string, options?: { exact?: boolean }): WebViewLocator {
     const escaped = JSON.stringify(text);
-    const finderAllJs = options?.exact
-      ? `(() => { const out = []; for (const el of document.querySelectorAll('*')) { if (el.children.length === 0 && el.textContent?.trim() === ${escaped}) out.push(el); } return out; })()`
-      : `(() => { const out = []; for (const el of document.querySelectorAll('*')) { if (el.children.length === 0 && el.textContent?.includes(${escaped})) out.push(el); } return out; })()`;
+    // Leaf elements only, over the document and its open shadow roots;
+    // never a <script> or <style> (Stencil puts one in every shadow root).
+    const test = options?.exact ? `(el.textContent ?? '').trim() === ${escaped}` : `(el.textContent ?? '').includes(${escaped})`;
+    const finderAllJs = withDomHelpers(
+      `__ts.all(document).filter((el) => __ts.isLeaf(el) && !__ts.skipText(el) && ${test})`);
     return new WebViewLocator(this, `text=${text}`, this._timeoutMs, finderAllJs);
   }
 
@@ -1234,9 +1288,11 @@ export class WebViewHandle {
       // interpolating the role into a CSS selector, where special
       // characters could break the query.
       const roleEscaped = JSON.stringify(role);
-      const finderAllJs = hasName
-        ? `(() => { const out = []; for (const el of document.querySelectorAll('[role]')) { if (el.getAttribute('role') === ${roleEscaped} && (el.getAttribute('aria-label') === ${JSON.stringify(options!.name)} || el.textContent?.trim() === ${JSON.stringify(options!.name)})) out.push(el); } return out; })()`
-        : `(() => { const out = []; for (const el of document.querySelectorAll('[role]')) { if (el.getAttribute('role') === ${roleEscaped}) out.push(el); } return out; })()`;
+      const nameTest = hasName
+        ? ` && (__ts.name(el) === ${JSON.stringify(options!.name)} || __ts.flatText(el).trim() === ${JSON.stringify(options!.name)})`
+        : '';
+      const finderAllJs = withDomHelpers(
+        `__ts.queryAll('[role]').filter((el) => el.getAttribute('role') === ${roleEscaped}${nameTest} && !__ts.a11yHidden(el))`);
       return new WebViewLocator(this, `role=${role}${displaySuffix}`, this._timeoutMs, finderAllJs);
     }
 
@@ -1245,50 +1301,36 @@ export class WebViewHandle {
 
     if (!hasName) {
       return new WebViewLocator(this, displayName, this._timeoutMs,
-        `Array.from(document.querySelectorAll(${JSON.stringify(selectorList)}))`);
+        withDomHelpers(`__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => !__ts.a11yHidden(el))`));
     }
 
     // Non-null: hasName guarantees options.name is set (TS can't narrow through the const).
     const nameEscaped = JSON.stringify(options!.name);
-    // W3C Accessible Name computation (matches Playwright's getByRole):
-    // 1. aria-labelledby  2. aria-label  3. <label> (for or wrapping)
-    // 4. title  5. placeholder  6. textContent (buttons/links only)
-    const finderAllJs = `(() => {
-      function accessibleName(el) {
-        var lblBy = el.getAttribute('aria-labelledby');
-        if (lblBy) { var ref = document.getElementById(lblBy); if (ref) return ref.textContent?.trim() || ''; }
-        if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
-        if (el.id) { var lbl = document.querySelector('label[for=' + JSON.stringify(el.id) + ']'); if (lbl) return lbl.textContent?.trim() || ''; }
-        if (el.closest('label')) { var wrapper = el.closest('label'); var clone = wrapper.cloneNode(true); clone.querySelectorAll('input,select,textarea').forEach(function(c){c.remove();}); var t = clone.textContent?.trim(); if (t) return t; }
-        if (el.getAttribute('title')) return el.getAttribute('title');
-        if (el.getAttribute('placeholder')) return el.getAttribute('placeholder');
-        return el.textContent?.trim() || '';
-      }
-      const out = [];
-      for (const el of document.querySelectorAll(${JSON.stringify(selectorList)})) {
-        if (accessibleName(el) === ${nameEscaped}) out.push(el);
-      }
-      return out;
-    })()`;
+    // Accessible name (webview-dom-js.ts `name`), each id and label looked
+    // up in the element's own tree: 1. aria-labelledby 2. aria-label
+    // 3. <label> (for or wrapping) 4. title 5. placeholder 6. text content,
+    // flattened through slots and shadow roots.
+    const finderAllJs = withDomHelpers(
+      `__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => __ts.name(el) === ${nameEscaped} && !__ts.a11yHidden(el))`);
     return new WebViewLocator(this, displayName, this._timeoutMs, finderAllJs);
   }
 
   /** Locate an element by its placeholder text. */
   getByPlaceholder(text: string): WebViewLocator {
     return new WebViewLocator(this, `placeholder=${text}`, this._timeoutMs,
-      `Array.from(document.querySelectorAll('[placeholder=' + JSON.stringify(${JSON.stringify(text)}) + ']'))`);
+      deepQueryAllJs(`[placeholder=${JSON.stringify(text)}]`));
   }
 
   /** Locate an element by its `data-testid` attribute. */
   getByTestId(testId: string): WebViewLocator {
     return new WebViewLocator(this, `testId=${testId}`, this._timeoutMs,
-      `Array.from(document.querySelectorAll('[data-testid=' + JSON.stringify(${JSON.stringify(testId)}) + ']'))`);
+      deepQueryAllJs(`[data-testid=${JSON.stringify(testId)}]`));
   }
 
   /** Locate an element by its `aria-label`. */
   getByLabel(text: string): WebViewLocator {
     return new WebViewLocator(this, `label=${text}`, this._timeoutMs,
-      `Array.from(document.querySelectorAll('[aria-label=' + JSON.stringify(${JSON.stringify(text)}) + ']'))`);
+      deepQueryAllJs(`[aria-label=${JSON.stringify(text)}]`));
   }
 
   /** Locate an element by CSS selector. */
@@ -1350,6 +1392,8 @@ interface DomNode {
   testId: string
   type: string
   href: string
+  shadow?: boolean
+  a11yHidden?: boolean
   bounds: { left: number; top: number; right: number; bottom: number }
   children: DomNode[]
 }

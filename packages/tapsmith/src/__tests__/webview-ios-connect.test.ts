@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   }) as () => unknown,
   findSocket: ((_udid: string) => '/tmp/webinspectord_sim.socket') as (udid: string) => string | null,
   constructed: [] as unknown[],
+  appPids: (async () => []) as (udid: string, bundleId: string, budgetMs: number) => Promise<number[]>,
 }));
 
 vi.mock('../webkit-inspector.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../webkit-inspector.js', () => ({
     return inspector;
   },
   findSimulatorInspectorSocket: (udid: string) => h.findSocket(udid),
+  findSimulatorAppPids: (udid: string, bundleId: string, budgetMs: number) => h.appPids(udid, bundleId, budgetMs),
 }));
 
 // ─── Mock helpers ───
@@ -101,6 +103,7 @@ function makeIosDevice(timeout: number): Device {
 beforeEach(() => {
   h.constructed = [];
   h.findSocket = () => '/tmp/webinspectord_sim.socket';
+  h.appPids = async () => [];
   h.nextInspector = () => {
     throw new Error('nextInspector not set by test');
   };
@@ -117,7 +120,7 @@ describe('Device.webview() on iOS — bounded connection setup (PILOT-288)', () 
 
     const device = makeIosDevice(300);
     await expect(device.webview()).rejects.toThrow(
-      /WebView connection setup timed out during connecting to the WebKit Inspector service/,
+      /WebView connection setup timed out after \d+ms while connecting to the WebKit Inspector service/,
     );
     // The hung connection attempt must be torn down, not leaked.
     expect(inspector.close).toHaveBeenCalled();
@@ -131,7 +134,7 @@ describe('Device.webview() on iOS — bounded connection setup (PILOT-288)', () 
 
     const device = makeIosDevice(300);
     await expect(device.webview()).rejects.toThrow(
-      /WebView connection setup timed out during listing WebView targets/,
+      /WebView connection setup timed out after \d+ms while listing WebView targets/,
     );
     expect(inspector.close).toHaveBeenCalled();
   });
@@ -229,7 +232,7 @@ describe('Device.webview() on iOS — bounded connection setup (PILOT-288)', () 
     // phase instead, failing the match.
     const device = makeIosDevice(2_000);
     await expect(device.webview()).rejects.toThrow(
-      /WebView connection setup timed out during waiting for an inspectable WebView page.*No inspectable WebView pages found/,
+      /WebView connection setup timed out after \d+ms while waiting for an inspectable WebView page: No inspectable WebView pages found/,
     );
     expect(inspector.listTargets.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
@@ -452,5 +455,118 @@ describe('Device._webviewOfApp() on iOS — the current app only (MCP tools)', (
     await device._webviewOfApp('dev.tapsmith.testapp');
     expect(inspector.connectToPage).toHaveBeenCalledWith('PID:100', 1);
     expect(inspector.connectToPage).not.toHaveBeenCalledWith('PID:300', 9);
+  });
+});
+
+// An app built with CODE_SIGNING_ALLOWED=NO has no signed bundle identifier:
+// webinspectord lists it as "process-<executable>" (PILOT-1330).
+describe('Device.webview() on iOS — unsigned simulator builds', () => {
+  const unsigned = (pid: number, pages = [page(1)]): MockTarget => ({
+    appId: `PID:${pid}`, bundleId: 'process-App', name: 'App', pages,
+  });
+  const safari: MockTarget = { appId: 'PID:300', bundleId: 'com.apple.mobilesafari', name: 'Safari', pages: [page(9)] };
+
+  it('matches the app by its process id when the inspector lists no bundle id', async () => {
+    const lookups: string[] = [];
+    h.appPids = async (_udid, bundleId) => {
+      lookups.push(bundleId);
+      return [100];
+    };
+    const inspector = makeMockInspector({ listTargets: vi.fn(async (): Promise<MockTarget[]> => [safari, unsigned(100)]) });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(5_000);
+    await device._webviewOfApp('dev.tapsmith.testapp');
+    expect(lookups).toContain('dev.tapsmith.testapp');
+    expect(inspector.connectToPage).toHaveBeenCalledWith('PID:100', 1);
+    expect(inspector.connectToPage).not.toHaveBeenCalledWith('PID:300', 9);
+  });
+
+  it('prefers the bundle-less app with the launched pid over another app in device.webview()', async () => {
+    h.appPids = async () => [100];
+    // Safari has the newer pid, so the any-app fallback would pick it first.
+    const inspector = makeMockInspector({
+      listTargets: vi.fn(async (): Promise<MockTarget[]> => [unsigned(100), { ...safari, appId: 'PID:900' }]),
+    });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(5_000);
+    await device.webview();
+    expect(inspector.connectToPage).toHaveBeenCalledWith('PID:100', 1);
+    expect(inspector.connectToPage).not.toHaveBeenCalledWith('PID:900', 9);
+  });
+
+  it('ignores a stale entry of a previous launch whose pid is gone', async () => {
+    h.appPids = async () => [200];
+    const inspector = makeMockInspector({
+      listTargets: vi.fn(async (): Promise<MockTarget[]> => [unsigned(100, [page(1)]), unsigned(200, [page(2)])]),
+    });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(5_000);
+    await device._webviewOfApp('dev.tapsmith.testapp');
+    expect(inspector.connectToPage).toHaveBeenCalledWith('PID:200', 2);
+    expect(inspector.connectToPage).not.toHaveBeenCalledWith('PID:100', 1);
+  });
+
+  it('does not look up process ids when the bundle id matches', async () => {
+    let lookups = 0;
+    h.appPids = async () => {
+      lookups++;
+      return [];
+    };
+    const own: MockTarget = { appId: 'PID:100', bundleId: 'dev.tapsmith.testapp', name: 'TestApp', pages: [page(1)] };
+    const inspector = makeMockInspector({ listTargets: vi.fn(async (): Promise<MockTarget[]> => [own]) });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(5_000);
+    await device.webview();
+    expect(lookups).toBe(0);
+  });
+
+  it('says the build looks unsigned when a bundle-less app has a page it could not match', async () => {
+    h.appPids = async () => [];
+    const inspector = makeMockInspector({ listTargets: vi.fn(async (): Promise<MockTarget[]> => [unsigned(100)]) });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(1_000);
+    const err = await device._webviewOfApp('dev.tapsmith.testapp').catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toMatch(/no bundle ID/);
+    expect(message).toMatch(/pid 100/);
+    expect(message).toMatch(/CODE_SIGNING_ALLOWED=NO/);
+    // The page IS inspectable: no advice to make it so.
+    expect(message).not.toMatch(/isInspectable|webviewDebuggingEnabled/);
+  });
+});
+
+describe('Device.webview() on iOS — timeout error', () => {
+  it('names one budget, keeps the last real error and lists the apps seen', async () => {
+    let calls = 0;
+    const inspector = makeMockInspector({
+      listTargets: vi.fn(async (): Promise<MockTarget[]> => {
+        calls++;
+        // Listings answer at first, then one hangs past the deadline: the
+        // attempt cut short by the overall budget must not replace the
+        // round's real finding with a second, shorter timeout.
+        if (calls > 2) return new Promise<never>(() => {});
+        return [{ appId: 'PID:300', bundleId: 'com.example.other', name: 'Other', pages: [page(9)] }];
+      }),
+    });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(2_000);
+    const err = await device._webviewOfApp('dev.tapsmith.testapp').catch((e: Error) => e);
+    const message = (err as Error).message;
+    expect(message.match(/\d+ms/g)).toEqual(['2000ms']);
+    expect(message).toMatch(/No inspectable WebView page in dev\.tapsmith\.testapp/);
+    expect(message).toMatch(/com\.example\.other \(pid 300, 1 page\)/);
+  });
+
+  it('gives a framework-neutral hint when no inspectable page appears at all', async () => {
+    const inspector = makeMockInspector({ listTargets: vi.fn(async (): Promise<MockTarget[]> => []) });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(1_000);
+    const err = await device.webview().catch((e: Error) => e);
+    const message = (err as Error).message;
+    expect(message).toMatch(/isInspectable/);
+    expect(message).toMatch(/webviewDebuggingEnabled/);
+    expect(message).toMatch(/Capacitor/);
+    expect(message).not.toMatch(/setWebContentsDebuggingEnabled/);
   });
 });

@@ -6,7 +6,7 @@
  */
 
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
-import { getNodeBounds, hitTest } from './hierarchy-utils.js';
+import { getNodeBounds, getNodeRole, hitTest } from './hierarchy-utils.js';
 import { findBetterDescendant, hasGoodSelectors } from './selector-generation.js';
 import { isHooksMarkerCarrier, isNonAppSubtree, isSwitchPartNode } from './non-app-nodes.js';
 
@@ -34,6 +34,27 @@ function owningSwitch(roots: HierarchyNode[], part: HierarchyNode): HierarchyNod
     current = findParent(roots, current);
   }
   return current;
+}
+
+/** WebView roles a pick stays on: the control the user clicked, even inside another one. */
+const WEBVIEW_CONTROL_ROLES = new Set(['button', 'link', 'textfield', 'checkbox', 'radio', 'switch', 'tab', 'combobox', 'slider']);
+
+/** WebView controls a pick on their own parts (a label, a knob, an icon) moves up to. */
+const WEBVIEW_PICK_TARGET_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'switch', 'tab']);
+
+/**
+ * The web control a WebView node is part of (a span, knob or icon inside a
+ * button, link, switch, checkbox, radio or tab, such as the inner parts of an
+ * ion-button or ion-toggle), or null when the node is a control itself or
+ * inside none. A pick there picks the control, as Playwright's picker does.
+ */
+function owningWebViewControl(roots: HierarchyNode[], node: HierarchyNode): HierarchyNode | null {
+  if (node.attributes.get('webview') !== 'true' || WEBVIEW_CONTROL_ROLES.has(getNodeRole(node))) return null;
+  for (let current = findParent(roots, node); current?.attributes.get('webview') === 'true'; current = findParent(roots, current)) {
+    const role = getNodeRole(current);
+    if (WEBVIEW_PICK_TARGET_ROLES.has(role) && getNodeBounds(current)) return current;
+  }
+  return null;
 }
 
 function boundsOverlap(a: Bounds, b: Bounds): boolean {
@@ -78,6 +99,7 @@ export function pickNodeAt(
     }
   }
   if (!betterNode) betterNode = hitNode;
+  betterNode = owningWebViewControl(roots, betterNode) ?? betterNode;
   const bounds = getNodeBounds(betterNode);
   return bounds ? { node: betterNode, bounds } : null;
 }

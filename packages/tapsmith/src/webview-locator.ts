@@ -1,4 +1,5 @@
 import type { WebViewHandle } from './webview-handle.js';
+import { deepQueryAllJs } from './webview-dom-js.js';
 import { checkNoArguments, checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
 
 const COUNT_HINT = 'It reads the page as it is now; to wait for a number of matches, use expect.poll(() => locator.count(), { timeout }).toBe(n).';
@@ -14,8 +15,8 @@ export const WEBVIEW_LOCATOR_BRAND = Symbol.for('tapsmith.WebViewLocator');
  *
  * `_selector` is used for display/tracing. `_finderAllJs` is a JS expression
  * evaluated via CDP that returns an Array of ALL matching elements in
- * document order (defaults to `querySelectorAll(selector)` when not
- * explicitly set); `_finderJs` derives the single target element from it.
+ * document order, open shadow roots included (defaults to the CSS selector's
+ * matches when not explicitly set); `_finderJs` derives the single target element from it.
  *
  * Strict mode: like native locators, an action, single-element
  * query, or positive assertion on a locator that resolves to more than one
@@ -48,7 +49,7 @@ export class WebViewLocator {
     this._handle = handle;
     this._selector = selector;
     this._timeoutMs = timeoutMs;
-    this._finderAllJs = finderAllJs ?? `Array.from(document.querySelectorAll(${JSON.stringify(selector)}))`;
+    this._finderAllJs = finderAllJs ?? deepQueryAllJs(selector);
     this._nthIndex = nthIndex;
   }
 

@@ -24,6 +24,9 @@ import type {
 /** Module-level count of active console interceptors to prevent racing. */
 let _activeConsoleInterceptors = 0;
 
+/** Screenshot failure reasons this process has already printed on the terminal. */
+const _printedScreenshotFailures = new Set<string>();
+
 // ─── Global collector accessor ───
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -312,6 +315,8 @@ export class TraceCollector {
   private _lastTimelineTimestamp: number;
   private _lastTimedEvent: ActionTraceEvent | AssertionTraceEvent | null = null;
   private _screenshots: ScreenshotCapture[] = [];
+  /** Whether this trace already says a screenshot failed. */
+  private _screenshotFailureNoted = false;
   private _hierarchies: HierarchyCapture[] = [];
   private _groupStack: string[] = [];
   /**
@@ -630,7 +635,7 @@ export class TraceCollector {
               this._pendingCaptures.set(actionIndex, pending);
             }
           }
-        }).catch(() => { /* best-effort */ }),
+        }).catch((err: unknown) => this._noteScreenshotFailure(err)),
       );
     }
 
@@ -689,7 +694,7 @@ export class TraceCollector {
               this._pendingCaptures.set(actionIndex, pending);
             }
           }
-        }).catch(() => { /* best-effort */ }),
+        }).catch((err: unknown) => this._noteScreenshotFailure(err)),
       );
     }
 
@@ -970,6 +975,29 @@ export class TraceCollector {
       this._onEvent?.(event);
     }
     this._pendingGroupStarts.length = 0;
+  }
+
+  // ── Capture failures ──
+
+  /**
+   * Say once per trace, and once per process on the terminal, that a
+   * screenshot failed: otherwise the trace just has no images and nothing
+   * says why. A capture that only timed out is not reported.
+   */
+  private _noteScreenshotFailure(err: unknown): void {
+    if (this._screenshotFailureNoted || isCurrentAttemptClosed()) return;
+    this._screenshotFailureNoted = true;
+    const reason = err instanceof Error ? err.message : String(err);
+    this._addConsoleEvent(
+      'warn',
+      `Screenshot capture failed, so actions from here on may have no screenshot: ${reason}`,
+      'daemon',
+    );
+    if (_printedScreenshotFailures.has(reason)) return;
+    _printedScreenshotFailures.add(reason);
+    // Written past the console interception, which would also record it in
+    // the trace as test output.
+    process.stderr.write(`[tapsmith] Screenshot capture failed, so traces are missing screenshots: ${reason}\n`);
   }
 
   // ── Console ──

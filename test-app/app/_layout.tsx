@@ -68,6 +68,7 @@ export default function RootLayout() {
           <Stack.Screen name="keychain" options={{ title: "Keychain" }} />
           <Stack.Screen name="preferences" options={{ title: "Preferences" }} />
           <Stack.Screen name="slow-load" options={{ title: "Slow Load" }} />
+          <Stack.Screen name="delayed-list" options={{ title: "Delayed List" }} />
           <Stack.Screen name="animating" options={{ title: "Animating" }} />
           <Stack.Screen name="carousel" options={{ title: "Carousel" }} />
           <Stack.Screen name="scroll" options={{ title: "Scroll" }} />

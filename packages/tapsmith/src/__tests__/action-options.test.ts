@@ -287,8 +287,8 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     await expect(handle.type('x', { dealy: 5 } as { delay?: number })).rejects.toThrow('type() accepts: delay, timeout.');
     await expect(handle.longPress({ durationMs: 5 } as { duration?: number })).rejects.toThrow('longPress() accepts: duration, timeout.');
     await expect(handle.highlight({ duration: 5 } as { durationMs?: number })).rejects.toThrow('highlight() accepts: durationMs.');
-    await expect(handle.scrollIntoView({ timeout: 5 } as { speed?: number }))
-      .rejects.toThrow('scrollIntoView() accepts: direction, maxScrolls, speed.');
+    await expect(handle.scrollIntoView({ distance: 5 } as { speed?: number }))
+      .rejects.toThrow('scrollIntoView() accepts: direction, maxScrolls, speed, timeout.');
   });
 
   it.each([

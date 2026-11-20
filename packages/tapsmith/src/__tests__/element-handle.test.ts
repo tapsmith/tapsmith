@@ -6003,6 +6003,11 @@ describe('scrollIntoView() direction is the way the view scrolls, as scroll() ta
 // swiping out the rest of maxScrolls.
 describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929)', () => {
   const absent = () => vi.fn(async () => makeFindElementsResponse([]));
+  /** A screen whose list has content to scroll (PILOT-1324), `tag` telling one read from another. */
+  const s = (tag: string) =>
+    '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">' +
+    '<node class="android.widget.ScrollView" scrollable="true" bounds="[0,0][1080,2400]">' +
+    `<node class="android.widget.TextView" text="${tag}" bounds="[0,100][1080,200]"/></node></node></hierarchy>`;
   const directions = (swipe: ReturnType<typeof vi.fn>) => swipe.mock.calls.map((c) => c[0]);
 
   it('fails after the first swipe that changes nothing, not after maxScrolls', async () => {
@@ -6010,7 +6015,7 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
     const client = makeMockClient({
       findElements: absent(),
       swipe,
-      getUiHierarchy: vi.fn(hierarchySequence(['<a/>', '<b/>', '<c/>', '<c/>'])),
+      getUiHierarchy: vi.fn(hierarchySequence([s('a'), s('b'), s('c'), s('c')])),
     });
 
     await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 10 })).rejects.toThrow(
@@ -6018,8 +6023,8 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
         'on screen: the screen stopped changing after 3 scroll(s) in direction "down" ' +
         '(the default: the element was not on screen or in the tree, so its position was not known; ' +
         'pass { direction: "up" } for an element above the screen). ' +
-        'No scrollable container was found on screen, so the swipe crossed the middle of the screen: if the content ' +
-        'can scroll further, scroll() the list that holds the element (for example getByRole("scrollview").scroll("down")).',
+        'If the content can scroll further, the swipe inside the scrollable at [0,0][1080,2400] did not move it: ' +
+        'scroll() the list that holds the element.',
     );
     expect(swipe).toHaveBeenCalledTimes(3);
   });
@@ -6029,7 +6034,7 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
     const client = makeMockClient({
       findElements: absent(),
       swipe,
-      getUiHierarchy: vi.fn(hierarchySequence(['<same/>'])),
+      getUiHierarchy: vi.fn(hierarchySequence([s('same')])),
     });
 
     await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView()).rejects.toThrow(
@@ -6043,7 +6048,7 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
     const client = makeMockClient({
       findElements: absent(),
       swipe,
-      getUiHierarchy: vi.fn(hierarchySequence(['<same/>'])),
+      getUiHierarchy: vi.fn(hierarchySequence([s('same')])),
     });
 
     await expect(
@@ -6060,7 +6065,7 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
     const client = makeMockClient({
       findElements: vi.fn(async () => makeFindElementsResponse([above])),
       swipe,
-      getUiHierarchy: vi.fn(hierarchySequence(['<same/>'])),
+      getUiHierarchy: vi.fn(hierarchySequence([s('same')])),
     });
 
     await expect(new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView()).rejects.toThrow(
@@ -6070,8 +6075,9 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
 
   it('judges only what is on screen, so off-screen cells a table relabels do not hide the end (UITableView)', async () => {
     const dump = (offScreenLabel: string) =>
-      `<hierarchy><Application bounds="[0,0][402,874]"><Cell label="${offScreenLabel}" bounds="[0,-300][402,-256]"/>` +
-      '<Cell label="Row 100" bounds="[0,760][402,804]"/></Application></hierarchy>';
+      `<hierarchy><Application bounds="[0,0][402,874]"><XCUIElementTypeTable type="XCUIElementTypeTable" bounds="[0,0][402,874]">` +
+      `<Cell label="${offScreenLabel}" bounds="[0,-300][402,-256]"/>` +
+      '<Cell label="Row 100" bounds="[0,760][402,804]"/></XCUIElementTypeTable></Application></hierarchy>';
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({
       findElements: absent(),
@@ -6087,9 +6093,10 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
 
   it('re-reads once after an idle wait before calling it the end, so a lagging tree is not mistaken for one', async () => {
     let probes = 0;
-    // Two probes before swipe 1, its watch reads and probe, then seen in swipe 2's watch.
+    // Two probes before swipe 1, its watch reads and probe, one more once the
+    // re-read shows the screen changed (PILOT-1324), then seen in swipe 2's watch.
     const findElements = vi.fn(async () =>
-      makeFindElementsResponse(++probes > 2 + WATCH_READS + 1 ? [makeElementInfo({ visible: true })] : []),
+      makeFindElementsResponse(++probes > 2 + WATCH_READS + 1 + 1 ? [makeElementInfo({ visible: true })] : []),
     );
     const swipe = vi.fn(async () => successResponse());
     const waitForIdle = vi.fn(async () => successResponse());
@@ -6098,7 +6105,7 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
       findElements,
       swipe,
       waitForIdle,
-      getUiHierarchy: vi.fn(hierarchySequence(['<a/>', '<a/>', '<b/>', '<c/>'])),
+      getUiHierarchy: vi.fn(hierarchySequence([s('a'), s('a'), s('b'), s('c')])),
     });
 
     await new ElementHandle(client, _text('Item 9'), 5000).scrollIntoView();
@@ -6169,12 +6176,261 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
     const client = makeMockClient({
       findElements: absent(),
       swipe,
-      getUiHierarchy: vi.fn(hierarchySequence(['<a/>', '<b/>', '<b/>'])),
+      getUiHierarchy: vi.fn(hierarchySequence([s('a'), s('b'), s('b')])),
     });
 
     await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
       /reached the end of the scrollable content .* stopped changing after 2 scroll\(s\)/,
     );
+  });
+});
+
+// PILOT-1324: a screen that a swipe did not change is the end of the content
+// only when something on it has content to scroll. A screen still loading its
+// list (a spinner, nothing that scrolls yet) is waited for, up to the timeout,
+// and the scroll goes on once it changes.
+describe('scrollIntoView() waits for content that is still loading (PILOT-1324)', () => {
+  /** An Android screen showing only a spinner: nothing on it scrolls. */
+  const spinner =
+    '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">' +
+    '<node class="android.widget.ProgressBar" bounds="[480,1140][600,1260]"/></node></hierarchy>';
+  /** The list that replaces it, `n` making each dump differ. */
+  const list = (n: number) =>
+    '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">' +
+    `<node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,200][1080,2400]">` +
+    `<node class="android.widget.TextView" text="Fake Podcast ${n}" bounds="[0,200][1080,400]"/>` +
+    '<node class="android.widget.TextView" text="Fake Podcast 20" bounds="[0,400][1080,600]"/></node></node></hierarchy>';
+  const absent = () => vi.fn(async () => makeFindElementsResponse([]));
+
+  it('keeps waiting while a spinner is all there is, then scrolls the list that replaces it to the element', async () => {
+    let loaded = false;
+    let swipesSinceLoad = 0;
+    const swipe = vi.fn(async () => {
+      if (loaded) swipesSinceLoad++;
+      return successResponse();
+    });
+    let reads = 0;
+    const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> => {
+      // Before swipe 1, after it, its confirm, one read of the wait: the spinner.
+      loaded = ++reads > 4;
+      return { requestId: '1', hierarchyXml: loaded ? list(reads) : spinner, errorMessage: '' };
+    });
+    const findElements = vi.fn(async () =>
+      makeFindElementsResponse(swipesSinceLoad > 0 ? [makeElementInfo({ visible: true })] : []));
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy });
+
+    await new ElementHandle(client, _text('Fake Podcast 7'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits when the only scrollable on screen is a chip bar beside the loading list, which the swipe cannot move', async () => {
+    const chips =
+      '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">' +
+      '<node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,200][1080,350]">' +
+      '<node class="android.widget.Button" text="All" bounds="[20,220][320,330]"/>' +
+      '<node class="android.widget.Button" text="News" bounds="[340,220][640,330]"/></node>' +
+      '<node class="android.widget.ProgressBar" bounds="[480,1140][600,1260]"/></node></hierarchy>';
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: absent(), swipe, getUiHierarchy: vi.fn(hierarchySequence([chips])) });
+
+    await expect(new ElementHandle(client, _text('Fake Podcast 7'), 400).scrollIntoView()).rejects.toThrow(
+      /was not on screen after waiting 400ms: .* the scrollable at \[0,200\]\[1080,350\] that the swipe ran in was not seen to have content to scroll that way/,
+    );
+    // The same with the direction given: a chip bar has nothing to scroll up and down either way.
+    await expect(new ElementHandle(client, _text('Fake Podcast 7'), 400).scrollIntoView({ direction: 'down' })).rejects.toThrow(
+      /was not on screen after waiting 400ms/,
+    );
+  });
+
+  it('fails at the timeout when the screen never changes and nothing on it scrolls, saying so', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: absent(), swipe, getUiHierarchy: vi.fn(hierarchySequence([spinner])) });
+
+    const began = Date.now();
+    await expect(new ElementHandle(client, _text('Fake Podcast 7'), 400).scrollIntoView()).rejects.toThrow(
+      'scrollIntoView: getByText("Fake Podcast 7", { exact: true }) was not on screen after waiting 400ms: ' +
+        'the screen stopped changing after 1 scroll(s) in direction "down" ' +
+        '(the default: the element was not on screen or in the tree, so its position was not known; ' +
+        'pass { direction: "up" } for an element above the screen), and nothing on it has content to scroll, ' +
+        'so its content may still be loading. If it loads later, pass a longer timeout; ' +
+        'if the content can scroll, scroll() the list that holds the element (for example getByRole("scrollview").scroll("down")).',
+    );
+    expect(Date.now() - began).toBeGreaterThanOrEqual(380);
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits up to its own timeout option rather than the device timeout', async () => {
+    const client = makeMockClient({ findElements: absent(), swipe: vi.fn(async () => successResponse()), getUiHierarchy: vi.fn(hierarchySequence([spinner])) });
+
+    const began = Date.now();
+    await expect(new ElementHandle(client, _text('Item'), 60_000).scrollIntoView({ timeout: 300 })).rejects.toThrow(
+      /was not on screen after waiting 300ms/,
+    );
+    expect(Date.now() - began).toBeLessThan(5000);
+  });
+
+  it('refuses a timeout that is not a positive number of milliseconds', async () => {
+    const client = makeMockClient();
+    await expect(new ElementHandle(client, _text('Item'), 5000).scrollIntoView({ timeout: 0 })).rejects.toThrow(
+      /scrollIntoView\(\): timeout must be a positive, finite number of milliseconds/,
+    );
+    await expect(new ElementHandle(client, _text('Item'), 5000).scrollIntoView({ timeout: 0.5 })).rejects.toThrow(
+      /timeout is in milliseconds/,
+    );
+  });
+
+  it('finds an element that appears while it waits, with no further swipe', async () => {
+    let reads = 0;
+    const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> => {
+      reads++;
+      return { requestId: '1', hierarchyXml: spinner, errorMessage: '' };
+    });
+    // Seen once the wait has read the screen once.
+    const findElements = vi.fn(async () =>
+      makeFindElementsResponse(reads > 3 ? [makeElementInfo({ visible: true })] : []));
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy });
+
+    await new ElementHandle(client, _text('Fake Podcast 1'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits again on the same deadline when the screen changes but still has nothing to scroll', async () => {
+    const other = spinner.replace('ProgressBar', 'TextView" text="Searching…');
+    const swipe = vi.fn(async () => successResponse());
+    // Spinner through swipe 1's wait, then a message that also never scrolls.
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([spinner, spinner, spinner, spinner, other])),
+    });
+
+    const began = Date.now();
+    await expect(new ElementHandle(client, _text('Item'), 600).scrollIntoView()).rejects.toThrow(
+      /was not on screen after waiting 600ms: the screen stopped changing after 2 scroll\(s\)/,
+    );
+    expect(Date.now() - began).toBeLessThan(3000);
+    expect(swipe).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps waiting through reads that fail', async () => {
+    let reads = 0;
+    const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> =>
+      ++reads <= 3 ? { requestId: '1', hierarchyXml: spinner, errorMessage: '' } : { requestId: '1', hierarchyXml: '', errorMessage: 'dump failed' });
+    const client = makeMockClient({ findElements: absent(), swipe: vi.fn(async () => successResponse()), getUiHierarchy });
+
+    await expect(new ElementHandle(client, _text('Item'), 1500).scrollIntoView()).rejects.toThrow(/was not on screen after waiting 1500ms/);
+    expect(reads).toBeGreaterThan(4);
+  });
+
+  it('propagates a user stop while it waits', async () => {
+    let reads = 0;
+    const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> => {
+      if (++reads > 4) throw new TestAbortedError();
+      return { requestId: '1', hierarchyXml: spinner, errorMessage: '' };
+    });
+    const client = makeMockClient({ findElements: absent(), swipe: vi.fn(async () => successResponse()), getUiHierarchy });
+
+    await expect(new ElementHandle(client, _text('Item'), 5000).scrollIntoView()).rejects.toSatisfy(isAbortError);
+  });
+
+  it('does not wait at the end of a list that scrolls (PILOT-929 still holds)', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: absent(), swipe, getUiHierarchy: vi.fn(hierarchySequence([list(0)])) });
+
+    const began = Date.now();
+    await expect(new ElementHandle(client, _text('Item 99'), 30_000).scrollIntoView()).rejects.toThrow(
+      /reached the end of the scrollable content .* stopped changing after 1 scroll\(s\)/,
+    );
+    expect(Date.now() - began).toBeLessThan(5000);
+  });
+
+  it('looks again for the element before swiping on, when the screen changed while it confirmed the end', async () => {
+    // The list grows during the confirm: its new rows hold the element.
+    let reads = 0;
+    const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> => {
+      reads++;
+      return { requestId: '1', hierarchyXml: list(reads < 3 ? 0 : 1), errorMessage: '' };
+    });
+    const findElements = vi.fn(async () =>
+      makeFindElementsResponse(reads >= 3 ? [makeElementInfo({ visible: true })] : []));
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy });
+
+    await new ElementHandle(client, _text('Fake Podcast 1'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  describe('iOS', () => {
+    const emptyTable =
+      '<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">' +
+      '<XCUIElementTypeTable type="XCUIElementTypeTable" bounds="[0,100][402,874]"/>' +
+      '<XCUIElementTypeActivityIndicator type="XCUIElementTypeActivityIndicator" bounds="[180,400][222,442]"/>' +
+      '</XCUIElementTypeApplication></hierarchy>';
+    const fullTable = (n: number) =>
+      '<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">' +
+      '<XCUIElementTypeTable type="XCUIElementTypeTable" bounds="[0,100][402,874]">' +
+      `<XCUIElementTypeCell type="XCUIElementTypeCell" label="Row ${n}" bounds="[0,100][402,144]"/>` +
+      '<XCUIElementTypeCell type="XCUIElementTypeCell" label="Row 20" bounds="[0,860][402,904]"/>' +
+      '</XCUIElementTypeTable></XCUIElementTypeApplication></hierarchy>';
+    const tableRegion = { left: 0, top: 100, right: 402, bottom: 874 };
+    const steps = (moved: (i: number) => ScrollStepResponse['moved'], found: (i: number) => boolean) => {
+      let i = 0;
+      return vi.fn(async (): Promise<ScrollStepResponse> => {
+        const n = i++;
+        return {
+          requestId: '1',
+          elements: found(n) ? [makeElementInfo({ text: 'Row 30', visible: true, bounds: { left: 0, top: 500, right: 402, bottom: 544 } })] : [],
+          errorMessage: '',
+          moved: moved(n),
+          swiped: true,
+          unsupported: false,
+          region: tableRegion,
+        };
+      });
+    };
+    const handle = (client: TapsmithGrpcClient, timeout = 5000) =>
+      new ElementHandle(client, _text('Row 30'), timeout, { platform: 'ios' } as never);
+
+    it('does not take two still steps in an empty table for its end, and steps on once its rows load', async () => {
+      let reads = 0;
+      const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> =>
+        ({ requestId: '1', hierarchyXml: ++reads <= 3 ? emptyTable : fullTable(reads), errorMessage: '' }));
+      const scrollStep = steps((i) => (i < 2 ? 'MOVED_NO' : 'MOVED_YES'), (i) => i >= 3);
+      const row = makeElementInfo({ text: 'Row 30', visible: true, bounds: { left: 0, top: 500, right: 402, bottom: 544 } });
+      const findElements = vi.fn(async () => makeFindElementsResponse(scrollStep.mock.calls.length > 3 ? [row] : []));
+      const client = makeMockClient({ scrollStep, findElements, getUiHierarchy });
+
+      await handle(client).scrollIntoView();
+
+      expect(scrollStep).toHaveBeenCalledTimes(4);
+    });
+
+    it('fails at the timeout when the table never loads', async () => {
+      const scrollStep = steps(() => 'MOVED_NO', () => false);
+      const client = makeMockClient({
+        scrollStep,
+        findElements: vi.fn(async () => makeFindElementsResponse([])),
+        getUiHierarchy: vi.fn(hierarchySequence([emptyTable])),
+      });
+
+      await expect(handle(client, 400).scrollIntoView()).rejects.toThrow(/was not on screen after waiting 400ms/);
+    });
+
+    it('still stops at the end of a table with rows after two still steps', async () => {
+      const scrollStep = steps(() => 'MOVED_NO', () => false);
+      let n = 0;
+      const client = makeMockClient({
+        scrollStep,
+        findElements: vi.fn(async () => makeFindElementsResponse([])),
+        getUiHierarchy: vi.fn(async () => ({ requestId: '1', hierarchyXml: fullTable(n++), errorMessage: '' })),
+      });
+
+      await expect(handle(client, 30_000).scrollIntoView()).rejects.toThrow(/reached the end of the scrollable content/);
+    });
   });
 });
 
@@ -6659,8 +6915,10 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
   describe('on iOS', () => {
     const table = (n: number) =>
       `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
-      `<XCUIElementTypeTable type="XCUIElementTypeTable" label="${n}" bounds="[0,100][402,874]"/>` +
-      `</XCUIElementTypeApplication></hierarchy>`;
+      `<XCUIElementTypeTable type="XCUIElementTypeTable" label="${n}" bounds="[0,100][402,874]">` +
+      // A row past the bottom edge: the table has content to scroll (PILOT-1324).
+      `<XCUIElementTypeCell type="XCUIElementTypeCell" label="Row 20" bounds="[0,860][402,904]"/>` +
+      `</XCUIElementTypeTable></XCUIElementTypeApplication></hierarchy>`;
     const tableRegion = { left: 0, top: 100, right: 402, bottom: 874 };
     const cell = (top: number, visible: boolean) =>
       makeElementInfo({ text: 'Item 25', visible, bounds: { left: 0, top, right: 402, bottom: top + 44 } });
@@ -6752,7 +7010,9 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
         getUiHierarchy: vi.fn(hierarchySequence([table(0)])),
       });
 
-      await expect(handle(client, 'ios').scrollIntoView({ direction: 'left', maxScrolls: 1 })).rejects.toThrow(/after 1 scroll/);
+      // The table has nothing to scroll sideways, so the unchanged screen is
+      // waited on rather than taken for its end (PILOT-1324): a short timeout.
+      await expect(handle(client, 'ios').scrollIntoView({ direction: 'left', maxScrolls: 1, timeout: 300 })).rejects.toThrow(/after 1 scroll/);
       expect(scrollStep).not.toHaveBeenCalled();
       // A fling, as before steps: not a drag, not a slow gentle swipe.
       expect(swipe).toHaveBeenCalledWith('right', { speed: 2000, distance: 0.6, region: tableRegion });

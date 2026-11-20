@@ -3,6 +3,7 @@ mod agent_auth;
 mod agent_comms;
 mod android_agent_install;
 mod android_animation_scales;
+mod android_display;
 mod android_keyboard;
 mod android_keystore;
 mod android_permissions;

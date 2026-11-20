@@ -83,7 +83,11 @@ if (kDebugMode && platform is WebKitWebViewController) {
 }
 ```
 
+**Capacitor apps** -- Debug builds are inspectable by default (`ios.webContentsDebuggingEnabled` in `capacitor.config.ts` controls it).
+
 On iOS, Tapsmith connects via the simulator's WebKit Inspector protocol directly. No additional tooling or browser setup is required.
+
+Tapsmith finds your app's WebView by its bundle identifier. A simulator build made with code signing turned off (`xcodebuild … CODE_SIGNING_ALLOWED=NO`, common in CI recipes) has none as far as the WebKit Inspector is concerned: it lists the app as `process-<executable name>`. Tapsmith then matches the app by the process ID it runs under on the simulator, so such builds work too. If the connect still times out, the error names the apps that had inspectable pages, and says when one of them had no bundle identifier.
 
 ## Switching to WebView Context
 
@@ -240,6 +244,8 @@ await expect(webview.getByText("Welcome back")).toBeVisible()
 await expect(webview.getByTestId("status")).toHaveText("Ready")
 await expect(webview.getByLabel("Close dialog")).toBeVisible()
 ```
+
+Locators also find elements inside open shadow roots, as Playwright's do, so they work on Ionic, Stencil, Lit and Shoelace components: `webview.getByRole("button", { name: "Sign in" })` finds the native `<button>` inside `<ion-button>Sign in</ion-button>`. Closed shadow roots stay out of reach, and a CSS selector's combinators don't cross a shadow boundary (`webview.locator("button")` finds the button inside an `ion-button`, `webview.locator("ion-button button")` does not). See [Shadow DOM](api-reference.md#webviewgetbytexttext-options-and-friends) in the API reference.
 
 A `WebViewLocator` supports the same actions as the direct methods:
 
@@ -403,7 +409,7 @@ describe("checkout", () => {
 
 `test.use({ timeout })` raises every action and assertion timeout in its scope. To raise only the wait for the screen, wait for the native screen that hosts the WebView first, with an assertion that takes its own timeout, then connect: `await expect(device.getByText("Checkout")).toBeVisible({ timeout: 60_000 })`.
 
-**Debugging must be enabled in the app.** On Android, `WebView.setWebContentsDebuggingEnabled(true)` must be called before the WebView is created. On iOS (16.4+), the `WKWebView` must have `isInspectable = true`. Without these, Tapsmith cannot connect and `device.webview()` will time out.
+**Debugging must be enabled in the app.** On Android, `WebView.setWebContentsDebuggingEnabled(true)` must be called before the WebView is created. On iOS (16.4+), the `WKWebView` must have `isInspectable = true`. Without these, Tapsmith cannot connect and `device.webview()` will time out. The timeout error lists the WebViews (Android) or apps with inspectable pages (iOS) it did find, so a WebView that is debuggable but belongs to another app shows up there.
 
 **One WebView connection at a time.** Calling `device.webview()` connects to a single WebView. If your app has multiple WebViews on screen, pass the package/bundle identifier to target the right one. Call `device.native()` before switching to a different WebView.
 

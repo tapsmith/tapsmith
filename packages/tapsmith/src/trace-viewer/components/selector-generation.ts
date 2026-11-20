@@ -152,7 +152,8 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
   const ariaLabel = getContentDesc(node);
   const placeholder = getHint(node);
   const testId = node.attributes.get('webview-testid') ?? '';
-  const role = getWebViewRole(node);
+  // getByRole skips what assistive technology does not see.
+  const role = node.attributes.get('webview-a11y-hidden') === 'true' ? null : getWebViewRole(node);
 
   // 1. Role + name (highest priority)
   const accessibleName = ariaLabel || text || placeholder;
@@ -211,8 +212,10 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
     });
   }
 
-  // 7. CSS id selector
-  if (id) {
+  // 7. CSS id selector — not for an element in a shadow root, where an id
+  // need only be unique within its own tree (every instance of a component
+  // repeats it).
+  if (id && node.attributes.get('webview-shadow') !== 'true') {
     selectors.push({
       code: `webview.locator("${escapeJsString(cssIdSelector(id))}")`,
       label: 'CSS #id',
