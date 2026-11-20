@@ -162,6 +162,17 @@ Role names are case-insensitive. Any other role throws as soon as the locator is
 
 > **SwiftUI toggles:** iOS exposes a SwiftUI `Toggle` as a switch the size of its row, named by its label, with the switch's knob inside it as a second, unnamed switch. Tapsmith treats the pair as the one control it is: `getByRole("switch")` finds one switch per `Toggle`, named and checked like the row, and `tap()` and `setChecked()` touch the knob, since a `Toggle` in a `Form` ignores a touch on the rest of its row. A UIKit `UISwitch` is a single switch.
 
+#### Settings rows (UIKit)
+
+UIKit labels a switch in a `UITableViewCell` with its row's texts joined by ", ", the way VoiceOver reads the row: a row titled "Wi-Fi" with the subtitle "Join known networks" gives its switch the label `"Wi-Fi, Join known networks"`. That holds for a switch set as the cell's `accessoryView` and for one laid out in its content view. So on a settings screen:
+
+```typescript
+await device.getByRole("switch", { name: "Wi-Fi" }).tap()   // a part of the name: the row's title
+await expect(device.getByLabel("Wi-Fi")).not.toBeChecked()   // getByLabel: the row's title, or the whole label
+```
+
+`getByRole`'s default substring match finds the switch by its title, and `exact: true` matches one whole part of the label (`{ name: "Wi-Fi", exact: true }`). `getByLabel` matches the whole label or the row's title, not the subtitle, which apps often change with the setting. A switch with an `accessibilityLabel` of its own is named and labelled by it alone. The locator picker and the MCP snapshot suggest such a switch by its row's title.
+
 #### Jetpack Compose
 
 Compose controls are found by role and name the way TalkBack reads them. A Material3 `Button`, a `NavigationBarItem`, an `IconButton` or a row made toggleable with `Modifier.toggleable(role = Role.Checkbox)` is one element: its role comes from the control's `Role`, and its name from the text (or `contentDescription`) of what it contains. So `getByRole("button", { name: "Sign in" })` finds `Button(onClick) { Text("Sign in") }`, `getByRole("tab", { name: "Items" })` a navigation bar item, and `getByRole("checkbox", { name: "Remember me" })` the toggleable row below. `checked`, `selected` and `disabled` read the control's state, and `toHaveRole()` reports its role.

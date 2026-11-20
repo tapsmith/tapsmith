@@ -121,7 +121,7 @@ On Android the value is compared with the element's whole resource ID, which is 
 Locate an input element by its associated label text. Finds form controls (text fields, checkboxes, switches, etc.) whose accessible name matches the label.
 
 - **Android**: matches inputs (text fields, checkboxes, switches, radio buttons, seek bars and spinners) whose `contentDescription` equals the text, inputs linked via `labelFor`/`labeledBy`, or a Jetpack Compose text field whose `label` is the text (the label is a child of the field).
-- **iOS**: matches input elements (text fields, text views, switches and toggles, sliders, steppers, pickers, checkboxes and radio buttons, but not search fields) whose `accessibilityLabel` or title equals the text.
+- **iOS**: matches input elements (text fields, text views, switches and toggles, sliders, steppers, pickers, checkboxes and radio buttons, but not search fields) whose `accessibilityLabel` or title equals the text. A switch in a UIKit settings row, which UIKit labels with the row's texts joined by ", " (`"Wi-Fi, Join known networks"`), is also labelled by the row's title (`"Wi-Fi"`), but not by its subtitle ([Settings rows](locators.md#settings-rows-uikit)).
 
 The comparison normalizes whitespace like `getByText`. A [RegExp](#regular-expressions) is tested against the label text instead.
 
