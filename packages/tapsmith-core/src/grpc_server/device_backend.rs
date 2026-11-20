@@ -72,6 +72,41 @@ pub(super) struct AgentLaunched {
     pub app_launched_fresh: bool,
 }
 
+/// A system alert covering the app ([`DeviceBackend::system_alert`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct SystemAlert {
+    /// Its title; empty when it has none.
+    pub title: String,
+    /// Its buttons' labels, in screen order.
+    pub buttons: Vec<String>,
+}
+
+impl SystemAlert {
+    /// The iOS agent's `systemAlert` result: `None` when it reports no
+    /// alert, or answers in a shape it never sends.
+    pub(super) fn from_agent_data(data: &serde_json::Value) -> Option<Self> {
+        if data.get("present").and_then(serde_json::Value::as_bool) != Some(true) {
+            return None;
+        }
+        Some(Self {
+            title: data
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            buttons: data
+                .get("buttons")
+                .and_then(serde_json::Value::as_array)
+                .map(|b| {
+                    b.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+    }
+}
+
 /// Device operations whose implementation depends on the platform.
 ///
 /// Methods that act return an `ActionResponse` (failures carry an error
@@ -105,10 +140,16 @@ pub(super) trait DeviceBackend: Send + Sync {
     async fn get_color_scheme(&self) -> Result<String, Status>;
     async fn is_keyboard_shown(&self) -> Result<bool, Status>;
     async fn hide_keyboard(&self, request_id: String) -> ActionResult;
-    /// System ANR / crash dialogs the agent answered on its own since the
-    /// last call (PILOT-977). Only Android shows such dialogs.
+    /// System dialogs the agent answered on its own since the last call:
+    /// Android's ANR / crash dialogs (PILOT-977), iOS's leftover "Open in"
+    /// prompts.
     async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
         Ok(Vec::new())
+    }
+    /// The system alert covering the app, which locators cannot see. Only
+    /// iOS reads one (SpringBoard's); Android answers its dialogs itself.
+    async fn system_alert(&self) -> Result<Option<SystemAlert>, Status> {
+        Ok(None)
     }
 
     // ─── System UI ───

@@ -211,7 +211,10 @@ export interface IsKeyboardShownResponse {
   shown: boolean;
 }
 
-/** A system ANR / crash dialog the Android agent answered on its own. */
+/**
+ * A system dialog the agent answered on its own: an ANR / crash dialog on
+ * Android, a leftover "Open in “App”?" prompt on iOS.
+ */
 export interface SystemDialogEvent {
   /** The dialog's title, e.g. `Pixel Launcher isn't responding`; empty when unknown. */
   title: string;
@@ -219,9 +222,9 @@ export interface SystemDialogEvent {
   owner: string;
   /** The app under test owns it: its own ANR, answered with Wait. */
   ownedByTarget: boolean;
-  /** `anr` (isn't responding) or `crash` (keeps stopping). */
+  /** `anr` (isn't responding) or `crash` (keeps stopping) on Android; `open-in-prompt` on iOS. */
   kind: string;
-  /** The button pressed: `Close app` or `Wait`. */
+  /** The button pressed: `Close app` or `Wait` on Android; `Cancel` on iOS. */
   button: string;
   /** When it was answered, device wall-clock ms since the epoch. */
   timestampMs: number;
@@ -230,6 +233,17 @@ export interface SystemDialogEvent {
 export interface TakeSystemDialogEventsResponse {
   requestId: string;
   events: SystemDialogEvent[];
+}
+
+/** The system alert covering the app (iOS: SpringBoard's frontmost alert). */
+export interface GetSystemAlertResponse {
+  requestId: string;
+  /** Whether an alert is up. */
+  present: boolean;
+  /** Its title; empty when it has none. */
+  title: string;
+  /** Its buttons' labels, in screen order. */
+  buttons: string[];
 }
 
 export interface GetColorSchemeResponse {
@@ -1213,6 +1227,13 @@ export class TapsmithGrpcClient {
   /** The system dialogs the agent answered since the last call, oldest first. */
   async takeSystemDialogEvents(deadlineMs?: number): Promise<TakeSystemDialogEventsResponse> {
     return this.call<TakeSystemDialogEventsResponse>('takeSystemDialogEvents', {
+      requestId: requestId(),
+    }, deadlineMs);
+  }
+
+  /** The system alert covering the app, which locators cannot see. Always none on Android. */
+  async getSystemAlert(deadlineMs?: number): Promise<GetSystemAlertResponse> {
+    return this.call<GetSystemAlertResponse>('getSystemAlert', {
       requestId: requestId(),
     }, deadlineMs);
   }
