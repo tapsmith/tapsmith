@@ -31,13 +31,13 @@ describe("clearAppData on an iOS simulator", () => {
     await device.launchApp(PKG)
     await permissionsScreen.open()
     await permissionsScreen.checkCameraButton.tap()
-    await expect(permissionsScreen.cameraStatus("granted")).toBeVisible()
+    await expect(permissionsScreen.cameraStatus).toHaveText("granted")
 
     await device.clearAppData(PKG)
     await device.launchApp(PKG)
     await permissionsScreen.open()
     await permissionsScreen.checkCameraButton.tap()
-    await expect(permissionsScreen.cameraStatus("undetermined")).toBeVisible()
+    await expect(permissionsScreen.cameraStatus).toHaveText("undetermined")
   })
 
   test("saveAppState/restoreAppState round-trip UserDefaults written just before the save", async ({

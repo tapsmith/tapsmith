@@ -4,11 +4,13 @@ import { Device, expect } from "tapsmith"
 export class PermissionsScreen {
   constructor(private device: Device) {}
 
-  get heading() { return this.device.getByRole("header", { name: "Permissions" }) }
+  // The title shows twice on iOS (the navigation bar's and the page's own
+  // heading); this is a screen-arrival check, so either match proves it.
+  get heading() { return this.device.getByRole("header", { name: "Permissions" }).first() }
   /** Reads the camera permission without prompting. */
   get checkCameraButton() { return this.device.getByRole("button", { name: "Check camera permission" }) }
-  /** The camera card, labelled with the status last read ("granted", "undetermined"…). */
-  cameraStatus(status: string) { return this.device.getByLabel(`Camera permission: ${status}`) }
+  /** The camera status last read ("unknown", "granted", "undetermined"…). */
+  get cameraStatus() { return this.device.getByTestId("camera-status") }
 
   async open() {
     await this.device.openDeepLink("tapsmithtest:///permissions")

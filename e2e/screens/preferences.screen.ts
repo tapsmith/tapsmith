@@ -4,7 +4,9 @@ import { Device, expect } from "tapsmith"
 export class PreferencesScreen {
   constructor(private device: Device) {}
 
-  get heading() { return this.device.getByRole("header", { name: "Preferences" }) }
+  // The title shows twice on iOS (the navigation bar's and the page's own
+  // heading); this is a screen-arrival check, so either match proves it.
+  get heading() { return this.device.getByRole("header", { name: "Preferences" }).first() }
   get input() { return this.device.getByTestId("preferences-input") }
   get saveButton() { return this.device.getByTestId("preferences-save-button") }
   get loadButton() { return this.device.getByTestId("preferences-load-button") }
