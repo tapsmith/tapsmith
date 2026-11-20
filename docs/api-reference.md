@@ -381,7 +381,7 @@ await device.launchApp("com.example.myapp", { waitForIdle: false }); // return i
 
 **Options:**
 - `activity?` — specific Activity to launch (e.g., `".settings.ProfileActivity"`)
-- `clearData?` — clear all app data before launching (default: `false`)
+- `clearData?` — clear all app data before launching (default: `false`). On an iOS simulator this clears the data container and `UserDefaults` but, unlike [`clearAppData`](#deviceclearappdatapackagename-string-promisevoid), keeps the keychain and privacy permissions
 - `waitForIdle?` — wait for the UI to settle after launch (default: `true`)
 
 ### `device.openDeepLink(uri: string, options?: OpenDeepLinkOptions): Promise<void>`
