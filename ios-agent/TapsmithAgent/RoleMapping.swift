@@ -6,9 +6,9 @@ enum AccessibilityTrait {
     static let link: UInt64 = 1 << 1          // UIAccessibilityTraitLink
     static let image: UInt64 = 1 << 2         // UIAccessibilityTraitImage
     static let staticText: UInt64 = 1 << 6    // UIAccessibilityTraitStaticText
+    static let searchField: UInt64 = 1 << 10  // UIAccessibilityTraitSearchField
+    static let adjustable: UInt64 = 1 << 12   // UIAccessibilityTraitAdjustable (slider, stepper, picker wheel)
     static let header: UInt64 = 1 << 16       // UIAccessibilityTraitHeader
-    static let adjustable: UInt64 = 1 << 17   // UIAccessibilityTraitAdjustable (slider/picker)
-    static let searchField: UInt64 = 1 << 20  // UIAccessibilityTraitSearchField
     /// UIAccessibilityTraitTextEntry (private): UIKit gives it to a text view
     /// only while it can be edited — a UIKit UITextView, a SwiftUI
     /// TextEditor, React Native's multi-line TextInput — and not to a
@@ -168,6 +168,34 @@ enum RoleMapping {
         dict["children"] = children
     }
 
+    /// The element types a scroll view's indicators are children of: every
+    /// UIScrollView (a WKWebView's included) a snapshot can show.
+    static let scrollIndicatorParents: Set<XCUIElement.ElementType> = [
+        .scrollView, .table, .collectionView, .webView, .textView,
+    ]
+
+    /// Take the adjustable trait off each scroll view's indicators ("Vertical
+    /// scroll bar, 2 pages"): generic views with the adjustable trait, like a
+    /// React Native `accessibilityRole="adjustable"` view, but no seekbar.
+    /// The label that says what they are is localized; their place is not —
+    /// a direct child of a scroll view (PILOT-1329). An adjustable RN view
+    /// placed directly in a scroll view loses its role with them, as every
+    /// adjustable view had none before.
+    static func markScrollIndicators(in dict: inout [String: Any]) {
+        guard var children = dict["children"] as? [[String: Any]], !children.isEmpty else { return }
+        let parentScrolls = scrollIndicatorParents.contains(elementType(of: dict))
+        for i in children.indices {
+            if parentScrolls, elementType(of: children[i]) == .other {
+                let traits = traitBits(of: children[i])
+                if traits & AccessibilityTrait.adjustable != 0 {
+                    children[i]["traits"] = traits & ~AccessibilityTrait.adjustable
+                }
+            }
+            markScrollIndicators(in: &children[i])
+        }
+        dict["children"] = children
+    }
+
     /// A snapshot dictionary's element type.
     private static func elementType(of dict: [String: Any]) -> XCUIElement.ElementType {
         let raw = (dict["elementType"] as? UInt) ?? (dict["elementType"] as? Int).map(UInt.init)
@@ -222,8 +250,6 @@ enum RoleMapping {
         // Trait-derived semantic roles take priority — these are the ones an
         // app explicitly declares via `accessibilityRole`.
         if traits & Trait.header != 0 { return "heading" }
-        if traits & Trait.searchField != 0 { return "searchfield" }
-        if traits & Trait.adjustable != 0 { return "seekbar" }
         if traits & Trait.link != 0 { return "link" }
 
         if isTabBarItem(elementType, inTabBar: inTabBar) { return "tab" }
@@ -236,11 +262,27 @@ enum RoleMapping {
         let typeRole = elementTypeToRole[elementType] ?? ""
         if !typeRole.isEmpty { return typeRole }
 
-        // Generic .other elements with a button/image trait still convey role.
+        // Generic .other elements with a role trait still convey role. The
+        // search-field and adjustable traits name a generic view's role only
+        // (`isGenericTraitRole`): a stepper, picker wheel or page indicator
+        // is adjustable too, and an RN TextInput with role="search" is a
+        // textfield, as on Android.
+        if isGenericTraitRole(elementType) {
+            if traits & Trait.searchField != 0 { return "searchfield" }
+            if traits & Trait.adjustable != 0 { return "seekbar" }
+        }
         if traits & Trait.button != 0 { return "button" }
         if traits & Trait.image != 0 { return "image" }
 
         return ""
+    }
+
+    /// Whether the search-field and adjustable traits give an element of this
+    /// type its role: only a generic view (React Native's
+    /// `accessibilityRole="adjustable"` or `"search"`) has no other. A web
+    /// range input is a `.slider` already.
+    static func isGenericTraitRole(_ elementType: XCUIElement.ElementType) -> Bool {
+        elementType == .other
     }
 
     /// Whether `elementType` is a text view that can't be edited: no
@@ -305,7 +347,7 @@ enum RoleMapping {
     /// Check if a UIAccessibilityTraits bitmask matches a role.
     /// This handles React Native components (Pressable, TouchableOpacity) that
     /// set accessibilityRole but render as generic UIViews (.other element type).
-    static func matchesTrait(role: String, traits: UInt64) -> Bool {
+    static func matchesTrait(role: String, elementType: XCUIElement.ElementType, traits: UInt64) -> Bool {
         typealias Trait = AccessibilityTrait
         switch role.lowercased() {
         case "button": return traits & Trait.button != 0
@@ -313,8 +355,8 @@ enum RoleMapping {
         case "heading", "header": return traits & Trait.header != 0
         case "image": return traits & Trait.image != 0
         case "text": return traits & Trait.staticText != 0
-        case "seekbar", "slider": return traits & Trait.adjustable != 0
-        case "searchfield": return traits & Trait.searchField != 0
+        case "seekbar", "slider": return isGenericTraitRole(elementType) && traits & Trait.adjustable != 0
+        case "searchfield": return isGenericTraitRole(elementType) && traits & Trait.searchField != 0
         default: return false
         }
     }
@@ -428,7 +470,7 @@ enum RoleMapping {
             if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
             return hasNameFilter && resolveRole(for: .other, traits: traits, inTabBar: false).isEmpty
         }
-        return types.contains(elementType) || matchesTrait(role: canonical, traits: traits)
+        return types.contains(elementType) || matchesTrait(role: canonical, elementType: elementType, traits: traits)
     }
 
     /// The role description React Native leads a generic view's accessibility

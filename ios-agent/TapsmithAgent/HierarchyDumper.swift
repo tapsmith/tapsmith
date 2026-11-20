@@ -60,6 +60,8 @@ class HierarchyDumper {
         // (PILOT-1219), so the trace viewer and MCP don't take it for a toolbar.
         BarHost.markHosts(in: &dict)
         RoleMapping.markNavigationTitles(in: &dict)
+        // A scroll view's indicator is no seekbar (PILOT-1329).
+        RoleMapping.markScrollIndicators(in: &dict)
         var keyboardTop: CGFloat?
         dumpNode(dict, depth: 1, inTabBar: false, insideNonApp: false, keyboardTop: &keyboardTop, into: &xml)
         xml += "</hierarchy>\n"

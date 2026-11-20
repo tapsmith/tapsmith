@@ -180,6 +180,17 @@ const CASES: Case[] = [
   { why: 'a slider is a seekbar', platform: 'ios', type: I.slider, reportedRole: 'seekbar', role: 'seekbar', matches: true },
   { why: 'by its React Native spelling', platform: 'ios', type: I.slider, reportedRole: 'seekbar', role: 'slider', matches: true },
   { why: 'a generic view with the adjustable trait is a seekbar', platform: 'ios', type: I.other, traits: ['adjustable'], reportedRole: 'seekbar', role: 'seekbar', matches: true },
+  { why: 'a slider with the adjustable trait is a seekbar', platform: 'ios', type: I.slider, traits: ['adjustable'], reportedRole: 'seekbar', role: 'seekbar', matches: true },
+  { why: 'a stepper with the adjustable trait is still a spinbutton', platform: 'ios', type: I.stepper, traits: ['adjustable'], reportedRole: 'spinbutton', role: 'spinbutton', matches: true },
+  { why: 'and no seekbar', platform: 'ios', type: I.stepper, traits: ['adjustable'], reportedRole: 'spinbutton', role: 'seekbar', matches: false },
+  { why: 'a generic view with the search-field trait is a searchfield', platform: 'ios', type: I.other, traits: ['searchField'], reportedRole: 'searchfield', role: 'searchfield', matches: true },
+  { why: "a text field with the search-field trait (RN's search role) stays a textfield, as on Android", platform: 'ios', type: I.field, traits: ['searchField'], reportedRole: 'textfield', role: 'textfield', matches: true },
+  { why: 'and no searchfield', platform: 'ios', type: I.field, traits: ['searchField'], reportedRole: 'textfield', role: 'searchfield', matches: false },
+  { why: "a web text field (WebKit's web-content trait) is a textfield", platform: 'ios', type: I.field, traits: ['webContent', 'textEntry'], reportedRole: 'textfield', role: 'textfield', matches: true },
+  { why: 'and no seekbar', platform: 'ios', type: I.field, traits: ['webContent', 'textEntry'], reportedRole: 'textfield', role: 'seekbar', matches: false },
+  { why: 'a web button is a button', platform: 'ios', type: I.button, traits: ['webContent', 'button'], reportedRole: 'button', role: 'button', matches: true },
+  { why: 'web text is text', platform: 'ios', type: I.text, traits: ['webContent', 'staticText'], reportedRole: 'text', role: 'text', matches: true },
+  { why: 'a web group has no role', platform: 'ios', type: I.other, traits: ['webContent'], role: 'seekbar', matches: false },
   // A multi-line text view (React Native's <TextInput multiline />, a
   // UITextView, a SwiftUI TextEditor) is a textfield, as Android's multi-line
   // EditText is — while it can be edited, which UIKit marks with the

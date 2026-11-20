@@ -234,6 +234,8 @@ class SnapshotElementFinder {
         // A navigation title is a heading, whether or not the device
         // published its header trait (PILOT-1260).
         RoleMapping.markNavigationTitles(in: &snapshotDict)
+        // A scroll view's indicator is no seekbar (PILOT-1329).
+        RoleMapping.markScrollIndicators(in: &snapshotDict)
         return snapshotDict
     }
 

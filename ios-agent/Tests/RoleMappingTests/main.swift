@@ -392,5 +392,82 @@ check("an empty toolbar host reports no role",
       RoleMapping.resolveRole(for: .toolbar, traits: 0, inTabBar: false, isEmptyBarHost: true), "")
 check("a toolbar reports \"toolbar\"", RoleMapping.resolveRole(for: .toolbar, traits: 0, inTabBar: false), "toolbar")
 
+// ─── The adjustable and search-field traits, and web content (PILOT-1329) ───
+
+// UIKit's values, written out: a test that read RoleMapping's own constants
+// could not catch a wrong one (bit 17 was once taken for adjustable).
+let adjustableTrait: UInt64 = 0x1000    // UIAccessibilityTraitAdjustable
+let searchFieldTrait: UInt64 = 0x400    // UIAccessibilityTraitSearchField
+// WebKit's private web-content bit, which every element in a WKWebView carries.
+let webContentTrait: UInt64 = 1 << 17
+check("the adjustable trait is UIKit's", AccessibilityTrait.adjustable, adjustableTrait)
+check("the search-field trait is UIKit's", AccessibilityTrait.searchField, searchFieldTrait)
+
+check("a generic view with the adjustable trait is a seekbar",
+      RoleMapping.resolveRole(for: .other, traits: adjustableTrait, inTabBar: false), "seekbar")
+check("it matches getByRole(\"seekbar\")", matches("seekbar", .other, traits: adjustableTrait), true)
+check("and getByRole(\"slider\")", matches("slider", .other, traits: adjustableTrait), true)
+check("a slider is a seekbar", RoleMapping.resolveRole(for: .slider, traits: adjustableTrait, inTabBar: false), "seekbar")
+check("a stepper with the adjustable trait is still a spinbutton",
+      RoleMapping.resolveRole(for: .stepper, traits: adjustableTrait, inTabBar: false), "spinbutton")
+check("and no seekbar", matches("seekbar", .stepper, traits: adjustableTrait), false)
+check("a picker wheel with the adjustable trait is no seekbar",
+      matches("seekbar", .pickerWheel, traits: adjustableTrait), false)
+check("a page indicator with the adjustable trait is no seekbar",
+      matches("seekbar", .pageIndicator, traits: adjustableTrait), false)
+check("a generic view with the search-field trait is a searchfield",
+      RoleMapping.resolveRole(for: .other, traits: searchFieldTrait, inTabBar: false), "searchfield")
+check("it matches getByRole(\"searchfield\")", matches("searchfield", .other, traits: searchFieldTrait), true)
+check("a search field is a searchfield",
+      RoleMapping.resolveRole(for: .searchField, traits: searchFieldTrait, inTabBar: false), "searchfield")
+check("a text field with the search-field trait (RN role=\"search\") stays a textfield, as on Android",
+      RoleMapping.resolveRole(for: .textField, traits: searchFieldTrait, inTabBar: false), "textfield")
+check("and no searchfield", matches("searchfield", .textField, traits: searchFieldTrait), false)
+
+// Web content: each node keeps the role its own type and public traits give it.
+check("a web text field is a textfield",
+      RoleMapping.resolveRole(for: .textField, traits: webContentTrait, inTabBar: false), "textfield")
+check("a web button is a button",
+      RoleMapping.resolveRole(for: .button, traits: webContentTrait | buttonTrait, inTabBar: false), "button")
+check("a web link is a link",
+      RoleMapping.resolveRole(for: .link, traits: webContentTrait | linkTrait, inTabBar: false), "link")
+check("web text is text",
+      RoleMapping.resolveRole(for: .staticText, traits: webContentTrait | staticTextTrait, inTabBar: false), "text")
+check("a web heading is a heading",
+      RoleMapping.resolveRole(for: .other, traits: webContentTrait | headerTrait, inTabBar: false), "heading")
+check("a web group has no role", RoleMapping.resolveRole(for: .other, traits: webContentTrait, inTabBar: false), "")
+check("no web node is a seekbar", matches("seekbar", .textField, traits: webContentTrait), false)
+check("nor a generic one", matches("seekbar", .other, traits: webContentTrait), false)
+check("bit 20 is no search field", matches("searchfield", .other, traits: 1 << 20), false)
+check("a web range input (a slider) is a seekbar",
+      RoleMapping.resolveRole(for: .slider, traits: webContentTrait | adjustableTrait, inTabBar: false), "seekbar")
+
+// A scroll view's indicators are adjustable generic views, but no seekbar:
+// each is a direct child of its scroll view (traits read on an iOS 26.5
+// simulator: 0x200001000, the same as an RN adjustable view's).
+func node(_ type: ElementType, traits: UInt64 = 0, _ children: [[String: Any]] = []) -> [String: Any] {
+    ["elementType": type.rawValue, "traits": traits, "children": children]
+}
+func traitsOfChild(_ dict: [String: Any], _ path: [Int]) -> UInt64 {
+    var d = dict
+    for i in path { d = (d["children"] as! [[String: Any]])[i] }
+    return d["traits"] as! UInt64
+}
+let indicatorTraits: UInt64 = 0x2_0000_1000
+for scroller in [ElementType.scrollView, .table, .collectionView, .webView, .textView] {
+    var tree = node(.other, [node(scroller, [node(.other, traits: indicatorTraits, [node(.other)]), node(.other, [node(.other, traits: indicatorTraits)])])])
+    RoleMapping.markScrollIndicators(in: &tree)
+    check("a \(RoleMapping.typeName(for: scroller)) indicator loses the adjustable trait",
+          traitsOfChild(tree, [0, 0]), indicatorTraits & ~adjustableTrait)
+    check("an adjustable view deeper in a \(RoleMapping.typeName(for: scroller)) keeps it",
+          traitsOfChild(tree, [0, 1, 0]), indicatorTraits)
+}
+do {
+    var tree = node(.other, [node(.other, traits: indicatorTraits), node(.scrollView, [node(.slider, traits: adjustableTrait)])])
+    RoleMapping.markScrollIndicators(in: &tree)
+    check("an adjustable view outside a scroll view keeps the trait", traitsOfChild(tree, [0]), indicatorTraits)
+    check("a slider directly in a scroll view keeps it", traitsOfChild(tree, [1, 0]), adjustableTrait)
+}
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
