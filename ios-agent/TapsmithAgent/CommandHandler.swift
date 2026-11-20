@@ -126,8 +126,9 @@ class CommandHandler {
     /// When `waitForAppReady` next looks for a leftover "Open in" prompt.
     private var leftoverPromptCheck = LeftoverPromptCheck()
 
-    /// Cancel a leftover "Open in “App”?" prompt before a launch, or before
-    /// the session's first use of an app it found already running.
+    /// Cancel a leftover "Open in “App”?" prompt before a launch, before a
+    /// reset delivers Tapsmith's own link, or before the session's first use
+    /// of an app it found already running. True when one was cancelled.
     ///
     /// Tapsmith's own deep links answer this prompt inside the daemon's
     /// openurl flow, so one that is up when a launch starts came from
@@ -137,9 +138,10 @@ class CommandHandler {
     /// for (for an Expo dev client, a dev-server URL that can switch the
     /// bundle it loads), and the launch that follows brings the app up
     /// anyway. Recorded for the daemon to report (`takeSystemDialogEvents`).
-    private func cancelLeftoverOpenInPrompt() {
+    @discardableResult
+    private func cancelLeftoverOpenInPrompt() -> Bool {
         leftoverPromptCheck.checked(at: Date())
-        guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { return }
+        guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { return false }
         NSLog("[SystemDialog] Cancelling a leftover %@ before using the app", alert.description)
         var gone = false
         _ = ObjCExceptionCatcher.catchException {
@@ -153,13 +155,14 @@ class CommandHandler {
         }
         guard gone else {
             NSLog("[SystemDialog] %@ was still up after Cancel", alert.description)
-            return
+            return false
         }
         systemAlertEvents.record(
             title: alert.title,
             button: "Cancel",
             timestampMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
         )
+        return true
     }
 
     /// True when the app's accessibility tree has rendered interactive content.
@@ -3205,6 +3208,14 @@ class CommandHandler {
             var phases = PhaseClock()
 
             if deliverInProcess {
+                // Nothing of Tapsmith's is pending yet, so an Open-in prompt
+                // up now is a leftover: cancel it before the wait loops below
+                // would press its Open (a warm reset in a long-lived session
+                // never launches the app). On the readiness clock, as warm
+                // resets deliver a link every test.
+                if leftoverPromptCheck.due(now: Date()) {
+                    cancelLeftoverOpenInPrompt()
+                }
                 guard #available(iOS 16.4, *) else {
                     throw AgentError.actionFailed(
                         "openDeepLink requires iOS 16.4 or newer for in-process delivery"
@@ -3361,6 +3372,11 @@ class CommandHandler {
             throw AgentError.actionFailed(
                 "openDeepLink: app did not reach foreground after opening \(urlString)"
             )
+
+        case "cancelLeftoverOpenInPrompt":
+            // The daemon, before its cold path's `simctl openurl` raises a
+            // prompt of Tapsmith's own: one up now is a leftover.
+            return ["cancelled": cancelLeftoverOpenInPrompt()]
 
         case "systemAlert":
             // The SpringBoard alert covering the app, for the SDK's

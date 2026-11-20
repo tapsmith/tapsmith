@@ -45,6 +45,9 @@ const WEBVIEW_ADB_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBVIEW_ADB_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const IOS_OPEN_URL_PROMPT_TIMEOUT: Duration = Duration::from_secs(28);
 const IOS_OPEN_DIALOG_ACCEPT_TIMEOUT_MS: u64 = 300;
+/// The agent's leftover-prompt check: a SpringBoard query, and when a prompt
+/// is up its Cancel tap and up to 2 s waiting for it to close.
+const IOS_CANCEL_LEFTOVER_PROMPT_TIMEOUT_MS: u64 = 5_000;
 /// Budget for one `evaluateSelectors` batch. Evaluating never waits for a
 /// match, so this only bounds the agent's work on a large batch; the SDK sends
 /// a screen's candidates in small chunks. The Android agent also stops early
@@ -850,6 +853,29 @@ impl TapsmithServiceImpl {
             Err(e) => {
                 debug!(error = %e, "Failed to probe iOS Open-in-app dialog");
             }
+        }
+    }
+
+    /// Cancel an "Open in" prompt left up by something outside Tapsmith
+    /// before the cold path's `simctl openurl` raises Tapsmith's own: its
+    /// accept loop presses Open on any such prompt, which would deliver the
+    /// leftover's URL (for `npx expo run:ios`, a dev-server link). Best
+    /// effort: an agent that predates the command just answers an error.
+    pub(super) async fn cancel_leftover_ios_open_in_prompt(&self) {
+        match self
+            .send_agent_command_with_timeout(
+                &AgentCommand::CancelLeftoverOpenInPrompt {},
+                IOS_CANCEL_LEFTOVER_PROMPT_TIMEOUT_MS,
+            )
+            .await
+        {
+            Ok(resp) if resp.success => {
+                if resp.data.get("cancelled").and_then(|v| v.as_bool()) == Some(true) {
+                    info!("Cancelled a leftover iOS Open-in prompt before opening a URL");
+                }
+            }
+            Ok(resp) => debug!(error = ?resp.error, "leftover Open-in prompt check failed"),
+            Err(e) => debug!(error = %e, "leftover Open-in prompt check failed"),
         }
     }
 

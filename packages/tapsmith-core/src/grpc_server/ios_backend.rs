@@ -687,6 +687,12 @@ impl DeviceBackend for IosBackend<'_> {
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
 
+            // Only before the first openurl: after a failed attempt, a prompt
+            // still up may be Tapsmith's own.
+            if attempt == 1 {
+                self.svc.cancel_leftover_ios_open_in_prompt().await;
+            }
+
             if let Err(e) = self
                 .svc
                 .open_ios_simulator_url_with_prompt_handling(&serial, uri)

@@ -685,6 +685,8 @@ pub enum AgentCommand {
     TakeSystemDialogEvents {},
     /// The SpringBoard alert covering the app, if any (iOS).
     GetSystemAlert {},
+    /// Cancel a leftover "Open in" prompt before Tapsmith opens a URL (iOS).
+    CancelLeftoverOpenInPrompt {},
     SetOrientation {
         orientation: String,
     },
@@ -767,6 +769,7 @@ impl AgentCommand {
             AgentCommand::IsKeyboardShown {} => "isKeyboardShown",
             AgentCommand::TakeSystemDialogEvents {} => "takeSystemDialogEvents",
             AgentCommand::GetSystemAlert {} => "systemAlert",
+            AgentCommand::CancelLeftoverOpenInPrompt {} => "cancelLeftoverOpenInPrompt",
             AgentCommand::SetOrientation { .. } => "setOrientation",
             AgentCommand::GetOrientation {} => "getOrientation",
             AgentCommand::GetColorScheme {} => "getColorScheme",
@@ -1176,6 +1179,9 @@ impl AgentCommand {
             AgentCommand::IsKeyboardShown {} => ("isKeyboardShown", json!({})),
             AgentCommand::TakeSystemDialogEvents {} => ("takeSystemDialogEvents", json!({})),
             AgentCommand::GetSystemAlert {} => ("systemAlert", json!({})),
+            AgentCommand::CancelLeftoverOpenInPrompt {} => {
+                ("cancelLeftoverOpenInPrompt", json!({}))
+            }
             AgentCommand::SetOrientation { orientation } => {
                 ("setOrientation", json!({ "orientation": orientation }))
             }
@@ -1945,6 +1951,7 @@ mod tests {
             AgentCommand::GetOrientation {},
             AgentCommand::TakeSystemDialogEvents {},
             AgentCommand::GetSystemAlert {},
+            AgentCommand::CancelLeftoverOpenInPrompt {},
             AgentCommand::CaptureTraceState {
                 screenshot: true,
                 hierarchy: true,
