@@ -4920,6 +4920,30 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     }
 
     #[instrument(skip_all, fields(request_id))]
+    async fn get_system_alert(
+        &self,
+        request: Request<proto::GetSystemAlertRequest>,
+    ) -> Result<Response<proto::GetSystemAlertResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+
+        let alert = self.backend().await?.system_alert().await?;
+        Ok(Response::new(match alert {
+            Some(alert) => proto::GetSystemAlertResponse {
+                request_id,
+                present: true,
+                title: alert.title,
+                buttons: alert.buttons,
+            },
+            None => proto::GetSystemAlertResponse {
+                request_id,
+                present: false,
+                ..Default::default()
+            },
+        }))
+    }
+
+    #[instrument(skip_all, fields(request_id))]
     async fn hide_keyboard(
         &self,
         request: Request<proto::HideKeyboardRequest>,

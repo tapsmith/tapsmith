@@ -683,6 +683,8 @@ pub enum AgentCommand {
     /// Take the system ANR / crash dialogs the Android agent answered on its
     /// own since the last call (PILOT-977).
     TakeSystemDialogEvents {},
+    /// The SpringBoard alert covering the app, if any (iOS).
+    GetSystemAlert {},
     SetOrientation {
         orientation: String,
     },
@@ -764,6 +766,7 @@ impl AgentCommand {
             AgentCommand::HideKeyboard {} => "hideKeyboard",
             AgentCommand::IsKeyboardShown {} => "isKeyboardShown",
             AgentCommand::TakeSystemDialogEvents {} => "takeSystemDialogEvents",
+            AgentCommand::GetSystemAlert {} => "systemAlert",
             AgentCommand::SetOrientation { .. } => "setOrientation",
             AgentCommand::GetOrientation {} => "getOrientation",
             AgentCommand::GetColorScheme {} => "getColorScheme",
@@ -1172,6 +1175,7 @@ impl AgentCommand {
             AgentCommand::HideKeyboard {} => ("hideKeyboard", json!({})),
             AgentCommand::IsKeyboardShown {} => ("isKeyboardShown", json!({})),
             AgentCommand::TakeSystemDialogEvents {} => ("takeSystemDialogEvents", json!({})),
+            AgentCommand::GetSystemAlert {} => ("systemAlert", json!({})),
             AgentCommand::SetOrientation { orientation } => {
                 ("setOrientation", json!({ "orientation": orientation }))
             }
@@ -1940,6 +1944,7 @@ mod tests {
             AgentCommand::GetClipboard {},
             AgentCommand::GetOrientation {},
             AgentCommand::TakeSystemDialogEvents {},
+            AgentCommand::GetSystemAlert {},
             AgentCommand::CaptureTraceState {
                 screenshot: true,
                 hierarchy: true,

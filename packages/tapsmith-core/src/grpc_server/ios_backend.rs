@@ -1,8 +1,10 @@
 //! iOS device work: `simctl` for simulators plus the XCUITest agent, which is
 //! the only path on physical devices.
 
+use super::android_backend::system_dialog_events_from;
 use super::device_backend::{
     ActionResult, AgentLaunched, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
+    SystemAlert,
 };
 use super::*;
 
@@ -306,6 +308,35 @@ impl DeviceBackend for IosBackend<'_> {
             .and_then(|v| v.as_str())
             .unwrap_or("light")
             .to_string())
+    }
+
+    async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+        // The leftover "Open in" prompts the agent cancelled before a launch.
+        let result = self
+            .svc
+            .send_agent_command(&AgentCommand::TakeSystemDialogEvents {})
+            .await?;
+        if !result.success {
+            return Err(Status::internal(format!(
+                "Could not read the system alerts the agent answered: {}",
+                result.error.unwrap_or_default()
+            )));
+        }
+        Ok(system_dialog_events_from(&result.data))
+    }
+
+    async fn system_alert(&self) -> Result<Option<SystemAlert>, Status> {
+        let result = self
+            .svc
+            .send_agent_command(&AgentCommand::GetSystemAlert {})
+            .await?;
+        if !result.success {
+            return Err(Status::internal(format!(
+                "Could not read the system alert on screen: {}",
+                result.error.unwrap_or_default()
+            )));
+        }
+        Ok(SystemAlert::from_agent_data(&result.data))
     }
 
     async fn is_keyboard_shown(&self) -> Result<bool, Status> {
@@ -2246,5 +2277,75 @@ mod screenshot_orientation_tests {
             ""
         );
         assert_eq!(screenshot_orientation(&json!({ "orientation": 3 })), "");
+    }
+}
+
+#[cfg(test)]
+mod system_alert_tests {
+    use super::super::android_backend::system_dialog_events_from;
+    use super::SystemAlert;
+    use serde_json::json;
+
+    #[test]
+    fn reads_the_agents_alert() {
+        let alert = SystemAlert::from_agent_data(&json!({
+            "present": true,
+            "title": "Open in “priya-app”?",
+            "buttons": ["Cancel", "Open"],
+        }));
+        assert_eq!(
+            alert,
+            Some(SystemAlert {
+                title: "Open in “priya-app”?".into(),
+                buttons: vec!["Cancel".into(), "Open".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn is_none_without_an_alert() {
+        assert_eq!(
+            SystemAlert::from_agent_data(&json!({ "present": false })),
+            None
+        );
+        // An answer in a shape the agent never sends is no alert either.
+        assert_eq!(SystemAlert::from_agent_data(&json!({})), None);
+        assert_eq!(
+            SystemAlert::from_agent_data(&json!({ "present": "yes" })),
+            None
+        );
+    }
+
+    #[test]
+    fn keeps_an_untitled_alert_and_skips_odd_buttons() {
+        let alert = SystemAlert::from_agent_data(&json!({
+            "present": true,
+            "buttons": ["OK", 3, null],
+        }));
+        assert_eq!(
+            alert,
+            Some(SystemAlert {
+                title: String::new(),
+                buttons: vec!["OK".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn reads_a_cancelled_open_in_prompt_as_an_event() {
+        let events = system_dialog_events_from(&json!({ "events": [{
+            "title": "Open in “priya-app”?",
+            "owner": "com.apple.springboard",
+            "ownedByTarget": false,
+            "kind": "open-in-prompt",
+            "button": "Cancel",
+            "timestampMs": 1_795_134_792_297_i64,
+        }]}));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "open-in-prompt");
+        assert_eq!(events[0].button, "Cancel");
+        assert_eq!(events[0].owner, "com.apple.springboard");
+        assert!(!events[0].owned_by_target);
+        assert_eq!(events[0].timestamp_ms, 1_795_134_792_297);
     }
 }
