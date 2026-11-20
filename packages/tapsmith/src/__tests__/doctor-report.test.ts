@@ -685,6 +685,42 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
     });
   });
 
+  describe('app-id', () => {
+    it("accepts Expo's hyphenated iOS bundle id", async () => {
+      withXcode();
+      writeConfig("export default { platform: 'ios', simulator: 'iPhone 16', package: 'com.anonymous.priya-app' }\n");
+      expect(check((await doctorJson()).json, 'app-id')).toBeUndefined();
+    });
+
+    it('fails a hyphenated Android package, which every launch refuses', async () => {
+      withAdb();
+      writeConfig("export default { platform: 'android', package: 'com.anonymous.priya-app' }\n");
+      const { code, json } = await doctorJson();
+      expect(check(json, 'app-id')).toMatchObject({
+        status: 'fail',
+        label: '"com.anonymous.priya-app" is not a valid Android package name: it may contain only letters, digits, dots and underscores — tapsmith test cannot launch the app',
+        fix: expect.stringContaining('applicationId'),
+      });
+      expect(code).toBe(1);
+    });
+
+    it("judges each project by its own platform's rule, in one row naming the projects", async () => {
+      withAdb();
+      withXcode();
+      writeConfig(`export default { projects: [
+        { name: 'droid', use: { platform: 'android', package: 'com.example.my-app' } },
+        { name: 'phone', use: { platform: 'ios', simulator: 'iPhone 16', package: 'com.example.my-app' } },
+        { name: 'bad', use: { platform: 'ios', simulator: 'iPhone 16', package: 'com.example app' } },
+      ] }\n`);
+      const rows = (await doctorJson()).json.checks.filter((c) => c.id === 'app-id');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toContain('not a valid Android package name: it may contain only letters, digits, dots and underscores (project droid)');
+      expect(rows[0]!.label).toContain('"com.example app" is not a valid iOS bundle identifier');
+      expect(rows[0]!.label).toContain('(project bad)');
+      expect(rows[0]!.label).not.toContain('phone');
+    });
+  });
+
   it('iOS-only fields without platform fail, as tapsmith test does', async () => {
     withXcode();
     writeConfig("export default { app: 'x.app', simulator: 'iPhone 16' }\n");

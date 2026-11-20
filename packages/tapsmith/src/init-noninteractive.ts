@@ -18,6 +18,7 @@ import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
 import type { InstallCommand } from './config.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
+import { appIdWarning } from './app-id.js';
 
 // ─── Types ───
 
@@ -276,6 +277,8 @@ export function resolveInitPlan(
     if (useEmulators && env.avds.length === 0 && (!avd || env.avdImages.length > 0)) {
       warnings.push(noAvdsListedMessage(env.avdImages, avd));
     }
+    const packageWarning = packageName && appIdWarning(packageName, 'android');
+    if (packageWarning) warnings.push(packageWarning);
     android = { apkPath, packageName, useEmulators, usePhysicalDevices: deviceType === 'physical' || deviceType === 'both', avd };
   }
 
@@ -344,6 +347,9 @@ export function resolveInitPlan(
         fix: 'Pass --bundle-id <id>',
       });
     }
+
+    const bundleIdWarning = appIdWarning(bundleId, 'ios');
+    if (bundleIdWarning) warnings.push(bundleIdWarning);
 
     let simulator = args.simulator;
     if (!simulator) {

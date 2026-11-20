@@ -146,7 +146,7 @@ export interface TapsmithConfig {
   /** Directory to write screenshots and artifacts to. */
   outputDir: string;
 
-  /** Android package name of the app under test. Launched automatically before tests. */
+  /** The app under test: its Android package name, or its iOS bundle identifier. Launched automatically before tests. */
   package?: string;
 
   /** Path to the Tapsmith agent APK. Used for auto-install if agent is not on device. */
