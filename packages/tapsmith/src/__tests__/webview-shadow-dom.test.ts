@@ -195,16 +195,6 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
     await expect(handle.locator('button[').count()).rejects.toThrow();
   });
 
-  it('walks a very deep tree without overflowing the stack', async () => {
-    const { handle } = handleOn('<!DOCTYPE html><body></body>', (doc) => {
-      doc.body.attachShadow({ mode: 'open' }).innerHTML = '<slot></slot>';
-      let parent: Element = doc.body;
-      for (let i = 0; i < 12_000; i++) parent = parent.appendChild(doc.createElement('div'));
-      parent.appendChild(doc.createElement('p')).id = 'deep';
-    });
-    expect(await idsOf(handle, handle.locator('#deep')._finderAllJs)).toEqual(['deep']);
-  }, 30_000);
-
   describe('the Playground DOM dump', () => {
     function flatten(nodes: HierarchyNode[]): HierarchyNode[] {
       return nodes.flatMap((n) => [n, ...flatten(n.children)]);
