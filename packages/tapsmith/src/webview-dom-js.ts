@@ -60,7 +60,9 @@ const HELPERS_JS = `(() => {
       if (n.nodeType === 3) { s += n.data; return; }
       if (n.nodeType !== 1 && n.nodeType !== 11) return;
       if (n.nodeType === 1) {
-        if (skipText(n)) return;
+        // Hidden from assistive technology, so not part of a name: an icon's
+        // ligature text or SVG <title> (Material Web, ionicons 5).
+        if (skipText(n) || (n !== node && n.getAttribute('aria-hidden') === 'true')) return;
         if (n.nodeName.toUpperCase() === 'SLOT' && typeof n.assignedNodes === 'function') {
           for (const a of n.assignedNodes({ flatten: true })) visit(a);
           return;

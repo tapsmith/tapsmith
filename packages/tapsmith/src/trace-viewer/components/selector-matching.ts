@@ -785,13 +785,13 @@ function matchCssSelector(css: string, tag: string, id: string, cssClass: string
   }
 
   // tag#id
-  const tagIdMatch = trimmed.match(/^(\w+)#(\S+)$/);
+  const tagIdMatch = trimmed.match(/^([a-zA-Z][\w-]*)#(\S+)$/);
   if (tagIdMatch) {
     return isCssIdentifier(tagIdMatch[2]) && tag === tagIdMatch[1] && id === tagIdMatch[2];
   }
 
   // tag.class
-  const tagClassMatch = trimmed.match(/^(\w+)\.(\S+)$/);
+  const tagClassMatch = trimmed.match(/^([a-zA-Z][\w-]*)\.(\S+)$/);
   if (tagClassMatch) {
     return isCssIdentifier(tagClassMatch[2]) && tag === tagClassMatch[1] && classes.includes(tagClassMatch[2]);
   }

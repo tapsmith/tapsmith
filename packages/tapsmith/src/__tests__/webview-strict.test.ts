@@ -42,6 +42,7 @@ function probeOf(matches: ProbeMatch[], nthIndex = 0): WebViewLocatorProbe {
       role: m.role ?? '',
       text: m.text ?? '',
       leaf: m.leaf ?? true,
+      inShadow: false,
     })),
   };
 }

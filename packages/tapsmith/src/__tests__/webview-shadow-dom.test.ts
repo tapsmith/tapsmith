@@ -15,6 +15,7 @@ import { WebViewHandle } from '../webview-handle.js';
 import { isStrictModeViolation } from '../element-handle.js';
 import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
+import { findMatchingNodes, parseSelectorString } from '../trace-viewer/components/selector-matching.js';
 
 const SHADOW_PAGE = `<!DOCTYPE html><html><body>
   <button id="light">Light</button>
@@ -24,7 +25,7 @@ const SHADOW_PAGE = `<!DOCTYPE html><html><body>
   <x-slider id="volume"></x-slider>
   <x-outer id="outer"></x-outer>
   <x-closed id="closed"></x-closed>
-  <x-icon id="close" aria-label="Close"></x-icon>
+  <x-icon id="close" class="icon-host" aria-label="Close"></x-icon>
   <p id="result">idle</p>
 </body></html>`;
 
@@ -153,9 +154,18 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
     await handle.getByRole('button', { name: 'Sign in' }).click();
     expect(doc.getElementById('result')!.textContent).toBe('signed in');
 
+    // A real keystroke's input event is composed: it reaches listeners on the
+    // component's host and the document, where Lit and Material Web apps listen.
+    const heard: string[] = [];
+    doc.getElementById('nickname')!.addEventListener('input', () => heard.push('host'));
+    doc.addEventListener('input', () => heard.push('document'));
     const field = handle.getByPlaceholder('Your nickname');
     await field.fill('jordan');
     expect(await field.inputValue()).toBe('jordan');
+    expect(heard).toEqual(['host', 'document']);
+    heard.length = 0;
+    await handle.fill('#nick', 'sam');
+    expect(heard).toEqual(['host', 'document']);
   });
 
   it('counts shadow matches for strict mode', async () => {
@@ -183,6 +193,33 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
     expect(await handle.getByRole('button', { name: '' }).count()).toBe(1);
     expect(await handle.getByRole('banner', { name: '' }).count()).toBe(1);
     expect(await handle.getByRole('banner', { name: 'Y' }).count()).toBe(1);
+  });
+
+  it('leaves aria-hidden content out of an accessible name', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="b"><x-icon aria-hidden="true"></x-icon>Sign in</button>'
+      + '<x-md-button id="m"><x-icon slot="icon" aria-hidden="true">send</x-icon>Send</x-md-button></body>', (doc) => {
+      // An ionicons 5 icon renders its SVG <title> into its shadow root.
+      doc.querySelector('#b x-icon')!.attachShadow({ mode: 'open' }).innerHTML = '<svg><title>Log In</title></svg>';
+      // Material Web's md-button: the icon slot and the label slot inside the button.
+      doc.getElementById('m')!.attachShadow({ mode: 'open' }).innerHTML =
+        '<button><slot name="icon"></slot><span class="label"><slot></slot></span></button>';
+    });
+    expect(await handle.getByRole('button', { name: 'Sign in' }).count()).toBe(1);
+    expect(await handle.getByRole('button', { name: 'Send' }).count()).toBe(1);
+  });
+
+  it('never suggests an id or test id from inside a shadow root, where it need not be unique', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><x-field></x-field><x-field></x-field></body>', (doc) => {
+      for (const host of doc.querySelectorAll('x-field')) {
+        host.attachShadow({ mode: 'open' }).innerHTML = '<input id="native-input" data-testid="field">';
+      }
+    });
+    const err = await handle.getByRole('textfield').click().catch((e: unknown) => e);
+    expect(isStrictModeViolation(err)).toBe(true);
+    expect(String(err)).not.toContain('#native-input');
+    expect(String(err)).not.toContain('webview.getByTestId');
+    // Each would match both fields.
+    expect(await handle.locator('#native-input').count()).toBe(2);
   });
 
   it('keeps document order and results on a page without shadow roots', async () => {
@@ -245,6 +282,25 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
         const [, role, name] = /getByRole\("(\w+)", \{ name: "([^"]+)" \}\)/.exec(code)!;
         expect(await handle.getByRole(role!, { name }).count(), code).toBe(1);
       }
+    });
+
+    it('includes a slot\'s fallback content, which the slot (display: contents) has no box of its own to hold', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><x-details id="d"></x-details></body>', (doc) => {
+        doc.getElementById('d')!.attachShadow({ mode: 'open' }).innerHTML =
+          '<div class="summary"><slot name="label"><span class="default-label">Details</span></slot></div>';
+      });
+      const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
+      const summary = nodes.find((n) => n.attributes.get('webview-class') === 'summary')!;
+      expect(summary.children.map((c) => c.attributes.get('text'))).toEqual(['Details']);
+    });
+
+    it('matches a custom element\'s tag.class and tag#id offline, as the page does', async () => {
+      const { handle } = shadowPage();
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      const count = (code: string) => findMatchingNodes(roots, parseSelectorString(code)!).length;
+      expect(count('webview.locator("x-button#sign-in")')).toBe(1);
+      expect(count('webview.locator("x-icon.icon-host")')).toBe(1);
+      expect(await handle.locator('x-icon.icon-host').count()).toBe(1);
     });
   });
 });

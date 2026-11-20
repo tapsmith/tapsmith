@@ -60,6 +60,9 @@ interface WebViewDomDescription {
   text: string
   /** No child elements: the only kind of element webview.getByText finds. */
   leaf: boolean
+  /** Inside a shadow root, where an id or test id need only be unique within
+   * that one tree, so neither picks this element out of the whole page. */
+  inShadow: boolean
 }
 
 /** @internal — Single-tick snapshot of a locator's full match set. */
@@ -84,8 +87,8 @@ function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string
   if (!d) return undefined;
   // Copy-paste-safe string literals, like the native suggestions (PILOT-659).
   const lit = (v: string): string => `"${escapeJsString(v)}"`;
-  if (d.testId) return `webview.getByTestId(${lit(d.testId)})`;
-  if (d.id) return `webview.locator(${lit(cssIdSelector(d.id))})`;
+  if (d.testId && !d.inShadow) return `webview.getByTestId(${lit(d.testId)})`;
+  if (d.id && !d.inShadow) return `webview.locator(${lit(cssIdSelector(d.id))})`;
   if (d.ariaLabel) return `webview.getByLabel(${lit(d.ariaLabel)})`;
   // getByText finds leaf elements only: a parent's text would resolve to the
   // child holding it, or to nothing when it spans several (PILOT-666).
@@ -667,6 +670,7 @@ export class WebViewHandle {
           role: el.getAttribute('role') || '',
           text: (el.textContent || '').trim().slice(0, 80),
           leaf: el.children.length === 0,
+          inShadow: el.getRootNode() !== document,
         })),
         target: ${targetJs},
       };
@@ -867,7 +871,7 @@ export class WebViewHandle {
       await this._evaluate(`(() => {
         const el = (${loc._finderJs});
         el.value = ${escaped};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       })()`, remainingUntil(deadline));
     }, loc._finderJs, timeoutMs);
@@ -959,12 +963,18 @@ export class WebViewHandle {
       // Evaluate JS to walk the DOM and produce a hierarchy
       const domData = await this._evaluate(withDomHelpers(`(() => {
         const dpr = ${useDpr ? 'window.devicePixelRatio || 1' : '1'};
+        // The nodes for el: itself, or, when it has no box of its own (a
+        // <slot> or other display: contents element), its children's nodes in
+        // its place, so a slot's fallback content can still be picked.
         function walk(el, depth) {
-          if (depth > 20) return null;
+          if (depth > 20) return [];
           const tag = el.tagName?.toLowerCase() || '';
-          if (!tag || tag === 'script' || tag === 'style' || tag === 'head') return null;
+          if (!tag || tag === 'script' || tag === 'style' || tag === 'head') return [];
+          // Shadow-including tree order, as the locators match: the open
+          // shadow root's contents, then the element's own children.
+          const kids = el.shadowRoot ? [...el.shadowRoot.children, ...el.children] : [...el.children];
           const r = el.getBoundingClientRect();
-          if (r.width === 0 && r.height === 0) return null;
+          if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth + 1));
           const node = {
             tag: tag,
             id: el.id || '',
@@ -1003,16 +1013,10 @@ export class WebViewHandle {
             },
             children: [],
           };
-          // Shadow-including tree order, as the locators match: the open
-          // shadow root's contents, then the element's own children.
-          const kids = el.shadowRoot ? [...el.shadowRoot.children, ...el.children] : el.children;
-          for (const child of kids) {
-            const c = walk(child, depth + 1);
-            if (c) node.children.push(c);
-          }
-          return node;
+          for (const child of kids) node.children.push(...walk(child, depth + 1));
+          return [node];
         }
-        return walk(document.body, 0);
+        return walk(document.body, 0)[0] ?? null;
       })()`), WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS) as DomNode | null;
 
       if (!domData) return undefined;
@@ -1091,7 +1095,7 @@ export class WebViewHandle {
       await this._evaluate(`(() => {
         const el = (${deepQueryJs(selector)});
         el.value = ${escaped};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       })()`, remainingUntil(deadline));
     }, undefined, timeout);
