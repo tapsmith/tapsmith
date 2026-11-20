@@ -238,7 +238,7 @@ Roles and names work on both platforms for most Material widgets, and are the fi
 | `CheckboxListTile` | `getByLabel("Remember me")` | A `checkbox` on Android and a `switch` on iOS, so `getByRole()` needs the role per platform. `setChecked()` and `toBeChecked()` work on both |
 | `SwitchListTile` | `getByRole("switch", { name: "Notifications" })` | |
 | `ListTile` with `onTap` | `getByRole("button", { name: /Item 1(?!\d)/ })` | Named by all of its text together (leading, title and subtitle), so match part of the name: `{ name: "Price: $3.00" }` finds the row too, and the `RegExp` keeps `"Item 1"` from also matching `"Item 10"` |
-| `NavigationBar`, `NavigationRail`, `TabBar` or `BottomNavigationBar` item | `getByRole("tab", { name: "Settings" })` | `selected` reads which one is current. A `NavigationBar` or `BottomNavigationBar` item is also a `button` |
+| `NavigationBar`, `NavigationRail`, `TabBar` or `BottomNavigationBar` item | `getByRole("tab", { name: "Settings" })` | `selected` reads which one is current. A `NavigationBar` or `BottomNavigationBar` item still matches `getByRole("button", { name })` too, but `toHaveRole()` reports it as `tab` |
 | `AlertDialog` | its buttons by role, its title with `getByDescription()` | Flutter draws the dialog itself, so it is not a native alert and `getByRole("alert")` does not find it. Its buttons tap as usual |
 
 An `AppBar` title is not a `heading` on either platform: find it with `getByDescription()`. When no role or name fits a widget, give it a `Semantics(identifier:)`.
