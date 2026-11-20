@@ -154,6 +154,30 @@ describe('.only focuses the whole file', () => {
     expect(statuses(result)).toEqual({ 'off > x': 'skipped', y: 'skipped' });
   });
 
+  it('reports every test it leaves out, and every test of a describe.skip, to the reporter', async () => {
+    const ended: TestResult[] = [];
+    await run(() => {
+      tapsmithTest.only('a', async () => {});
+      tapsmithTest('b', async () => {});
+      tapsmithTest.describe('g', () => {
+        tapsmithTest('c', async () => {});
+        tapsmithTest.describe('inner', () => { tapsmithTest('d', async () => {}); });
+      });
+      tapsmithTest.describe.only('focused', () => {
+        tapsmithTest('e', async () => {});
+        tapsmithTest.describe.skip('off', () => { tapsmithTest('f', async () => {}); });
+      });
+    }, { reporter: { onTestEnd: (r: TestResult) => { ended.push(r); } }, projectName: 'p', testFilePath: '/f.test.ts' });
+    expect(ended.map((r) => [r.fullName, r.status, r.project, r.filePath])).toEqual([
+      ['a', 'passed', 'p', '/f.test.ts'],
+      ['b', 'skipped', 'p', '/f.test.ts'],
+      ['g > c', 'skipped', 'p', '/f.test.ts'],
+      ['g > inner > d', 'skipped', 'p', '/f.test.ts'],
+      ['focused > e', 'passed', 'p', '/f.test.ts'],
+      ['focused > off > f', 'skipped', 'p', '/f.test.ts'],
+    ]);
+  });
+
   it('runs no hook of a describe that holds no focused test', async () => {
     const hook = vi.fn();
     const result = await run(() => {

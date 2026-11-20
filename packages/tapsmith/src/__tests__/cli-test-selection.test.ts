@@ -370,6 +370,17 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     expect(reachedDevice).toBe(false);
   });
 
+  it('reports a broken file that holds no .only in a run another file focuses, and runs nothing', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'),
+      'import { test } from "tapsmith";\ntest.only("signs in", async () => {});\n');
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'signup.test.ts'), BROKEN);
+    const { status, output, reachedDevice } = run();
+    expect(plain(output)).toContain('signup.test.ts — failed to load');
+    expect(plain(output)).toContain('No tests ran: 1 test file failed to load.');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
   it('points a missing import at its line, before any device work', () => {
     fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'),
       'import { test } from "tapsmith";\nimport { helper } from "./helpers/nope.js";\ntest("m", async () => { helper(); });\n');

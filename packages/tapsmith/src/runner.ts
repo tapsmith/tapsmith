@@ -3818,22 +3818,13 @@ async function runSuiteContext(
     // the remaining suites' tests as 'skipped'.
     if (opts.abortSignal?.aborted) break;
 
-    const shouldSkip = suiteEntry.skip || (focused && !suiteFocused(suiteEntry));
-
-    if (shouldSkip) {
-      // Mark all tests in skipped suite as skipped (we still need to discover them)
-      const childCtx = materializeSuiteEntry(suiteEntry);
-      const prefix = parentPrefix ? `${parentPrefix} > ${suiteEntry.name}` : suiteEntry.name;
-      const skippedResult = skipAll(childCtx, prefix, opts);
-      result.suites.push(skippedResult);
-      continue;
-    }
-
-    if (serialGroup?.failed || ctx.skipped || skippedByBeforeAll) {
-      // An earlier test of the serial group failed, or this scope is skipped
-      // by a describe-level test.skip(): the whole describe is skipped
-      // without its hooks or app reset, and — like a test the loop above
-      // skips — each of its tests is reported as skipped.
+    if (suiteEntry.skip || (focused && !suiteFocused(suiteEntry))
+      || serialGroup?.failed || ctx.skipped || skippedByBeforeAll) {
+      // A describe.skip, a describe a `.only` beside it leaves out, the rest
+      // of a serial group after a failure, or a scope skipped by a
+      // describe-level test.skip(): the whole describe is skipped without
+      // its hooks or app reset, and — like a test the loop above skips —
+      // each of its tests is reported as skipped.
       const childCtx = materializeSuiteEntry(suiteEntry);
       const prefix = parentPrefix ? `${parentPrefix} > ${suiteEntry.name}` : suiteEntry.name;
       const skippedResult = skipAll(childCtx, prefix, opts);
