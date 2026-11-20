@@ -84,7 +84,8 @@ export function pickNodeAt(
 
 // ─── WebView overlay detection (live mirror pick) ───
 
-function isNativeWebViewContainer(node: HierarchyNode): boolean {
+/** A native WebView element: what holds a page's accessibility projection. */
+export function isNativeWebViewContainer(node: HierarchyNode): boolean {
   // iOS: <XCUIElementTypeWebView …>. Android: <node class="android.webkit.WebView" …>.
   return node.tagName === 'XCUIElementTypeWebView'
     || (node.attributes.get('class') ?? '').includes('webkit.WebView');

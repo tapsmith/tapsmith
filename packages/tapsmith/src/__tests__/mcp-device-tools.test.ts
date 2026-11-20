@@ -309,6 +309,33 @@ describe('tapsmith_snapshot', () => {
     });
   });
 
+  describe('a WebView on screen (PILOT-1329)', () => {
+    const WEB_XML = `
+<XCUIElementTypeApplication type="XCUIElementTypeApplication">
+  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Sign in to continue to DreamSpinner" bounds="[0,100][390,140]" />
+  <XCUIElementTypeWebView type="XCUIElementTypeWebView" bounds="[0,150][390,800]">
+    <XCUIElementTypeButton type="XCUIElementTypeButton" label="Sign in" tapsmith-role="button" bounds="[20,200][370,250]" />
+  </XCUIElementTypeWebView>
+</XCUIElementTypeApplication>`;
+
+    it('marks its content and says how to reach the page, before the locators', async () => {
+      hoisted.client = makeDaemon({ hierarchyXml: WEB_XML, evaluate: signInAgent }).client;
+      const out = text(await callTool('tapsmith_snapshot'));
+      expect(out).toMatch(/^- webview \(web content: device\.webview\(\) locators\)\n {2}- \[\d+\] button "Sign in"$/m);
+      const note = out.indexOf('const webview = await device.webview()');
+      expect(note).toBeGreaterThan(out.indexOf('- webview'));
+      expect(note).toBeLessThan(out.indexOf('## Suggested Locators'));
+      expect(out).toContain('webview.getByRole(');
+      expect(out).toContain('tapsmith_test_locator');
+      expect(summarizeResult('tapsmith_snapshot', out)).toMatch(/, 2 locators$/);
+    });
+
+    it('says nothing of WebViews on a screen with none', async () => {
+      hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent }).client;
+      expect(text(await callTool('tapsmith_snapshot'))).not.toContain('webview');
+    });
+  });
+
   it('returns the tree and the locators an agent is meant to copy', async () => {
     hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent }).client;
     const res = await callTool('tapsmith_snapshot');

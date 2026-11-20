@@ -560,6 +560,130 @@
       "matches": true
     },
     {
+      "why": "a slider with the adjustable trait is a seekbar",
+      "platform": "ios",
+      "type": "XCUIElementTypeSlider",
+      "traits": [
+        "adjustable"
+      ],
+      "reportedRole": "seekbar",
+      "role": "seekbar",
+      "matches": true
+    },
+    {
+      "why": "a stepper with the adjustable trait is still a spinbutton",
+      "platform": "ios",
+      "type": "XCUIElementTypeStepper",
+      "traits": [
+        "adjustable"
+      ],
+      "reportedRole": "spinbutton",
+      "role": "spinbutton",
+      "matches": true
+    },
+    {
+      "why": "and no seekbar",
+      "platform": "ios",
+      "type": "XCUIElementTypeStepper",
+      "traits": [
+        "adjustable"
+      ],
+      "reportedRole": "spinbutton",
+      "role": "seekbar",
+      "matches": false
+    },
+    {
+      "why": "a generic view with the search-field trait is a searchfield",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "traits": [
+        "searchField"
+      ],
+      "reportedRole": "searchfield",
+      "role": "searchfield",
+      "matches": true
+    },
+    {
+      "why": "a text field with the search-field trait (RN's search role) stays a textfield, as on Android",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "traits": [
+        "searchField"
+      ],
+      "reportedRole": "textfield",
+      "role": "textfield",
+      "matches": true
+    },
+    {
+      "why": "and no searchfield",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "traits": [
+        "searchField"
+      ],
+      "reportedRole": "textfield",
+      "role": "searchfield",
+      "matches": false
+    },
+    {
+      "why": "a web text field (WebKit's web-content trait) is a textfield",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "traits": [
+        "webContent",
+        "textEntry"
+      ],
+      "reportedRole": "textfield",
+      "role": "textfield",
+      "matches": true
+    },
+    {
+      "why": "and no seekbar",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "traits": [
+        "webContent",
+        "textEntry"
+      ],
+      "reportedRole": "textfield",
+      "role": "seekbar",
+      "matches": false
+    },
+    {
+      "why": "a web button is a button",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "webContent",
+        "button"
+      ],
+      "reportedRole": "button",
+      "role": "button",
+      "matches": true
+    },
+    {
+      "why": "web text is text",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "webContent",
+        "staticText"
+      ],
+      "reportedRole": "text",
+      "role": "text",
+      "matches": true
+    },
+    {
+      "why": "a web group has no role",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "traits": [
+        "webContent"
+      ],
+      "role": "seekbar",
+      "matches": false
+    },
+    {
       "why": "a multi-line text view is a textfield",
       "platform": "ios",
       "type": "XCUIElementTypeTextView",

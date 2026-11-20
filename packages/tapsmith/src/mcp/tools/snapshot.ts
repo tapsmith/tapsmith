@@ -19,6 +19,14 @@ const EMPTY_SCREEN_WAIT_MS = 15_000;
 const EMPTY_SCREEN_POLL_MS = 500;
 
 /**
+ * Said under a tree that marks a WebView's content (formatHierarchy's
+ * `hasWebView`): its refs are native locators on the page's accessibility
+ * projection, and the page itself is reached through `device.webview()`
+ * (PILOT-1329).
+ */
+const WEBVIEW_NOTE = '(The `webview` lines hold a WebView\'s content as the native accessibility tree shows it, and the refs under them are native locators. For the page itself, use WebView locators: `const webview = await device.webview()`, then `webview.getByRole()`, `webview.getByText()`, `webview.getByPlaceholder()` or `webview.locator(css)`. tapsmith_test_locator checks `webview.…` locators too.)';
+
+/**
  * Read the screen, reading again while it has nothing on it yet. An error on
  * the first read is the answer; after an empty read it may be the launch
  * still going on, so it is reported only if it lasts until the bound.
@@ -63,7 +71,7 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
       const ios = hierarchyXml.includes('<XCUIElementType');
       const { byNode, errorMessage: suggestError, stoppedAt, notFound } =
         await agentValidatedSuggestions(client, nodes, ios ? { chunkSize: IOS_CHUNK_SIZE } : {});
-      const { tree, locators } = formatHierarchy(roots, byNode);
+      const { tree, locators, hasWebView } = formatHierarchy(roots, byNode);
 
       // There is no other matcher to fall back to: say why refs are missing
       // rather than offer unchecked ones. The note goes before the locator
@@ -81,7 +89,7 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
           : notFound > 0
             ? `(${notFound === 1 ? '1 listed element was' : `${notFound} listed elements were`} not on screen when the device agent checked ${notFound === 1 ? 'it' : 'them'}, so ${notFound === 1 ? 'it has' : 'they have'} no suggested locator; the screen may have changed. Take the snapshot again.)`
             : '';
-      const body = [tree || '(empty screen)', note].filter(Boolean).join('\n\n');
+      const body = [tree || '(empty screen)', hasWebView ? WEBVIEW_NOTE : '', note].filter(Boolean).join('\n\n');
       const output = locators.length > 0
         ? `${body}\n\n## Suggested Locators\n${locators.join('\n')}`
         : body;

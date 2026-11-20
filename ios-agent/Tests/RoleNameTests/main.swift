@@ -32,16 +32,18 @@ let typesByName: [String: XCUIElement.ElementType] = {
     return map
 }()
 
-/// The fixture's trait names, as the bits RoleMapping reads.
+/// The fixture's trait names, as the bits an element carries: UIKit's values,
+/// written out, so a wrong constant in RoleMapping fails here (PILOT-1329).
 let traitsByName: [String: UInt64] = [
-    "button": AccessibilityTrait.button,
-    "link": AccessibilityTrait.link,
-    "image": AccessibilityTrait.image,
-    "staticText": AccessibilityTrait.staticText,
-    "header": AccessibilityTrait.header,
-    "adjustable": AccessibilityTrait.adjustable,
-    "searchField": AccessibilityTrait.searchField,
-    "textEntry": AccessibilityTrait.textEntry,
+    "button": 1 << 0,        // UIAccessibilityTraitButton
+    "link": 1 << 1,          // UIAccessibilityTraitLink
+    "image": 1 << 2,         // UIAccessibilityTraitImage
+    "staticText": 1 << 6,    // UIAccessibilityTraitStaticText
+    "searchField": 1 << 10,  // UIAccessibilityTraitSearchField
+    "adjustable": 1 << 12,   // UIAccessibilityTraitAdjustable
+    "header": 1 << 16,       // UIAccessibilityTraitHeader
+    "webContent": 1 << 17,   // WebKit's private web-content trait, on every node in a WKWebView
+    "textEntry": 1 << 18,    // UIAccessibilityTraitTextEntry (private)
 ]
 
 let fixturePath = CommandLine.arguments.count > 1

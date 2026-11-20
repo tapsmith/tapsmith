@@ -1,12 +1,28 @@
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { getNodeRole } from '../trace-viewer/components/hierarchy-utils.js';
 import { isNonAppNode, isNonAppSubtree } from '../trace-viewer/components/non-app-nodes.js';
+import { isNativeWebViewContainer } from '../trace-viewer/components/pick-node.js';
 import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
 import { escapeJsString } from '../js-string-escape.js';
 
 interface FormattedResult {
   tree: string
   locators: string[]
+  /** Whether the tree marks a WebView's content (`WEBVIEW_LINE`). */
+  hasWebView: boolean
+}
+
+/**
+ * The line a native WebView's content is listed under. Its nodes are the
+ * page's accessibility projection, which native locators match; the page's
+ * own DOM is reached with `device.webview()` locators (PILOT-1329).
+ */
+const WEBVIEW_LINE = 'webview (web content: device.webview() locators)';
+
+/** Where the formatter is: inside a WebView already marked, and whether one was. */
+interface WebViewState {
+  inside: boolean
+  marked: boolean
 }
 
 interface RefEntry {
@@ -67,9 +83,21 @@ function formatNode(
   depth: number,
   refs: RefEntry[],
   suggestions: Suggestions,
+  webview: WebViewState,
 ): string[] {
   const lines: string[] = [];
   const indent = '  '.repeat(depth);
+
+  // A WebView (iOS nests three) is marked once, at its outermost element,
+  // and its content listed under it.
+  if (!webview.inside && isNativeWebViewContainer(node)) {
+    lines.push(`${indent}- ${WEBVIEW_LINE}`);
+    webview.inside = true;
+    webview.marked = true;
+    lines.push(...formatNode(node, depth + 1, refs, suggestions, webview));
+    webview.inside = false;
+    return lines;
+  }
   const role = getNodeRole(node);
   const text = getText(node);
   const hint = getHint(node);
@@ -104,7 +132,7 @@ function formatNode(
   const childDepth = isSemantic ? depth + 1 : depth;
   for (const child of node.children) {
     if (hasSemanticDescendant(child)) {
-      lines.push(...formatNode(child, childDepth, refs, suggestions));
+      lines.push(...formatNode(child, childDepth, refs, suggestions, webview));
     }
   }
 
@@ -131,15 +159,17 @@ export function semanticNodes(roots: HierarchyNode[]): HierarchyNode[] {
 export function formatHierarchy(roots: HierarchyNode[], suggestions: Suggestions): FormattedResult {
   const refs: RefEntry[] = [];
   const lines: string[] = [];
+  const webview: WebViewState = { inside: false, marked: false };
 
   for (const root of roots) {
     if (hasSemanticDescendant(root)) {
-      lines.push(...formatNode(root, 0, refs, suggestions));
+      lines.push(...formatNode(root, 0, refs, suggestions, webview));
     }
   }
 
   return {
     tree: lines.join('\n'),
     locators: refs.map(r => `[${r.ref}] ${r.selector}`),
+    hasWebView: webview.marked,
   };
 }

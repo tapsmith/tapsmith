@@ -23,6 +23,7 @@ import { TogglesScreen } from "./screens/toggles.screen.js"
 import { TurnedScreen } from "./screens/turned.screen.js"
 import { TypingScreen } from "./screens/typing.screen.js"
 import { VisibilityScreen } from "./screens/visibility.screen.js"
+import { WebViewScreen } from "./screens/webview.screen.js"
 
 type ScreenFixtures = {
   accessibilityScreen: AccessibilityScreen
@@ -49,6 +50,7 @@ type ScreenFixtures = {
   turnedScreen: TurnedScreen
   typingScreen: TypingScreen
   visibilityScreen: VisibilityScreen
+  webviewScreen: WebViewScreen
 }
 
 export const test = base.extend<ScreenFixtures>({
@@ -123,6 +125,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   visibilityScreen: async ({ device }, use) => {
     await use(new VisibilityScreen(device))
+  },
+  webviewScreen: async ({ device }, use) => {
+    await use(new WebViewScreen(device))
   },
 })
 
