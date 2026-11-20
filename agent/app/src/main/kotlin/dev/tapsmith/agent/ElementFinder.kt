@@ -721,7 +721,8 @@ class ElementFinder(
          * text (read only when the first two don't match) — or, for an
          * EditText with no other name, its hint (PILOT-834). A control with
          * no name of its own in an actionable row is named by the row
-         * ([RowName.name]) instead.
+         * ([RowName.name]) instead, and a Flutter tab by its label
+         * ([FlutterTab.nameOf]).
          */
         private fun matchesAccessibleName(
             candidate: FindCandidate,
@@ -739,7 +740,9 @@ class ElementFinder(
                 }
             }
             val text = candidate.text
-            val contentDescription = candidate.contentDescription
+            // A Flutter tab is named by its label, without the position
+            // Flutter appends to it ("Contact\nTab 2 of 3", FlutterTab).
+            val contentDescription = candidate.contentDescription.let { FlutterTab.nameOf(it) ?: it }
             // An empty EditText reports its hint as its text; that hint is a
             // name, not a typed value. A typed one with no other name is still
             // named by its hint (PILOT-834).
@@ -1464,7 +1467,7 @@ class ElementFinder(
             // 1. Heading flag (API 28+) — React Native writes here for
             //    `accessibilityRole="header"`.
             if (android.os.Build.VERSION.SDK_INT >= 28 && node.isHeading) {
-                return FindRules.publishedRole(isHeading = true, rawDescription = null)
+                return FindRules.publishedRole(isHeading = true, rawDescription = null, contentDescription = null)
             }
 
             // 2. Compat-shimmed heading flag for older API levels: read the
@@ -1484,7 +1487,7 @@ class ElementFinder(
             // accessibilityRole="Header" would otherwise surface as
             // "Header"), and read RN's multi-word descriptions ("Progress
             // Bar") as the role name.
-            return FindRules.publishedRole(compatHeading, raw)
+            return FindRules.publishedRole(compatHeading, raw, node.contentDescription)
         } catch (e: Exception) {
             // A malformed extras bundle must not fail the whole find; log so
             // a regression in every role-from-RN mapping is visible.

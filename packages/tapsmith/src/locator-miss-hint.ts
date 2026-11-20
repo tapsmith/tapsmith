@@ -17,6 +17,7 @@
 
 import type { EvaluateSelectorsResponse, GetSystemAlertResponse } from './grpc-client.js';
 import { collapseSameTargetDuplicates } from './element-handle.js';
+import { normalizeRole } from './roles.js';
 import { formatSelector, makeSelector, type RoleSelectorValue, type Selector } from './selectors.js';
 
 /** The sentence every native locator miss ends with. MCP tools replace it with their own. */
@@ -75,6 +76,16 @@ function wordProbes(needle: string, skip: Selector['kind']['type'][]): Probe[] {
 }
 
 /**
+ * The words as a tab's name. A Flutter tab's description ends in the position
+ * Flutter appends to its label ("Contact\nTab 2 of 3"), so neither
+ * getByDescription("Contact") nor a role it does not have finds it; the tab
+ * role names it "Contact".
+ */
+function tabProbe(needle: string): Probe {
+  return { selector: makeSelector({ type: 'role', value: { role: 'tab', name: needle } }) };
+}
+
+/**
  * The alternative selectors a miss of `selector` is checked against. Empty
  * for a scoped selector (the agent evaluates unscoped selectors only), a
  * RegExp needle under a text getter, and the id-like getters, whose values
@@ -89,7 +100,10 @@ export function nearMissProbes(selector: Selector): Probe[] {
       const probes: Probe[] = [];
       const loose = loosenedRole(rv);
       if (loose) probes.push({ selector: makeSelector({ type: 'role', value: loose }) });
-      if (!rv.nameRegex && rv.name) probes.push(...wordProbes(rv.name, []));
+      if (!rv.nameRegex && rv.name) {
+        probes.push(...wordProbes(rv.name, []));
+        if (normalizeRole(rv.role) !== 'tab') probes.push(tabProbe(rv.name));
+      }
       // Named or not, the role itself: told only when nothing else matched.
       if (rv.name || rv.nameRegex) {
         probes.push({ selector: makeSelector({ type: 'role', value: { role: rv.role, name: '' } }), fallback: true });
@@ -97,11 +111,16 @@ export function nearMissProbes(selector: Selector): Probe[] {
       return probes;
     }
     case 'text':
-      return [{ selector: makeSelector({ type: 'textContains', value: kind.value }) }, ...wordProbes(kind.value, ['textContains'])];
+      return [
+        { selector: makeSelector({ type: 'textContains', value: kind.value }) },
+        ...wordProbes(kind.value, ['textContains']),
+        tabProbe(kind.value),
+      ];
     case 'textContains':
+    case 'contentDesc':
+      return kind.value ? [...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)] : [];
     case 'label':
     case 'hint':
-    case 'contentDesc':
       return kind.value ? wordProbes(kind.value, [kind.type]) : [];
     default:
       return [];

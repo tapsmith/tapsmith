@@ -1873,6 +1873,140 @@
       "matches": true
     },
     {
+      "why": "a Flutter NavigationRail destination is a tab",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "matches": true
+    },
+    {
+      "why": "named by its label",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "contact",
+      "matches": true
+    },
+    {
+      "why": "exact compares the label without the position",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "the position is not part of the name",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Tab 2",
+      "matches": false
+    },
+    {
+      "why": "a RegExp tests the label",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": {
+        "source": "^Contact$",
+        "flags": "",
+        "pattern": "\\AContact\\z",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
+      "why": "not another tab's label",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Posts",
+      "matches": false
+    },
+    {
+      "why": "a NavigationRail destination is no button",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "matches": false
+    },
+    {
+      "why": "a Flutter NavigationBar destination is a tab",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "and still a button, by its label",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "an unlabelled Flutter tab is a tab named nothing",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Tab 1 of 3",
+      "reportedRole": "tab",
+      "tabName": "",
+      "role": "tab",
+      "matches": true
+    },
+    {
+      "why": "and has no name to match",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Tab 1 of 3",
+      "reportedRole": "tab",
+      "tabName": "",
+      "role": "tab",
+      "name": "Tab",
+      "matches": false
+    },
+    {
+      "why": "a description without the position is no tab",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact",
+      "role": "tab",
+      "matches": false
+    },
+    {
       "why": "a RecyclerView's row is a listitem",
       "platform": "android",
       "type": "android.widget.LinearLayout",

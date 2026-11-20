@@ -81,7 +81,9 @@ const ALWAYS_GENERIC_ROLES = new Set(['other', 'none']);
 // UIAccessibilityTraitHeader → "heading", UIAccessibilityTraitButton →
 // "button"). These are trustworthy even on generic XCUIElementTypeOther
 // elements because the app explicitly declared them.
-const TRUSTED_TRAIT_ROLES = new Set(['heading', 'link', 'searchfield', 'button', 'image', 'seekbar']);
+// A tab is the role an Android item publishes as a role description (Material,
+// Compose, React Native) or that a Flutter tab's position marks.
+const TRUSTED_TRAIT_ROLES = new Set(['heading', 'link', 'searchfield', 'button', 'image', 'seekbar', 'tab']);
 
 /** Check whether the node's native class/type already maps to a known role
  * (without relying on tapsmith-role). If so, the role is trustworthy. */
@@ -270,11 +272,15 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   // row: the agent dumps the row's title as `tapsmith-label`, a part of the
   // full name (`tapsmith-name`) that getByRole's substring match accepts and
   // that a changing summary does not break.
+  // A Flutter tab is named by its label without the "Tab 2 of 3" Flutter
+  // appends to it: the agent dumps that label as `tapsmith-name` with no
+  // `tapsmith-label` (FlutterTab), possibly "" for an icon with no label.
   const named = (value: string): string => (value.trim() ? value : '');
   const rowLabel = ios ? '' : named(node.attributes.get('tapsmith-label') ?? '');
+  const tabName = ios || node.attributes.has('tapsmith-label') ? undefined : node.attributes.get('tapsmith-name');
   const fullName = ios
     ? (named(label) || placeholderName(node))
-    : (named(contentDesc) || placeholderName(node) || text || rowLabel);
+    : tabName !== undefined ? named(tabName) : (named(contentDesc) || placeholderName(node) || text || rowLabel);
   const accessibleName = roleNameFor(fullName) || fullName;
   // getByLabel matches Android's content-desc (or a labelling view, which
   // the dump does not carry, or a nameless control's row title) — never the

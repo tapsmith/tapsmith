@@ -482,7 +482,8 @@ function descendantText(node: HierarchyNode, depth = 0): string[] {
  * A text field with no other name is named by its placeholder
  * ({@link placeholderName}, PILOT-834), and an iOS back button with no label
  * "Back" ({@link backButtonName}). An Android control with no name of its own
- * in an actionable row is named by the row instead ({@link rowName}).
+ * in an actionable row, or a Flutter tab, is named as the agent names it
+ * ({@link rowName}).
  */
 function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boolean {
   const query = normalizeWhitespace(name);
@@ -510,13 +511,15 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
 }
 
 /**
- * The name an Android control with none of its own takes from the actionable
- * row it sits in — an androidx SwitchPreferenceCompat's switch, named by its
- * row's title and summary — as the agent's dump writes it (`tapsmith-name`,
- * the agent's RowName), or undefined.
+ * The name the Android agent gives a node in place of its own attributes, as
+ * its dump writes it (`tapsmith-name`), or undefined: a control with no name
+ * of its own takes the actionable row's it sits in — an androidx
+ * SwitchPreferenceCompat's switch, named by its row's title and summary (the
+ * agent's RowName) — and a Flutter tab is named by its label without the
+ * "Tab 2 of 3" position Flutter appends (FlutterTab), which may leave "".
  */
 function rowName(node: HierarchyNode): string | undefined {
-  return node.attributes.get('tapsmith-name') || undefined;
+  return node.attributes.get('tapsmith-name');
 }
 
 /** An iOS node's name when it is the system back button with no label or title, else ''. */

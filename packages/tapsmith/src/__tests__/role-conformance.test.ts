@@ -69,6 +69,11 @@ interface Case {
   rowName?: string
   /** Android: that row's label (`tapsmith-label`, RowName.label). */
   rowLabel?: string
+  /**
+   * Android: a Flutter tab's name, as the dump writes it (`tapsmith-name`, the
+   * agent's FlutterTab.nameOf its content description).
+   */
+  tabName?: string
   /** Android: the class of the node's parent (a listitem is a list's child). */
   parentType?: string
   /** A string name, a RegExp as source + flags, or none. */
@@ -134,6 +139,9 @@ const A = {
 } as const;
 
 const NBSP = '\u00a0';
+
+/** A Flutter tab's content description: its label, then the position Flutter appends for TalkBack. */
+const FLUTTER_TAB = 'Contact\nTab 2 of 3';
 
 const CASES: Case[] = [
   // iOS: a SwiftUI TextField("Title", text:) has an empty label and the text as its placeholder.
@@ -349,6 +357,20 @@ const CASES: Case[] = [
   { why: 'a CheckBoxPreference\'s checkbox is named by its row', platform: 'android', type: A.checkBox, role: 'checkbox', rowName: 'Wi-Fi only', rowLabel: 'Wi-Fi only', name: 'Wi-Fi only', exact: true, matches: true },
   { why: 'a row-named switch is still found without a name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', matches: true },
 
+  // ─── A Flutter tab: "<label>\nTab <i> of <n>" and no role (NavigationBar, NavigationRail, TabBar) ───
+  { why: 'a Flutter NavigationRail destination is a tab', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', matches: true },
+  { why: 'named by its label', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'contact', matches: true },
+  { why: 'exact compares the label without the position', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'the position is not part of the name', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Tab 2', matches: false },
+  { why: 'a RegExp tests the label', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: { source: '^Contact$', flags: '' }, matches: true },
+  { why: 'not another tab\'s label', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Posts', matches: false },
+  { why: 'a NavigationRail destination is no button', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', matches: false },
+  { why: 'a Flutter NavigationBar destination is a tab', platform: 'android', type: A.button, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and still a button, by its label', platform: 'android', type: A.button, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: 'Contact', exact: true, matches: true },
+  { why: 'an unlabelled Flutter tab is a tab named nothing', platform: 'android', type: A.view, contentDesc: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', matches: true },
+  { why: 'and has no name to match', platform: 'android', type: A.view, contentDesc: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', name: 'Tab', matches: false },
+  { why: 'a description without the position is no tab', platform: 'android', type: A.view, contentDesc: 'Contact', role: 'tab', matches: false },
+
   // ─── listitem: a list's row, not every layout ───
   { why: 'a RecyclerView\'s row is a listitem', platform: 'android', type: A.linearLayout, role: 'listitem', parentType: A.recyclerView, matches: true },
   { why: 'a ListView\'s row is a listitem', platform: 'android', type: A.relativeLayout, role: 'listitem', parentType: A.listView, childTexts: ['Full black'], name: 'Full black', matches: true },
@@ -367,6 +389,7 @@ function nodeFor(c: Case): HierarchyNode {
   if (c.reportedRole !== undefined) attrs['tapsmith-role'] = c.reportedRole;
   if (c.rowName !== undefined) attrs['tapsmith-name'] = c.rowName;
   if (c.rowLabel !== undefined) attrs['tapsmith-label'] = c.rowLabel;
+  if (c.tabName !== undefined) attrs['tapsmith-name'] = c.tabName;
   const children = (c.childTexts ?? []).map((text): HierarchyNode => ({
     tagName: 'node',
     attributes: new Map(Object.entries({ class: 'android.widget.TextView', text, 'resource-id': '' })),
@@ -426,7 +449,9 @@ describe('getByRole conformance (PILOT-834, PILOT-707)', () => {
   it('every case says what the element\'s dump reports', () => {
     // An iOS element always reports a role or none; the replays check which.
     for (const c of CASES) {
-      if (c.platform === 'android') expect(c.reportedRole === undefined, c.why).toBe(c.roleDescription === undefined && !c.heading);
+      if (c.platform === 'android') {
+        expect(c.reportedRole === undefined, c.why).toBe(c.roleDescription === undefined && !c.heading && c.tabName === undefined);
+      }
     }
   });
 
