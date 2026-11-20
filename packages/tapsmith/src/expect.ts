@@ -1570,21 +1570,76 @@ const TO_PASS_STAND_IN = notSupportedYet(
 
 // ─── PILOT-43: Soft assertions ───
 
+// Kept on globalThis so that every copy of this module loaded in one process
+// (the SDK from dist and from a test file's own import, or a global CLI and a
+// project's own install at another version) shares one record. The errors
+// stay an array under the original key, which every SDK version reads and
+// writes. Older copies empty the record by assigning a new array to the key
+// when the test calls their flushSoftErrors(), so the key is an accessor that
+// keeps what such an assignment replaces: the runner owns every error of the
+// attempt and takes them all at its end. This copy's `flushSoftErrors()` only
+// reads, keeping its place under a key of its own, so a test that reads its
+// failures still fails, as in Playwright.
+interface SoftErrorStore {
+  /** The array on the shared key, which copies push to. */
+  current: Error[];
+  /** Errors in arrays an older copy's flush assigned away, oldest first. */
+  replaced: Error[];
+  /** How many of `current` the test has already read with `flushSoftErrors()`. */
+  flushed: number;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _G = globalThis as any;
 const SOFT_ERRORS_KEY = Symbol.for('tapsmith.softErrors');
-if (!_G[SOFT_ERRORS_KEY]) _G[SOFT_ERRORS_KEY] = [] as Error[];
+const SOFT_ERROR_STORE_KEY = Symbol.for('tapsmith.softErrorStore');
 
-function getSoftErrors(): Error[] { return _G[SOFT_ERRORS_KEY]; }
-function setSoftErrors(v: Error[]): void { _G[SOFT_ERRORS_KEY] = v; }
+function softErrorStore(): SoftErrorStore {
+  let store = _G[SOFT_ERROR_STORE_KEY] as SoftErrorStore | undefined;
+  if (store) return store;
+  // An older copy loaded first may already have put a plain array here.
+  const existing: unknown = _G[SOFT_ERRORS_KEY];
+  const created: SoftErrorStore = { current: Array.isArray(existing) ? existing : [], replaced: [], flushed: 0 };
+  store = created;
+  Object.defineProperty(globalThis, SOFT_ERRORS_KEY, {
+    configurable: true,
+    get: () => created.current,
+    set: (next: unknown) => {
+      created.replaced.push(...created.current);
+      created.current = Array.isArray(next) ? next : [];
+      created.flushed = 0;
+    },
+  });
+  _G[SOFT_ERROR_STORE_KEY] = store;
+  return store;
+}
+softErrorStore();
+
+function recordSoftError(err: Error): void { softErrorStore().current.push(err); }
 
 /**
- * Retrieve and clear all soft assertion failures.
- * Called by the test runner at the end of each test.
+ * Return the soft assertion failures recorded since the previous call.
+ *
+ * Reading them does not clear them: the test still fails at its end when any
+ * soft assertion failed. Use this to inspect or log the failures mid-test.
  */
 export function flushSoftErrors(): Error[] {
-  const errors = getSoftErrors();
-  setSoftErrors([]);
+  const store = softErrorStore();
+  const errors = store.current.slice(store.flushed);
+  store.flushed = store.current.length;
+  return errors;
+}
+
+/**
+ * Every soft assertion failure of the attempt, clearing the record. Called by
+ * the test runner at the end of each attempt; not part of the public API.
+ */
+export function takeSoftErrors(): Error[] {
+  const store = softErrorStore();
+  const errors = [...store.replaced, ...store.current];
+  store.replaced = [];
+  store.current = [];
+  store.flushed = 0;
   return errors;
 }
 
@@ -1608,7 +1663,7 @@ function createSoftLocatorAssertions(
       try {
         await original.apply(inner, args);
       } catch (err) {
-        getSoftErrors().push(err instanceof Error ? err : new Error(String(err)));
+        recordSoftError(err instanceof Error ? err : new Error(String(err)));
       }
     };
   }
@@ -1635,7 +1690,7 @@ function createSoftWebViewAssertions(
       try {
         await original.apply(inner, args);
       } catch (err) {
-        getSoftErrors().push(err instanceof Error ? err : new Error(String(err)));
+        recordSoftError(err instanceof Error ? err : new Error(String(err)));
       }
     };
   }
@@ -1644,7 +1699,7 @@ function createSoftWebViewAssertions(
 
 function createSoftGenericAssertions(actual: unknown, negated: boolean): GenericAssertions {
   return createGenericAssertions(actual, negated, (message) => {
-    getSoftErrors().push(new Error(message));
+    recordSoftError(new Error(message));
   });
 }
 

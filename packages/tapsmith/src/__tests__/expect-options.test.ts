@@ -6,7 +6,7 @@
  * instead of being silently ignored.
  */
 import { describe, it, expect as vitestExpect, vi } from "vitest";
-import { expect as tapsmithExpect, flushSoftErrors } from "../expect.js";
+import { expect as tapsmithExpect, takeSoftErrors } from "../expect.js";
 import { ElementHandle } from "../element-handle.js";
 import { _text } from "../selectors.js";
 import { WebViewHandle, type WebViewLocatorProbe } from "../webview-handle.js";
@@ -150,10 +150,10 @@ describe("toBeVisible({ visible: false }) (PILOT-547)", () => {
   });
 
   it("expect.soft records the failure instead of throwing", async () => {
-    flushSoftErrors();
+    takeSoftErrors();
     await tapsmithExpect.soft(handleOf(visible)).toBeVisible({ visible: false, timeout: 50 });
     await tapsmithExpect.soft(handleOf(hidden)).toBeVisible({ visible: false, timeout: 50 });
-    const errors = flushSoftErrors();
+    const errors = takeSoftErrors();
     vitestExpect(errors).toHaveLength(1);
     vitestExpect(errors[0].message).toContain("to be hidden (toBeVisible({ visible: false }))");
   });
@@ -295,9 +295,9 @@ describe("matcher options are validated (PILOT-547)", () => {
   });
 
   it("expect.soft records an unsupported option as a failure", async () => {
-    flushSoftErrors();
+    takeSoftErrors();
     await tapsmithExpect.soft(handleOf(visible)).toBeEnabled({ enabled: false } as unknown as { timeout: number });
-    const errors = flushSoftErrors();
+    const errors = takeSoftErrors();
     vitestExpect(errors).toHaveLength(1);
     vitestExpect(errors[0]).toBeInstanceOf(TypeError);
   });

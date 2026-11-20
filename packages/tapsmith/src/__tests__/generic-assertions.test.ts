@@ -1,5 +1,5 @@
 import { describe, it, expect as vitestExpect, vi, beforeEach, afterEach } from "vitest";
-import { expect as tapsmithExpect, flushSoftErrors } from "../expect.js";
+import { expect as tapsmithExpect, flushSoftErrors, takeSoftErrors } from "../expect.js";
 import { ElementHandle } from "../element-handle.js";
 import { _text } from "../selectors.js";
 import type {
@@ -628,7 +628,7 @@ describe("PILOT-42: Generic value assertions", () => {
 
 describe("PILOT-43: expect.soft()", () => {
   beforeEach(() => {
-    flushSoftErrors(); // Clear any leftover errors
+    takeSoftErrors(); // Clear any leftover errors
   });
 
   describe("generic soft assertions", () => {
@@ -646,12 +646,17 @@ describe("PILOT-43: expect.soft()", () => {
       vitestExpect(errors[1].message).toContain("to contain");
     });
 
-    it("flushSoftErrors clears the list", () => {
+    it("flushSoftErrors returns only the failures since its previous call, and keeps them for the runner", () => {
       tapsmithExpect.soft(5).toBe(6);
       const errors1 = flushSoftErrors();
       vitestExpect(errors1).toHaveLength(1);
+      vitestExpect(flushSoftErrors()).toHaveLength(0);
+      tapsmithExpect.soft(7).toBe(8);
       const errors2 = flushSoftErrors();
-      vitestExpect(errors2).toHaveLength(0);
+      vitestExpect(errors2.map((e) => e.message)).toEqual(["Expected 7 to be 8"]);
+      vitestExpect(takeSoftErrors().map((e) => e.message)).toEqual(["Expected 5 to be 6", "Expected 7 to be 8"]);
+      vitestExpect(takeSoftErrors()).toHaveLength(0);
+      vitestExpect(flushSoftErrors()).toHaveLength(0);
     });
 
     it("does not collect passing assertions", () => {

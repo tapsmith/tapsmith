@@ -1538,15 +1538,14 @@ expect([1, 2, 3]).toHaveLength(3);
 
 ### `expect.soft(elementHandle: ElementHandle): TapsmithAssertions`
 
-Create a soft assertion that records failures without stopping the test. Failures are collected and can be flushed at the end.
+Create a soft assertion: a failure is recorded instead of thrown, and the test carries on. When the test ends, the runner fails it if any soft assertion failed, listing every failure, as Playwright does. You don't need to collect or check the failures yourself.
+
+`expect.soft(value)` works the same for generic values. Await locator soft assertions as you would any other, so each one has finished (and its failure is recorded) before the test ends.
 
 ```typescript
-expect.soft(device.getByText("Header", { exact: true })).toBeVisible();
-expect.soft(device.getByText("Footer", { exact: true })).toBeVisible();
-// Test continues even if assertions fail
-
-const errors = flushSoftErrors();
-// errors contains any failures from soft assertions
+await expect.soft(device.getByText("Header", { exact: true })).toBeVisible();
+await expect.soft(device.getByText("Footer", { exact: true })).toBeVisible();
+// The test continues even if these fail, and fails at its end if any did.
 ```
 
 ### `expect.poll(fn: () => unknown | Promise<unknown>, options?: PollOptions): GenericAssertions`
@@ -1571,12 +1570,13 @@ await expect.poll(() => fetchStatus(), { timeout: 10000 }).toBe("ready");
 
 ### `flushSoftErrors(): Error[]`
 
-Retrieve and clear all soft assertion failures collected by `expect.soft()`.
+Return the soft assertion failures recorded since the previous call. Reading them does not clear them: the test still fails at its end when any soft assertion failed. Use it to inspect or log failures part-way through a test; you never need it to make a test fail.
 
 ```typescript
+await expect.soft(device.getByText("Header", { exact: true })).toBeVisible();
 const errors = flushSoftErrors();
 if (errors.length > 0) {
-  console.log(`${errors.length} soft assertions failed`);
+  console.log(`${errors.length} soft assertion(s) failed so far`);
 }
 ```
 
