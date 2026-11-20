@@ -2056,22 +2056,12 @@ impl TapsmithServiceImpl {
         }
     }
 
-    /// Validate that a string looks like a valid Android package name (e.g. `com.example.app`).
+    /// Check an app id (an Android package name or an iOS bundle id) before it
+    /// reaches adb, simctl or the agent, by the active device's platform rules
+    /// — see [`validate_app_id`].
     #[allow(clippy::result_large_err)] // Status is tonic's standard error type
-    fn validate_package_name(name: &str) -> Result<(), Status> {
-        if name.is_empty() {
-            return Err(Status::invalid_argument("package_name is required"));
-        }
-        // Package names: letters, digits, dots, underscores
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
-        {
-            return Err(Status::invalid_argument(format!(
-                "invalid package name: {name:?} — must contain only alphanumeric characters, dots, and underscores"
-            )));
-        }
-        Ok(())
+    async fn check_app_id(&self, name: &str) -> Result<(), Status> {
+        validate_app_id(name, self.active_platform().await)
     }
 
     /// Validate that a string looks like a valid Android permission (e.g. `android.permission.CAMERA`).
@@ -4396,7 +4386,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let serial = self.active_serial().await?;
         let backend = self.backend().await?;
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         // A (re)launched process can newly expose the hooks marker (e.g. a
         // reinstalled build) — let the next navigation link re-probe.
@@ -4465,7 +4455,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     ) -> Result<Response<proto::ResetAppResponse>, Status> {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
         let serial = self.active_serial().await?;
         let supports_cold_delivery = self.backend().await?.supports_cold_deep_link().await;
         let idle_timeout_ms = if req.idle_timeout_ms > 0 {
@@ -4701,7 +4691,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let request_id = Self::request_id(&req.request_id);
         let serial = self.active_serial().await?;
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         let backend = self.backend().await?;
         let resp = backend.restart_app(request_id, serial, &req).await?;
@@ -4721,7 +4711,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         self.backend()
             .await?
@@ -4737,7 +4727,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         let state = self.backend().await?.app_state(&req.package_name).await?;
         Ok(Response::new(proto::GetAppStateResponse {
@@ -4754,7 +4744,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         let timeout = if req.timeout_ms > 0 {
             Duration::from_millis(req.timeout_ms)
@@ -4781,7 +4771,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         let backend = self.backend().await?;
         backend.clear_app_data(request_id, &req).await
@@ -4795,7 +4785,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         // iOS uses service names: camera, photos, location, microphone, etc.
         self.backend()
@@ -4817,7 +4807,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
 
         self.backend()
             .await?
@@ -5883,7 +5873,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let request_id = Self::request_id(&req.request_id);
         let serial = self.active_serial().await?;
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
         if req.path.is_empty() {
             return Err(Status::invalid_argument("path is required"));
         }
@@ -5901,7 +5891,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let request_id = Self::request_id(&req.request_id);
         let serial = self.active_serial().await?;
 
-        Self::validate_package_name(&req.package_name)?;
+        self.check_app_id(&req.package_name).await?;
         if req.path.is_empty() {
             return Err(Status::invalid_argument("path is required"));
         }
@@ -7477,6 +7467,44 @@ fn capture_port_update(
     Ok((applied != requested).then_some(port))
 }
 
+/// Validate an app id against the platform's character set. It is an
+/// injection guard as much as a format check: the id reaches `adb shell`
+/// command strings on Android and argv on iOS, so it never holds spaces,
+/// quotes or shell metacharacters, and never starts with `-` (an option).
+///
+/// - Android package names: letters, digits, dots and underscores.
+/// - iOS bundle ids: letters, digits, dots and hyphens (Apple's rule), so
+///   Expo's default `com.anonymous.my-app` launches. Underscores, which
+///   Apple's rule leaves out, are still accepted: an installed simulator app
+///   can carry one, and earlier daemons launched it.
+/// - No device selected yet: either platform's characters; the RPC then fails
+///   on the missing device instead.
+#[allow(clippy::result_large_err)] // Status is tonic's standard error type
+fn validate_app_id(name: &str, platform: Option<Platform>) -> Result<(), Status> {
+    if name.is_empty() {
+        return Err(Status::invalid_argument("package_name is required"));
+    }
+    let hyphen_ok = platform != Some(Platform::Android);
+    let valid_chars = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || (hyphen_ok && c == '-'));
+    if valid_chars && !name.starts_with('-') {
+        return Ok(());
+    }
+    let message = match platform {
+        Some(Platform::Android) => format!(
+            "invalid Android package name: {name:?} — it may contain only letters, digits, dots and underscores"
+        ),
+        Some(Platform::Ios) => format!(
+            "invalid iOS bundle identifier: {name:?} — it may contain only letters, digits, dots, hyphens and underscores, and must not start with a hyphen"
+        ),
+        None => format!(
+            "invalid app id: {name:?} — it may contain only letters, digits, dots, hyphens and underscores, and must not start with a hyphen"
+        ),
+    };
+    Err(Status::invalid_argument(message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7603,6 +7631,136 @@ mod tests {
         assert_eq!(with.instance_id, "session-nonce-1");
         assert_eq!(with.pid, std::process::id());
         assert_eq!(without.instance_id, "", "a daemon started by hand has none");
+    }
+
+    // PILOT-1314: each platform's own app-id rule.
+    #[test]
+    fn ios_bundle_ids_may_contain_hyphens() {
+        for id in [
+            "com.anonymous.priya-app",
+            "com.example.my-app",
+            "dev.tapsmith.testapp",
+            "com.legacy.my_app",
+        ] {
+            assert!(validate_app_id(id, Some(Platform::Ios)).is_ok(), "{id}");
+        }
+    }
+
+    #[test]
+    fn android_package_names_keep_androids_rule() {
+        for id in [
+            "dev.tapsmith.testapp",
+            "com.example.my_app",
+            "com.example.App2",
+        ] {
+            assert!(validate_app_id(id, Some(Platform::Android)).is_ok(), "{id}");
+        }
+        let err = validate_app_id("com.anonymous.priya-app", Some(Platform::Android)).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("Android package name") && err.message().contains("underscores"),
+            "{}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn app_ids_stay_an_injection_guard_on_every_platform() {
+        let hostile = [
+            "",
+            "com.example app",
+            "com.example;reboot",
+            "com.example$(id)",
+            "com.example`id`",
+            "com.example'x",
+            "com.example\"x",
+            "com.example|sh",
+            "com.example&x",
+            "com.example>x",
+            "com.example/x",
+            "com.example\nx",
+            "-com.example",
+            "--help",
+        ];
+        for platform in [Some(Platform::Ios), Some(Platform::Android), None] {
+            for id in hostile {
+                let err = validate_app_id(id, platform).unwrap_err();
+                assert_eq!(
+                    err.code(),
+                    tonic::Code::InvalidArgument,
+                    "{id:?} on {platform:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn app_id_errors_name_the_platforms_rule() {
+        let ios = validate_app_id("com.example app", Some(Platform::Ios)).unwrap_err();
+        assert!(
+            ios.message().contains("iOS bundle identifier") && ios.message().contains("hyphens"),
+            "{}",
+            ios.message()
+        );
+        let none = validate_app_id("com.example app", None).unwrap_err();
+        assert!(
+            none.message().starts_with("invalid app id"),
+            "{}",
+            none.message()
+        );
+        assert!(validate_app_id("com.example.my-app", None).is_ok());
+    }
+
+    fn service_with_active(platform: Platform) -> TapsmithServiceImpl {
+        let mut dm = DeviceManager::new();
+        dm.add_device(crate::device::DeviceInfo {
+            serial: "SERIAL-1".to_string(),
+            model: "test".to_string(),
+            is_emulator: true,
+            state: crate::device::ConnectionState::Discovered,
+            platform,
+            os_version: String::new(),
+        });
+        dm.set_active("SERIAL-1").unwrap();
+        TapsmithServiceImpl::new(
+            Arc::new(RwLock::new(dm)),
+            Arc::new(RwLock::new(AgentConnection::new())),
+            crate::daemon_log_bus::DaemonLogBus::new(16),
+        )
+    }
+
+    // The RPCs judge the id by the selected device's platform: a hyphenated
+    // bundle id gets past the check on iOS (and fails later only because no
+    // agent is connected here), and is refused up front on Android.
+    #[tokio::test]
+    async fn app_rpcs_judge_the_app_id_by_the_active_platform() {
+        let request = || {
+            Request::new(proto::GetAppStateRequest {
+                package_name: "com.anonymous.priya-app".to_string(),
+                ..Default::default()
+            })
+        };
+        let ios = service_with_active(Platform::Ios)
+            .get_app_state(request())
+            .await;
+        let ios_err = ios.expect_err("no agent is connected");
+        assert_ne!(
+            ios_err.code(),
+            tonic::Code::InvalidArgument,
+            "{}",
+            ios_err.message()
+        );
+
+        let android = service_with_active(Platform::Android)
+            .get_app_state(request())
+            .await;
+        let android_err = android.expect_err("Android refuses the hyphen");
+        assert_eq!(android_err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            android_err.message().contains("Android package name"),
+            "{}",
+            android_err.message()
+        );
     }
 
     fn test_service() -> TapsmithServiceImpl {
