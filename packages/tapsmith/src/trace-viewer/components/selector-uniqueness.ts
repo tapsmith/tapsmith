@@ -107,9 +107,14 @@ function tryExactRoleNameUpgrade(
   return null;
 }
 
-/** The node's whole accessible name, as role-name matching reads it first. */
+/**
+ * The node's whole accessible name, as role-name matching reads it first — or,
+ * for an Android control with none of its own, the name its row gives it
+ * (`tapsmith-name`), as agent-suggestions.ts reads it.
+ */
 function fullAccessibleName(node: HierarchyNode): string {
-  return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
+  return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text')
+    || node.attributes.get('tapsmith-name') || '';
 }
 
 /** (b) Ambiguous getByRole without a name → try adding the accessible name. */

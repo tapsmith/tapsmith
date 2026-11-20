@@ -823,3 +823,23 @@ describe('substring getByText ignores case in the playground, like the agents (P
     expect(result[0].code).toBe('device.getByText("Sign in", { exact: true })');
   });
 });
+
+describe('Android: a row-named switch whose title is in another row', () => {
+  // Two androidx Preference switches: the dump names each by its row
+  // (tapsmith-name) and labels it by the row's title (tapsmith-label).
+  function sw(title: string, summary: string): HierarchyNode {
+    return makeNode('node', {
+      class: 'android.widget.Switch', checkable: 'true', bounds: `[0,${title.length}][10,${title.length + 10}]`,
+      'tapsmith-name': `${title} ${summary}`, 'tapsmith-label': title,
+    });
+  }
+  const dark = sw('Dark theme', 'Use a dark background');
+  const schedule = sw('Schedule', 'Turn on dark theme at sunset');
+  const roots = [makeNode('node', { class: 'android.widget.FrameLayout' }, [dark, schedule])];
+
+  it('pins the title by the whole row name, exact, not by position', () => {
+    const best = disambiguateSelectors(roots, dark, generateSelectors(dark))[0];
+    expect(best.code).toBe('device.getByRole("switch", { name: "Dark theme Use a dark background", exact: true })');
+    expect(findMatchingNodes(roots, parseSelectorString(best.code)!)).toEqual([dark]);
+  });
+});
