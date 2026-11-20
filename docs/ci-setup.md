@@ -724,7 +724,12 @@ can be merged after all shards complete.
 ### Merging Sharded Reports
 
 After all shard jobs finish, download the blob artifacts and merge them into a
-single HTML report:
+single HTML report. With no `reporter` in the config (as `tapsmith init` writes
+it) or only `blob`, `merge-reports` writes the HTML report to `tapsmith-report/`
+under the config's `rootDir`, beside the `list` output. A config that names other
+reporters gets those instead: include `html` among them, or pass
+`--reporter html` to the merge step. See
+[`tapsmith merge-reports`](api-reference.md#tapsmith-merge-reports-dir).
 
 ```yaml
 merge-reports:
@@ -745,7 +750,8 @@ merge-reports:
       run: npx tapsmith merge-reports all-blob-reports
 
     # always(): with a shard missing, merge-reports exits 1 but still
-    # writes the report for the shards that finished.
+    # writes the report for the shards that finished. tapsmith-report/ is
+    # the default; a config that lists reporters must include "html".
     - name: Upload HTML report
       if: always()
       uses: actions/upload-artifact@v4
