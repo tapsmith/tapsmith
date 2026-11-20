@@ -7578,8 +7578,8 @@ fn android_user_store_ca_warning() -> String {
      system trust store could not be changed. Apps trust a user CA only when their \
      network_security_config.xml opts in, which release builds rarely do: their HTTPS requests \
      fail or are passed through uncaptured, and device.route(), waitForRequest() and \
-     waitForResponse() cannot see them. Use a Google APIs or AOSP emulator image on API 28 or \
-     later, or opt your test build in to user CAs; see \
+     waitForResponse() cannot see them. Use a Google APIs or AOSP emulator image, or opt your \
+     test build in to user CAs; see \
      https://tapsmith.dev/guides/network/#android-emulator-image-requirements"
         .to_string()
 }

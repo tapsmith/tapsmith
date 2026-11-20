@@ -1295,6 +1295,11 @@ async fn try_install_overlay_ca(
         "/data/local/tmp/tapsmith-cacerts",
         cert_filename,
         tmp_cert_path,
+        if store_dir == SYSTEM_CA_CERT_DIR {
+            OverlayStore::System
+        } else {
+            OverlayStore::Apex
+        },
     );
 
     match shell_lenient(serial, &script).await {
@@ -1352,6 +1357,15 @@ fn parse_overlay_outcome(out: &str) -> OverlayInstallOutcome {
     }
 }
 
+/// Which runtime trust store [`overlay_ca_install_script`] overlays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverlayStore {
+    /// `/system/etc/security/cacerts`, before Android 14.
+    System,
+    /// The Conscrypt APEX store, from Android 14.
+    Apex,
+}
+
 /// The device-side script behind [`try_install_overlay_ca`]: assemble the combined
 /// cert set once in `stage_dir`, then nsenter into init + every zygote and make
 /// `src_dir` (the runtime cacerts dir) hold our CA. Paths are parameters so the
@@ -1364,14 +1378,43 @@ fn parse_overlay_outcome(out: &str) -> OverlayInstallOutcome {
 ///   fall through to a fresh overlay on top;
 /// - absent → tmpfs-overlay the dir with the staged set.
 ///
-/// The SELinux relabel to `system_security_cacerts_file` is mandatory — apps
-/// can't read certs left with the default tmpfs label.
+/// The SELinux relabel to the store's own cert label is mandatory — apps
+/// can't read certs left with the default tmpfs label, nor ones carrying a
+/// label the device's policy does not define.
 fn overlay_ca_install_script(
     src_dir: &str,
     stage_dir: &str,
     cert_filename: &str,
     tmp_cert_path: &str,
+    store: OverlayStore,
 ) -> String {
+    let no_nsenter = if store == OverlayStore::System {
+        // Android 9 and earlier have no `nsenter`. There the shell is in
+        // init's mount namespace, whose mounts propagate to the zygotes, so
+        // overlaying it there is enough. Only before Android 14: the APEX
+        // store is mounted per namespace, so init's overlay would not reach
+        // the zygotes.
+        r#"elif [ "$(readlink /proc/self/ns/mnt)" = "$(readlink /proc/1/ns/mnt)" ]; then
+  ns() { shift; "$@"; }
+  PIDS=1
+"#
+    } else {
+        ""
+    };
+    let label = if store == OverlayStore::System {
+        format!(
+            r#"# Label our cert like the store's own certs: system_security_cacerts_file
+# from Android 10, plain system_file before it, where the former is not a type
+# the policy knows, so an app reads a cert carrying it as unlabeled and is
+# denied.
+CTX=$(ls -Z "$SRC" 2>/dev/null | grep -v " {cert_filename}\$" | head -n 1)
+CTX=${{CTX%% *}}
+case "$CTX" in u:object_r:*) ;; *) CTX=u:object_r:system_security_cacerts_file:s0 ;; esac
+"#
+        )
+    } else {
+        "CTX=u:object_r:system_security_cacerts_file:s0\n".to_string()
+    };
     format!(
         r#"SRC={src_dir}
 TMP={stage_dir}
@@ -1388,22 +1431,29 @@ chmod 644 "$TMP"/* || exit 1
 # store) rather than mounting a depleted store that would strip trusted CAs
 # from every app forked by the zygote.
 [ "$(ls "$TMP" | wc -l)" -ge "$NCERTS" ] || exit 1
+{label}if command -v nsenter >/dev/null 2>&1; then
+  ns() {{ p=$1; shift; nsenter -t "$p" -m -- "$@"; }}
+  PIDS="1 $(pidof zygote) $(pidof zygote64)"
+{no_nsenter}else
+  rm -rf "$TMP"
+  exit 1
+fi
 ok=0
 replaced=0
-for PID in 1 $(pidof zygote) $(pidof zygote64); do
+for PID in $PIDS; do
   [ -z "$PID" ] && continue
   stale=0
-  if nsenter -t "$PID" -m -- test -f "$SRC"/{cert_filename} 2>/dev/null; then
+  if ns "$PID" test -f "$SRC"/{cert_filename} 2>/dev/null; then
     # Every Tapsmith CA has the same subject, hence this same filename, so a
     # present file is only ours if it is byte-identical (PILOT-712).
-    if nsenter -t "$PID" -m -- cmp -s "$TMP"/{cert_filename} "$SRC"/{cert_filename} 2>/dev/null; then ok=1; continue; fi
-    if nsenter -t "$PID" -m -- sh -c "cp $TMP/{cert_filename} $SRC/{cert_filename} && chmod 644 $SRC/{cert_filename} && chown 0:0 $SRC/{cert_filename} && chcon u:object_r:system_security_cacerts_file:s0 $SRC/{cert_filename}" 2>/dev/null \
-      && nsenter -t "$PID" -m -- cmp -s "$TMP"/{cert_filename} "$SRC"/{cert_filename} 2>/dev/null; then
+    if ns "$PID" cmp -s "$TMP"/{cert_filename} "$SRC"/{cert_filename} 2>/dev/null; then ok=1; continue; fi
+    if ns "$PID" sh -c "cp $TMP/{cert_filename} $SRC/{cert_filename} && chmod 644 $SRC/{cert_filename} && chown 0:0 $SRC/{cert_filename} && chcon $CTX $SRC/{cert_filename}" 2>/dev/null \
+      && ns "$PID" cmp -s "$TMP"/{cert_filename} "$SRC"/{cert_filename} 2>/dev/null; then
       ok=1; replaced=1; continue
     fi
     stale=1
   fi
-  if nsenter -t "$PID" -m -- sh -c "mount -t tmpfs tmpfs $SRC && (cp $TMP/* $SRC/ && chmod 644 $SRC/* && chown 0:0 $SRC/* && chcon u:object_r:system_security_cacerts_file:s0 $SRC/* || (umount -l $SRC && exit 1))" 2>/dev/null; then
+  if ns "$PID" sh -c "mount -t tmpfs tmpfs $SRC && (cp $TMP/* $SRC/ && chmod 644 $SRC/* && chown 0:0 $SRC/* && chcon $CTX $SRC/* || (umount -l $SRC && exit 1))" 2>/dev/null; then
     ok=1
     [ "$stale" = 1 ] && replaced=1
   fi
@@ -2627,7 +2677,9 @@ mod overlay_script_tests {
     //! the staging dir. Exercises the script's actual control flow — what it
     //! compares, replaces and mounts — rather than its text.
 
-    use super::{overlay_ca_install_script, parse_overlay_outcome, OverlayInstallOutcome};
+    use super::{
+        overlay_ca_install_script, parse_overlay_outcome, OverlayInstallOutcome, OverlayStore,
+    };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -2729,16 +2781,38 @@ mod overlay_script_tests {
     }
 
     fn run(f: &Fixture) -> String {
-        let script = overlay_ca_install_script(
-            &f.src.to_string_lossy(),
-            &f.stage.to_string_lossy(),
-            CERT,
-            &f.cert.to_string_lossy(),
+        let path = format!(
+            "{}:{}",
+            f.bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        run_script(f, OverlayStore::Apex, &path)
+    }
+
+    /// As [`run`], for the pre-Android 14 system store, with an `ls` that
+    /// gives every cert in it `label` for `ls -Z`.
+    fn run_system(f: &Fixture, label: &str) -> String {
+        write_exec(
+            &f.bin.join("ls"),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = -Z ]; then for x in \"$2\"/*; do echo \"{label} ${{x##*/}}\"; done; exit 0; fi\nPATH=\"${{PATH#*:}}\" exec ls \"$@\"\n"
+            ),
         );
         let path = format!(
             "{}:{}",
             f.bin.display(),
             std::env::var("PATH").unwrap_or_default()
+        );
+        run_script(f, OverlayStore::System, &path)
+    }
+
+    fn run_script(f: &Fixture, store: OverlayStore, path: &str) -> String {
+        let script = overlay_ca_install_script(
+            &f.src.to_string_lossy(),
+            &f.stage.to_string_lossy(),
+            CERT,
+            &f.cert.to_string_lossy(),
+            store,
         );
         let out = Command::new("/bin/sh")
             .arg("-c")
@@ -2871,7 +2945,7 @@ mod overlay_script_tests {
         }
         let f = fixture();
         fs::set_permissions(&f.src, fs::Permissions::from_mode(0o555)).unwrap();
-        let out = run(&f);
+        let out = run_system(&f, "u:object_r:system_security_cacerts_file:s0");
         assert_eq!(
             parse_overlay_outcome(&out),
             OverlayInstallOutcome::Installed,
@@ -2883,6 +2957,119 @@ mod overlay_script_tests {
         assert!(f.src.join("bbbbbbbb.0").exists());
         let chcon = fs::read_to_string(f.root.join("chcon.log")).unwrap();
         assert!(chcon.contains("system_security_cacerts_file"), "{chcon}");
+    }
+
+    // Android 9 and earlier label the store's certs system_file and have no
+    // system_security_cacerts_file type: a cert carrying it reads as
+    // unlabeled to apps, which are denied it. Ours takes the store's label.
+    #[test]
+    fn system_store_cert_takes_the_stores_own_label() {
+        let f = fixture();
+        let out = run_system(&f, "u:object_r:system_file:s0");
+        assert_eq!(
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Installed,
+            "{out}"
+        );
+        let chcon = fs::read_to_string(f.root.join("chcon.log")).unwrap();
+        assert!(chcon.starts_with("u:object_r:system_file:s0 "), "{chcon}");
+        assert!(!chcon.contains("system_security_cacerts_file"), "{chcon}");
+    }
+
+    #[test]
+    fn system_store_label_falls_back_when_ls_cannot_say() {
+        let f = fixture();
+        let out = run_system(&f, "?");
+        assert_eq!(
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Installed,
+            "{out}"
+        );
+        let chcon = fs::read_to_string(f.root.join("chcon.log")).unwrap();
+        assert!(
+            chcon.starts_with("u:object_r:system_security_cacerts_file:s0 "),
+            "{chcon}"
+        );
+    }
+
+    /// A PATH with no `nsenter` (Android 9 and earlier): the fixture's shims
+    /// but `nsenter`, the host tools the script needs, and a `readlink` that
+    /// reports the shell's mount namespace as init's (`same_ns`) or not.
+    fn path_without_nsenter(f: &Fixture, same_ns: bool) -> String {
+        let dir = f.root.join("bin-no-nsenter");
+        fs::create_dir_all(&dir).unwrap();
+        for shim in ["pidof", "mount", "umount", "chown", "chcon"] {
+            std::os::unix::fs::symlink(f.bin.join(shim), dir.join(shim)).unwrap();
+        }
+        for tool in [
+            "sh", "rm", "mkdir", "ls", "wc", "cp", "chmod", "cmp", "test", "cat", "grep", "head",
+        ] {
+            let found = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("command -v {tool}"))
+                .output()
+                .unwrap();
+            let host = String::from_utf8_lossy(&found.stdout).trim().to_string();
+            if host.starts_with('/') {
+                std::os::unix::fs::symlink(host, dir.join(tool)).unwrap();
+            }
+        }
+        write_exec(
+            &dir.join("readlink"),
+            if same_ns {
+                "#!/bin/sh\necho 'mnt:[1]'\n"
+            } else {
+                "#!/bin/sh\ncase \"$1\" in /proc/1/*) echo 'mnt:[1]';; *) echo 'mnt:[2]';; esac\n"
+            },
+        );
+        dir.display().to_string()
+    }
+
+    // Android 9 has no nsenter, but its shell shares init's mount namespace,
+    // whose mounts reach the zygotes: overlay it there (PILOT-1340).
+    #[test]
+    fn without_nsenter_the_system_store_is_overlaid_in_the_shells_namespace() {
+        let f = fixture();
+        let path = path_without_nsenter(&f, true);
+        let out = run_script(&f, OverlayStore::System, &path);
+        assert_eq!(
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Installed,
+            "{out}"
+        );
+        assert_eq!(mounts(&f), 1);
+        assert_eq!(installed(&f), NEW_CA);
+        assert!(f.src.join("aaaaaaaa.0").exists());
+        assert!(!f.stage.exists(), "staging dir left behind");
+    }
+
+    #[test]
+    fn without_nsenter_a_shell_outside_inits_namespace_fails() {
+        let f = fixture();
+        let path = path_without_nsenter(&f, false);
+        let out = run_script(&f, OverlayStore::System, &path);
+        assert_eq!(
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Failed,
+            "{out}"
+        );
+        assert_eq!(mounts(&f), 0);
+        assert!(!f.stage.exists(), "staging dir left behind");
+    }
+
+    // The APEX store (Android 14+) is mounted per namespace, so an overlay in
+    // init's alone would not reach the zygotes: no nsenter, no overlay.
+    #[test]
+    fn without_nsenter_the_apex_store_is_not_overlaid() {
+        let f = fixture();
+        let path = path_without_nsenter(&f, true);
+        let out = run_script(&f, OverlayStore::Apex, &path);
+        assert_eq!(
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Failed,
+            "{out}"
+        );
+        assert_eq!(mounts(&f), 0);
     }
 
     #[test]

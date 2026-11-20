@@ -72,7 +72,8 @@ jobs:
       - name: Start the emulator and run the tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 33
+          api-level: 36
+          target: google_apis
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: npx tapsmith test
@@ -85,6 +86,11 @@ jobs:
           path: tapsmith-results/
           retention-days: 14
 ```
+
+The emulator matches the one Tapsmith's own CI runs: a Google APIs image on API 36. Any Google APIs or
+AOSP image works for HTTPS capture, on other API levels too, because both allow `adb root`. A Google
+Play image (`target: playstore`) does not: see
+[Android emulator image requirements](network.md#android-emulator-image-requirements).
 
 The matching config points `apk` at the APK the workflow builds. Set `package` to your app's
 `applicationId` (in `android/app/build.gradle`). In an Expo project that doesn't commit `android/`,
