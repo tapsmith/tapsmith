@@ -275,6 +275,15 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     expect(second.reachedDevice).toBe(false);
   });
 
+  it('fails with "No tests found" when the .only marks of the suite select no test', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'),
+      'import { test } from "tapsmith";\ntest.describe.only("todo", () => {});\ntest("signs in", async () => {});\n');
+    const { status, output, reachedDevice } = run();
+    expect(output).toContain('No tests found: the .only in tests/pw/login.test.ts selects no test');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
   it('fails the grep check when the grep matches only tests a .only leaves out', () => {
     focusLogin();
     const { status, output, reachedDevice } = run('--grep', 'creates|signs out');

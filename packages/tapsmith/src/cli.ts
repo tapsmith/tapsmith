@@ -2338,17 +2338,18 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     return !!result && 'names' in result && result.focusedNames !== undefined;
   };
   const focusedRun = runIsFocused(unshardedFiles, focusedFile);
+  // Setup projects: a `.only` there neither focuses the run nor drops their files.
+  const setupProjects = new Set(projects.flatMap((p) => p.dependencies));
 
   // A grep that selects no test fails here, before the reporters too.
   if (selectionFilterActive && preflight) {
     const found = preflight;
     const { findSelectionMiss, grepFiltersFor, noTestsMatchFilterMessage } = await import('./test-filter.js');
-    const dependedOn = new Set(projects.flatMap((p) => p.dependencies));
     const miss = findSelectionMiss(
       unshardedFiles.flatMap(({ project, files }) => {
         const filters = grepFiltersFor(config, project);
         // A focused run runs no file of a top-level project that has no `.only`.
-        const kept = focusedRun && !dependedOn.has(project.name) ? files.filter(focusedFile) : files;
+        const kept = focusedRun && !setupProjects.has(project.name) ? files.filter(focusedFile) : files;
         return kept.map((file) => ({ file, filters }));
       }),
       (file) => {
@@ -2375,6 +2376,22 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   const loadFailures = preflight ? await preflightLoadFailures(projects, preflight) : [];
 
   if (focusedRun && loadFailures.length === 0) {
+    // Marks that select nothing (an empty describe.only) would otherwise
+    // leave every other file out and pass with no test run: fail, as
+    // Playwright does. Decided from the whole suite, so every shard agrees.
+    const focusFiles = [...new Set(unshardedFiles
+      .filter(({ project }) => !setupProjects.has(project.name))
+      .flatMap(({ files }) => files.filter(focusedFile)))];
+    const selectsNothing = focusFiles.every((file) => {
+      const result = preflight?.get(file);
+      return !!result && 'names' in result && result.focusedNames?.length === 0;
+    });
+    if (selectsNothing) {
+      const listed = focusFiles.map((f) => relativeTestPath(f, config.rootDir)).join(', ');
+      const marks = focusFiles.length === 1 ? 'the .only in' : 'the .only marks in';
+      console.error(red(`No tests found: ${marks} ${listed} ${focusFiles.length === 1 ? 'selects' : 'select'} no test, and a run with a .only runs nothing else.`));
+      process.exit(1);
+    }
     testFiles = focusProjects(projects, focusedFile);
     if (config.shard) {
       const { current, total } = config.shard;
