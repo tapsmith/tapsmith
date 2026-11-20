@@ -10,6 +10,7 @@ import { DragScreen } from "./screens/drag.screen.js"
 import { GesturesScreen } from "./screens/gestures.screen.js"
 import { HomeScreen } from "./screens/home.screen.js"
 import { KeyboardScreen } from "./screens/keyboard.screen.js"
+import { NativeSettingsScreen } from "./screens/native-settings.screen.js"
 import { ListScreen } from "./screens/list.screen.js"
 import { LoginScreen } from "./screens/login.screen.js"
 import { NativeTabsScreen } from "./screens/native-tabs.screen.js"
@@ -41,6 +42,7 @@ type ScreenFixtures = {
   keyboardScreen: KeyboardScreen
   listScreen: ListScreen
   loginScreen: LoginScreen
+  nativeSettingsScreen: NativeSettingsScreen
   nativeTabsScreen: NativeTabsScreen
   occlusionScreen: OcclusionScreen
   permissionsScreen: PermissionsScreen
@@ -90,6 +92,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   keyboardScreen: async ({ device }, use) => {
     await use(new KeyboardScreen(device))
+  },
+  nativeSettingsScreen: async ({ device }, use) => {
+    await use(new NativeSettingsScreen(device))
   },
   listScreen: async ({ device }, use) => {
     await use(new ListScreen(device))
