@@ -436,7 +436,7 @@ class SnapshotElementFinder {
             let isTabBarHost = BarHost.isMarkedTabBarHost(nodeDict)
             let role = RoleMapping.resolveRole(
                 for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost,
-                isTabBarHost: isTabBarHost
+                isTabBarHost: isTabBarHost, label: label
             )
             let isEnabled = nodeDict["enabled"] as? Bool ?? true
             let value = nodeDict["value"] as? String
@@ -1852,7 +1852,8 @@ class SnapshotElementFinder {
                 inTabBar: inTabBar,
                 inAlert: inAlert,
                 isEmptyBarHost: node[BarHost.emptyHostKey] as? Bool ?? false,
-                isTabBarHost: BarHost.isMarkedTabBarHost(node)
+                isTabBarHost: BarHost.isMarkedTabBarHost(node),
+                label: label
             ) {
                 return false
             }

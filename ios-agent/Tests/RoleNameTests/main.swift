@@ -78,12 +78,15 @@ if let data = FileManager.default.contents(atPath: fixturePath),
             traits |= bit
         }
         let want = c["matches"] as? Bool ?? false
-        let reported = RoleMapping.resolveRole(for: type, traits: traits, inTabBar: inTabBar)
+        let reported = RoleMapping.resolveRole(for: type, traits: traits, inTabBar: inTabBar, label: label)
         expect("reports \(c["reportedRole"] as? String ?? "no role") \(why)",
                reported == (c["reportedRole"] as? String ?? ""))
+        // The playground names a Flutter tab by the dump's tapsmith-name.
+        expect("names \(c["tabName"] as? String ?? "no tab") \(why)",
+               FlutterTab.name(of: label) == c["tabName"] as? String)
         let isRole = RoleMapping.matches(
             role: role, elementType: type, traits: traits, value: value,
-            hasNameFilter: c["name"] != nil, inTabBar: inTabBar, inAlert: inAlert
+            hasNameFilter: c["name"] != nil, inTabBar: inTabBar, inAlert: inAlert, label: label
         )
         if c["name"] == nil {
             expect("role \(role) \(why)", isRole == want)

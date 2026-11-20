@@ -334,7 +334,19 @@ check("a native tab reports \"tab\"", RoleMapping.resolveRole(for: .tab, traits:
 check("a heading in a tab bar is still a heading",
       RoleMapping.resolveRole(for: .staticText, traits: headerTrait, inTabBar: true), "heading")
 check("getByRole(\"tab\") lists native tabs", (try? RoleMapping.elementTypes(for: "tab")) ?? [], [.tab])
-check("a tab query covers native tabs and buttons", (try? RoleMapping.queryTypes(for: "tab")) ?? [], [.tab, .button])
+check("a tab query covers native tabs, buttons and the views a Flutter tab is",
+      (try? RoleMapping.queryTypes(for: "tab")) ?? [], [.tab, .button, .staticText, .other])
+check("a Flutter destination's static text reports tab",
+      RoleMapping.resolveRole(for: .staticText, traits: 0, inTabBar: false, label: "Contact\nTab 2 of 3"), "tab")
+check("a header trait still makes a heading",
+      RoleMapping.resolveRole(for: .staticText, traits: headerTrait, inTabBar: false, label: "Contact\nTab 2 of 3"), "heading")
+check("FlutterTab names a destination by its label", FlutterTab.name(of: "Contact\nTab 2 of 3"), "Contact")
+check("FlutterTab keeps a multi-line label's line breaks", FlutterTab.name(of: "Inbox\n3 new\nTab 1 of 12"), "Inbox\n3 new")
+check("FlutterTab names an unlabelled item nothing", FlutterTab.name(of: "Tab 2 of 3"), "")
+for other in ["", "Contact", "Contact Tab 2 of 3", "Contact\nTab 2 of 3, double tap", "Contact\ntab 2 of 3",
+              "Contact\nTab 0 of 3", "Contact\nTab 2 von 3"] {
+    check("FlutterTab: \(other.debugDescription) is no tab", FlutterTab.name(of: other), nil)
+}
 check("a button query covers buttons only", (try? RoleMapping.queryTypes(for: "button")) ?? [], [.button])
 check("role-only tab re-resolves by label", RoleMapping.needsLabelReResolution(role: "tab"), true)
 

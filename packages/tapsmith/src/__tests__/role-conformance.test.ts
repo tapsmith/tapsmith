@@ -357,6 +357,21 @@ const CASES: Case[] = [
   { why: 'a CheckBoxPreference\'s checkbox is named by its row', platform: 'android', type: A.checkBox, role: 'checkbox', rowName: 'Wi-Fi only', rowLabel: 'Wi-Fi only', name: 'Wi-Fi only', exact: true, matches: true },
   { why: 'a row-named switch is still found without a name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', matches: true },
 
+  // ─── iOS: a Flutter tab, the same label; a NavigationBar item is a button, a rail's static text (generic while selected) ───
+  { why: 'a Flutter NavigationRail destination is a tab', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', matches: true },
+  { why: 'named by its label', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'contact', matches: true },
+  { why: 'exact compares the label without the position', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'the position is not part of the name', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Tab 2', matches: false },
+  { why: 'a RegExp tests the label', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: { source: '^Contact$', flags: '' }, matches: true },
+  { why: 'and is still static text', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'text', name: 'Contact', exact: true, matches: true },
+  { why: 'the selected rail destination, a generic view, is a tab', platform: 'ios', type: I.other, label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and no menuitem by its name', platform: 'ios', type: I.other, label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'menuitem', name: 'Contact', matches: false },
+  { why: 'a Flutter NavigationBar destination is a tab', platform: 'ios', type: I.button, traits: ['button'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and still a button, by its label', platform: 'ios', type: I.button, traits: ['button'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: 'Contact', exact: true, matches: true },
+  { why: 'an unlabelled Flutter tab is a tab named nothing', platform: 'ios', type: I.other, label: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', matches: true },
+  { why: 'and has no name to match', platform: 'ios', type: I.other, label: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', name: 'Tab', matches: false },
+  { why: 'a label without the position is no tab', platform: 'ios', type: I.text, traits: ['staticText'], label: 'Contact', reportedRole: 'text', role: 'tab', matches: false },
+
   // ─── A Flutter tab: "<label>\nTab <i> of <n>" and no role (NavigationBar, NavigationRail, TabBar) ───
   { why: 'a Flutter NavigationRail destination is a tab', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', matches: true },
   { why: 'named by its label', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'contact', matches: true },

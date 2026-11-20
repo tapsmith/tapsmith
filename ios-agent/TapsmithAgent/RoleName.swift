@@ -57,6 +57,12 @@ enum RoleName {
             ?? backButtonName(elementType: elementType, label: label, title: title, identifier: identifier)
     }
 
+    /// The name a label gives: the label, or a Flutter tab's without the
+    /// "Tab 2 of 3" Flutter appends to it (`FlutterTab`).
+    static func labelName(_ label: String) -> String {
+        FlutterTab.name(of: label) ?? label
+    }
+
     /// Whether the element's name matches `name` (TextMatch.nameMatches): a
     /// case-insensitive substring, or with `exact` the whole name — for a
     /// label or title also one child of a ", "-joined label; a placeholder
@@ -65,6 +71,7 @@ enum RoleName {
         elementType: XCUIElement.ElementType, label: String, title: String, placeholder: String,
         identifier: String, name: String, exact: Bool
     ) -> Bool {
+        let label = labelName(label)
         if TextMatch.nameMatches(label, name, exact: exact) || TextMatch.nameMatches(title, name, exact: exact) {
             return true
         }
@@ -83,6 +90,7 @@ enum RoleName {
         elementType: XCUIElement.ElementType, label: String, title: String, placeholder: String,
         identifier: String, regex: TextRegex
     ) -> Bool {
+        let label = labelName(label)
         if let fallback = fallbackName(
             elementType: elementType, label: label, title: title, placeholder: placeholder, identifier: identifier
         ) {
