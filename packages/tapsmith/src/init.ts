@@ -42,6 +42,7 @@ import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitigno
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 import { detectCodingAgents, pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
+import { appIdProblem, appIdWarning, type AppIdPlatform } from './app-id.js';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -229,10 +230,13 @@ const OTHER_ID = 'Enter another…';
  * id, so it could never be skipped the way its prompt says. With nothing to
  * suggest it is an input, where Enter with nothing typed skips it.
  */
-async function askAppId(message: string, suggested?: { id: string; source: string }): Promise<string | undefined> {
+async function askAppId(message: string, platform: AppIdPlatform, suggested?: { id: string; source: string }): Promise<string | undefined> {
+  // A typed id the daemon would refuse is asked again; empty skips.
+  const validate = (val: string): true | string => val.trim().length === 0 || (appIdProblem(val.trim(), platform) ?? true);
   const typed = async (): Promise<string | undefined> => (await ask<string>({
     type: 'input',
     message: `${message} ${dim('(Enter to skip)')}`,
+    validate,
   })).trim() || undefined;
   if (!suggested) return typed();
   const picked = await ask<string>({
@@ -245,7 +249,15 @@ async function askAppId(message: string, suggested?: { id: string; source: strin
     ],
   });
   if (picked === SKIP_BUILD) return undefined;
-  return picked === OTHER_ID ? typed() : picked;
+  if (picked === OTHER_ID) return typed();
+  warnInvalidAppId(picked, platform);
+  return picked;
+}
+
+/** A warning line for a detected or suggested id the daemon would refuse. */
+function warnInvalidAppId(id: string, platform: AppIdPlatform): void {
+  const warning = appIdWarning(id, platform);
+  if (warning) console.log(`  ${YELLOW}⚠${RESET} ${warning}`);
 }
 
 /**
@@ -428,6 +440,7 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
   let packageName = apkPath ? detectAndroidPackage(apkPath) : undefined;
   if (packageName) {
     console.log(dim(`  Detected package: ${packageName}`));
+    warnInvalidAppId(packageName, 'android');
   } else {
     console.log(dim(apkPath
       ? `  Could not read the package name from ${apkPath} (needs aapt2 from the Android SDK build-tools).`
@@ -438,7 +451,7 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
     const suggested = expo?.androidPackage
       ? { id: expo.androidPackage, source: 'from the Expo app config' }
       : gradleId ? { id: gradleId, source: "the app module's applicationId" } : undefined;
-    packageName = await askAppId('What is your app\'s package name?', suggested);
+    packageName = await askAppId('What is your app\'s package name?', 'android', suggested);
   }
   if (!apkPath && packageName) {
     // As `init --yes --package` says it (PILOT-721).
@@ -629,12 +642,14 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
   if (useSimulators && !simBundleId) {
     simBundleId = await askAppId(
       both ? 'What is your simulator build\'s bundle identifier?' : 'What is your app\'s bundle identifier?',
+      'ios',
       suggest(deviceBundleIdRead, "the device build's id"),
     );
   }
   if (usePhysicalDevice && !deviceBundleIdRead) {
     deviceBundleIdRead = await askAppId(
       both ? 'What is your device build\'s bundle identifier?' : 'What is your app\'s bundle identifier?',
+      'ios',
       suggest(simBundleId, "the simulator build's id"),
     );
   }
@@ -681,7 +696,10 @@ export function customSimulatorDeviceType(name: string, env: EnvScan): string | 
 
 function detectBundleId(appPath: string): string | undefined {
   const detected = detectIosBundleId(appPath);
-  if (detected) console.log(dim(`  Detected bundle ID: ${detected}`));
+  if (detected) {
+    console.log(dim(`  Detected bundle ID: ${detected}`));
+    warnInvalidAppId(detected, 'ios');
+  }
   return detected;
 }
 

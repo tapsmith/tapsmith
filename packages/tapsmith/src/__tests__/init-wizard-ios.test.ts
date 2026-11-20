@@ -131,6 +131,23 @@ describe('configureIos() (PILOT-251)', () => {
     expect(ios.bundleId).toBe('com.example.typed');
   });
 
+  it("takes Expo's hyphenated bundle id from the build without a warning, and validates a typed one by iOS's rule", async () => {
+    const logged: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logged.push(args.join(' ')); });
+    bundleIds.set(SIM_APP, 'com.anonymous.priya-app');
+    script('simulators');
+    expect((await configureIos(env)).bundleId).toBe('com.anonymous.priya-app');
+    expect(logged.join('\n')).not.toContain('not a valid');
+
+    answers.clear();
+    questions.length = 0;
+    script('physical', [[/bundle identifier/, 'com.example.typed']]);
+    await configureIos(env);
+    const validate = questions.find((q) => /bundle identifier/.test(q.message))?.validate;
+    expect(validate?.('com.anonymous.priya-app')).toBe(true);
+    expect(validate?.('com.example my app')).toContain('not a valid iOS bundle identifier');
+  });
+
   it('both: collects the simulator and device builds, bundle id from the builds', async () => {
     bundleIds.set(SIM_APP, 'com.example.sim');
     bundleIds.set(DEVICE_APP, 'com.example.sim');

@@ -467,6 +467,22 @@ describe('resolveInitPlan()', () => {
     expect(resolveInitPlan(initArgs({ yes: true, platform: 'android' }), baseEnv, detectStubs).warnings).toEqual([]);
   });
 
+  it("takes Expo's hyphenated iOS bundle id without a warning, and warns about a hyphenated Android package", () => {
+    const ios = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), baseEnv, { ...detectStubs, detectIosBundleId: () => 'com.anonymous.priya-app' });
+    expect(ios.ios?.bundleId).toBe('com.anonymous.priya-app');
+    expect(ios.warnings).toEqual([]);
+    const android = resolveInitPlan(initArgs({ yes: true, platform: 'android', package: 'com.anonymous.priya-app' }), baseEnv, detectStubs);
+    expect(android.android?.packageName).toBe('com.anonymous.priya-app');
+    expect(android.warnings).toEqual([
+      '"com.anonymous.priya-app" is not a valid Android package name: it may contain only letters, digits, dots and underscores, so Tapsmith cannot launch the app until package is set to the id the app is built with',
+    ]);
+  });
+
+  it('warns about a bundle id no iOS app can have', () => {
+    const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios', bundleId: 'com.example my app' }), baseEnv, detectStubs);
+    expect(plan.warnings).toEqual([expect.stringContaining('"com.example my app" is not a valid iOS bundle identifier')]);
+  });
+
   it('omits avd with a warning when none available', () => {
     const plan = resolveInitPlan(
       initArgs({ yes: true, platform: 'android' }),

@@ -218,6 +218,33 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
     expect(JSON.stringify(questions)).not.toContain('com.example');
   });
 
+  it('asks again for a typed package name Android cannot have, and lets Enter skip', async () => {
+    apkCandidates = [DEBUG_APK];
+    script([
+      [/Where is your Android APK/, DEBUG_APK],
+      [/package name/, 'com.acme.app'],
+    ]);
+
+    await configureAndroid(env);
+
+    const validate = question(/package name/)?.validate;
+    expect(validate?.('com.acme.my-app')).toBe('"com.acme.my-app" is not a valid Android package name: it may contain only letters, digits, dots and underscores');
+    expect(validate?.(' com.acme.my_app ')).toBe(true);
+    expect(validate?.('')).toBe(true);
+  });
+
+  it("warns when the Expo app config's package is one Android refuses", async () => {
+    script([
+      [/Where is your Android APK/, 'Skip for now'],
+      [/package name/, (q: Question) => q.choices?.[0]?.name],
+    ]);
+
+    const android = await configureAndroid(env, { androidPackage: 'com.acme.my-app' } as ExpoProject);
+
+    expect(android.packageName).toBe('com.acme.my-app');
+    expect(logged.join('\n')).toContain('"com.acme.my-app" is not a valid Android package name');
+  });
+
   it('says to install an Android SDK when ADB is missing and there is none (PILOT-558)', async () => {
     apkCandidates = [DEBUG_APK];
     packages.set(DEBUG_APK, 'com.acme.app');
@@ -361,8 +388,8 @@ describe('configureAndroid() with no build yet (PILOT-778)', () => {
     expect(apk?.validate?.('')).toBe(true);
     expect(apk?.validate?.('   ')).toBe(true);
     expect(question(/package name/)?.message).toMatch(/Enter to skip/);
-    // Nothing to validate: any answer, empty included, moves on.
-    expect(question(/package name/)?.validate).toBeUndefined();
+    // Empty moves on; only an id Android cannot have is asked again.
+    expect(question(/package name/)?.validate?.('   ')).toBe(true);
     expect(android.apkPath).toBeUndefined();
     expect(android.packageName).toBeUndefined();
   });

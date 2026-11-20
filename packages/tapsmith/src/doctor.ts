@@ -28,6 +28,7 @@ import { mitmproxyRedirectorSource } from './setup-ios.js';
 import { readIosAppInfo, type IosAppInfo } from './ios-app-bundle.js';
 import { isSimulatorUdid } from './ios-devicectl.js';
 import { isYarnPnp, YARN_PNP_FIX } from './yarn-pnp.js';
+import { appIdProblem } from './app-id.js';
 
 // ─── ANSI helpers ───
 
@@ -657,6 +658,31 @@ function checkConfiguredSimulators(report: Reporter, configured: Map<string, str
     if (required) fail(report, 'simulator', label, fix);
     else warn(report, 'simulator', label, `${fix}. Meanwhile, select the other projects with --project`);
   }
+}
+
+// ─── App ids ───
+
+/**
+ * Each scope's `package` against its platform's app-id rule (`app-id.ts`,
+ * the daemon's own), in one row naming the projects: an id the daemon
+ * refuses fails every launch, so it is an error. No row when every id is
+ * valid — the `app-apk` and `ios-app` rows already name the app.
+ */
+function checkAppIds(report: Reporter, scopes: TapsmithConfig[], projects: Array<string | undefined>): void {
+  const problems = new Map<string, string[]>();
+  scopes.forEach((scope, i) => {
+    if (!scope.package) return;
+    const problem = appIdProblem(scope.package, scopePlatform(scope));
+    if (!problem) return;
+    const owners = problems.get(problem) ?? [];
+    const project = projects[i];
+    if (project !== undefined && !owners.includes(project)) owners.push(project);
+    problems.set(problem, owners);
+  });
+  if (problems.size === 0) return;
+  const label = [...problems].map(([problem, owners]) => (owners.length === 0 ? problem : `${problem} (project${owners.length === 1 ? '' : 's'} ${owners.join(', ')})`)).join('; ');
+  fail(report, 'app-id', `${label} — tapsmith test cannot launch the app`,
+    'Set package to the id the app is built with: the applicationId in android/app/build.gradle, or CFBundleIdentifier in the iOS app\'s Info.plist');
 }
 
 // ─── iOS app under test (PILOT-918) ───
@@ -1441,6 +1467,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
         `Add platform: 'ios' to ${fixes.join(' and ')}`);
     }
   }
+  checkAppIds(report, scopes, projectNames);
 
   // ─── Android ───
   if (printing) {
