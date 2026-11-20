@@ -248,6 +248,43 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     }
   });
 
+  // ─── .only across files (PILOT-572) ───
+
+  const focusLogin = (): void => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'),
+      'import { test } from "tapsmith";\ntest.only("signs in", async () => {});\ntest("signs out", async () => {});\n');
+  };
+
+  it('runs only the files that hold a .only when any file does', () => {
+    focusLogin();
+    const { output, reachedDevice } = run('--workers', '2');
+    expect(output).toContain('Config: 1 worker | 1 test file');
+    expect(reachedDevice).toBe(true);
+  });
+
+  it('decides .only from the whole suite on every shard, and ends a shard without a focused file cleanly', () => {
+    focusLogin();
+    // Sorted, login.test.ts falls on shard 1 and signup.test.ts on shard 2.
+    const first = run('--shard=1/2', '--workers', '2');
+    expect(first.output).toContain('Shard 1/2: running 1 file(s)');
+    expect(first.reachedDevice).toBe(true);
+    fs.rmSync(marker, { force: true });
+    const second = run('--shard=2/2');
+    expect(second.output).toContain('Shard 2/2: no test file in this shard holds a focused (.only) test.');
+    expect(second.status).toBe(0);
+    expect(second.reachedDevice).toBe(false);
+  });
+
+  it('fails the grep check when the grep matches only tests a .only leaves out', () => {
+    focusLogin();
+    const { status, output, reachedDevice } = run('--grep', 'creates|signs out');
+    expect(output).toContain('No tests found: no test matches grep /creates|signs out/.');
+    expect(output).toContain('  - signs in');
+    expect(output).not.toContain('signup > creates an account');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
   function writeChain(): void {
     for (const f of ['tests/auth.setup.ts', 'tests/seed.setup.ts']) fs.writeFileSync(path.join(root, f), testFile('setup', ['s']));
     fs.mkdirSync(path.join(root, 'tests', 'api'));

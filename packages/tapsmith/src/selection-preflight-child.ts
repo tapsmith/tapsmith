@@ -1,20 +1,29 @@
 /**
  * Child process for `tapsmith test`'s checks before any device work: the
- * selection check and load failures.
+ * selection check, load failures, and which files a `.only` focuses the run on.
  *
- * Imports each test file to read its test names — no test body runs — and
- * sends them back over IPC, or the error the file failed to load with. Out of the CLI's process so a test file's
+ * Imports each test file to read its test names (and which of them a `.only`
+ * leaves in) — no test body runs — and sends them back over IPC, or the error the file failed to load with. Out of the CLI's process so a test file's
  * top-level code never runs twice there (once here, once for the real run),
  * and so a shared helper's module cache, and whatever it registered while
  * loading, is not left behind for the run.
  */
 
 import { loadErrorForReport } from './load-failure.js';
-import { discoverTestFile, type DiscoveredSuite } from './runner.js';
-import type { PreflightRequest, PreflightResponse } from './selection-preflight.js';
+import { discoverTestFile, type DiscoveredSuite, type DiscoveredTest } from './runner.js';
+import type { FilePreflight, PreflightRequest, PreflightResponse } from './selection-preflight.js';
 
-function testNames(suite: DiscoveredSuite): string[] {
-  return [...suite.tests.map((t) => t.fullName), ...suite.suites.flatMap(testNames)];
+function testNames(suite: DiscoveredSuite, keep: (test: DiscoveredTest) => boolean = () => true): string[] {
+  return [
+    ...suite.tests.filter(keep).map((t) => t.fullName),
+    ...suite.suites.flatMap((child) => testNames(child, keep)),
+  ];
+}
+
+/** What loading the file found: every test's name, and for a file with a `.only`, the focused ones'. */
+function preflightOf(suite: DiscoveredSuite): FilePreflight {
+  const names = testNames(suite);
+  return suite.focused ? { names, focusedNames: testNames(suite, (t) => !t.outOfFocus) } : { names };
 }
 
 const hello: PreflightResponse = { type: 'pid', pid: process.pid };
@@ -24,7 +33,7 @@ process.once('message', async (msg: PreflightRequest) => {
   const results: Extract<PreflightResponse, { type: 'names' }>['results'] = [];
   for (const file of msg.files) {
     try {
-      results.push({ file, names: testNames(await discoverTestFile(file)) });
+      results.push({ file, ...preflightOf(await discoverTestFile(file)) });
     } catch (err) {
       // Prepared here, where the loader's error still has its class (a
       // SyntaxError's location is found from it), and once: the parent only

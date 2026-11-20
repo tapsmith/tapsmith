@@ -4444,6 +4444,8 @@ export interface DiscoveredTest {
   fullName: string
   only: boolean
   skip: boolean
+  /** Set when a `.only` elsewhere in the file leaves this test out of the run. */
+  outOfFocus?: true
   /** Effective isolation options for this test (suite cascade applied). */
   use?: DiscoveredUseOptions
 }
@@ -4452,6 +4454,8 @@ export interface DiscoveredSuite {
   name: string
   tests: DiscoveredTest[]
   suites: DiscoveredSuite[]
+  /** On a file's root: the file holds a `.only`, so only its focused tests run. */
+  focused?: true
   /** Effective isolation options for this suite (parent cascade applied). */
   use?: DiscoveredUseOptions
 }
@@ -4489,7 +4493,7 @@ export async function discoverTestFile(filePath: string): Promise<DiscoveredSuit
   const rootCtx = popContext();
   const discovered = discoverSuiteContext(rootCtx, '', undefined);
   await settleAsyncDescribes();
-  return discovered;
+  return holdsFocus(rootCtx) ? { ...discovered, focused: true } : discovered;
 }
 
 function discoverSuiteContext(
@@ -4497,15 +4501,18 @@ function discoverSuiteContext(
   parentPrefix: string,
   parentUse: DiscoveredUseOptions | undefined,
   parentSkipped = false,
+  parentOutOfFocus = false,
 ): DiscoveredSuite {
   const use = pickDiscoveredUse(parentUse, ctx.useOptions);
   // A describe-level test.skip() skips the scope and everything below it.
   const scopeSkipped = parentSkipped || !!ctx.skipped;
+  const focused = holdsFocus(ctx);
   const tests: DiscoveredTest[] = ctx.tests.map((t) => ({
     name: t.name,
     fullName: parentPrefix ? `${parentPrefix} > ${t.name}` : t.name,
     only: t.only,
     skip: t.skip || scopeSkipped,
+    ...(parentOutOfFocus || (focused && !t.only) ? { outOfFocus: true as const } : {}),
     ...(use ? { use } : {}),
   }));
 
@@ -4513,7 +4520,8 @@ function discoverSuiteContext(
   for (const entry of ctx.suites) {
     const suitePrefix = parentPrefix ? `${parentPrefix} > ${entry.name}` : entry.name;
     const childCtx = materializeSuiteEntry(entry);
-    suites.push(discoverSuiteContext(childCtx, suitePrefix, use, scopeSkipped));
+    const outOfFocus = parentOutOfFocus || (focused && !suiteFocused(entry));
+    suites.push(discoverSuiteContext(childCtx, suitePrefix, use, scopeSkipped, outOfFocus));
   }
 
   return { name: parentPrefix, tests, suites, ...(use ? { use } : {}) };

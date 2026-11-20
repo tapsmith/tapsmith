@@ -790,6 +790,15 @@ export function shardProjects(
     const mine = new Set(sorted.filter((_, i) => i % total === current - 1));
     project.testFiles = project.testFiles.filter((f) => mine.delete(f));
   }
+  return dropUnneededSetupProjects(projects, dependedOn);
+}
+
+/**
+ * Empty every setup project (one another project depends on) whose dependents
+ * were left with no file, and return the run's files as one deduplicated,
+ * sorted list.
+ */
+function dropUnneededSetupProjects(projects: ResolvedProject[], dependedOn: Set<string>): string[] {
   // Until nothing changes: emptying one setup project in a chain
   // (`setup` → `api` → `e2e`) can leave the one it depends on with no
   // dependent files either, whatever order the config lists them in.
@@ -807,6 +816,41 @@ export function shardProjects(
     }
   }
   return [...new Set(projects.flatMap((p) => p.testFiles))].sort();
+}
+
+// ─── Focus (`.only`) ───
+
+/**
+ * Whether a `.only` focuses the run: some file of a project that no other
+ * project depends on holds one. `entries` is the whole suite, before
+ * sharding, so every shard decides it the same way. A `.only` in a setup
+ * project focuses nothing beyond its own file: as in Playwright, which
+ * applies `.only` to the top-level projects only.
+ */
+export function runIsFocused(
+  entries: Array<{ project: ResolvedProject; files: string[] }>,
+  isFocused: (file: string) => boolean,
+): boolean {
+  const dependedOn = new Set(entries.flatMap(({ project }) => project.dependencies));
+  return entries.some(({ project, files }) => !dependedOn.has(project.name) && files.some(isFocused));
+}
+
+/**
+ * Cut every top-level project's `testFiles` down to the files that hold a
+ * `.only`, in place, for a run {@link runIsFocused} says is focused: the other
+ * files would run no test. Setup projects run whole, and not at all once
+ * their dependents keep no file. Returns the run's files as one
+ * deduplicated, sorted list — empty for a shard that holds no focused file.
+ */
+export function focusProjects(
+  projects: ResolvedProject[],
+  isFocused: (file: string) => boolean,
+): string[] {
+  const dependedOn = new Set(projects.flatMap((p) => p.dependencies));
+  for (const project of projects) {
+    if (!dependedOn.has(project.name)) project.testFiles = project.testFiles.filter(isFocused);
+  }
+  return dropUnneededSetupProjects(projects, dependedOn);
 }
 
 /**

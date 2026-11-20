@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { resolveProjects, validateProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, workerPlanNote, devicePinWorkersConflict, platformOfSerial, scopeDevicePinToPlatform, devicesPinnedByManyBuckets, shardProjects, targetSessionConfig, type ResolvedProject } from '../project.js';
+import { resolveProjects, validateProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, workerPlanNote, devicePinWorkersConflict, platformOfSerial, scopeDevicePinToPlatform, devicesPinnedByManyBuckets, shardProjects, runIsFocused, focusProjects, targetSessionConfig, type ResolvedProject } from '../project.js';
 import { serializeConfig } from '../worker-protocol.js';
 import { effectiveConfigForProject, isConfigValidationError, loadConfig, type TapsmithConfig } from '../config.js';
 
@@ -1105,5 +1105,63 @@ describe('shardProjects()', () => {
     const a = project('a', ['/r/shared.test.ts']);
     const b = project('b', ['/r/shared.test.ts']);
     expect(shardProjects([a, b], { current: 1, total: 2 })).toEqual(['/r/shared.test.ts']);
+  });
+});
+
+// ─── focusProjects ───
+
+describe('runIsFocused() / focusProjects()', () => {
+  function project(name: string, testFiles: string[], extra: Partial<ResolvedProject> = {}): ResolvedProject {
+    const config = makeConfig();
+    return {
+      name,
+      testMatch: ['**/*.test.ts'],
+      testIgnore: [],
+      dependencies: [],
+      testFiles,
+      effectiveConfig: config,
+      deviceSignature: deviceSignature(config),
+      ...extra,
+    };
+  }
+  const entries = (projects: ResolvedProject[]) => projects.map((p) => ({ project: p, files: [...p.testFiles] }));
+
+  it('keeps only the files that hold a .only, in every project that runs them', () => {
+    const a = project('a', ['/r/x.test.ts', '/r/y.test.ts']);
+    const b = project('b', ['/r/x.test.ts', '/r/z.test.ts']);
+    const focused = new Set(['/r/x.test.ts']);
+    expect(runIsFocused(entries([a, b]), (f) => focused.has(f))).toBe(true);
+    expect(focusProjects([a, b], (f) => focused.has(f))).toEqual(['/r/x.test.ts']);
+    expect(a.testFiles).toEqual(['/r/x.test.ts']);
+    expect(b.testFiles).toEqual(['/r/x.test.ts']);
+  });
+
+  it('is not focused without a .only, nor by one in a setup project, which runs whole', () => {
+    const setup = project('setup', ['/r/auth.setup.ts', '/r/seed.setup.ts']);
+    const api = project('api', ['/r/api1.test.ts', '/r/api2.test.ts'], { dependencies: ['setup'] });
+    expect(runIsFocused(entries([setup, api]), () => false)).toBe(false);
+    expect(runIsFocused(entries([setup, api]), (f) => f === '/r/auth.setup.ts')).toBe(false);
+    const focused = new Set(['/r/api2.test.ts', '/r/auth.setup.ts']);
+    expect(focusProjects([setup, api], (f) => focused.has(f))).toEqual(['/r/api2.test.ts', '/r/auth.setup.ts', '/r/seed.setup.ts']);
+    expect(setup.testFiles).toEqual(['/r/auth.setup.ts', '/r/seed.setup.ts']);
+  });
+
+  it('drops a setup project whose dependents keep no file', () => {
+    const setup = project('setup', ['/r/auth.setup.ts']);
+    const api = project('api', ['/r/api1.test.ts'], { dependencies: ['setup'] });
+    const ui = project('ui', ['/r/ui1.test.ts']);
+    expect(focusProjects([setup, api, ui], (f) => f === '/r/ui1.test.ts')).toEqual(['/r/ui1.test.ts']);
+    expect(setup.testFiles).toEqual([]);
+    expect(api.testFiles).toEqual([]);
+  });
+
+  it('decides focus from the whole suite, so a shard without the focused file runs nothing', () => {
+    const all = project('default', ['/r/a.test.ts', '/r/b.test.ts'], { synthesized: true });
+    const suite = entries([all]);
+    shardProjects([all], { current: 2, total: 2 });
+    expect(all.testFiles).toEqual(['/r/b.test.ts']);
+    const focused = (f: string) => f === '/r/a.test.ts';
+    expect(runIsFocused(suite, focused)).toBe(true);
+    expect(focusProjects([all], focused)).toEqual([]);
   });
 });

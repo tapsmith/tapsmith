@@ -1999,6 +1999,21 @@ async function preflightLoadFailures(
   return results;
 }
 
+/**
+ * End a shard that has no file to run, with exit code 0. It still leaves its
+ * (empty) blob, or merge-reports would report the shard as missing whenever
+ * there are fewer files than shards.
+ */
+async function exitEmptyShard(config: TapsmithConfig): Promise<never> {
+  const { writeEmptyShardBlob } = await import('./merge-reports.js');
+  const refusal = await writeEmptyShardBlob(config);
+  if (refusal) {
+    console.error(red(refusal));
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // Load config
   const config = await loadConfig(undefined, args.config);
@@ -2246,15 +2261,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     testFiles = shardProjects(projects, config.shard);
     if (testFiles.length === 0) {
       console.log(dim(`Shard ${current}/${total}: no test files in this shard.`));
-      // Still leave this shard's (empty) blob, or merge-reports would report
-      // the shard as missing whenever there are fewer files than shards.
-      const { writeEmptyShardBlob } = await import('./merge-reports.js');
-      const refusal = await writeEmptyShardBlob(config);
-      if (refusal) {
-        console.error(red(refusal));
-        process.exit(1);
-      }
-      process.exit(0);
+      await exitEmptyShard(config);
     }
     shardMessage = `Shard ${current}/${total}: running ${testFiles.length} file(s)`;
   }
@@ -2312,26 +2319,43 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   let preflight: Map<string, import('./selection-preflight.js').FilePreflight | undefined> | undefined;
   if (!args.ui && !args.watch) {
     const { preflightTestFiles } = await import('./selection-preflight.js');
-    // A grep is answered from the whole suite, so every shard answers it the
-    // same way; load failures are reported for this shard's files.
+    // A grep and a `.only` are answered from the whole suite, so every shard
+    // answers them the same way; load failures are reported for this
+    // shard's files.
     preflight = await preflightTestFiles([...new Set([
-      ...(selectionFilterActive ? unshardedFiles.flatMap(({ files }) => files) : []),
+      ...unshardedFiles.flatMap(({ files }) => files),
       ...testFiles,
     ])]);
   }
+
+  // A `.only` anywhere in the suite focuses the whole run on the focused
+  // tests, as in Playwright: a file without one runs nothing (PILOT-572).
+  // Unknown when the preflight could not load the files: each file then
+  // still applies its own `.only`.
+  const { runIsFocused, focusProjects } = await import('./project.js');
+  const focusedFile = (file: string): boolean => {
+    const result = preflight?.get(file);
+    return !!result && 'names' in result && result.focusedNames !== undefined;
+  };
+  const focusedRun = runIsFocused(unshardedFiles, focusedFile);
 
   // A grep that selects no test fails here, before the reporters too.
   if (selectionFilterActive && preflight) {
     const found = preflight;
     const { findSelectionMiss, grepFiltersFor, noTestsMatchFilterMessage } = await import('./test-filter.js');
+    const dependedOn = new Set(projects.flatMap((p) => p.dependencies));
     const miss = findSelectionMiss(
       unshardedFiles.flatMap(({ project, files }) => {
         const filters = grepFiltersFor(config, project);
-        return files.map((file) => ({ file, filters }));
+        // A focused run runs no file of a top-level project that has no `.only`.
+        const kept = focusedRun && !dependedOn.has(project.name) ? files.filter(focusedFile) : files;
+        return kept.map((file) => ({ file, filters }));
       }),
       (file) => {
         const result = found.get(file);
-        return result && 'names' in result ? result.names : undefined;
+        if (!result || !('names' in result)) return undefined;
+        // A file with a `.only` runs only its focused tests, in any run.
+        return result.focusedNames ?? result.names;
       },
     );
     if (miss) {
@@ -2342,6 +2366,23 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         hasProjects && projects.some((p) => p.grep !== undefined || p.grepInvert !== undefined),
       )));
       process.exit(1);
+    }
+  }
+
+  // Found before the run is focused, so a broken file is reported even when
+  // it holds no `.only`: as in Playwright, a file that fails to load fails
+  // the run.
+  const loadFailures = preflight ? await preflightLoadFailures(projects, preflight) : [];
+
+  if (focusedRun && loadFailures.length === 0) {
+    testFiles = focusProjects(projects, focusedFile);
+    if (config.shard) {
+      const { current, total } = config.shard;
+      if (testFiles.length === 0) {
+        console.log(dim(`Shard ${current}/${total}: no test file in this shard holds a focused (.only) test.`));
+        await exitEmptyShard(config);
+      }
+      shardMessage = `Shard ${current}/${total}: running ${testFiles.length} file(s)`;
     }
   }
 
@@ -2387,7 +2428,6 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
 
   // A file that failed to load: report it, as the run would have, to every
   // reporter, and run nothing (PILOT-784).
-  const loadFailures = preflight ? await preflightLoadFailures(projects, preflight) : [];
   if (loadFailures.length > 0) {
     const fileCount = new Set(loadFailures.map((r) => r.filePath)).size;
     reporter.onRunStart(config, fileCount);
