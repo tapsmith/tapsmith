@@ -123,7 +123,11 @@ class CommandHandler {
     /// The alerts the agent answered on its own, for `takeSystemDialogEvents`.
     private var systemAlertEvents = SystemAlertEvents()
 
-    /// Cancel a leftover "Open in “App”?" prompt before a launch.
+    /// Whether `waitForAppReady` has looked for a leftover "Open in" prompt.
+    private var checkedLeftoverPromptAtReadiness = false
+
+    /// Cancel a leftover "Open in “App”?" prompt before a launch, or before
+    /// the session's first use of an app it found already running.
     ///
     /// Tapsmith's own deep links answer this prompt inside the daemon's
     /// openurl flow, so one that is up when a launch starts came from
@@ -135,7 +139,7 @@ class CommandHandler {
     /// anyway. Recorded for the daemon to report (`takeSystemDialogEvents`).
     private func cancelLeftoverOpenInPrompt() {
         guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { return }
-        NSLog("[SystemDialog] Cancelling a leftover %@ before launching the app", alert.description)
+        NSLog("[SystemDialog] Cancelling a leftover %@ before using the app", alert.description)
         var gone = false
         _ = ObjCExceptionCatcher.catchException {
             let element = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
@@ -3141,6 +3145,15 @@ class CommandHandler {
         case "waitForAppReady":
             let bundleId = targetBundleId(fallback: params)
             let timeoutMs = (params["timeout"] as? NSNumber)?.intValue ?? 10_000
+            // The session's first readiness check can adopt an app that is
+            // already running, with no launchApp: cancel a leftover prompt
+            // here too. Once per agent process: the SpringBoard query costs
+            // tens of milliseconds, and warm resets wait for readiness every
+            // test, while relaunches check in launchApp.
+            if !checkedLeftoverPromptAtReadiness {
+                checkedLeftoverPromptAtReadiness = true
+                cancelLeftoverOpenInPrompt()
+            }
             // A process launched outside the runner (simctl launch / openurl)
             // can stay invisible to an XCUIApplication bound while it was
             // still registering, and XCTest learns of it through XPC callbacks

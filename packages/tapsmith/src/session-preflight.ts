@@ -116,7 +116,7 @@ export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext)
     const timestamp = Number(event.timestampMs) || Date.now();
     if (event.kind === OPEN_IN_PROMPT_KIND) {
       const message = `A system alert left on the device, "${title}", was covering the app; `
-        + `Tapsmith pressed ${event.button} before launching the app. Something outside the test opened a link to the app `
+        + `Tapsmith pressed ${event.button} before using the app. Something outside the test opened a link to the app `
         + '(npx expo run:ios does when it finishes).';
       ctx.notices.push({ kind: 'foreign-dialog', title, owner, message, timestamp });
       process.stderr.write(`[tapsmith] ${message}\n`);

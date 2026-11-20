@@ -2930,7 +2930,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
     try {
       await collectAnsweredSystemDialogs(ctx);
       const message = 'A system alert left on the device, "Open in “priya-app”?", was covering the app; '
-        + 'Tapsmith pressed Cancel before launching the app. Something outside the test opened a link to the app '
+        + 'Tapsmith pressed Cancel before using the app. Something outside the test opened a link to the app '
         + '(npx expo run:ios does when it finishes).';
       expect(ctx.notices).toEqual([{
         kind: 'foreign-dialog',

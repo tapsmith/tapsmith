@@ -427,10 +427,10 @@ Element getByRole("button", { name: "Sign in" }) was not found after waiting 500
 
 **What happened:** iOS draws some alerts outside your app, in SpringBoard (the home screen process): "Open in “App”?" confirmations for links, and permission prompts. Locators only see the app under test, so while such an alert is up they cannot find anything behind it, and `type()` cannot focus a field (its error names the alert the same way). The failure screenshot shows the alert.
 
-The usual one is **"Open in “App”?"**. `npx expo run:ios` ends by opening a link to your app (`<scheme>://?__expo_url=…`) with `xcrun simctl openurl`, and the simulator asks for confirmation. The alert stays up when the app is closed and relaunched, so it would cover every test. Tapsmith cancels a leftover "Open in" prompt before it launches the app, at the start of the run and at each relaunch, and says so:
+The usual one is **"Open in “App”?"**. `npx expo run:ios` ends by opening a link to your app (`<scheme>://?__expo_url=…`) with `xcrun simctl openurl`, and the simulator asks for confirmation. The alert stays up when the app is closed and relaunched, so it would cover every test. Tapsmith cancels a leftover "Open in" prompt at the start of the run and before each relaunch of the app, and says so:
 
 ```
-[tapsmith] A system alert left on the device, "Open in “my-app”?", was covering the app; Tapsmith pressed Cancel before launching the app. Something outside the test opened a link to the app (npx expo run:ios does when it finishes).
+[tapsmith] A system alert left on the device, "Open in “my-app”?", was covering the app; Tapsmith pressed Cancel before using the app. Something outside the test opened a link to the app (npx expo run:ios does when it finishes).
 ```
 
 The trace also shows it, as a `systemDialog` step on the test that was running when Tapsmith collected it. Tapsmith presses **Cancel**, not **Open**: Open would deliver a link no test asked for. Prompts that Tapsmith's own `device.openDeepLink()` raises are answered with Open, as before. Tapsmith recognises the English prompt only.
