@@ -23,6 +23,10 @@ describe("getByRole seekbar", () => {
     // Found by role alone, it is bound to the view itself, not looked for
     // among the screen's sliders (it has none).
     expect((await seekbar.screenshot()).length).toBeGreaterThan(0)
+    if (device.platform === "ios") {
+      // A scroll waits for its element first, which once looked for a slider.
+      await seekbar.scroll("left")
+    }
   })
 
   test("is not a scroll view's indicator", async ({ device, scrollScreen }) => {

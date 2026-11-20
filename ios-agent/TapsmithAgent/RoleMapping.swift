@@ -312,7 +312,9 @@ enum RoleMapping {
     /// tab bar's items are, for "tablist" the bar host the iPhone Duo's
     /// TabView is (PILOT-1260; the iPad's floating tab bar is a generic
     /// `.other`, already a tablist type), and for "alert" the static text an RN `Text`
-    /// is (`staticTextRoles`). A coarse query — callers still filter by
+    /// is (`staticTextRoles`), and for "seekbar" and "searchfield" the generic
+    /// view an RN adjustable or search view is (`isGenericTraitRole`,
+    /// PILOT-1329). A coarse query — callers still filter by
     /// `matches` or by the tab-bar ancestry.
     /// - Throws: AgentError.invalidSelector if the role is unknown.
     static func queryTypes(for role: String) throws -> [XCUIElement.ElementType] {
@@ -321,6 +323,7 @@ enum RoleMapping {
         if canonical == "tab" { return types + [.button] }
         if canonical == "tablist" { return types + [.toolbar] }
         if staticTextRoles.contains(canonical) { return types + [.staticText] }
+        if canonical == "seekbar" || canonical == "searchfield" { return types + [.other] }
         return types
     }
 

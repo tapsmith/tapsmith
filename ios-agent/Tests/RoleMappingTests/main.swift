@@ -456,6 +456,15 @@ check("a button is a button by its type", RoleMapping.matchedByTraitOnly(role: "
 check("a heading is left to its own rule", RoleMapping.matchedByTraitOnly(role: "heading", elementType: .other), false)
 check("a checkbox is left to its own rule", RoleMapping.matchedByTraitOnly(role: "checkbox", elementType: .other), false)
 
+// A wait for a seekbar or searchfield also waits on generic views, which an
+// RN adjustable or search view is; the snapshot finder then checks the trait
+// (PILOT-1329). Without it, scroll() on one waited for a slider forever.
+check("a seekbar wait covers sliders and generic views",
+      (try? RoleMapping.queryTypes(for: "seekbar")) ?? [], [.slider, .other])
+check("by its RN spelling too", (try? RoleMapping.queryTypes(for: "slider")) ?? [], [.slider, .other])
+check("a searchfield wait covers search fields and generic views",
+      (try? RoleMapping.queryTypes(for: "searchfield")) ?? [], [.searchField, .other])
+
 // A scroll view's indicators are adjustable generic views, but no seekbar:
 // each is a direct child of its scroll view (traits read on an iOS 26.5
 // simulator: 0x200001000, the same as an RN adjustable view's).
