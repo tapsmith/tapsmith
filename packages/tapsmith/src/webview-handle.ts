@@ -39,6 +39,15 @@ const ROLE_CSS_MAP: Record<string, string[]> = {
   image: ['img', '[role="img"]'],
 };
 
+/**
+ * Roles whose accessible name comes from their content. The DOM dump gives
+ * such an element its flattened text as its name when that text is not its
+ * own leaf text, so the Playground suggests the name getByRole matches.
+ */
+const NAME_FROM_CONTENT_SELECTOR = ['button', 'link', 'heading', 'tab', 'checkbox', 'radio', 'switch']
+  .flatMap((role) => ROLE_CSS_MAP[role]!)
+  .join(', ');
+
 // ─── Strict mode (PILOT-227) ───
 
 /** @internal — DOM-derived description of one matched element. */
@@ -948,7 +957,7 @@ export class WebViewHandle {
       const useDpr = this._platform === 'android';
 
       // Evaluate JS to walk the DOM and produce a hierarchy
-      const domData = await this._evaluate(`(() => {
+      const domData = await this._evaluate(withDomHelpers(`(() => {
         const dpr = ${useDpr ? 'window.devicePixelRatio || 1' : '1'};
         function walk(el, depth) {
           if (depth > 20) return null;
@@ -964,11 +973,21 @@ export class WebViewHandle {
             placeholder: el.placeholder || '',
             role: el.getAttribute('role') || '',
             ariaLabel: (() => {
-              var lblBy = el.getAttribute('aria-labelledby');
-              if (lblBy) { var ref = document.getElementById(lblBy); if (ref) return ref.textContent?.trim() || ''; }
+              const by = __ts.labelledBy(el);
+              if (by !== null) return by;
               if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
-              if (el.id) { var lbl = document.querySelector('label[for=' + JSON.stringify(el.id) + ']'); if (lbl) return lbl.textContent?.trim() || ''; }
-              if (el.closest && el.closest('label')) { var wrapper = el.closest('label'); var clone = wrapper.cloneNode(true); clone.querySelectorAll('input,select,textarea').forEach(function(c){c.remove();}); var t = clone.textContent?.trim(); if (t) return t; }
+              const lbl = __ts.labelFor(el);
+              if (lbl) return __ts.flatText(lbl).trim();
+              const wrapped = __ts.wrappingLabel(el);
+              if (wrapped) return wrapped;
+              // A control named by its content that holds more than text
+              // (the <button> inside an ion-button holds a <slot>): the name
+              // getByRole matches it by, read through slots and shadow roots.
+              // The match is exact, so a name too long to keep whole is left out.
+              if ((el.children.length > 0 || el.shadowRoot) && el.matches(${JSON.stringify(NAME_FROM_CONTENT_SELECTOR)})) {
+                const name = __ts.name(el);
+                return name.length <= 200 ? name : '';
+              }
               return '';
             })(),
             // The attribute alone: what webview.getByLabel matches (PILOT-666).
@@ -984,14 +1003,17 @@ export class WebViewHandle {
             },
             children: [],
           };
-          for (const child of el.children) {
+          // Shadow-including tree order, as the locators match: the open
+          // shadow root's contents, then the element's own children.
+          const kids = el.shadowRoot ? [...el.shadowRoot.children, ...el.children] : el.children;
+          for (const child of kids) {
             const c = walk(child, depth + 1);
             if (c) node.children.push(c);
           }
           return node;
         }
         return walk(document.body, 0);
-      })()`, WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS) as DomNode | null;
+      })()`), WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS) as DomNode | null;
 
       if (!domData) return undefined;
 

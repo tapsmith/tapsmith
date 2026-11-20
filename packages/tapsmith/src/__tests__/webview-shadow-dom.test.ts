@@ -13,6 +13,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TapsmithGrpcClient } from '../grpc-client.js';
 import { WebViewHandle } from '../webview-handle.js';
 import { isStrictModeViolation } from '../element-handle.js';
+import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
+import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 
 const SHADOW_PAGE = `<!DOCTYPE html><html><body>
   <button id="light">Light</button>
@@ -65,7 +67,17 @@ function buildShadowTrees(doc: Document): void {
 function handleOn(html: string, setup?: (doc: Document) => void) {
   const dom = new JSDOM(html, { runScripts: 'outside-only' });
   setup?.(dom.window.document);
-  const handle = new WebViewHandle({} as TapsmithGrpcClient, 0, 300);
+  // jsdom does no layout: give every rendered element a box, and none to the
+  // elements a browser gives none (a <slot> is display: contents).
+  dom.window.Element.prototype.getBoundingClientRect = function (this: Element) {
+    const size = ['STYLE', 'SLOT', 'SCRIPT'].includes(this.nodeName) ? 0 : 10;
+    return { left: 0, top: 0, right: size, bottom: size, width: size, height: size, x: 0, y: 0 } as DOMRect;
+  };
+  // The native WebView's place on screen, which the DOM dump offsets by.
+  const client = {
+    findElement: async () => ({ found: true, element: { bounds: { left: 0, top: 0, right: 100, bottom: 100 } } }),
+  } as unknown as TapsmithGrpcClient;
+  const handle = new WebViewHandle(client, 0, 300);
   vi.spyOn(handle, '_evaluate').mockImplementation(async (expression: string) => {
     const value: unknown = dom.window.eval(expression);
     // Runtime.evaluate returns by value.
@@ -192,4 +204,57 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
     });
     expect(await idsOf(handle, handle.locator('#deep')._finderAllJs)).toEqual(['deep']);
   }, 30_000);
+
+  describe('the Playground DOM dump', () => {
+    function flatten(nodes: HierarchyNode[]): HierarchyNode[] {
+      return nodes.flatMap((n) => [n, ...flatten(n.children)]);
+    }
+
+    it('includes open shadow trees, in the order the locators match, and not closed ones', async () => {
+      const { handle } = shadowPage();
+      const xml = (await handle._dumpDomHierarchy())!;
+      const nodes = flatten(parseHierarchyXml(xml));
+      const tags = nodes.map((n) => n.attributes.get('webview-tag'));
+      // Custom-element hosts parse, with their shadow contents as children.
+      const host = nodes.find((n) => n.attributes.get('webview-id') === 'sign-in')!;
+      expect(host.children.map((c) => c.attributes.get('webview-tag'))).toEqual(['button']);
+      expect(tags.filter((t) => t === 'button')).toHaveLength(4);
+      expect(nodes.some((n) => n.attributes.get('text') === 'Secret')).toBe(false);
+      // No zero-size <style> or <slot>.
+      expect(tags).not.toContain('style');
+      expect(tags).not.toContain('slot');
+    });
+
+    it('names a shadow button by its slotted text, so the Playground suggests getByRole with that name', async () => {
+      const { handle } = shadowPage();
+      const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
+      const inner = nodes.find((n) => n.attributes.get('webview-tag') === 'button'
+        && n.attributes.get('content-desc') === 'Sign in');
+      expect(inner).toBeDefined();
+      expect(generateSelectors(inner!)[0]?.code).toBe('webview.getByRole("button", { name: "Sign in" })');
+    });
+
+    it('every top suggestion for a shadow element finds it at runtime', async () => {
+      const { handle } = shadowPage();
+      const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
+      const named = (tag: string, name: string) => nodes.find((n) =>
+        n.attributes.get('webview-tag') === tag && n.attributes.get('content-desc') === name);
+      const suggestions = [
+        named('button', 'Sign in'),
+        named('button', 'Close'),
+        named('input', 'Nickname'),
+        named('div', 'Volume'),
+      ].map((n) => generateSelectors(n!)[0]!.code);
+      expect(suggestions).toEqual([
+        'webview.getByRole("button", { name: "Sign in" })',
+        'webview.getByRole("button", { name: "Close" })',
+        'webview.getByRole("textfield", { name: "Nickname" })',
+        'webview.getByRole("slider", { name: "Volume" })',
+      ]);
+      for (const code of suggestions) {
+        const [, role, name] = /getByRole\("(\w+)", \{ name: "([^"]+)" \}\)/.exec(code)!;
+        expect(await handle.getByRole(role!, { name }).count(), code).toBe(1);
+      }
+    });
+  });
 });
