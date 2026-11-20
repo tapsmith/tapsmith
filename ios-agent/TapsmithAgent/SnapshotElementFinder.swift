@@ -276,7 +276,8 @@ class SnapshotElementFinder {
         let treeHasLazyList = register && RowAnchor.containsLazyList(snapshotDict)
         var queryNodes: [QueryNode] = []
         if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel
-            || selector.roleOnlySwitch || treeHasReadOnlyTextView || treeHasEmptyBarHost) {
+            || selector.roleOnlySwitch || selector.roleOnlyMayMatchByTrait || treeHasReadOnlyTextView
+            || treeHasEmptyBarHost) {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
         }
         var liveFocusedTextInputFetched = false
@@ -2252,10 +2253,15 @@ class SnapshotElementFinder {
             }
         } else if let role = selector.role {
             let nodeLabel = snapshotNode?["label"] as? String ?? ""
-            if selector.roleOnlyReResolvesByLabel {
-                // Role-only heading / RN checkbox, radio, alert, combobox: a
-                // type query can't tell them apart from other static texts or
-                // generic views, so find the node by its own label, as
+            let matchedByTrait = nodeElType.map {
+                $0 != .any && RoleMapping.matchedByTraitOnly(role: role, elementType: $0)
+            } ?? false
+            if selector.roleOnlyReResolvesByLabel || matchedByTrait {
+                // Role-only heading / RN checkbox, radio, alert, combobox, or
+                // a generic view matched by a trait (an RN adjustable view or
+                // Pressable, PILOT-1329): a type query can't tell them apart
+                // from other static texts or generic views, or doesn't return
+                // them at all, so find the node by its own label, as
                 // role + name does above — and like it, cache nothing for an
                 // empty label rather than bind some other element (PILOT-608).
                 if !nodeLabel.isEmpty, let labelIndex {
@@ -2310,7 +2316,7 @@ class SnapshotElementFinder {
                 // a progressbar that is an activity indicator (PILOT-797) or
                 // a list that is a collection view is indexed among all of
                 // the role's types, not looked for among the first type's.
-                // (A trait-matched `.other` is in no type query.)
+                // (A trait-matched `.other` is found by its label, above.)
                 if types.count == 1 {
                     element = resolve(app.descendants(matching: firstType))
                 } else {

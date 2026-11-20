@@ -442,6 +442,20 @@ check("bit 20 is no search field", matches("searchfield", .other, traits: 1 << 2
 check("a web range input (a slider) is a seekbar",
       RoleMapping.resolveRole(for: .slider, traits: webContentTrait | adjustableTrait, inTabBar: false), "seekbar")
 
+// A role-only match made by a trait alone is found again by its label: no
+// query on the role's types returns a generic view (PILOT-1329).
+check("an RN adjustable view is a seekbar by its trait only",
+      RoleMapping.matchedByTraitOnly(role: "seekbar", elementType: .other), true)
+check("and by the RN spelling", RoleMapping.matchedByTraitOnly(role: "slider", elementType: .other), true)
+check("a slider is a seekbar by its type", RoleMapping.matchedByTraitOnly(role: "seekbar", elementType: .slider), false)
+check("a generic search view is a searchfield by its trait only",
+      RoleMapping.matchedByTraitOnly(role: "searchfield", elementType: .other), true)
+check("an RN Pressable is a button by its trait only",
+      RoleMapping.matchedByTraitOnly(role: "button", elementType: .other), true)
+check("a button is a button by its type", RoleMapping.matchedByTraitOnly(role: "button", elementType: .button), false)
+check("a heading is left to its own rule", RoleMapping.matchedByTraitOnly(role: "heading", elementType: .other), false)
+check("a checkbox is left to its own rule", RoleMapping.matchedByTraitOnly(role: "checkbox", elementType: .other), false)
+
 // A scroll view's indicators are adjustable generic views, but no seekbar:
 // each is a direct child of its scroll view (traits read on an iOS 26.5
 // simulator: 0x200001000, the same as an RN adjustable view's).

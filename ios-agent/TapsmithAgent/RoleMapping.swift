@@ -483,6 +483,21 @@ enum RoleMapping {
         return otherRoleDescriptions.values.contains(part) ? part : nil
     }
 
+    /// The roles a generic view can match by a trait alone (`matchesTrait`):
+    /// an RN Pressable is an `.other` with the button trait, an RN adjustable
+    /// view an `.other` with the adjustable one. No query on the role's
+    /// element types returns such a view.
+    static let traitMatchedRoles: Set<String> = ["button", "link", "image", "text", "seekbar", "searchfield"]
+
+    /// Whether a role-only match of this element type was matched by a trait
+    /// rather than by its type, so a query on the role's types can't find it
+    /// again and its live element is found by its own label instead.
+    static func matchedByTraitOnly(role: String, elementType: XCUIElement.ElementType) -> Bool {
+        let canonical = normalize(role)
+        guard traitMatchedRoles.contains(canonical), let types = roleToElementTypes[canonical] else { return false }
+        return !types.contains(elementType)
+    }
+
     /// Whether a role-only match must be found again as a live element by its
     /// own label (QueryIndex) rather than by a query on the role's element types:
     /// a type query can't express a trait, a description or an ancestor, so

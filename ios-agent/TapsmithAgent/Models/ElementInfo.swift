@@ -64,6 +64,14 @@ struct ElementSelector {
         return RoleMapping.needsLabelReResolution(role: role)
     }
 
+    /// Whether a role-only selector can match a generic view by a trait
+    /// (`RoleMapping.traitMatchedRoles`): such a match is found again by its
+    /// own label, as no query on the role's element types returns it.
+    var roleOnlyMayMatchByTrait: Bool {
+        guard let role, !hasNameFilter else { return false }
+        return RoleMapping.traitMatchedRoles.contains(RoleMapping.normalize(role))
+    }
+
     /// Whether this is `getByRole("switch")` with no name: a named match is
     /// found again by its own label, since a live switch query also returns
     /// SwiftUI Toggle knobs, out of tree order (PILOT-790).

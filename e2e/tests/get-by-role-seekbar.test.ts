@@ -14,11 +14,26 @@ async function dump(device: unknown): Promise<string> {
 }
 
 describe("getByRole seekbar", () => {
-  test("finds the adjustable view, and not the scroll view's indicators", async ({ device, gesturesScreen }) => {
+  test("finds the adjustable view", async ({ device, gesturesScreen }) => {
     await openScreen(device, "/gestures")
     await expect(gesturesScreen.draggable).toBeVisible()
     await expect(device.getByRole("seekbar", { name: "Draggable item" })).toBeVisible()
-    await expect(device.getByRole("seekbar")).toHaveCount(1)
+    const seekbar = device.getByRole("seekbar")
+    await expect(seekbar).toHaveCount(1)
+    // Found by role alone, it is bound to the view itself, not looked for
+    // among the screen's sliders (it has none).
+    expect((await seekbar.screenshot()).length).toBeGreaterThan(0)
+  })
+
+  test("is not a scroll view's indicator", async ({ device, scrollScreen }) => {
+    await openScreen(device, "/scroll")
+    await expect(scrollScreen.heading).toBeVisible()
+    if (device.platform === "ios") {
+      // iOS lists a scroll view's indicators ("Vertical scroll bar, 2 pages")
+      // as adjustable generic views, like the adjustable view above.
+      await expect(device.getByDescription("Vertical scroll bar").first()).toExist()
+    }
+    await expect(device.getByRole("seekbar")).toHaveCount(0)
   })
 
   describe("in a WebView", () => {
