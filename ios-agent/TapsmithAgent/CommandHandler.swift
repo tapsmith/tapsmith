@@ -179,9 +179,11 @@ class CommandHandler {
             )
             cancelled = true
             // Another unanswered openurl's prompt comes up a moment after
-            // this one closes (or is already up): give it that moment, then
-            // read again. Paid only after a cancel.
-            if gone { Thread.sleep(forTimeInterval: Self.queuedPromptSettle) }
+            // this one closes: give it that moment, then read again. After
+            // every Cancel, whether or not the poll saw the alert go (it can
+            // miss the moment between two prompts). Paid only after a cancel.
+            if !gone { NSLog("[SystemDialog] the alert was still up 2 s after Cancel") }
+            Thread.sleep(forTimeInterval: Self.queuedPromptSettle)
         }
         return cancelled
     }
