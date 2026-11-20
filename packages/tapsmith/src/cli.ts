@@ -2340,6 +2340,13 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   const focusedRun = runIsFocused(unshardedFiles, focusedFile);
   // Setup projects: a `.only` there neither focuses the run nor drops their files.
   const setupProjects = new Set(projects.flatMap((p) => p.dependencies));
+  // The files a focused run runs, from the whole suite.
+  const focusFiles = focusedRun
+    ? [...new Set(unshardedFiles
+      .filter(({ project }) => !setupProjects.has(project.name))
+      .flatMap(({ files }) => files.filter(focusedFile)))]
+    : [];
+  const focusFileList = focusFiles.map((f) => relativeTestPath(f, config.rootDir)).join(', ');
 
   // A grep that selects no test fails here, before the reporters too.
   if (selectionFilterActive && preflight) {
@@ -2365,7 +2372,9 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         config.grep,
         config.grepInvert,
         hasProjects && projects.some((p) => p.grep !== undefined || p.grepInvert !== undefined),
-      )));
+      ) + (focusedRun
+        ? `\nOnly the tests marked .only were checked: ${focusFiles.length === 1 ? `the .only in ${focusFileList} focuses` : `the .only marks in ${focusFileList} focus`} the run.`
+        : '')));
       process.exit(1);
     }
   }
@@ -2379,17 +2388,13 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     // Marks that select nothing (an empty describe.only) would otherwise
     // leave every other file out and pass with no test run: fail, as
     // Playwright does. Decided from the whole suite, so every shard agrees.
-    const focusFiles = [...new Set(unshardedFiles
-      .filter(({ project }) => !setupProjects.has(project.name))
-      .flatMap(({ files }) => files.filter(focusedFile)))];
     const selectsNothing = focusFiles.every((file) => {
       const result = preflight?.get(file);
       return !!result && 'names' in result && result.focusedNames?.length === 0;
     });
     if (selectsNothing) {
-      const listed = focusFiles.map((f) => relativeTestPath(f, config.rootDir)).join(', ');
       const marks = focusFiles.length === 1 ? 'the .only in' : 'the .only marks in';
-      console.error(red(`No tests found: ${marks} ${listed} ${focusFiles.length === 1 ? 'selects' : 'select'} no test, and a run with a .only runs nothing else.`));
+      console.error(red(`No tests found: ${marks} ${focusFileList} ${focusFiles.length === 1 ? 'selects' : 'select'} no test, and a run with a .only runs nothing else.`));
       process.exit(1);
     }
     // Said out loud: with no forbidOnly yet, a .only left in by mistake would

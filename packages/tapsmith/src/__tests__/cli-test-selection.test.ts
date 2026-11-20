@@ -293,6 +293,8 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     expect(output).toContain('No tests found: no test matches grep /creates|signs out/.');
     expect(output).toContain('  - signs in');
     expect(output).not.toContain('signup > creates an account');
+    // Says why the tests the grep names were not checked.
+    expect(output).toContain('Only the tests marked .only were checked: the .only in tests/pw/login.test.ts focuses the run.');
     expect(status).toBe(1);
     expect(reachedDevice).toBe(false);
   });
