@@ -1541,6 +1541,10 @@ pub async fn write_back_app_preferences(
                 );
             }
             let plist = domain.with_extension("plist");
+            let on_disk = tokio::fs::read(&plist).await.ok();
+            if !should_write_back_preferences(on_disk.as_deref(), &output.stdout) {
+                return Ok(());
+            }
             if let Some(parent) = plist.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
@@ -1550,6 +1554,30 @@ pub async fn write_back_app_preferences(
         }
     })
     .await
+}
+
+/// Whether [`write_back_app_preferences`] should replace a domain's plist
+/// (`on_disk`, `None` when there is none) with what `defaults export` printed.
+/// `export` succeeds with an empty dictionary for a path it cannot read as
+/// preferences — a missing file, or a `.plist` that is not a dictionary (an
+/// app's own array or data file kept in that folder) — so an empty export
+/// only replaces a file that is itself a dictionary, and anything that is not
+/// a dictionary is never overwritten.
+fn should_write_back_preferences(on_disk: Option<&[u8]>, exported: &[u8]) -> bool {
+    let is_dictionary = |bytes: &[u8]| {
+        matches!(
+            plist::Value::from_reader(std::io::Cursor::new(bytes)),
+            Ok(plist::Value::Dictionary(_))
+        )
+    };
+    let exported_is_empty = match plist::Value::from_reader(std::io::Cursor::new(exported)) {
+        Ok(plist::Value::Dictionary(dict)) => dict.is_empty(),
+        _ => return false,
+    };
+    match on_disk {
+        Some(bytes) => is_dictionary(bytes),
+        None => !exported_is_empty,
+    }
 }
 
 /// Clear a simulator app's data container: its `UserDefaults` through
@@ -2844,10 +2872,6 @@ mod tests {
         assert!(a.starts_with(std::env::temp_dir()));
     }
 
-    /// PILOT-462: clearing must keep the container manager's metadata plist.
-    /// Deleting it orphans the container — a later boot reaps it and the app
-    /// gets a bare re-created one whose first launch after every boot has no
-    /// accessibility server ("Interrupting test" on the first snapshot).
     #[tokio::test]
     async fn preference_domains_are_the_apps_own_and_each_plist_by_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -2880,6 +2904,33 @@ mod tests {
     }
 
     #[test]
+    fn preferences_write_back_never_replaces_what_is_not_a_dictionary() {
+        let xml = |v: plist::Value| {
+            let mut bytes = Vec::new();
+            v.to_writer_xml(&mut bytes).unwrap();
+            bytes
+        };
+        let mut values = plist::Dictionary::new();
+        values.insert("session".into(), plist::Value::String("jordan".into()));
+        let full = xml(plist::Value::Dictionary(values));
+        let empty = xml(plist::Value::Dictionary(plist::Dictionary::new()));
+        let array = xml(plist::Value::Array(vec![plist::Value::Integer(1.into())]));
+
+        // A dictionary on disk takes what cfprefsd holds, values or none.
+        assert!(should_write_back_preferences(Some(&empty), &full));
+        assert!(should_write_back_preferences(Some(&full), &empty));
+        // No file: written only when cfprefsd holds values.
+        assert!(should_write_back_preferences(None, &full));
+        assert!(!should_write_back_preferences(None, &empty));
+        // An app's own non-dictionary file, or one that is not a plist at
+        // all, is what `export` reports as empty: left alone.
+        assert!(!should_write_back_preferences(Some(&array), &empty));
+        assert!(!should_write_back_preferences(Some(b"not a plist"), &empty));
+        // Output that is not a dictionary plist is never written.
+        assert!(!should_write_back_preferences(Some(&full), b"garbage"));
+    }
+
+    #[test]
     fn missing_domain_errors_are_recognised() {
         assert!(is_missing_domain_error(
             "Domain (/x/Library/Preferences/app) not found.\nDefaults have not been changed."
@@ -2892,6 +2943,10 @@ mod tests {
         ));
     }
 
+    /// PILOT-462: clearing must keep the container manager's metadata plist.
+    /// Deleting it orphans the container — a later boot reaps it and the app
+    /// gets a bare re-created one whose first launch after every boot has no
+    /// accessibility server ("Interrupting test" on the first snapshot).
     #[tokio::test]
     async fn clear_container_keeps_container_manager_metadata() {
         let dir = tempfile::tempdir().unwrap();
