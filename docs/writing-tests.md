@@ -822,19 +822,19 @@ Regular assertions stop the test immediately on failure. Soft assertions record 
 ### Using `expect.soft()`
 
 ```typescript
-import { test, expect, flushSoftErrors } from "tapsmith"
+import { test, expect } from "tapsmith"
 
 test("dashboard shows all sections", async ({ device }) => {
   await expect.soft(device.getByText("Revenue")).toBeVisible()
   await expect.soft(device.getByText("Users")).toBeVisible()
   await expect.soft(device.getByText("Orders")).toBeVisible()
   await expect.soft(device.getByText("Inventory")).toBeVisible()
-
-  // Flush at the end to fail the test if any soft assertions failed
-  const errors = flushSoftErrors()
-  expect(errors).toHaveLength(0)
 })
 ```
+
+When the test ends, the runner fails it if any soft assertion failed, and the failure lists every one, as in Playwright. There is nothing to flush or check yourself. Await each soft assertion like a regular one, so it has finished before the test ends.
+
+To look at the failures part-way through a test, for example to log them, call `flushSoftErrors()`. It returns the failures recorded since its previous call and does not clear them, so the test still fails.
 
 ### When to use soft assertions
 

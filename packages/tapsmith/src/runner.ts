@@ -21,7 +21,7 @@ import { pendingWaiterMark, type Device, type RouteRegistrationRecord } from './
 import type { TapsmithReporter } from './reporter.js';
 import { fileLoadFailureTitle, loadErrorForReport } from './load-failure.js';
 import { APIRequestContext } from './api-request.js';
-import { flushSoftErrors } from './expect.js';
+import { takeSoftErrors } from './expect.js';
 import { FixtureRegistry, resolveFixtures, fixtureParameterNames, functionHasParameters, type FixtureDefinitions, type BuiltinFixtures } from './fixtures.js';
 import { resolveTraceConfig, type TraceConfig } from './trace/types.js';
 import { shouldRecord, shouldRetain, uiModeTraceMode } from './trace/trace-mode.js';
@@ -3380,8 +3380,9 @@ async function runSuiteContext(
         }
       }
 
-      // Collect soft assertion failures (PILOT-43)
-      const softErrors = flushSoftErrors();
+      // Collect soft assertion failures (PILOT-43): all of the attempt's,
+      // including any the test read with flushSoftErrors() (PILOT-1309).
+      const softErrors = takeSoftErrors();
       if (softErrors.length > 0) {
         const messages = softErrors.map((e) => e.message).join('\n');
         const softErrorSummary = `${softErrors.length} soft assertion(s) failed:\n${messages}`;

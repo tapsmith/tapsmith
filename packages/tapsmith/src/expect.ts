@@ -1570,21 +1570,48 @@ const TO_PASS_STAND_IN = notSupportedYet(
 
 // ─── PILOT-43: Soft assertions ───
 
+// Kept on globalThis so that every copy of this module loaded in one process
+// (the SDK from dist and from a test file's own import) shares one record.
+// The runner owns `errors`: it takes them all at the end of each attempt.
+// `flushSoftErrors()` only reads, so a test that reads its failures still
+// fails, as in Playwright.
+interface SoftErrorState {
+  errors: Error[];
+  /** How many of `errors` the test has already read with `flushSoftErrors()`. */
+  flushed: number;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _G = globalThis as any;
-const SOFT_ERRORS_KEY = Symbol.for('tapsmith.softErrors');
-if (!_G[SOFT_ERRORS_KEY]) _G[SOFT_ERRORS_KEY] = [] as Error[];
+const SOFT_ERRORS_KEY = Symbol.for('tapsmith.softErrorState');
+if (!_G[SOFT_ERRORS_KEY]) _G[SOFT_ERRORS_KEY] = { errors: [], flushed: 0 } satisfies SoftErrorState;
 
-function getSoftErrors(): Error[] { return _G[SOFT_ERRORS_KEY]; }
-function setSoftErrors(v: Error[]): void { _G[SOFT_ERRORS_KEY] = v; }
+function softErrorState(): SoftErrorState { return _G[SOFT_ERRORS_KEY]; }
+function recordSoftError(err: Error): void { softErrorState().errors.push(err); }
 
 /**
- * Retrieve and clear all soft assertion failures.
- * Called by the test runner at the end of each test.
+ * Return the soft assertion failures recorded since the previous call (or
+ * since the test started).
+ *
+ * Reading them does not clear them: the test still fails at its end when any
+ * soft assertion failed. Use this to inspect or log the failures mid-test.
  */
 export function flushSoftErrors(): Error[] {
-  const errors = getSoftErrors();
-  setSoftErrors([]);
+  const state = softErrorState();
+  const errors = state.errors.slice(state.flushed);
+  state.flushed = state.errors.length;
+  return errors;
+}
+
+/**
+ * Every soft assertion failure of the attempt, clearing the record. Called by
+ * the test runner at the end of each attempt; not part of the public API.
+ */
+export function takeSoftErrors(): Error[] {
+  const state = softErrorState();
+  const errors = state.errors;
+  state.errors = [];
+  state.flushed = 0;
   return errors;
 }
 
@@ -1608,7 +1635,7 @@ function createSoftLocatorAssertions(
       try {
         await original.apply(inner, args);
       } catch (err) {
-        getSoftErrors().push(err instanceof Error ? err : new Error(String(err)));
+        recordSoftError(err instanceof Error ? err : new Error(String(err)));
       }
     };
   }
@@ -1635,7 +1662,7 @@ function createSoftWebViewAssertions(
       try {
         await original.apply(inner, args);
       } catch (err) {
-        getSoftErrors().push(err instanceof Error ? err : new Error(String(err)));
+        recordSoftError(err instanceof Error ? err : new Error(String(err)));
       }
     };
   }
@@ -1644,7 +1671,7 @@ function createSoftWebViewAssertions(
 
 function createSoftGenericAssertions(actual: unknown, negated: boolean): GenericAssertions {
   return createGenericAssertions(actual, negated, (message) => {
-    getSoftErrors().push(new Error(message));
+    recordSoftError(new Error(message));
   });
 }
 
