@@ -431,7 +431,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .description('Merge blob reports from sharded runs')
     .argument('[dir]', 'Blob report directory (default: blob-report)')
     .addOption(configOption())
-    .option('--reporter <names>', 'Reporters to use, comma-separated, in place of the config\'s (default: list,html)')
+    .option('--reporter <names>', 'Reporters to use, comma-separated, in place of the config\'s (default: the config\'s, or list,html when it sets none besides blob)')
     .action((dir: string | undefined, opts: { config?: string; reporter?: string }) =>
       act('merge-reports', handlers.mergeReports)({ dir, config: opts.config, reporter: opts.reporter }));
 
