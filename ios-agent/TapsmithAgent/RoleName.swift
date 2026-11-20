@@ -11,7 +11,9 @@ import XCTest
 ///
 /// The placeholder is a fallback, not one more name: a labelled field is
 /// named by its label alone, as in Playwright. So is the system back
-/// button's "Back" (`backButtonName`, PILOT-1260).
+/// button's "Back" (`backButtonName`, PILOT-1260). A Flutter tab is named
+/// by its label without the position Flutter appends (`FlutterTab`) as well
+/// as by its whole label.
 enum RoleName {
     /// The element types a placeholder names when they have no label or title.
     static let placeholderNamedTypes: Set<XCUIElement.ElementType> = [
@@ -57,12 +59,6 @@ enum RoleName {
             ?? backButtonName(elementType: elementType, label: label, title: title, identifier: identifier)
     }
 
-    /// The name a label gives: the label, or a Flutter tab's without the
-    /// "Tab 2 of 3" Flutter appends to it (`FlutterTab`).
-    static func labelName(_ label: String) -> String {
-        FlutterTab.name(of: label) ?? label
-    }
-
     /// Whether the element's name matches `name` (TextMatch.nameMatches): a
     /// case-insensitive substring, or with `exact` the whole name — for a
     /// label or title also one child of a ", "-joined label; a placeholder
@@ -71,7 +67,9 @@ enum RoleName {
         elementType: XCUIElement.ElementType, label: String, title: String, placeholder: String,
         identifier: String, name: String, exact: Bool
     ) -> Bool {
-        let label = labelName(label)
+        if let tabName = FlutterTab.name(of: label), TextMatch.nameMatches(tabName, name, exact: exact) {
+            return true
+        }
         if TextMatch.nameMatches(label, name, exact: exact) || TextMatch.nameMatches(title, name, exact: exact) {
             return true
         }
@@ -90,7 +88,9 @@ enum RoleName {
         elementType: XCUIElement.ElementType, label: String, title: String, placeholder: String,
         identifier: String, regex: TextRegex
     ) -> Bool {
-        let label = labelName(label)
+        if let tabName = FlutterTab.name(of: label), !tabName.isEmpty, regex.nameMatches(tabName) {
+            return true
+        }
         if let fallback = fallbackName(
             elementType: elementType, label: label, title: title, placeholder: placeholder, identifier: identifier
         ) {

@@ -1915,7 +1915,22 @@
       "matches": true
     },
     {
-      "why": "the position is not part of the name",
+      "why": "and still by its whole label, as before",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact\nTab 2 of 3",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "or a part of it",
       "platform": "ios",
       "type": "XCUIElementTypeStaticText",
       "traits": [
@@ -1926,7 +1941,41 @@
       "tabName": "Contact",
       "role": "tab",
       "name": "Tab 2",
+      "matches": true
+    },
+    {
+      "why": "exact does not match a part of the position",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Tab 2 of 3",
+      "exact": true,
       "matches": false
+    },
+    {
+      "why": "a RegExp tests the whole label too",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": {
+        "source": "Tab 2 of",
+        "flags": "",
+        "pattern": "Tab\\u00202\\u0020of",
+        "ignoreCase": false
+      },
+      "matches": true
     },
     {
       "why": "a RegExp tests the label",
@@ -2026,14 +2075,14 @@
       "matches": true
     },
     {
-      "why": "and has no name to match",
+      "why": "and no label to match",
       "platform": "ios",
       "type": "XCUIElementTypeOther",
       "label": "Tab 1 of 3",
       "reportedRole": "tab",
       "tabName": "",
       "role": "tab",
-      "name": "Tab",
+      "name": "Home",
       "matches": false
     },
     {
@@ -2082,7 +2131,19 @@
       "matches": true
     },
     {
-      "why": "the position is not part of the name",
+      "why": "and still by its whole description, as before",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact\nTab 2 of 3",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "or a part of it",
       "platform": "android",
       "type": "android.view.View",
       "contentDesc": "Contact\nTab 2 of 3",
@@ -2090,6 +2151,18 @@
       "tabName": "Contact",
       "role": "tab",
       "name": "Tab 2",
+      "matches": true
+    },
+    {
+      "why": "exact does not match a part of the position",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Tab 2 of 3",
+      "exact": true,
       "matches": false
     },
     {
@@ -2164,14 +2237,14 @@
       "matches": true
     },
     {
-      "why": "and has no name to match",
+      "why": "and no label to match",
       "platform": "android",
       "type": "android.view.View",
       "contentDesc": "Tab 1 of 3",
       "reportedRole": "tab",
       "tabName": "",
       "role": "tab",
-      "name": "Tab",
+      "name": "Home",
       "matches": false
     },
     {

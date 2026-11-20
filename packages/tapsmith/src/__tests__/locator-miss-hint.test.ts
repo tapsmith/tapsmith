@@ -57,7 +57,9 @@ describe("nearMissProbes()", () => {
       'getByRole("tab", { name: "Welcome" })',
     ]);
     vitestExpect(codes(_hint("Email"))).toEqual(['getByText("Email")', 'getByLabel("Email")', 'getByDescription("Email")']);
-    vitestExpect(codes(_label("Email"))).toEqual(['getByText("Email")', 'getByPlaceholder("Email")', 'getByDescription("Email")']);
+    vitestExpect(codes(_label("Email"))).toEqual([
+      'getByText("Email")', 'getByPlaceholder("Email")', 'getByDescription("Email")', 'getByRole("tab", { name: "Email" })',
+    ]);
     vitestExpect(codes(_contentDesc("Close"))).toEqual([
       'getByText("Close")', 'getByLabel("Close")', 'getByPlaceholder("Close")', 'getByRole("tab", { name: "Close" })',
     ]);
@@ -86,17 +88,17 @@ describe("nearMissProbes()", () => {
     vitestExpect(codes(_textContains("Hi")).length).toBe(4);
   });
 
-  it("checks the words as a tab's name for a description, a text or another role's name", () => {
+  it("checks the words as a tab's name for a description, a text, a label or another role's name", () => {
     // A Flutter NavigationRail destination: its description is "Contact\nTab 2 of 3", and it is a tab named "Contact".
     vitestExpect(codes(_contentDesc("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
     vitestExpect(codes(_text("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
     vitestExpect(codes(_textContains("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
+    vitestExpect(codes(_label("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
     vitestExpect(codes(_role("button", { name: "Contact" })).slice(-2)).toEqual([
       'getByRole("tab", { name: "Contact" })', 'getByRole("button")',
     ]);
-    // Not for a tab query, nor for the input getters.
+    // Not for a tab query, nor for a placeholder, which only a text field has.
     vitestExpect(codes(_role("tab", { name: "Contact" })).join()).not.toContain('getByRole("tab", { name');
-    vitestExpect(codes(_label("Email")).join()).not.toContain("getByRole");
     vitestExpect(codes(_hint("Email")).join()).not.toContain("getByRole");
   });
 

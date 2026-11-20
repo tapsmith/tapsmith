@@ -243,7 +243,7 @@ Roles and names work on both platforms for most Material widgets, and are the fi
 
 An `AppBar` title is not a `heading` on either platform: find it with `getByDescription()`. When no role or name fits a widget, give it a `Semantics(identifier:)`.
 
-**Navigation destinations are tabs.** Flutter gives the items of a Material `NavigationBar` (the `flutter create` template's), `NavigationRail`, `TabBar` and `BottomNavigationBar` no tab role on either platform: a bar's items are buttons, a rail's or tab bar's plain views or text. It adds the item's position to its label for screen readers instead, so a destination labelled "Contact" is described as `"Contact\nTab 2 of 3"`. Tapsmith reads that position: the item is a `tab`, named by its label alone, so one locator finds it whether a responsive app shows a `NavigationBar` on a phone or a `NavigationRail` on a tablet or an unfolded foldable:
+**Navigation destinations are tabs.** Flutter gives the items of a Material `NavigationBar` (the `flutter create` template's), `NavigationRail`, `TabBar` and `BottomNavigationBar` no tab role on either platform: a bar's items are buttons, a rail's or tab bar's plain views or text. It adds the item's position to its label for screen readers instead, so a destination labelled "Contact" is described as `"Contact\nTab 2 of 3"`. Tapsmith reads that position: the item is a `tab`, and its label alone names it (the whole description does too), so one locator finds it whether a responsive app shows a `NavigationBar` on a phone or a `NavigationRail` on a tablet or an unfolded foldable:
 
 ```typescript
 await device.getByRole("tab", { name: "Contact" }).tap()

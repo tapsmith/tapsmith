@@ -10,10 +10,11 @@ import Foundation
 /// `"Contact\nTab 2 of 3"`. The Android agent reads the same suffix
 /// (FlutterTab.kt).
 ///
-/// Such an element is a `tab` (`RoleMapping.resolveRole`), and its name is
-/// the label without that suffix (`"Contact"`, `RoleName`), so
-/// `getByRole("tab", { name: "Contact" })` finds it whichever of those
-/// widgets draws it.
+/// Such an element is a `tab` (`RoleMapping.resolveRole`), and it is named by
+/// the label without that suffix (`"Contact"`, `RoleName`) as well as by its
+/// whole label, so `getByRole("tab", { name: "Contact", exact: true })` finds
+/// it whichever of those widgets draws it, and a locator written with the
+/// whole label keeps working.
 ///
 /// Flutter's default English localization only: an app that localizes its
 /// Material strings publishes the suffix in its own language, which is not

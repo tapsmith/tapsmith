@@ -118,8 +118,8 @@ export function nearMissProbes(selector: Selector): Probe[] {
       ];
     case 'textContains':
     case 'contentDesc':
-      return kind.value ? [...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)] : [];
     case 'label':
+      return kind.value ? [...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)] : [];
     case 'hint':
       return kind.value ? wordProbes(kind.value, [kind.type]) : [];
     default:

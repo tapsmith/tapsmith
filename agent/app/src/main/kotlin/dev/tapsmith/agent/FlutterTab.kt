@@ -9,10 +9,11 @@ package dev.tapsmith.agent
  * label for TalkBack — MaterialLocalizations.tabLabel, merged into the
  * content description after a line break: `"Contact\nTab 2 of 3"`.
  *
- * Such an element is a `tab` ([FindRules.publishedRole]), and its name is
- * the label without that suffix (`"Contact"`), so
- * `getByRole("tab", { name: "Contact" })` finds it whichever of those
- * widgets draws it, and `exact` compares the label alone.
+ * Such an element is a `tab` ([FindRules.publishedRole]), and it is named
+ * by the label without that suffix (`"Contact"`) as well as by its whole
+ * description, so `getByRole("tab", { name: "Contact", exact: true })`
+ * finds it whichever of those widgets draws it, and a locator written
+ * with the whole description keeps working.
  *
  * Flutter's default English localization only: an app that localizes its
  * Material strings (GlobalMaterialLocalizations) publishes the suffix in its
