@@ -402,6 +402,14 @@ class SnapshotElementFinder {
             return counts
         }
 
+        // A role-only match's index in its role's type query, which never
+        // returns a generic view matched by a trait (PILOT-1329).
+        let typeQueryIndices: [Int]? = register && selector.roleOnlyMayMatchByTrait
+            ? RoleMapping.typeQueryIndices(role: selector.role ?? "", matchTypes: matches.map { match in
+                XCUIElement.ElementType(rawValue: match.0["elementType"] as? UInt ?? 0) ?? .other
+            })
+            : nil
+
         let results = matches.enumerated().map { (matchIndex, match) in
             let (nodeDict, frame) = match
             let bounds = ElementBounds(
@@ -459,7 +467,8 @@ class SnapshotElementFinder {
                 // This is deferred — the query object is created but not evaluated until
                 // a property (like .isHittable) is accessed. Pass the snapshot node so the
                 // query can use element type + identifier for more precise matching.
-                cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex,
+                cacheQueryElement(elementId: elementId, selector: selector,
+                    matchIndex: typeQueryIndices?[matchIndex] ?? matchIndex,
                     idIndex: idIndices[matchIndex],
                     treeIdCount: identifier.isEmpty ? 0 : treeIdCounts()[identifier, default: 0],
                     labelIndex: labelBindings[matchIndex].index,

@@ -501,6 +501,21 @@ enum RoleMapping {
         return !types.contains(elementType)
     }
 
+    /// Each role-only match's index for the role's type query: among the
+    /// matches before it that the query returns, so a trait-matched generic
+    /// view (`matchedByTraitOnly`), which it never returns, doesn't shift a
+    /// slider or button after it onto the next one (PILOT-1329). A role no
+    /// trait can match keeps each match's own index.
+    static func typeQueryIndices(role: String, matchTypes: [XCUIElement.ElementType]) -> [Int] {
+        guard traitMatchedRoles.contains(normalize(role)) else { return Array(matchTypes.indices) }
+        var typed = 0
+        return matchTypes.map { type in
+            let index = typed
+            if !matchedByTraitOnly(role: role, elementType: type) { typed += 1 }
+            return index
+        }
+    }
+
     /// Whether a role-only match must be found again as a live element by its
     /// own label (QueryIndex) rather than by a query on the role's element types:
     /// a type query can't express a trait, a description or an ancestor, so

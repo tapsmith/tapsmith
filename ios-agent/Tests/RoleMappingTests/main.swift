@@ -456,6 +456,18 @@ check("a button is a button by its type", RoleMapping.matchedByTraitOnly(role: "
 check("a heading is left to its own rule", RoleMapping.matchedByTraitOnly(role: "heading", elementType: .other), false)
 check("a checkbox is left to its own rule", RoleMapping.matchedByTraitOnly(role: "checkbox", elementType: .other), false)
 
+// A type-matched role-only match is indexed among the type-matched ones: the
+// role's type query never returns a trait-matched generic view before it
+// (PILOT-1329), so an RN adjustable view must not shift the sliders after it.
+check("sliders after an RN adjustable view are indexed among sliders",
+      RoleMapping.typeQueryIndices(role: "seekbar", matchTypes: [.other, .slider, .slider]), [0, 0, 1])
+check("a slider before it keeps its index",
+      RoleMapping.typeQueryIndices(role: "seekbar", matchTypes: [.slider, .other, .slider]), [0, 1, 1])
+check("buttons after an RN Pressable too",
+      RoleMapping.typeQueryIndices(role: "button", matchTypes: [.other, .button]), [0, 0])
+check("a role no trait can match keeps the match index",
+      RoleMapping.typeQueryIndices(role: "checkbox", matchTypes: [.other, .checkBox]), [0, 1])
+
 // A wait for a seekbar or searchfield also waits on generic views, which an
 // RN adjustable or search view is; the snapshot finder then checks the trait
 // (PILOT-1329). Without it, scroll() on one waited for a slider forever.

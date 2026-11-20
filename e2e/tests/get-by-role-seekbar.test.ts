@@ -20,11 +20,11 @@ describe("getByRole seekbar", () => {
     await expect(device.getByRole("seekbar", { name: "Draggable item" })).toBeVisible()
     const seekbar = device.getByRole("seekbar")
     await expect(seekbar).toHaveCount(1)
-    // Found by role alone, it is bound to the view itself, not looked for
-    // among the screen's sliders (it has none).
     expect((await seekbar.screenshot()).length).toBeGreaterThan(0)
     if (device.platform === "ios") {
-      // A scroll waits for its element first, which once looked for a slider.
+      // Found by role alone, the view is acted on through its live element,
+      // which was once looked for among the screen's sliders (it has none),
+      // and waited for as a slider.
       await seekbar.scroll("left")
     }
   })
