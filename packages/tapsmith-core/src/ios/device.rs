@@ -1406,6 +1406,15 @@ pub async fn preference_domains(container: &str, bundle_id: &str) -> Vec<std::pa
     domains
 }
 
+/// The plist file of a `UserDefaults` domain addressed by path: the path
+/// plus `.plist`. Not `with_extension`, which would replace the last dotted
+/// part of a domain name like `com.example.app` and name another domain's file.
+fn domain_plist(domain: &std::path::Path) -> std::path::PathBuf {
+    let mut path = domain.as_os_str().to_owned();
+    path.push(".plist");
+    path.into()
+}
+
 /// Run `defaults <args…>` inside the simulator, so it talks to the
 /// simulator's `cfprefsd`.
 async fn simulator_defaults(udid: &str, args: &[&str]) -> Result<std::process::Output> {
@@ -1540,7 +1549,7 @@ pub async fn write_back_app_preferences(
                     stderr.trim()
                 );
             }
-            let plist = domain.with_extension("plist");
+            let plist = domain_plist(&domain);
             let on_disk = tokio::fs::read(&plist).await.ok();
             if !should_write_back_preferences(on_disk.as_deref(), &output.stdout) {
                 return Ok(());
@@ -1593,16 +1602,17 @@ pub async fn clear_simulator_container(udid: &str, bundle_id: &str, container: &
 /// Wipe a simulator app's data — the `ClearAppData` RPC's simulator steps,
 /// which leave the app as a fresh install would find it: its `UserDefaults`
 /// and data container (as [`clear_simulator_container`]), its privacy
-/// permissions ([`reset_permissions`], run alongside), then (unless keychain
-/// state is turned off) the simulator's device-global keychain, so
+/// permissions ([`reset_permissions`]), and (unless keychain state is
+/// turned off) the simulator's device-global keychain, all at once, so
 /// keychain-backed auth state (e.g. Firebase Auth) does not survive a full
 /// clear and leave a half-signed-in app. The app must not be running.
 /// Best-effort: each failure is logged and the rest still runs. Returns
 /// whether every step succeeded.
 pub async fn wipe_simulator_app_data(udid: &str, bundle_id: &str, container: &str) -> bool {
     let started = std::time::Instant::now();
-    let mut complete = true;
-    let (cleared, permissions) = tokio::join!(
+    // The three steps touch separate state (the container, TCC, the
+    // device-global keychain), so they run together.
+    let (cleared, permissions, keychain) = tokio::join!(
         async {
             let preferences = delete_app_preferences(udid, container, bundle_id).await;
             let prefs_ms = started.elapsed().as_millis();
@@ -1618,7 +1628,24 @@ pub async fn wipe_simulator_app_data(udid: &str, bundle_id: &str, container: &st
             let reset = reset_permissions(udid, bundle_id).await;
             (reset, started.elapsed().as_millis())
         },
+        async {
+            let keychain: Result<&str, String> = if keychain_state_disabled() {
+                Ok("disabled")
+            } else {
+                match simulator_keychain_dir(container) {
+                    Some(keychain_dir) => clear_keychain(udid, &keychain_dir)
+                        .await
+                        .map(|how| how.as_str())
+                        .map_err(|e| e.to_string()),
+                    None => Err(format!(
+                        "could not derive the simulator keychain dir from {container}"
+                    )),
+                }
+            };
+            (keychain, started.elapsed().as_millis())
+        },
     );
+    let mut complete = true;
     let (preferences, prefs_ms, cleared, container_ms) = cleared;
     if let Err(e) = preferences {
         warn!(error = %e, "Failed to clear the app's UserDefaults through cfprefsd; it may read the values the clear deleted");
@@ -1633,30 +1660,15 @@ pub async fn wipe_simulator_app_data(udid: &str, bundle_id: &str, container: &st
         warn!(error = %e, "Failed to reset the app's privacy permissions, continuing anyway");
         complete = false;
     }
-    let keychain_started = started.elapsed().as_millis();
-    let keychain = if keychain_state_disabled() {
-        "disabled"
-    } else {
-        match simulator_keychain_dir(container) {
-            Some(keychain_dir) => match clear_keychain(udid, &keychain_dir).await {
-                Ok(how) => how.as_str(),
-                Err(e) => {
-                    warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                    complete = false;
-                    "failed"
-                }
-            },
-            None => {
-                warn!(container = %container, "Could not derive simulator keychain dir; keychain not cleared");
-                complete = false;
-                "no_dir"
-            }
-        }
-    };
+    let (keychain, keychain_ms) = keychain;
+    let keychain = keychain.unwrap_or_else(|e| {
+        warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
+        complete = false;
+        "failed"
+    });
     let total_ms = started.elapsed().as_millis();
     crate::timing::timing_log!(
-        "kind=appstate name=clear dur_ms={total_ms} ok={complete} container_ms={container_ms} prefs_ms={prefs_ms} permissions_ms={permissions_ms} keychain={keychain} keychain_ms={}",
-        total_ms - keychain_started
+        "kind=appstate name=clear dur_ms={total_ms} ok={complete} container_ms={container_ms} prefs_ms={prefs_ms} permissions_ms={permissions_ms} keychain={keychain} keychain_ms={keychain_ms}"
     );
     complete
 }
@@ -2928,6 +2940,23 @@ mod tests {
         assert!(!should_write_back_preferences(Some(b"not a plist"), &empty));
         // Output that is not a dictionary plist is never written.
         assert!(!should_write_back_preferences(Some(&full), b"garbage"));
+    }
+
+    #[test]
+    fn domain_plist_appends_the_extension_to_dotted_domain_names() {
+        let prefs = std::path::Path::new("/c/Library/Preferences");
+        assert_eq!(
+            domain_plist(&prefs.join("dev.jordan.onboardc")),
+            prefs.join("dev.jordan.onboardc.plist")
+        );
+        assert_eq!(
+            domain_plist(&prefs.join("group.com.acme.shared")),
+            prefs.join("group.com.acme.shared.plist")
+        );
+        assert_eq!(
+            domain_plist(&prefs.join("session")),
+            prefs.join("session.plist")
+        );
     }
 
     #[test]
