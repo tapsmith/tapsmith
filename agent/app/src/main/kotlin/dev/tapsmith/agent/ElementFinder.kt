@@ -684,6 +684,12 @@ class ElementFinder(
             return candidate.descendantTextParts().any(labelMatches)
         }
 
+        /** Whether [role] (as a query writes it) is tab. */
+        private fun isTabRole(role: String?): Boolean {
+            val lowered = role?.lowercase() ?: return false
+            return (ROLE_ALIASES[lowered] ?: lowered) == "tab"
+        }
+
         /** Whether [role] (as a query writes it) is listitem. */
         private fun isListItemRole(role: String): Boolean {
             val lowered = role.lowercase()
@@ -721,8 +727,8 @@ class ElementFinder(
          * text (read only when the first two don't match) — or, for an
          * EditText with no other name, its hint (PILOT-834). A control with
          * no name of its own in an actionable row is named by the row
-         * ([RowName.name]) instead, and a Flutter tab also by its label
-         * alone ([FlutterTab.nameOf]).
+         * ([RowName.name]) instead, and a Flutter tab, queried as a tab,
+         * also by its label alone ([FlutterTab.nameOf]).
          */
         private fun matchesAccessibleName(
             candidate: FindCandidate,
@@ -739,10 +745,13 @@ class ElementFinder(
                     TextMatch.accessibleNameMatches(row.name, null, false, { null }, name!!, selector.nameExact)
                 }
             }
-            // A Flutter tab is also named by its label alone, without the
-            // position Flutter appends to it ("Contact\nTab 2 of 3",
-            // FlutterTab); its whole description still names it too.
-            val tabName = FlutterTab.nameOf(candidate.contentDescription)
+            // A Flutter tab queried as a tab is also named by its label
+            // alone, without the position Flutter appends to it
+            // ("Contact\nTab 2 of 3", FlutterTab); its whole description
+            // still names it too. As a button it keeps that whole
+            // description only, so an exact button name does not also find
+            // the tab bar's item with that label.
+            val tabName = if (isTabRole(selector.role)) FlutterTab.nameOf(candidate.contentDescription) else null
             if (!tabName.isNullOrEmpty()) {
                 val matched =
                     if (regex != null) {

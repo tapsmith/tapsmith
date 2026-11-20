@@ -93,7 +93,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
         } else if let name = c["name"] as? String {
             let got = isRole && RoleName.matches(
                 elementType: type, label: label, title: title, placeholder: placeholder, identifier: identifier,
-                name: name, exact: c["exact"] as? Bool ?? false
+                name: name, exact: c["exact"] as? Bool ?? false, tabQuery: RoleMapping.normalize(role) == "tab"
             )
             expect("string \(why)", got == want)
         } else if let name = c["name"] as? [String: Any] {
@@ -106,7 +106,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
             )
             let got = isRole && RoleName.matches(
                 elementType: type, label: label, title: title, placeholder: placeholder, identifier: identifier,
-                regex: re
+                regex: re, tabQuery: RoleMapping.normalize(role) == "tab"
             )
             expect("regex /\(source)/\(flags) \(why)", re.error == nil && got == want)
         } else {

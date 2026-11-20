@@ -1866,7 +1866,7 @@ class SnapshotElementFinder {
             if let name = selector.name {
                 if !RoleName.matches(
                     elementType: elType, label: label, title: title, placeholder: placeholderValue,
-                    identifier: identifier, name: name, exact: selector.nameExact
+                    identifier: identifier, name: name, exact: selector.nameExact, tabQuery: RoleMapping.normalize(role) == "tab"
                 ) {
                     return false
                 }
@@ -1874,7 +1874,7 @@ class SnapshotElementFinder {
                 // A RegExp tests the whitespace-normalized name (PILOT-520).
                 if !RoleName.matches(
                     elementType: elType, label: label, title: title, placeholder: placeholderValue,
-                    identifier: identifier, regex: nameRegex
+                    identifier: identifier, regex: nameRegex, tabQuery: RoleMapping.normalize(role) == "tab"
                 ) {
                     return false
                 }

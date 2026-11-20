@@ -2008,7 +2008,6 @@
       "tabName": "Contact",
       "role": "text",
       "name": "Contact",
-      "exact": true,
       "matches": true
     },
     {
@@ -2050,7 +2049,21 @@
       "matches": true
     },
     {
-      "why": "and still a button, by its label",
+      "why": "and still a button, by a part of its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact",
+      "matches": true
+    },
+    {
+      "why": "its label alone names it only as a tab, so an exact button name stays another button's",
       "platform": "ios",
       "type": "XCUIElementTypeButton",
       "traits": [
@@ -2062,7 +2075,41 @@
       "role": "button",
       "name": "Contact",
       "exact": true,
-      "matches": true
+      "matches": false
+    },
+    {
+      "why": "and so does an anchored RegExp",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": {
+        "source": "^Contact$",
+        "flags": "",
+        "pattern": "\\AContact\\z",
+        "ignoreCase": false
+      },
+      "matches": false
+    },
+    {
+      "why": "nor is static text named by it",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "text",
+      "name": "Contact",
+      "exact": true,
+      "matches": false
     },
     {
       "why": "an unlabelled Flutter tab is a tab named nothing",
@@ -2215,7 +2262,18 @@
       "matches": true
     },
     {
-      "why": "and still a button, by its label",
+      "why": "and still a button, by a part of its description",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact",
+      "matches": true
+    },
+    {
+      "why": "its label alone names it only as a tab, so an exact button name stays another button's",
       "platform": "android",
       "type": "android.widget.Button",
       "contentDesc": "Contact\nTab 2 of 3",
@@ -2224,7 +2282,23 @@
       "role": "button",
       "name": "Contact",
       "exact": true,
-      "matches": true
+      "matches": false
+    },
+    {
+      "why": "and so does an anchored RegExp",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": {
+        "source": "^Contact$",
+        "flags": "",
+        "pattern": "\\AContact\\z",
+        "ignoreCase": false
+      },
+      "matches": false
     },
     {
       "why": "an unlabelled Flutter tab is a tab named nothing",
