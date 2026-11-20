@@ -105,6 +105,93 @@ describe('test.describe', () => {
   });
 });
 
+// ─── Focus across the file's tree (Playwright's filterOnly) ───
+
+describe('.only focuses the whole file', () => {
+  it('skips the describe blocks beside a focused test', async () => {
+    const result = await run(() => {
+      tapsmithTest.only('focus', async () => {});
+      tapsmithTest('other', async () => {});
+      tapsmithTest.describe('grp', () => { tapsmithTest('g1', async () => {}); });
+    });
+    expect(statuses(result)).toEqual({ focus: 'passed', other: 'skipped', 'grp > g1': 'skipped' });
+  });
+
+  it('skips the tests beside a describe that holds a focused test', async () => {
+    const result = await run(() => {
+      tapsmithTest('top', async () => {});
+      tapsmithTest.describe('outer', () => {
+        tapsmithTest('sibling', async () => {});
+        tapsmithTest.describe('inner', () => { tapsmithTest.only('deep', async () => {}); });
+      });
+      tapsmithTest.describe('unrelated', () => { tapsmithTest('u', async () => {}); });
+    });
+    expect(statuses(result)).toEqual({
+      top: 'skipped',
+      'outer > sibling': 'skipped',
+      'outer > inner > deep': 'passed',
+      'unrelated > u': 'skipped',
+    });
+  });
+
+  it('narrows a focused describe to the focused tests inside it', async () => {
+    const result = await run(() => {
+      tapsmithTest.describe.only('grp', () => {
+        tapsmithTest('a', async () => {});
+        tapsmithTest.only('b', async () => {});
+      });
+      tapsmithTest.describe.only('whole', () => { tapsmithTest('c', async () => {}); });
+      tapsmithTest('d', async () => {});
+    });
+    expect(statuses(result)).toEqual({ 'grp > a': 'skipped', 'grp > b': 'passed', 'whole > c': 'passed', d: 'skipped' });
+  });
+
+  it('keeps a skipped describe holding a focused test skipped, and its siblings out', async () => {
+    const result = await run(() => {
+      tapsmithTest.describe.skip('off', () => { tapsmithTest.only('x', async () => {}); });
+      tapsmithTest('y', async () => {});
+    });
+    expect(statuses(result)).toEqual({ 'off > x': 'skipped', y: 'skipped' });
+  });
+
+  it('reports every test it leaves out, and every test of a describe.skip, to the reporter', async () => {
+    const ended: TestResult[] = [];
+    await run(() => {
+      tapsmithTest.only('a', async () => {});
+      tapsmithTest('b', async () => {});
+      tapsmithTest.describe('g', () => {
+        tapsmithTest('c', async () => {});
+        tapsmithTest.describe('inner', () => { tapsmithTest('d', async () => {}); });
+      });
+      tapsmithTest.describe.only('focused', () => {
+        tapsmithTest('e', async () => {});
+        tapsmithTest.describe.skip('off', () => { tapsmithTest('f', async () => {}); });
+      });
+    }, { reporter: { onTestEnd: (r: TestResult) => { ended.push(r); } }, projectName: 'p', testFilePath: '/f.test.ts' });
+    expect(ended.map((r) => [r.fullName, r.status, r.project, r.filePath])).toEqual([
+      ['a', 'passed', 'p', '/f.test.ts'],
+      ['b', 'skipped', 'p', '/f.test.ts'],
+      ['g > c', 'skipped', 'p', '/f.test.ts'],
+      ['g > inner > d', 'skipped', 'p', '/f.test.ts'],
+      ['focused > e', 'passed', 'p', '/f.test.ts'],
+      ['focused > off > f', 'skipped', 'p', '/f.test.ts'],
+    ]);
+  });
+
+  it('runs no hook of a describe that holds no focused test', async () => {
+    const hook = vi.fn();
+    const result = await run(() => {
+      tapsmithTest.only('focus', async () => {});
+      tapsmithTest.describe('grp', () => {
+        tapsmithBeforeAll(hook);
+        tapsmithTest('g1', async () => {});
+      });
+    });
+    expect(statuses(result)).toEqual({ focus: 'passed', 'grp > g1': 'skipped' });
+    expect(hook).not.toHaveBeenCalled();
+  });
+});
+
 // ─── Serial mode ───
 
 describe('test.describe.serial', () => {

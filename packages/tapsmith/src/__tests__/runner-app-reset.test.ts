@@ -1472,6 +1472,36 @@ describe('runner app reset (declared isolation)', () => {
     ]);
   });
 
+  it('announces the focused test, not one a .only elsewhere in the file leaves out', async () => {
+    // The root announces its first runnable test ahead of its setup: with
+    // a .only inside one describe, that is the focused test, under its own
+    // policy — never a test of the describe beside it.
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-focus-announce-'));
+    try {
+      const d = makeDevice();
+      pushContext();
+      tapsmithBeforeAll(async () => {});
+      tapsmithTest('root-level', async () => {});
+      tapsmithDescribe('a', () => { tapsmithTest('a1', async () => {}); });
+      tapsmithDescribe('b', () => {
+        tapsmithTest.use({ appResetScope: 'test' });
+        tapsmithTest.only('b1', async () => {});
+      });
+      const onTestStart = vi.fn(async () => {});
+      await runSuiteContext(popContext(), '', [], [], makeOpts(d, makeConfig({
+        rootDir: tempRoot,
+        trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+      }), { onTestStart }));
+      expect(onTestStart.mock.calls[0]).toEqual(
+        ['b > b1', { policy: { mode: 'clear', scope: 'test', appState: undefined } }],
+      );
+      expect(onTestStart.mock.calls.map((c) => (c as unknown[])[0])).not.toContain('root-level');
+      expect(onTestStart.mock.calls.map((c) => (c as unknown[])[0])).not.toContain('a > a1');
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('a nested describe inherits its parent appState instead of resetting to clear on entry', async () => {
     const d = makeDevice();
     pushContext();

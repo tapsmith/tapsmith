@@ -22,8 +22,12 @@ export interface PreflightLoadError {
   stack?: string;
 }
 
-/** What loading one file found: its test names, or why it could not be loaded. */
-export type FilePreflight = { names: string[] } | { error: PreflightLoadError };
+/**
+ * What loading one file found: its test names — and, when the file holds a
+ * `.only`, the names of the focused tests, which alone run — or why it could
+ * not be loaded.
+ */
+export type FilePreflight = { names: string[]; focusedNames?: string[] } | { error: PreflightLoadError };
 
 export type PreflightResponse =
   /** Sent first: the process that imports the files (under tsx, a grandchild). */

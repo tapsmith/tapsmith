@@ -1999,6 +1999,21 @@ async function preflightLoadFailures(
   return results;
 }
 
+/**
+ * End a shard that has no file to run, with exit code 0. It still leaves its
+ * (empty) blob, or merge-reports would report the shard as missing whenever
+ * there are fewer files than shards.
+ */
+async function exitEmptyShard(config: TapsmithConfig): Promise<never> {
+  const { writeEmptyShardBlob } = await import('./merge-reports.js');
+  const refusal = await writeEmptyShardBlob(config);
+  if (refusal) {
+    console.error(red(refusal));
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // Load config
   const config = await loadConfig(undefined, args.config);
@@ -2246,15 +2261,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     testFiles = shardProjects(projects, config.shard);
     if (testFiles.length === 0) {
       console.log(dim(`Shard ${current}/${total}: no test files in this shard.`));
-      // Still leave this shard's (empty) blob, or merge-reports would report
-      // the shard as missing whenever there are fewer files than shards.
-      const { writeEmptyShardBlob } = await import('./merge-reports.js');
-      const refusal = await writeEmptyShardBlob(config);
-      if (refusal) {
-        console.error(red(refusal));
-        process.exit(1);
-      }
-      process.exit(0);
+      await exitEmptyShard(config);
     }
     shardMessage = `Shard ${current}/${total}: running ${testFiles.length} file(s)`;
   }
@@ -2312,13 +2319,34 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   let preflight: Map<string, import('./selection-preflight.js').FilePreflight | undefined> | undefined;
   if (!args.ui && !args.watch) {
     const { preflightTestFiles } = await import('./selection-preflight.js');
-    // A grep is answered from the whole suite, so every shard answers it the
-    // same way; load failures are reported for this shard's files.
+    // A grep and a `.only` are answered from the whole suite, so every shard
+    // answers them the same way; load failures are reported for this
+    // shard's files.
     preflight = await preflightTestFiles([...new Set([
-      ...(selectionFilterActive ? unshardedFiles.flatMap(({ files }) => files) : []),
+      ...unshardedFiles.flatMap(({ files }) => files),
       ...testFiles,
     ])]);
   }
+
+  // A `.only` anywhere in the suite focuses the whole run on the focused
+  // tests, as in Playwright: a file without one runs nothing (PILOT-572).
+  // Unknown when the preflight could not load the files: each file then
+  // still applies its own `.only`.
+  const { runIsFocused, focusProjects } = await import('./project.js');
+  const focusedFile = (file: string): boolean => {
+    const result = preflight?.get(file);
+    return !!result && 'names' in result && result.focusedNames !== undefined;
+  };
+  const focusedRun = runIsFocused(unshardedFiles, focusedFile);
+  // Setup projects: a `.only` there neither focuses the run nor drops their files.
+  const setupProjects = new Set(projects.flatMap((p) => p.dependencies));
+  // The files a focused run runs, from the whole suite.
+  const focusFiles = focusedRun
+    ? [...new Set(unshardedFiles
+      .filter(({ project }) => !setupProjects.has(project.name))
+      .flatMap(({ files }) => files.filter(focusedFile)))]
+    : [];
+  const focusFileList = focusFiles.map((f) => relativeTestPath(f, config.rootDir)).join(', ');
 
   // A grep that selects no test fails here, before the reporters too.
   if (selectionFilterActive && preflight) {
@@ -2327,11 +2355,15 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     const miss = findSelectionMiss(
       unshardedFiles.flatMap(({ project, files }) => {
         const filters = grepFiltersFor(config, project);
-        return files.map((file) => ({ file, filters }));
+        // A focused run runs no file of a top-level project that has no `.only`.
+        const kept = focusedRun && !setupProjects.has(project.name) ? files.filter(focusedFile) : files;
+        return kept.map((file) => ({ file, filters }));
       }),
       (file) => {
         const result = found.get(file);
-        return result && 'names' in result ? result.names : undefined;
+        if (!result || !('names' in result)) return undefined;
+        // A file with a `.only` runs only its focused tests, in any run.
+        return result.focusedNames ?? result.names;
       },
     );
     if (miss) {
@@ -2340,8 +2372,51 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         config.grep,
         config.grepInvert,
         hasProjects && projects.some((p) => p.grep !== undefined || p.grepInvert !== undefined),
-      )));
+      ) + (focusedRun
+        ? `\nOnly the tests marked .only were checked: ${focusFiles.length === 1 ? `the .only in ${focusFileList} focuses` : `the .only marks in ${focusFileList} focus`} the run.`
+        : '')));
       process.exit(1);
+    }
+  }
+
+  // Found before the run is focused, so a broken file is reported even when
+  // it holds no `.only`: as in Playwright, a file that fails to load fails
+  // the run.
+  const loadFailures = preflight ? await preflightLoadFailures(projects, preflight) : [];
+
+  if (focusedRun && loadFailures.length === 0) {
+    // Marks that select nothing (an empty describe.only) would otherwise
+    // leave every other file out and pass with no test run: fail, as
+    // Playwright does. Decided from the whole suite, so every shard agrees.
+    const selectsNothing = focusFiles.every((file) => {
+      const result = preflight?.get(file);
+      return !!result && 'names' in result && result.focusedNames?.length === 0;
+    });
+    if (selectsNothing) {
+      const marks = focusFiles.length === 1 ? 'the .only in' : 'the .only marks in';
+      console.error(red(`No tests found: ${marks} ${focusFileList} ${focusFiles.length === 1 ? 'selects' : 'select'} no test, and a run with a .only runs nothing else.`));
+      process.exit(1);
+    }
+    // Said out loud: with no forbidOnly yet, a .only left in by mistake would
+    // otherwise pass a CI run that ran one file.
+    const suiteFiles = new Set(unshardedFiles
+      .filter(({ project }) => !setupProjects.has(project.name))
+      .flatMap(({ files }) => files));
+    const leftOut = suiteFiles.size - focusFiles.length;
+    if (leftOut > 0) {
+      const notice = `Running only the tests marked .only, in ${focusFiles.length} of ${suiteFiles.size} test files: `
+        + `the other ${leftOut === 1 ? 'file does' : `${leftOut} files do`} not run.`;
+      console.error(yellow(`⚠ ${notice}`));
+      if (process.env.GITHUB_ACTIONS) console.log(`::warning title=.only::${notice}`);
+    }
+    testFiles = focusProjects(projects, focusedFile);
+    if (config.shard) {
+      const { current, total } = config.shard;
+      if (testFiles.length === 0) {
+        console.log(dim(`Shard ${current}/${total}: no test file in this shard holds a focused (.only) test.`));
+        await exitEmptyShard(config);
+      }
+      shardMessage = `Shard ${current}/${total}: running ${testFiles.length} file(s)`;
     }
   }
 
@@ -2387,7 +2462,6 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
 
   // A file that failed to load: report it, as the run would have, to every
   // reporter, and run nothing (PILOT-784).
-  const loadFailures = preflight ? await preflightLoadFailures(projects, preflight) : [];
   if (loadFailures.length > 0) {
     const fileCount = new Set(loadFailures.map((r) => r.filePath)).size;
     reporter.onRunStart(config, fileCount);

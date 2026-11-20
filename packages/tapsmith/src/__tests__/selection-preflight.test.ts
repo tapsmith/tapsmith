@@ -38,6 +38,20 @@ describe('preflightTestFiles', { timeout: 60_000 }, () => {
     expect(located && 'error' in located && located.error.stack).toContain(`at ${syntax}:2:11`);
   });
 
+  it('returns the names a .only leaves in a focused file, and none for an unfocused one', async () => {
+    const runner = JSON.stringify(path.resolve(__dirname, '..', 'runner.ts'));
+    const focused = write('focused.test.ts', `import { test } from ${runner};\n`
+      + 'test.only("focus", async () => {});\ntest("other", async () => {});\n'
+      + 'test.describe("grp", () => { test("g1", async () => {}); test.describe.only("inner", () => { test("i1", async () => {}); }); });\n');
+    const plain = write('plain.test.ts', `import { test } from ${runner};\ntest("b1", async () => {});\n`);
+    const found = await preflightTestFiles([focused, plain]);
+    expect(found.get(focused)).toEqual({
+      names: ['focus', 'other', 'grp > g1', 'grp > inner > i1'],
+      focusedNames: ['focus', 'grp > inner > i1'],
+    });
+    expect(found.get(plain)).toEqual({ names: ['b1'] });
+  });
+
   it('rebuilds a load error as an Error with its name and stack', () => {
     const error = preflightLoadError({ name: 'SyntaxError', message: 'Unexpected token', stack: 'SyntaxError: Unexpected token\n    at /p/a.test.js:2:11' });
     expect(error).toBeInstanceOf(Error);

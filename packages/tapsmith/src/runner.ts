@@ -782,6 +782,26 @@ function materializeSuiteEntry(entry: SuiteEntry): SuiteContext {
   }
 }
 
+// ─── Focus (`.only`) ───
+
+/**
+ * Whether a scope holds a focused entry: a `.only` test, or a describe that
+ * is `.only` or holds one beneath it. In such a scope only the focused
+ * entries run, as Playwright's `.only` filters the whole tree: a `.only` deep
+ * in a describe also leaves out the tests and describes beside that describe.
+ */
+function holdsFocus(ctx: SuiteContext): boolean {
+  return ctx.tests.some((t) => t.only) || ctx.suites.some(suiteFocused);
+}
+
+/**
+ * Whether a describe survives its scope's focus: it is `.only` itself (and
+ * then runs whole, unless it holds a `.only` of its own), or holds one.
+ */
+function suiteFocused(entry: SuiteEntry): boolean {
+  return entry.only || holdsFocus(materializeSuiteEntry(entry));
+}
+
 function isThenable(value: unknown): value is PromiseLike<unknown> {
   return value !== null && (typeof value === 'object' || typeof value === 'function')
     && typeof (value as { then?: unknown }).then === 'function';
@@ -844,8 +864,10 @@ export interface TestFn<Fixtures extends object = TestFixtures> {
   /** Declare a test. `fn` receives the fixtures (`device`, …). */
   (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)): void;
   /**
-   * Declare a focused test: the unfocused tests beside it in the same
-   * describe block (or file) are skipped. Describe blocks beside it still run.
+   * Declare a focused test. When any test or describe in the run is
+   * focused, only the focused ones run: the other tests and describes of
+   * its file are skipped, and a `tapsmith test` run leaves out every file
+   * that has no focused test.
    */
   only: (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
   /** Skip a test, a scope or the running test; see `SkipFn`. */
@@ -959,9 +981,9 @@ export interface DescribeFn {
   /** Declare a group of tests; `fn` declares them synchronously. */
   (name: string, fn: () => void): void;
   /**
-   * Declare a focused group: the unfocused tests and groups beside it in the
-   * same describe block (or file) are skipped, except that the groups still
-   * run when a test beside them is focused too.
+   * Declare a focused group. It runs whole, unless it holds focused tests
+   * or groups of its own, which it is then narrowed to. As with `test.only`,
+   * everything unfocused in the run is left out.
    */
   only: (name: string, fn: () => void) => void;
   /** Declare a group whose tests are all reported as skipped. */
@@ -1761,15 +1783,14 @@ function firstRunnableTest(
   policy: AppResetPolicy,
 ): { fullName: string; policy: AppResetPolicy } | undefined {
   if (ctx.skipped) return undefined;
-  const hasOnlyTests = ctx.tests.some((t) => t.only);
-  const hasOnly = hasOnlyTests || ctx.suites.some((s) => s.only);
+  const focused = holdsFocus(ctx);
   for (const t of ctx.tests) {
-    if (t.skip || (hasOnly && !t.only)) continue;
+    if (t.skip || (focused && !t.only)) continue;
     const fullName = prefix ? `${prefix} > ${t.name}` : t.name;
     if (passesTestFilter(fullName, opts)) return { fullName, policy };
   }
   for (const s of ctx.suites) {
-    if (s.skip || (hasOnly && !s.only && !hasOnlyTests)) continue;
+    if (s.skip || (focused && !suiteFocused(s))) continue;
     const childPrefix = prefix ? `${prefix} > ${s.name}` : s.name;
     const child = materializeSuiteEntry(s);
     const scoped = resolveScope(child.useOptions, opts, policy);
@@ -2417,10 +2438,8 @@ async function runSuiteContext(
   // throws. Body intentionally not re-indented.
   try {
 
-  // Determine if any test/suite in this context uses `.only`
-  const hasOnlyTests = ctx.tests.some((t) => t.only);
-  const hasOnlySuites = ctx.suites.some((s) => s.only);
-  const hasOnly = hasOnlyTests || hasOnlySuites;
+  // A `.only` anywhere in this scope's tree leaves out what is not focused.
+  const focused = holdsFocus(ctx);
 
   // Run beforeAll hooks with tracing. We create a standalone collector
   // (via setActiveTraceCollector) that Device._traceCollector falls back to.
@@ -2706,7 +2725,7 @@ async function runSuiteContext(
     if (!passesTestFilter(fullName, opts)) continue;
 
     // Determine if this test should be skipped.
-    const shouldSkip = entry.skip || !!ctx.skipped || skippedByBeforeAll || (hasOnly && !entry.only) || !!serialGroup?.failed;
+    const shouldSkip = entry.skip || !!ctx.skipped || skippedByBeforeAll || (focused && !entry.only) || !!serialGroup?.failed;
 
     if (shouldSkip) {
       const skippedResult: TestResult = {
@@ -3800,22 +3819,13 @@ async function runSuiteContext(
     // the remaining suites' tests as 'skipped'.
     if (opts.abortSignal?.aborted) break;
 
-    const shouldSkip = suiteEntry.skip || (hasOnly && !suiteEntry.only && !hasOnlyTests);
-
-    if (shouldSkip) {
-      // Mark all tests in skipped suite as skipped (we still need to discover them)
-      const childCtx = materializeSuiteEntry(suiteEntry);
-      const prefix = parentPrefix ? `${parentPrefix} > ${suiteEntry.name}` : suiteEntry.name;
-      const skippedResult = skipAll(childCtx, prefix, opts);
-      result.suites.push(skippedResult);
-      continue;
-    }
-
-    if (serialGroup?.failed || ctx.skipped || skippedByBeforeAll) {
-      // An earlier test of the serial group failed, or this scope is skipped
-      // by a describe-level test.skip(): the whole describe is skipped
-      // without its hooks or app reset, and — like a test the loop above
-      // skips — each of its tests is reported as skipped.
+    if (suiteEntry.skip || (focused && !suiteFocused(suiteEntry))
+      || serialGroup?.failed || ctx.skipped || skippedByBeforeAll) {
+      // A describe.skip, a describe a `.only` beside it leaves out, the rest
+      // of a serial group after a failure, or a scope skipped by a
+      // describe-level test.skip(): the whole describe is skipped without
+      // its hooks or app reset, and — like a test the loop above skips —
+      // each of its tests is reported as skipped.
       const childCtx = materializeSuiteEntry(suiteEntry);
       const prefix = parentPrefix ? `${parentPrefix} > ${suiteEntry.name}` : suiteEntry.name;
       const skippedResult = skipAll(childCtx, prefix, opts);
@@ -4426,6 +4436,8 @@ export interface DiscoveredTest {
   fullName: string
   only: boolean
   skip: boolean
+  /** Set when a `.only` elsewhere in the file leaves this test out of the run. */
+  outOfFocus?: true
   /** Effective isolation options for this test (suite cascade applied). */
   use?: DiscoveredUseOptions
 }
@@ -4434,6 +4446,8 @@ export interface DiscoveredSuite {
   name: string
   tests: DiscoveredTest[]
   suites: DiscoveredSuite[]
+  /** On a file's root: the file holds a `.only`, so only its focused tests run. */
+  focused?: true
   /** Effective isolation options for this suite (parent cascade applied). */
   use?: DiscoveredUseOptions
 }
@@ -4471,7 +4485,7 @@ export async function discoverTestFile(filePath: string): Promise<DiscoveredSuit
   const rootCtx = popContext();
   const discovered = discoverSuiteContext(rootCtx, '', undefined);
   await settleAsyncDescribes();
-  return discovered;
+  return holdsFocus(rootCtx) ? { ...discovered, focused: true } : discovered;
 }
 
 function discoverSuiteContext(
@@ -4479,15 +4493,18 @@ function discoverSuiteContext(
   parentPrefix: string,
   parentUse: DiscoveredUseOptions | undefined,
   parentSkipped = false,
+  parentOutOfFocus = false,
 ): DiscoveredSuite {
   const use = pickDiscoveredUse(parentUse, ctx.useOptions);
   // A describe-level test.skip() skips the scope and everything below it.
   const scopeSkipped = parentSkipped || !!ctx.skipped;
+  const focused = holdsFocus(ctx);
   const tests: DiscoveredTest[] = ctx.tests.map((t) => ({
     name: t.name,
     fullName: parentPrefix ? `${parentPrefix} > ${t.name}` : t.name,
     only: t.only,
     skip: t.skip || scopeSkipped,
+    ...(parentOutOfFocus || (focused && !t.only) ? { outOfFocus: true as const } : {}),
     ...(use ? { use } : {}),
   }));
 
@@ -4495,7 +4512,8 @@ function discoverSuiteContext(
   for (const entry of ctx.suites) {
     const suitePrefix = parentPrefix ? `${parentPrefix} > ${entry.name}` : entry.name;
     const childCtx = materializeSuiteEntry(entry);
-    suites.push(discoverSuiteContext(childCtx, suitePrefix, use, scopeSkipped));
+    const outOfFocus = parentOutOfFocus || (focused && !suiteFocused(entry));
+    suites.push(discoverSuiteContext(childCtx, suitePrefix, use, scopeSkipped, outOfFocus));
   }
 
   return { name: parentPrefix, tests, suites, ...(use ? { use } : {}) };
