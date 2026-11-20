@@ -225,21 +225,46 @@ describe('scrollRegion — iOS (the element\'s frame is known)', () => {
 });
 
 // PILOT-1324: scrollIntoView() takes a screen that a swipe did not change for
-// the end of the content only when something on it has content to scroll; a
-// screen still loading its list (a spinner, an empty table) is waited for.
+// the end of the content only when the scrollable it swiped in has content to
+// scroll along the swipe; a screen still loading its list (a spinner, an empty
+// table, a chip bar beside it) is waited for.
 describe('hasScrollableContent', () => {
+  const full = { left: 0, top: 0, right: 1080, bottom: 2400 };
+  const listAt = { left: 0, top: 200, right: 1080, bottom: 2400 };
+
   it('is false for a screen with nothing scrollable on it (a spinner while a list loads)', () => {
     const xml = android(
       node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
         node('android.widget.ProgressBar', '[480,1140][600,1260]')),
       statusBar,
     );
-    expect(hasScrollableContent(xml)).toBe(false);
+    expect(hasScrollableContent(xml, undefined, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, full, 'vertical')).toBe(false);
   });
 
-  it('is true for an Android view marked scrollable, which it is only while its content overflows it', () => {
+  it('is true for the Android view swiped in, marked scrollable, which it is only while its content overflows it', () => {
     const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable)));
-    expect(hasScrollableContent(xml)).toBe(true);
+    expect(hasScrollableContent(xml, listAt, 'vertical')).toBe(true);
+  });
+
+  it('finds the scrollable under the centre of a region its agent trimmed differently', () => {
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable)));
+    expect(hasScrollableContent(xml, { left: 0, top: 200, right: 1080, bottom: 2274 }, 'vertical')).toBe(true);
+  });
+
+  it('is false for a chip bar beside a list still loading: a vertical swipe in a horizontal list moves nothing', () => {
+    const chip = (l: number) => node('android.widget.Button', `[${l},220][${l + 300},330]`, 'text="Chip"');
+    const chipBar = { left: 0, top: 200, right: 1080, bottom: 350 };
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,350]', scrollable, chip(20) + chip(340) + chip(660)) +
+      node('android.widget.ProgressBar', '[480,1140][600,1260]')));
+    expect(hasScrollableContent(xml, chipBar, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, chipBar, 'horizontal')).toBe(true);
+    expect(hasScrollableContent(xml, chipBar)).toBe(true);
+    // A HorizontalScrollView says so by its class, whatever its one child.
+    const hsv = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('android.widget.HorizontalScrollView', '[0,200][1080,350]', scrollable, node('android.widget.LinearLayout', '[0,200][2400,350]'))));
+    expect(hasScrollableContent(hsv, chipBar, 'vertical')).toBe(false);
   });
 
   it('is false for a scrollable inside the system UI', () => {
@@ -247,24 +272,38 @@ describe('hasScrollableContent', () => {
       node('android.widget.FrameLayout', '[0,0][1080,2400]'),
       '<node class="android.widget.ScrollView" package="com.android.systemui" bounds="[0,0][1080,600]" scrollable="true" tapsmith-non-app="true"/>',
     );
-    expect(hasScrollableContent(xml)).toBe(false);
+    expect(hasScrollableContent(xml, { left: 0, top: 0, right: 1080, bottom: 600 }, 'vertical')).toBe(false);
   });
+
+  const table = { left: 0, top: 100, right: 402, bottom: 874 };
 
   it('is false for an empty iOS table, or a scroll view whose content fits inside it', () => {
-    expect(hasScrollableContent(ios(el('Table', '[0,100][402,874]')))).toBe(false);
+    expect(hasScrollableContent(ios(el('Table', '[0,100][402,874]')), table, 'vertical')).toBe(false);
     expect(hasScrollableContent(ios(el('ScrollView', '[0,100][402,874]', '',
-      el('Other', '[0,100][402,874]', '', el('ActivityIndicator', '[180,400][222,442]', 'label="In progress"')))))).toBe(false);
+      el('Other', '[0,100][402,874]', '', el('ActivityIndicator', '[180,400][222,442]', 'label="In progress"')))), table, 'vertical')).toBe(false);
   });
 
-  it('is true for an iOS scrollable whose content reaches past its frame, either way', () => {
+  it('is true for an iOS scrollable whose content reaches past its frame along the swipe, either way', () => {
     expect(hasScrollableContent(ios(el('Table', '[0,100][402,874]', '',
-      el('Cell', '[0,100][402,144]', '', '') + el('Cell', '[0,860][402,904]'))))).toBe(true);
+      el('Cell', '[0,100][402,144]') + el('Cell', '[0,860][402,904]'))), table, 'vertical')).toBe(true);
     // At the end of a list: the rows it went past are above it.
     expect(hasScrollableContent(ios(el('ScrollView', '[0,100][402,874]', '',
-      el('Other', '[0,-2400][402,874]'))))).toBe(true);
+      el('Other', '[0,-2400][402,874]'))), table, 'vertical')).toBe(true);
+  });
+
+  it('is false for an empty iOS table beside a carousel that does overflow, and for the carousel swiped up and down', () => {
+    const xml = ios(
+      el('CollectionView', '[0,100][402,300]', '', el('Cell', '[0,100][300,300]') + el('Cell', '[310,100][610,300]')),
+      el('Table', '[0,300][402,874]'),
+    );
+    expect(hasScrollableContent(xml, { left: 0, top: 300, right: 402, bottom: 874 }, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 }, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 }, 'horizontal')).toBe(true);
+    // With no axis (the caller chose the direction), content either way counts.
+    expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 })).toBe(true);
   });
 
   it('is false for a dump with no bounds at all', () => {
-    expect(hasScrollableContent('<hierarchy/>')).toBe(false);
+    expect(hasScrollableContent('<hierarchy/>', full, 'vertical')).toBe(false);
   });
 });

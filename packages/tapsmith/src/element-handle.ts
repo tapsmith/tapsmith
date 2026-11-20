@@ -4215,6 +4215,12 @@ export class ElementHandle {
       // (PILOT-1324). Wait for the element to show or the screen to change,
       // until the deadline. True to scroll on (the element, when it showed,
       // stands as the next probe); false at the deadline.
+      // The axis the container must have content along for a swipe that
+      // moved nothing to be its end: the swipe's, when scrollIntoView() chose
+      // the direction (a chip bar is not the list it was looking for), and
+      // either when the caller asked for this one.
+      const contentAxis = (): 'vertical' | 'horizontal' | undefined =>
+        explicitDirection !== undefined ? undefined : isVertical(direction) ? 'vertical' : 'horizontal';
       const waitForContent = async (still: string): Promise<boolean> => {
         const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
         for (;;) {
@@ -4453,7 +4459,7 @@ export class ElementHandle {
         // table while its rows load): then wait for it, as below.
         if (platform === 'ios' && stillSteps >= 2 && !overshot) {
           const now = await readScreen();
-          if (!now || hasScrollableContent(now.xml)) {
+          if (!now || hasScrollableContent(now.xml, region, contentAxis())) {
             reachedEnd = true;
             break;
           }
@@ -4481,9 +4487,11 @@ export class ElementHandle {
           read = await readScreen();
           screen = read?.signature;
           if (read && screen === screenBeforeSwipe) {
-            // Only content that scrolls has an end. A screen with nothing on
-            // it to scroll may still be loading it (PILOT-1324).
-            if (hasScrollableContent(read.xml)) {
+            // Only content that scrolls has an end: the container swiped in
+            // must have content to scroll along the swipe. A screen with
+            // nothing to scroll there (a spinner, beside it perhaps a chip
+            // bar) may still be loading it (PILOT-1324).
+            if (hasScrollableContent(read.xml, region, contentAxis())) {
               reachedEnd = true;
               break;
             }

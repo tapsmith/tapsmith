@@ -6223,6 +6223,21 @@ describe('scrollIntoView() waits for content that is still loading (PILOT-1324)'
     expect(swipe).toHaveBeenCalledTimes(2);
   });
 
+  it('waits when the only scrollable on screen is a chip bar beside the loading list, which the swipe cannot move', async () => {
+    const chips =
+      '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">' +
+      '<node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,200][1080,350]">' +
+      '<node class="android.widget.Button" text="All" bounds="[20,220][320,330]"/>' +
+      '<node class="android.widget.Button" text="News" bounds="[340,220][640,330]"/></node>' +
+      '<node class="android.widget.ProgressBar" bounds="[480,1140][600,1260]"/></node></hierarchy>';
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: absent(), swipe, getUiHierarchy: vi.fn(hierarchySequence([chips])) });
+
+    await expect(new ElementHandle(client, _text('Fake Podcast 7'), 400).scrollIntoView()).rejects.toThrow(
+      /was not on screen after waiting 400ms: .* nothing on it has content to scroll/,
+    );
+  });
+
   it('fails at the timeout when the screen never changes and nothing on it scrolls, saying so', async () => {
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements: absent(), swipe, getUiHierarchy: vi.fn(hierarchySequence([spinner])) });
