@@ -161,7 +161,27 @@ impl DeviceBackend for AndroidBackend<'_> {
         // Write to the device whose rotation map was read, even if the active
         // device changed meanwhile.
         let cmd = format!("settings put system user_rotation {rotation}");
-        self.svc.adb_action_on(request_id, &serial, &cmd).await
+        let response = self.svc.adb_action_on(request_id, &serial, &cmd).await?;
+        if !response.get_ref().success {
+            return Ok(response);
+        }
+        // The setting only starts the turn. Return once the screen has
+        // turned, so what comes next (a swipe planned on the screen's size,
+        // a read of an element's bounds) sees the turned screen.
+        match wait_for_turn(&serial, rotation).await {
+            Ok(()) => Ok(response),
+            Err(reason) => {
+                let screenshot = self.svc.error_screenshot().await;
+                Ok(Response::new(proto::ActionResponse {
+                    request_id: response.into_inner().request_id,
+                    success: false,
+                    error_type: "ORIENTATION_NOT_SETTLED".to_string(),
+                    error_message: format!("Could not turn the screen to {orientation}: {reason}"),
+                    screenshot,
+                    app_launched_fresh: false,
+                }))
+            }
+        }
     }
 
     async fn get_orientation(&self) -> Result<String, Status> {
@@ -1709,6 +1729,154 @@ fn rotation_map_from(output: &str) -> Option<RotationMap> {
     })
 }
 
+/// Where the default display stands in a turn to `user_rotation` `wanted`,
+/// as [`turn_state`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnState {
+    /// Still turning: the window manager has not taken the new user rotation
+    /// yet, the display does not have its new size yet, or the rotation is
+    /// still animating (input sent meanwhile can be dropped or land turned).
+    Turning,
+    /// At rest. `turned` is false when the app in front holds its own
+    /// orientation. `setting_seen` is false when the output does not show
+    /// the window manager's user rotation, so it cannot say whether the
+    /// setting has been taken yet.
+    Settled { turned: bool, setting_seen: bool },
+    /// The output does not show the display's size.
+    Unknown,
+}
+
+/// The shell command [`turn_state`] reads.
+const TURN_PROBE: &str = "dumpsys window displays";
+/// Before Android 10 the display's section shows no rotation, and the user
+/// rotation and the rotation animation are dumped elsewhere: the whole
+/// window dump is read instead.
+const LEGACY_TURN_PROBE: &str = "dumpsys window";
+
+/// `WxH` after `label` on any line of `output`.
+fn size_field(output: &str, label: &str) -> Option<(u32, u32)> {
+    output.lines().find_map(|line| {
+        let start = line.find(label)? + label.len();
+        let value = line[start..].split_whitespace().next()?;
+        let (w, h) = value.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    })
+}
+
+/// The display's own rotation in its section: the line that starts with
+/// `mRotation=`. A configuration's `mRotation=ROTATION_90}` sits mid-line.
+fn display_rotation(section: &str) -> Option<u8> {
+    section.lines().find_map(|line| {
+        let value = line.trim_start().strip_prefix("mRotation=")?;
+        parse_rotation(value.split_whitespace().next()?)
+    })
+}
+
+/// The default display's turn to `user_rotation` `wanted`, from
+/// [`TURN_PROBE`]'s output, or [`LEGACY_TURN_PROBE`]'s where the display's
+/// section shows no rotation. The display has turned once the window manager
+/// has taken the user rotation, its current size (`cur=`) is its natural
+/// size (`init=`) turned by its rotation, and no rotation animation (a
+/// `ScreenRotationAnimation`, or with shell transitions an
+/// `AsyncRotationController`) is running. Without a rotation in the output,
+/// the current size alone tells whether it turned.
+fn turn_state(output: &str, wanted: u8) -> TurnState {
+    let Some(section) = default_display_section(output) else {
+        return TurnState::Unknown;
+    };
+    let (Some(natural), Some(current)) =
+        (size_field(section, "init="), size_field(section, "cur="))
+    else {
+        return TurnState::Unknown;
+    };
+    let rotation = display_rotation(section);
+    let legacy = rotation.is_none();
+    let user_rotation = rotation_field(section, "mUserRotation=").or_else(|| {
+        legacy
+            .then(|| rotation_field(output, "mUserRotation="))
+            .flatten()
+    });
+    if user_rotation.is_some_and(|r| r != wanted) {
+        return TurnState::Turning;
+    }
+    let animating = section.contains("mScreenRotationAnimation:")
+        || section.contains("AsyncRotationController")
+        || (legacy && output.contains("mScreenRotationAnimation:"));
+    // Whether the display is landscape at `rotation`; a square one is both.
+    let natural_landscape = natural.0 > natural.1;
+    let has_shape_of = |rotation: u8| {
+        natural.0 == natural.1
+            || (current.0 > current.1) == (natural_landscape != (rotation % 2 == 1))
+    };
+    let (sized, turned) = match rotation {
+        Some(rotation) => (has_shape_of(rotation), rotation == wanted),
+        None => (true, has_shape_of(wanted)),
+    };
+    if !sized || animating {
+        return TurnState::Turning;
+    }
+    TurnState::Settled {
+        turned,
+        setting_seen: user_rotation.is_some(),
+    }
+}
+
+/// How long `setOrientation` waits for the display to turn.
+const TURN_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a display whose output does not show the window manager's user
+/// rotation gets to start turning before an unturned display counts as held
+/// by the app.
+const TURN_UNSEEN_GRACE: Duration = Duration::from_secs(1);
+const TURN_POLL: Duration = Duration::from_millis(50);
+
+/// Wait until `serial`'s default display has finished turning to
+/// `user_rotation` `wanted`, or has come to rest unturned because the app in
+/// front holds its own orientation. Until then the screen still has its old
+/// size, and input sent mid-turn can be dropped or land turned. Returns the
+/// reason when the display is still turning at [`TURN_TIMEOUT`]; output it
+/// cannot read is not waited on.
+async fn wait_for_turn(serial: &str, wanted: u8) -> Result<(), String> {
+    let started = tokio::time::Instant::now();
+    let mut probe = TURN_PROBE;
+    loop {
+        let output = adb::shell(serial, probe)
+            .await
+            .map_err(|e| format!("could not read the display's rotation: {e}"))?;
+        if probe == TURN_PROBE
+            && default_display_section(&output).is_some_and(|s| display_rotation(s).is_none())
+        {
+            probe = LEGACY_TURN_PROBE;
+            continue;
+        }
+        match turn_state(&output, wanted) {
+            TurnState::Unknown => {
+                warn!("Could not read the display's rotation; not waiting for it to turn");
+                return Ok(());
+            }
+            TurnState::Settled {
+                turned,
+                setting_seen,
+            } if turned || setting_seen || started.elapsed() >= TURN_UNSEEN_GRACE => {
+                if !turned {
+                    info!(
+                        wanted,
+                        "The display did not turn; the app in front holds its orientation"
+                    );
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+        if started.elapsed() >= TURN_TIMEOUT {
+            return Err(format!(
+                "the screen was still turning {} s after it was asked to turn",
+                TURN_TIMEOUT.as_secs()
+            ));
+        }
+        tokio::time::sleep(TURN_POLL).await;
+    }
+}
+
 /// `serial`'s rotation map. Read on every call: a foldable's default display
 /// changes shape as it folds. A device whose output can't be parsed gets the
 /// phone mapping, with a warning; an adb failure is an error.
@@ -1782,6 +1950,167 @@ mod tests {
     // greps it, followed by `wm size`.
     const TABLET_PROBE: &str = "  Display: mDisplayId=0 (organized)\n    mLandscapeRotation=ROTATION_0 mSeascapeRotation=ROTATION_180\n    mPortraitRotation=ROTATION_270 mUpsideDownRotation=ROTATION_90\nPhysical size: 2560x1600\n";
     const PHONE_PROBE: &str = "    mLandscapeRotation=ROTATION_90 mSeascapeRotation=ROTATION_270\r\n    mPortraitRotation=ROTATION_0 mUpsideDownRotation=ROTATION_180\r\nPhysical size: 1080x2400\r\n";
+
+    // `dumpsys window displays` on an API 36 phone, cut to the lines
+    // `turn_state` reads, while turning to landscape (rotation 1) and after.
+    const API36_TURNING: &str = "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  Display: mDisplayId=0 (organized)\n    init=1080x2400 420dpi mMinSizeOfResizeableTaskDp=220 cur=1080x2400 app=1080x2400 rng=1080x1080-2400x2400\n  AsyncRotationController\n    mTransitionOp=2\n    mOriginalRotation=0\n  DisplayRotation\n    mRotation=1 mDeferredRotationPauseCount=0\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_90 mCameraRotationMode=0\n";
+    const API36_SIZED_STILL_ANIMATING: &str = "  Display: mDisplayId=0 (organized)\n    init=1080x2400 420dpi cur=2400x1080 app=2400x1080\n  AsyncRotationController\n    mTransitionOp=2\n  DisplayRotation\n    mRotation=1 mDeferredRotationPauseCount=0\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_90\n";
+    const API36_TURNED: &str = "  Display: mDisplayId=0 (organized)\n    init=1080x2400 420dpi mMinSizeOfResizeableTaskDp=220 cur=2400x1080 app=2400x1080 rng=1080x1080-2400x2400\n  overrideConfig={1.0 winConfig={ mBounds=Rect(0, 0 - 2400, 1080) mDisplayRotation=ROTATION_90 mRotation=ROTATION_90}}\n  DisplayRotation\n    mRotation=1 mDeferredRotationPauseCount=0\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_90 mCameraRotationMode=0\n";
+    // API 33 rotates without shell transitions: a ScreenRotationAnimation.
+    const API33_ANIMATING: &str = "  Display: mDisplayId=0 (organized)\n    init=1080x2400 420dpi cur=2400x1080 app=2272x1080\n  mScreenRotationAnimation:\n    mSurface=Surface(name=RotationLayer)\n  DisplayRotation\n    mRotation=1 mDeferredRotationPauseCount=0\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_90\n";
+    const API33_TURNED: &str = "  Display: mDisplayId=0 (organized)\n    init=1080x2400 420dpi cur=2400x1080 app=2272x1080\n  no ScreenRotationAnimation \n  DisplayRotation\n    mRotation=1 mDeferredRotationPauseCount=0\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_90\n";
+
+    #[test]
+    fn a_turn_is_settled_only_once_the_display_has_its_new_size_and_stopped_animating() {
+        assert_eq!(turn_state(API36_TURNING, 1), TurnState::Turning);
+        assert_eq!(
+            turn_state(API36_SIZED_STILL_ANIMATING, 1),
+            TurnState::Turning
+        );
+        assert_eq!(turn_state(API33_ANIMATING, 1), TurnState::Turning);
+        let turned = TurnState::Settled {
+            turned: true,
+            setting_seen: true,
+        };
+        assert_eq!(turn_state(API36_TURNED, 1), turned);
+        assert_eq!(turn_state(API33_TURNED, 1), turned);
+    }
+
+    #[test]
+    fn a_turn_the_window_manager_has_not_taken_yet_is_still_turning() {
+        // Straight after `settings put`: the window manager still has the old
+        // user rotation, so the unchanged display says nothing yet.
+        let before = "  Display: mDisplayId=0\n    init=1080x2400 420dpi cur=1080x2400\n  DisplayRotation\n    mRotation=0 mDeferredRotationPauseCount=0\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_0\n";
+        assert_eq!(turn_state(before, 1), TurnState::Turning);
+        // Already where it was asked to be.
+        assert_eq!(
+            turn_state(before, 0),
+            TurnState::Settled {
+                turned: true,
+                setting_seen: true
+            }
+        );
+    }
+
+    #[test]
+    fn an_app_that_holds_its_orientation_settles_unturned() {
+        // The setting is taken, but the app in front asks for portrait.
+        let held = "  Display: mDisplayId=0\n    init=1080x2400 420dpi cur=1080x2400\n  no ScreenRotationAnimation \n  DisplayRotation\n    mRotation=0 mDeferredRotationPauseCount=0\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_90\n";
+        assert_eq!(
+            turn_state(held, 1),
+            TurnState::Settled {
+                turned: false,
+                setting_seen: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_landscape_native_display_turns_to_portrait() {
+        let turning = "  Display: mDisplayId=0\n    init=2560x1600 320dpi cur=2560x1600\n  DisplayRotation\n    mRotation=3 mDeferredRotationPauseCount=0\n    mUserRotation=ROTATION_270\n";
+        assert_eq!(turn_state(turning, 3), TurnState::Turning);
+        let turned = turning.replace("cur=2560x1600", "cur=1600x2560");
+        assert_eq!(
+            turn_state(&turned, 3),
+            TurnState::Settled {
+                turned: true,
+                setting_seen: true
+            }
+        );
+    }
+
+    #[test]
+    fn only_the_default_display_is_read() {
+        let output = format!(
+            "  Display: mDisplayId=2\n    init=800x600 160dpi cur=800x600\n  AsyncRotationController\n  DisplayRotation\n    mRotation=0\n    mUserRotation=ROTATION_0\n{API36_TURNED}"
+        );
+        assert_eq!(
+            turn_state(&output, 1),
+            TurnState::Settled {
+                turned: true,
+                setting_seen: true
+            }
+        );
+    }
+
+    #[test]
+    fn output_without_the_user_rotation_settles_without_having_seen_the_setting() {
+        // Older releases dump no `mUserRotation` here.
+        let old = "  Display: mDisplayId=0\n    init=1080x1920 420dpi cur=1080x1920 app=1080x1794\n    mRotation=0\n";
+        assert_eq!(
+            turn_state(old, 1),
+            TurnState::Settled {
+                turned: false,
+                setting_seen: false
+            }
+        );
+    }
+
+    #[test]
+    fn unreadable_output_is_unknown() {
+        assert_eq!(turn_state("", 1), TurnState::Unknown);
+        assert_eq!(turn_state("garbage\n", 1), TurnState::Unknown);
+        // No size line.
+        assert_eq!(
+            turn_state("  Display: mDisplayId=0\n    mRotation=1\n", 1),
+            TurnState::Unknown
+        );
+        // No natural size.
+        assert_eq!(
+            turn_state(
+                "  Display: mDisplayId=0\n    cur=1080x2400\n    mRotation=1\n",
+                1
+            ),
+            TurnState::Unknown
+        );
+    }
+
+    // The whole `dumpsys window` on an API 28 phone, cut to the lines
+    // `turn_state` reads: the policy's user rotation comes before the
+    // display's section, the rotation animation after it, and the section
+    // shows no rotation.
+    const API28_TURNING: &str = "WINDOW MANAGER POLICY STATE (dumpsys window policy)\n    mUserRotationMode=USER_ROTATION_LOCKED mUserRotation=ROTATION_90 mAllowAllRotations=false\nWINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  Display: mDisplayId=0\n    init=1080x1920 420dpi cur=1920x1080 app=1794x1080 rng=1080x1017-1794x1731\n\nWINDOW MANAGER WINDOWS (dumpsys window windows)\n  mScreenRotationAnimation:\n    mSurface=Surface(name=ScreenshotSurface)\n";
+
+    #[test]
+    fn before_android_10_the_size_and_the_whole_dump_tell_the_turn() {
+        assert_eq!(turn_state(API28_TURNING, 1), TurnState::Turning);
+        let turned = API28_TURNING.replace("  mScreenRotationAnimation:\n", "");
+        assert_eq!(
+            turn_state(&turned, 1),
+            TurnState::Settled {
+                turned: true,
+                setting_seen: true
+            }
+        );
+        // The setting not taken yet.
+        let before = turned
+            .replace("ROTATION_90", "ROTATION_0")
+            .replace("cur=1920x1080", "cur=1080x1920");
+        assert_eq!(turn_state(&before, 1), TurnState::Turning);
+        // Taken, but the app in front holds portrait.
+        let held = turned.replace("cur=1920x1080", "cur=1080x1920");
+        assert_eq!(
+            turn_state(&held, 1),
+            TurnState::Settled {
+                turned: false,
+                setting_seen: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_config_rotation_is_not_taken_for_the_display_rotation() {
+        // winConfig's `mRotation=ROTATION_90}` comes first; the display's
+        // own rotation is the line that starts with `mRotation=`.
+        let output = "  Display: mDisplayId=0\n    init=1080x2400 420dpi cur=1080x2400\n  overrideConfig={ winConfig={ mDisplayRotation=ROTATION_90 mRotation=ROTATION_90}}\n  DisplayRotation\n    mRotation=0 mDeferredRotationPauseCount=0\n    mUserRotation=ROTATION_0\n";
+        assert_eq!(
+            turn_state(output, 0),
+            TurnState::Settled {
+                turned: true,
+                setting_seen: true
+            }
+        );
+    }
 
     #[test]
     fn the_window_managers_rotations_decide_the_map() {
