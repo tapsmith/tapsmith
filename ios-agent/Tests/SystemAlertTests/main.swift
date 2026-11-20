@@ -94,6 +94,14 @@ do {
     expect("until the interval has passed since it", check.due(now: t0.addingTimeInterval(56)))
 }
 
+expect("a delivery through testmanagerd raises no prompt of Tapsmith's own",
+       !SystemAlert.deliveryMayRaiseOwnPrompt("daemon"))
+expect("XCUIApplication.open can (the physical-device and fallback path)",
+       SystemAlert.deliveryMayRaiseOwnPrompt("xctest"))
+expect("an unanswered testmanagerd request may have fallen back: assume it can",
+       SystemAlert.deliveryMayRaiseOwnPrompt("daemon-timeout"))
+expect("so may anything unknown", SystemAlert.deliveryMayRaiseOwnPrompt("none"))
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)

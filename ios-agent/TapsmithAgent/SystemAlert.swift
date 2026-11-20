@@ -28,6 +28,16 @@ struct SystemAlert: Equatable {
         return "\(name) (\(list))"
     }
 
+    /// Whether a warm deep-link delivery, by how it went (`deliverWarmURL`'s
+    /// answer), can have raised an "Open in" prompt of Tapsmith's own.
+    /// testmanagerd's open-URL request ("daemon") hands the URL to the app
+    /// without one, so a prompt seen after it was left by something else
+    /// and is cancelled, not opened. `XCUIApplication.open` ("xctest") can
+    /// raise one, and so may anything that might have fallen back to it.
+    static func deliveryMayRaiseOwnPrompt(_ delivery: String) -> Bool {
+        delivery != "daemon"
+    }
+
     /// The sentence an error appends when this alert is up.
     var coveringSentence: String {
         "A system alert is covering the app: \(description). " +
@@ -76,10 +86,11 @@ struct SystemAlertEvents {
 /// the SpringBoard query costs tens of milliseconds. Not once per agent
 /// process either: a session can adopt an app that is already running long
 /// after the agent started. So at most once per `interval`, which any other
-/// check (a launch, a link delivery: `checked(at:)`) also restarts. A prompt
-/// a readiness check skips stays up and is named in errors; the checks
-/// before Tapsmith delivers a link, which would press its Open, are never
-/// skipped.
+/// check (a launch, a link delivery: `checked(at:)`) also restarts. Warm
+/// link deliveries check on the same clock; in between, their wait loops
+/// cancel any prompt the delivery cannot have raised
+/// (`deliveryMayRaiseOwnPrompt`), so a leftover is never opened. A prompt a
+/// readiness check skips stays up and is named in errors.
 struct LeftoverPromptCheck {
     let interval: TimeInterval
     private var last: Date?

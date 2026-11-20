@@ -91,6 +91,19 @@ class CommandHandler {
         return false
     }
 
+    /// What a warm delivery's wait loop does about an "Open in" prompt: Open
+    /// when the delivery may have raised it (`acceptOpenInAppDialogIfPresent`),
+    /// Cancel when it cannot have (SystemAlert.deliveryMayRaiseOwnPrompt), so
+    /// a leftover is never opened. Either way one query when none is up.
+    private func answerOpenInPrompt(springboard: XCUIApplication, ownPossible: Bool) -> Bool {
+        if ownPossible {
+            return acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0)
+        }
+        var up = false
+        _ = ObjCExceptionCatcher.catchException { up = springboard.buttons["Open"].exists }
+        return up && cancelLeftoverOpenInPrompt()
+    }
+
     /// SpringBoard's frontmost alert, read in one snapshot, or nil when none is
     /// up (or SpringBoard cannot be read). Costs one existence query when no
     /// alert is up, so callers keep it off hot paths: a launch, a failure.
@@ -317,7 +330,8 @@ class CommandHandler {
         _ app: XCUIApplication,
         greaterThan navBefore: UInt64,
         bootBefore: String?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        ownPromptPossible: Bool = true
     ) -> Bool {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
@@ -339,7 +353,7 @@ class CommandHandler {
             }
             if acknowledged { return true }
             // Dialog accepted: re-check at once.
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            if self.answerOpenInPrompt(springboard: springboard, ownPossible: ownPromptPossible) { continue }
             Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return false
@@ -362,7 +376,8 @@ class CommandHandler {
         _ app: XCUIApplication,
         greaterThan epochBefore: UInt64,
         bootBefore: String?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        ownPromptPossible: Bool = true
     ) -> HooksEpochOutcome {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
@@ -385,7 +400,7 @@ class CommandHandler {
             }
             if let outcome { return outcome }
             // Dialog accepted: re-check at once.
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            if self.answerOpenInPrompt(springboard: springboard, ownPossible: ownPromptPossible) { continue }
             Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return .timedOut
@@ -411,7 +426,8 @@ class CommandHandler {
     private func waitForDeepLinkNavigation(
         _ app: XCUIApplication,
         before: String,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        ownPromptPossible: Bool = true
     ) -> Bool {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let dumper = HierarchyDumper(app: app)
@@ -419,7 +435,7 @@ class CommandHandler {
         while Date() < deadline {
             // Same shape as waitForDeepLinkDestination: one SpringBoard query
             // per iteration in case "Open in <app>?" gates the warm delivery.
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
+            if self.answerOpenInPrompt(springboard: springboard, ownPossible: ownPromptPossible) {
                 // Dialog accepted — re-check on the next iteration.
             } else {
                 var navigated = false
@@ -3209,12 +3225,14 @@ class CommandHandler {
 
             if deliverInProcess {
                 // Nothing of Tapsmith's is pending yet, so an Open-in prompt
-                // up now is a leftover: cancel it before the wait loops below
-                // would press its Open (a warm reset in a long-lived session
-                // never launches the app). Every time, not on the readiness
-                // clock: a prompt raised between two runs seconds apart would
-                // otherwise be opened.
-                cancelLeftoverOpenInPrompt()
+                // up now is a leftover: cancel it (a warm reset in a
+                // long-lived session never launches the app). On the
+                // readiness clock, as warm resets deliver a link every test;
+                // in between, the wait loops below cancel rather than open a
+                // prompt that this delivery cannot have raised.
+                if leftoverPromptCheck.due(now: Date()) {
+                    cancelLeftoverOpenInPrompt()
+                }
                 guard #available(iOS 16.4, *) else {
                     throw AgentError.actionFailed(
                         "openDeepLink requires iOS 16.4 or newer for in-process delivery"
@@ -3257,9 +3275,10 @@ class CommandHandler {
                 // miss and the daemon falls back to its cold path.
                 let delivery = activateError == nil ? deliverWarmURL(url, bundleId: bundleId, app: targetApp) : "none"
                 phases.lap("deliver")
+                let ownPromptPossible = SystemAlert.deliveryMayRaiseOwnPrompt(delivery)
 
                 if let epochBefore = ackEpochGreaterThan {
-                    let outcome = waitForHooksEpoch(targetApp, greaterThan: epochBefore, bootBefore: ackBootBefore, timeout: 8.0)
+                    let outcome = waitForHooksEpoch(targetApp, greaterThan: epochBefore, bootBefore: ackBootBefore, timeout: 8.0, ownPromptPossible: ownPromptPossible)
                     phases.lap("verify")
                     switch outcome {
                     case .acknowledged(let epoch):
@@ -3284,7 +3303,7 @@ class CommandHandler {
                 }
 
                 if let navBefore = ackNavGreaterThan {
-                    if waitForHooksNav(targetApp, greaterThan: navBefore, bootBefore: ackBootBefore, timeout: 8.0) {
+                    if waitForHooksNav(targetApp, greaterThan: navBefore, bootBefore: ackBootBefore, timeout: 8.0, ownPromptPossible: ownPromptPossible) {
                         phases.lap("verify")
                         if displayAppearsBlack() {
                             throw AgentError.actionFailed(
@@ -3304,7 +3323,7 @@ class CommandHandler {
                 }
 
                 if let before = preOpenHierarchy {
-                    if waitForDeepLinkNavigation(targetApp, before: before, timeout: 5.0) {
+                    if waitForDeepLinkNavigation(targetApp, before: before, timeout: 5.0, ownPromptPossible: ownPromptPossible) {
                         phases.lap("verify")
                         // The hierarchy check can pass against a display that
                         // has stopped compositing (a11y stays healthy while
