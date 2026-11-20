@@ -26,7 +26,7 @@ import {
 import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
 import type { SwipeDirection } from './input-names.js';
 import { onScreenSignature } from './screen-signature.js';
-import { pickScrollRegion, type Rect } from './scroll-container.js';
+import { hasScrollableContent, pickScrollRegion, type Rect } from './scroll-container.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -3888,8 +3888,10 @@ export class ElementHandle {
    * Repeatedly swipes, checking visibility between each attempt. Useful for
    * reaching elements that are off-screen in a scrollable container (e.g. a
    * long list of navigation cards). Throws after `maxScrolls` swipes, or as
-   * soon as a swipe changes nothing on screen: the content reached its end,
-   * or the swipe missed the list.
+   * soon as a swipe changes nothing on a screen with content to scroll: the
+   * content reached its end, or the swipe missed the list. A screen with
+   * nothing on it to scroll (a spinner while a list loads) is waited for
+   * instead, up to `timeout`.
    *
    * Each swipe runs inside the scroll container that holds the element: its
    * nearest scrollable ancestor on screen when the device reports where the
@@ -3918,13 +3920,22 @@ export class ElementHandle {
    *
    * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `10` (a drag moves the list less than a fling), or `5` when the platform is not known.
    * @param options.speed - Swipe speed in pixels/second, for swipes that are not one-call steps. Default `2000`.
+   * @param options.timeout - How long, in milliseconds from the start of the
+   *   call, it waits for content that has not loaded yet. When a swipe
+   *   changes nothing on screen and nothing on it has content to scroll (a
+   *   spinner while a list loads), that is not the end of the content: it
+   *   waits for the element to show or the screen to change, and scrolls on.
+   *   Defaults to the device timeout. The swipes themselves are bounded by
+   *   `maxScrolls`.
    */
   async scrollIntoView(options?: {
     direction?: SwipeDirection | (string & {});
     maxScrolls?: number;
     speed?: number;
+    timeout?: number;
   }): Promise<void> {
-    checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed']);
+    const checked = checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed', 'timeout']);
+    const timeoutMs = checkTimeout('scrollIntoView()', checked?.timeout) ?? this._timeoutMs;
     const explicitDirection = scrollDirectionOption(options?.direction);
     // On Android each vertical swipe is a drag that moves the list about its
     // own length and stops (PILOT-973); a fling carried it further. So the
@@ -3940,6 +3951,7 @@ export class ElementHandle {
     // action's "after" as this capture, and this one's "after" as the next.
     const traceStart = await this._captureQueryStart('scrollIntoView');
     const start = Date.now();
+    const deadline = start + timeoutMs;
 
     let lastTransientErr: Error | undefined;
 
@@ -4041,6 +4053,9 @@ export class ElementHandle {
       // whether a swipe has since been seen to change nothing.
       let screenBeforeSwipe: string | undefined;
       let reachedEnd = false;
+      // The screen stopped changing with nothing on it to scroll, and stayed
+      // so until the deadline (PILOT-1324).
+      let stillLoading = false;
       // The scroll container the last swipe ran in (PILOT-934), or undefined
       // when it swiped the screen because nothing on screen scrolls. Kept for
       // the next swipe when the screen cannot be read.
@@ -4192,6 +4207,27 @@ export class ElementHandle {
             settleExtraTicks = Math.max(0, Math.ceil((SCROLL_SETTLE_MS - elapsed) / SCROLL_WATCH_INTERVAL_MS));
             return;
           }
+        }
+      };
+      // A screen that a swipe did not change, with nothing on it that has
+      // content to scroll, is not the end of the content: a list still
+      // loading shows a spinner, or an empty list, which no swipe moves
+      // (PILOT-1324). Wait for the element to show or the screen to change,
+      // until the deadline. True to scroll on (the element, when it showed,
+      // stands as the next probe); false at the deadline.
+      const waitForContent = async (still: string): Promise<boolean> => {
+        const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
+        for (;;) {
+          const delay = nextDelay(deadline);
+          if (Date.now() >= deadline) return false;
+          await sleep(delay, this._client._getAbortSignal?.());
+          const seen = await probe();
+          if (seen.outcome === 'visible') {
+            nextProbe = seen;
+            return true;
+          }
+          const now = await readScreen();
+          if (now !== undefined && now.signature !== still) return true;
         }
       };
       for (;;) {
@@ -4413,9 +4449,21 @@ export class ElementHandle {
         // point, so no read ever matches the one before. On Android "no
         // scroll event" is weaker evidence (a view may scroll without one),
         // so the screen read alone decides.
+        // Unless the container has nothing in it to scroll yet (an empty
+        // table while its rows load): then wait for it, as below.
         if (platform === 'ios' && stillSteps >= 2 && !overshot) {
-          reachedEnd = true;
-          break;
+          const now = await readScreen();
+          if (!now || hasScrollableContent(now.xml)) {
+            reachedEnd = true;
+            break;
+          }
+          if (!(await waitForContent(now.signature))) {
+            stillLoading = true;
+            break;
+          }
+          stillSteps = 0;
+          screenBeforeSwipe = undefined;
+          continue;
         }
         // Affirmative miss. Read the screen: unchanged since before the last
         // swipe means that swipe moved nothing, so more of them will not
@@ -4432,9 +4480,26 @@ export class ElementHandle {
           }
           read = await readScreen();
           screen = read?.signature;
-          if (screen !== undefined && screen === screenBeforeSwipe) {
-            reachedEnd = true;
-            break;
+          if (read && screen === screenBeforeSwipe) {
+            // Only content that scrolls has an end. A screen with nothing on
+            // it to scroll may still be loading it (PILOT-1324).
+            if (hasScrollableContent(read.xml)) {
+              reachedEnd = true;
+              break;
+            }
+            if (!(await waitForContent(read.signature))) {
+              stillLoading = true;
+              break;
+            }
+            stillSteps = 0;
+            screenBeforeSwipe = undefined;
+            continue;
+          }
+          // The screen changed while it settled (a list that grew, a spinner
+          // replaced): look for the element again before swiping on.
+          if (read) {
+            screenBeforeSwipe = undefined;
+            continue;
           }
         }
         // Affirmative miss with the swipe budget spent — give up.
@@ -4491,14 +4556,24 @@ export class ElementHandle {
       const lastDirection = used[used.length - 1];
       const screenSwiped = 'No scrollable container was found on screen, so the swipe crossed the middle of the screen: ';
       const scrollExample = `(for example getByRole("scrollview").scroll("${lastDirection}"))`;
+      if (stillLoading) {
+        throw new Error(
+          `scrollIntoView: ${this._describe()} was not on screen after waiting ${timeoutMs}ms: ` +
+            `the screen stopped changing after ${swipes} scroll(s) ${how}, and nothing on it has content to scroll, ` +
+            'so it may still be loading. If it loads later, pass a longer timeout; ' +
+            `if the content can scroll, scroll() the list that holds the element ${scrollExample}.`,
+        );
+      }
       if (reachedEnd) {
         throw new Error(
           `scrollIntoView: reached the end of the scrollable content without finding ${this._describe()} on screen: ` +
             `the screen stopped changing after ${swipes} scroll(s) ${how}. ` +
+            // Only content that scrolls has an end, so a scrollable was on
+            // screen to swipe in (PILOT-1324).
             (region
               ? `If the content can scroll further, the swipe inside the scrollable at ${formatRect(region)} did not ` +
                 'move it: scroll() the list that holds the element.'
-              : `${screenSwiped}if the content can scroll further, scroll() the list that holds the element ${scrollExample}.`),
+              : `If the content can scroll further, scroll() the list that holds the element ${scrollExample}.`),
         );
       }
       let budget = '';

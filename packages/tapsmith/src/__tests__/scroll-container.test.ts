@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickScrollRegion, scrollRegion } from '../scroll-container.js';
+import { hasScrollableContent, pickScrollRegion, scrollRegion } from '../scroll-container.js';
 
 // PILOT-934: scrollIntoView() swipes inside the scroll container that holds
 // its element, so a swipe cannot start outside a dialog (dismissing it) or on
@@ -221,5 +221,50 @@ describe('scrollRegion — iOS (the element\'s frame is known)', () => {
 
     expect(scrollRegion(xml, { left: 0, top: 3000, right: 402, bottom: 3044 })).toEqual({ left: 0, top: 120, right: 402, bottom: 874 });
     expect(scrollRegion(xml)).toEqual({ left: 0, top: 120, right: 402, bottom: 874 });
+  });
+});
+
+// PILOT-1324: scrollIntoView() takes a screen that a swipe did not change for
+// the end of the content only when something on it has content to scroll; a
+// screen still loading its list (a spinner, an empty table) is waited for.
+describe('hasScrollableContent', () => {
+  it('is false for a screen with nothing scrollable on it (a spinner while a list loads)', () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+        node('android.widget.ProgressBar', '[480,1140][600,1260]')),
+      statusBar,
+    );
+    expect(hasScrollableContent(xml)).toBe(false);
+  });
+
+  it('is true for an Android view marked scrollable, which it is only while its content overflows it', () => {
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable)));
+    expect(hasScrollableContent(xml)).toBe(true);
+  });
+
+  it('is false for a scrollable inside the system UI', () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,0][1080,2400]'),
+      '<node class="android.widget.ScrollView" package="com.android.systemui" bounds="[0,0][1080,600]" scrollable="true" tapsmith-non-app="true"/>',
+    );
+    expect(hasScrollableContent(xml)).toBe(false);
+  });
+
+  it('is false for an empty iOS table, or a scroll view whose content fits inside it', () => {
+    expect(hasScrollableContent(ios(el('Table', '[0,100][402,874]')))).toBe(false);
+    expect(hasScrollableContent(ios(el('ScrollView', '[0,100][402,874]', '',
+      el('Other', '[0,100][402,874]', '', el('ActivityIndicator', '[180,400][222,442]', 'label="In progress"')))))).toBe(false);
+  });
+
+  it('is true for an iOS scrollable whose content reaches past its frame, either way', () => {
+    expect(hasScrollableContent(ios(el('Table', '[0,100][402,874]', '',
+      el('Cell', '[0,100][402,144]', '', '') + el('Cell', '[0,860][402,904]'))))).toBe(true);
+    // At the end of a list: the rows it went past are above it.
+    expect(hasScrollableContent(ios(el('ScrollView', '[0,100][402,874]', '',
+      el('Other', '[0,-2400][402,874]'))))).toBe(true);
+  });
+
+  it('is false for a dump with no bounds at all', () => {
+    expect(hasScrollableContent('<hierarchy/>')).toBe(false);
   });
 });

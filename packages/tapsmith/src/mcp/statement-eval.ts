@@ -79,7 +79,7 @@ const NATIVE_ACTIONS: Record<string, ActionSpec> = {
   blur: act([opt(TIMEOUT)]),
   pinchIn: act([opt({ ...TIMEOUT, scale: 'number' })]),
   pinchOut: act([opt({ ...TIMEOUT, scale: 'number' })]),
-  scrollIntoView: act([opt({ direction: 'string', maxScrolls: 'integer', speed: 'number' })], false),
+  scrollIntoView: act([opt({ direction: 'string', maxScrolls: 'integer', speed: 'number', ...TIMEOUT })], false),
   waitFor: act([opt({ state: 'string', ...TIMEOUT })], false),
 };
 
