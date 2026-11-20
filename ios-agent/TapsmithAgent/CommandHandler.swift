@@ -91,6 +91,72 @@ class CommandHandler {
         return false
     }
 
+    /// SpringBoard's frontmost alert, read in one snapshot, or nil when none is
+    /// up (or SpringBoard cannot be read). Costs one existence query when no
+    /// alert is up, so callers keep it off hot paths: a launch, a failure.
+    private func readSpringBoardAlert() -> SystemAlert? {
+        var found: SystemAlert?
+        _ = ObjCExceptionCatcher.catchException {
+            let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+            guard alert.exists, let snapshot = try? alert.snapshot() else { return }
+            var texts: [String] = []
+            var buttons: [String] = []
+            func walk(_ node: XCUIElementSnapshot) {
+                switch node.elementType {
+                case .button:
+                    if !node.label.isEmpty { buttons.append(node.label) }
+                    return
+                case .staticText:
+                    if !node.label.isEmpty { texts.append(node.label) }
+                default:
+                    break
+                }
+                node.children.forEach(walk)
+            }
+            walk(snapshot)
+            found = SystemAlert(title: snapshot.label.isEmpty ? (texts.first ?? "") : snapshot.label,
+                                buttons: buttons)
+        }
+        return found
+    }
+
+    /// The alerts the agent answered on its own, for `takeSystemDialogEvents`.
+    private var systemAlertEvents = SystemAlertEvents()
+
+    /// Cancel a leftover "Open in “App”?" prompt before a launch.
+    ///
+    /// Tapsmith's own deep links answer this prompt inside the daemon's
+    /// openurl flow, so one that is up when a launch starts came from
+    /// somewhere else: `npx expo run:ios` ends with `simctl openurl`, and the
+    /// prompt it leaves survives every relaunch, covering the app for the
+    /// whole run. Cancel, not Open: Open would deliver a URL no test asked
+    /// for (for an Expo dev client, a dev-server URL that can switch the
+    /// bundle it loads), and the launch that follows brings the app up
+    /// anyway. Recorded for the daemon to report (`takeSystemDialogEvents`).
+    private func cancelLeftoverOpenInPrompt() {
+        guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { return }
+        NSLog("[SystemDialog] Cancelling a leftover %@ before launching the app", alert.description)
+        var gone = false
+        _ = ObjCExceptionCatcher.catchException {
+            let element = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+            element.buttons["Cancel"].tap()
+            let deadline = Date(timeIntervalSinceNow: 2.0)
+            while Date() < deadline {
+                if !element.exists { gone = true; return }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        guard gone else {
+            NSLog("[SystemDialog] %@ was still up after Cancel", alert.description)
+            return
+        }
+        systemAlertEvents.record(
+            title: alert.title,
+            button: "Cancel",
+            timestampMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        )
+    }
+
     /// True when the app's accessibility tree has rendered interactive content.
     ///
     /// Uses `app.snapshot()` — the same mechanism as `GetUiHierarchy` — rather
@@ -1412,7 +1478,7 @@ class CommandHandler {
         // The taps recorded the field as focused; it is not.
         snapshotFinder.clearFocusedTextInputHint()
         let at = tried.isEmpty ? "the element" : tried.map(Self.describe).joined(separator: ", ")
-        throw Self.notFocusedError(tried: at)
+        throw notFocusedError(tried: at)
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
@@ -1431,10 +1497,15 @@ class CommandHandler {
         "(\(Int(point.x.rounded())), \(Int(point.y.rounded())))"
     }
 
-    private static func notFocusedError(tried: String) -> AgentError {
-        .actionFailed(
-            "Tapping the field at \(tried) did not give it keyboard focus, so nothing was typed. " +
-                "The field may not accept text input there, or may not be editable."
+    /// Names a SpringBoard alert when one is up: it takes the focusing taps,
+    /// and is the likelier cause than the field.
+    private func notFocusedError(tried: String) -> AgentError {
+        let message = "Tapping the field at \(tried) did not give it keyboard focus, so nothing was typed. "
+        if let alert = readSpringBoardAlert() {
+            return .actionFailed(message + alert.coveringSentence)
+        }
+        return .actionFailed(
+            message + "The field may not accept text input there, or may not be editable."
         )
     }
 
@@ -2997,6 +3068,8 @@ class CommandHandler {
             // If the app was terminated, this launches a fresh process.
             // If running in background, this brings it to foreground.
             let targetApp = rebindApp(bundleId: targetBundleId(fallback: params))
+            // Before activate(): the prompt stays on top of the app it launches.
+            cancelLeftoverOpenInPrompt()
             targetApp.activate()
             // Wait for the state instead of a fixed 0.5 s (PILOT-976).
             // activate() normally returns with the app already in front, so
@@ -3277,6 +3350,17 @@ class CommandHandler {
             throw AgentError.actionFailed(
                 "openDeepLink: app did not reach foreground after opening \(urlString)"
             )
+
+        case "systemAlert":
+            // The SpringBoard alert covering the app, for the SDK's
+            // not-found message.
+            guard let alert = readSpringBoardAlert() else { return ["present": false] }
+            return ["present": true, "title": alert.title, "buttons": alert.buttons]
+
+        case "takeSystemDialogEvents":
+            // The prompts cancelLeftoverOpenInPrompt answered since the last
+            // call, in the Android agent's event shape.
+            return ["events": systemAlertEvents.take()]
 
         case "acceptOpenInAppDialog":
             let timeoutMs = params["timeout"] as? Int64 ?? 1000
