@@ -674,9 +674,9 @@ impl TapsmithServiceImpl {
         let ca_pem_path = mitm_ca.ca_pem_path().to_string_lossy().to_string();
         let daemon_agent = self.android_agent_started_on(serial).await;
         match adb::install_ca_cert(serial, &ca_pem_path, &cert_filename, daemon_agent).await {
-            Ok(path) => {
-                info!(%serial, "MITM CA pre-installed during device setup (before first app launch)");
-                *self.proxy_ca_cert_path.write().await = Some(path);
+            Ok(installed) => {
+                info!(%serial, store = ?installed.store, "MITM CA pre-installed during device setup (before first app launch)");
+                *self.proxy_ca_cert_path.write().await = Some(installed.cleanup_path);
                 *self.preinstalled_ca_serial.write().await = Some(serial.to_string());
             }
             Err(e) => {
@@ -7569,6 +7569,21 @@ fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
     }
 }
 
+/// The capture warning for a CA that went only into an Android device's user
+/// trust store: unlike a CA Tapsmith could not install at all, nothing is
+/// tunneled, since a build that opts in to user CAs trusts it, but every other
+/// build rejects Tapsmith's certificate host by host (PILOT-1340).
+fn android_user_store_ca_warning() -> String {
+    "Tapsmith's CA certificate went only into the device's user certificate store, because its \
+     system trust store could not be changed. Apps trust a user CA only when their \
+     network_security_config.xml opts in, which release builds rarely do: their HTTPS requests \
+     fail or are passed through uncaptured, and device.route(), waitForRequest() and \
+     waitForResponse() cannot see them. Use a Google APIs or AOSP emulator image on API 28 or \
+     later, or opt your test build in to user CAs; see \
+     https://tapsmith.dev/guides/network/#android-emulator-image-requirements"
+        .to_string()
+}
+
 /// Add to a reused proxy's `warnings` what its first start warned about
 /// (`first_start`) and why it still tunnels all TLS, each once (PILOT-1013).
 fn repeat_start_warnings(
@@ -7768,6 +7783,19 @@ mod tests {
         assert!(msg.contains("start it again"), "{msg}");
         assert!(msg.contains("passed through"), "{msg}");
         assert!(msg.contains("device.route()"), "{msg}");
+    }
+
+    // PILOT-1340: a CA only in the user store is a warning that says which
+    // builds reject it and what it breaks, not a silent INFO log line.
+    #[test]
+    fn user_store_ca_warning_says_release_builds_reject_it_and_how_to_fix() {
+        let msg = android_user_store_ca_warning();
+        assert!(msg.contains("user certificate store"), "{msg}");
+        assert!(msg.contains("release builds"), "{msg}");
+        assert!(msg.contains("device.route()"), "{msg}");
+        assert!(msg.contains("waitForResponse()"), "{msg}");
+        assert!(msg.contains("network_security_config.xml"), "{msg}");
+        assert!(!msg.contains('\n'), "one capture-warning line: {msg}");
     }
 
     // PILOT-914: a session tells its own daemon from another one on the same

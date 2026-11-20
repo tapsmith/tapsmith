@@ -1245,8 +1245,13 @@ impl DeviceBackend for AndroidBackend<'_> {
             .map_err(|e| Status::internal(format!("Failed to compute CA cert hash: {e}")))?;
         let daemon_agent = self.svc.android_agent_started_on(&serial).await;
         match adb::install_ca_cert(&serial, ca_pem_path, &cert_filename, daemon_agent).await {
-            Ok(installed_path) => {
-                *self.svc.proxy_ca_cert_path.write().await = Some(installed_path);
+            Ok(installed) => {
+                if installed.store == adb::CaTrustStore::User {
+                    let msg = android_user_store_ca_warning();
+                    warn!("{msg}");
+                    warnings.push(msg);
+                }
+                *self.svc.proxy_ca_cert_path.write().await = Some(installed.cleanup_path);
             }
             Err(e) => {
                 let (tunnel, msg) = android_ca_install_failure(&e);

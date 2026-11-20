@@ -149,9 +149,11 @@ const ADB_READY_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const ADB_READY_PACKAGE_TIMEOUT: Duration = Duration::from_secs(10);
 const ADB_READY_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// System CA certificate directory. Certs here are trusted by all apps
-/// without needing a per-app `network_security_config.xml`. Writable only
-/// on rooted emulators after `adb remount`.
+/// System CA certificate directory: the runtime trust store before Android 14,
+/// trusted by all apps without a per-app `network_security_config.xml`.
+/// Writable only on emulators booted with `-writable-system`, after
+/// `adb remount`; otherwise Tapsmith overlays it (see
+/// [`try_install_overlay_ca`]).
 const SYSTEM_CA_CERT_DIR: &str = "/system/etc/security/cacerts";
 
 /// User-installed CA certificate directory. Apps must include
@@ -162,7 +164,7 @@ const USER_CA_CERT_DIR: &str = "/data/misc/user/0/cacerts-added";
 /// Conscrypt APEX CA certificate directory — the *runtime* trust store on
 /// Android 14+ (API 34+). It is independent of [`SYSTEM_CA_CERT_DIR`] and is
 /// not made writable by `adb remount`, so the cert is injected via a tmpfs
-/// overlay inside the zygote mount namespace (see [`try_install_apex_ca`]).
+/// overlay inside the zygote mount namespace (see [`try_install_overlay_ca`]).
 const APEX_CA_CERT_DIR: &str = "/apex/com.android.conscrypt/cacerts";
 
 /// List connected ADB devices.
@@ -767,19 +769,37 @@ fn is_retryable_adb_transport_error(message: &str) -> bool {
     .any(|needle| msg.contains(needle))
 }
 
+/// Which trust store [`install_ca_cert`] put the CA in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaTrustStore {
+    /// The store every app trusts at runtime.
+    System,
+    /// The user store only: apps trust it only when their
+    /// `network_security_config.xml` opts in to user CAs, which release builds
+    /// rarely do.
+    User,
+}
+
+/// Where [`install_ca_cert`] put the CA.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledCa {
+    /// The on-device path a capture stop removes (a path that no longer
+    /// exists when there is nothing to remove).
+    pub cleanup_path: String,
+    pub store: CaTrustStore,
+}
+
 /// Install a CA certificate on the device for MITM HTTPS interception.
 ///
 /// `cert_filename` is the hash-based filename (e.g. `a1b2c3d4.0`) required by
 /// Android's certificate store. See [`crate::mitm_ca::MitmAuthority::device_cert_filename`].
 ///
-/// On emulators (rooted `userdebug` images), attempts to install into the
-/// **system** CA store so every app trusts the cert without needing a
-/// per-app `network_security_config.xml`. Falls back to the **user** CA
-/// store when the system partition cannot be remounted (physical devices,
-/// production images).
-///
-/// Returns the on-device path where the cert was installed, so the caller
-/// can clean it up later.
+/// On rooted devices (`userdebug` emulator images), installs into the store
+/// every app trusts at runtime — a tmpfs overlay of the system (before
+/// Android 14) or Conscrypt APEX (14+) cacerts dir, else a remounted
+/// `/system` — so no per-app `network_security_config.xml` is needed. Falls
+/// back to the **user** CA store when neither works, which the result's
+/// `store` says, since release builds do not trust it.
 ///
 /// On a rootable build that is not root yet, `adb root` restarts adbd, which
 /// ends a running agent's instrumentation and drops its port forward
@@ -793,7 +813,7 @@ pub async fn install_ca_cert(
     ca_pem_path: &str,
     cert_filename: &str,
     daemon_agent: bool,
-) -> Result<String> {
+) -> Result<InstalledCa> {
     // Check if already running as root (e.g. CLI called `adb root` during setup)
     let root = adbd_is_root(serial).await;
     // The daemon's own record outlives an agent that died with its emulator,
@@ -839,36 +859,45 @@ pub async fn install_ca_cert(
         // Push cert to a temp location
         push_file(serial, ca_pem_path, &tmp_cert).await?;
 
-        // Try the system CA store first where it is the runtime trust store
-        // (before Android 14, on rooted emulators where `adb remount` makes
-        // `/system/etc/security/cacerts` writable). From Android 14 apps read
-        // the APEX store below instead, so the remount and the writes there
-        // cost time and change nothing an app trusts.
         let sdk = device_sdk_int(serial).await;
-        let system_path = format!("{SYSTEM_CA_CERT_DIR}/{cert_filename}");
-        if system_store_is_runtime_trust_store(sdk)
-            && try_install_system_ca(serial, cert_filename, &system_path, &tmp_cert).await
-        {
-            return Ok(system_path);
+
+        // Overlay the runtime trust store with a tmpfs holding its certs plus
+        // ours, in init's and every zygote's mount namespace, so apps launched
+        // afterwards trust the cert without a network_security_config.xml.
+        // From Android 14 (API 34) that store is the Conscrypt APEX, which
+        // nothing else can write. Before 14 it is /system/etc/security/cacerts,
+        // read-only unless the emulator was booted with -writable-system: the
+        // overlay works either way, so it is tried before `adb remount`.
+        // Trying it first also matters once it is in place: /system is then a
+        // writable tmpfs, which the remount path's write probe would take for a
+        // remounted /system, and its cleanup path would delete our cert from
+        // the overlay at the end of the session.
+        let overlay_dir = runtime_trust_store_dir(sdk);
+        if try_install_overlay_ca(serial, overlay_dir, cert_filename, &tmp_cert).await {
+            // The overlays live in the mount namespaces and are volatile
+            // (cleared on reboot), so there's nothing for the capture-stop
+            // `rm -f` to clean. Pointing it at the overlay path would actually
+            // be harmful: the overlay is writable, so the `rm` would strip our
+            // cert there and make the next capture's idempotency check miss and
+            // stack a fresh tmpfs mount. Return the temp path (already deleted
+            // at the end of this fn) so cleanup is a true no-op.
+            return Ok(InstalledCa {
+                cleanup_path: tmp_cert.clone(),
+                store: CaTrustStore::System,
+            });
         }
 
-        // Android 14+ (API 34+): the runtime trust store moved to the Conscrypt
-        // APEX, which `adb remount` can't write, so the system-store path above
-        // silently has no effect there. Overlay the APEX cacerts dir inside the
-        // zygote mount namespace instead, so apps launched afterwards trust the
-        // cert without needing a per-app network_security_config.xml.
-        if !system_store_is_runtime_trust_store(sdk)
-            && try_install_apex_ca(serial, cert_filename, &tmp_cert).await
+        // Before Android 14, a /system that `adb remount` makes writable (an
+        // emulator booted with -writable-system) takes the cert directly —
+        // the fallback for an image whose shell has no `nsenter`.
+        let system_path = format!("{SYSTEM_CA_CERT_DIR}/{cert_filename}");
+        if overlay_dir == SYSTEM_CA_CERT_DIR
+            && try_install_system_ca(serial, cert_filename, &system_path, &tmp_cert).await
         {
-            // The APEX overlays live in the per-zygote mount namespaces and are
-            // volatile (cleared on reboot), so there's nothing for the
-            // capture-stop `rm -f` to clean. Pointing it at the overlay path
-            // would actually be harmful: the init-namespace view is writable, so
-            // the `rm` would strip our cert there and make the next capture's
-            // idempotency check miss and stack a fresh tmpfs mount. Return the
-            // temp path (already deleted at the end of this fn) so cleanup is a
-            // true no-op.
-            return Ok(tmp_cert.clone());
+            return Ok(InstalledCa {
+                cleanup_path: system_path,
+                store: CaTrustStore::System,
+            });
         }
 
         // Fall back to the user CA store (requires network_security_config.xml).
@@ -880,11 +909,15 @@ pub async fn install_ca_cert(
             return Err(e);
         }
 
-        info!(
-            %serial, cert_filename,
-            "CA certificate installed in user store (apps need network_security_config.xml to trust it)"
+        tracing::warn!(
+            %serial, cert_filename, sdk,
+            "CA certificate installed in user store only (the system trust store could not be \
+             changed); apps trust it only if their network_security_config.xml opts in to user CAs"
         );
-        Ok(user_path)
+        Ok(InstalledCa {
+            cleanup_path: user_path,
+            store: CaTrustStore::User,
+        })
     }
     .await;
 
@@ -1206,12 +1239,15 @@ async fn try_install_system_ca(
     true
 }
 
-/// Whether `/system/etc/security/cacerts` is what apps trust at runtime:
-/// before Android 14 (API 34). From 14 on the Conscrypt APEX store is. An
-/// unreadable API level counts as before 14, which tries the system store
-/// first as every level used to.
-fn system_store_is_runtime_trust_store(sdk: Option<u32>) -> bool {
-    !matches!(sdk, Some(v) if v >= 34)
+/// The cacerts dir apps trust at runtime: `/system/etc/security/cacerts`
+/// before Android 14 (API 34), the Conscrypt APEX store from 14 on. An
+/// unreadable API level counts as before 14, as it always has.
+fn runtime_trust_store_dir(sdk: Option<u32>) -> &'static str {
+    if matches!(sdk, Some(v) if v >= 34) {
+        APEX_CA_CERT_DIR
+    } else {
+        SYSTEM_CA_CERT_DIR
+    }
 }
 
 /// Read the device's API level (`ro.build.version.sdk`), if parseable.
@@ -1222,20 +1258,25 @@ async fn device_sdk_int(serial: &str) -> Option<u32> {
         .and_then(|s| s.trim().parse::<u32>().ok())
 }
 
-/// Inject the CA into the Conscrypt APEX trust store on Android 14+ (API 34+).
+/// Inject the CA into the runtime trust store `store_dir`
+/// ([`runtime_trust_store_dir`]) by overlaying it with a tmpfs holding its
+/// certs plus ours.
 ///
-/// On Android 14+ the runtime CA store is `/apex/com.android.conscrypt/cacerts`,
-/// which is read-only and decoupled from `/system/etc/security/cacerts` (writing
-/// the latter — even after `adb remount` — has no effect on what apps trust).
-/// The working approach is to overlay a tmpfs containing the existing APEX certs
-/// plus ours, *inside the mount namespace of each zygote*, so every app forked
-/// afterwards inherits the trusted cert. Because Tapsmith installs the CA at
-/// capture-start (before launching the app under test), the test app forks fresh
-/// from the patched zygote and trusts the MITM cert. Requires root.
+/// On Android 14+ that store is `/apex/com.android.conscrypt/cacerts`, which is
+/// read-only and decoupled from `/system/etc/security/cacerts` (writing the
+/// latter — even after `adb remount` — has no effect on what apps trust).
+/// Before 14 it is `/system/etc/security/cacerts`, which is read-only unless
+/// the emulator was booted with `-writable-system` (the default boot, and the
+/// one Tapsmith and most CI setups use, does not), so `adb remount` cannot
+/// write it either. The overlay is made *inside the mount namespace of init
+/// and of each zygote*, so every app forked afterwards inherits the trusted
+/// cert. Because Tapsmith installs the CA before launching the app under test,
+/// the test app forks fresh from the patched zygote and trusts the MITM cert.
+/// Requires root.
 ///
-/// Returns `true` if at least one zygote namespace was patched. The tmpfs
-/// overlays are volatile (cleared on reboot); a per-namespace idempotency check
-/// avoids stacking mounts across repeated capture sessions.
+/// Returns `true` if at least one namespace was patched. The tmpfs overlays are
+/// volatile (cleared on reboot); a per-namespace idempotency check avoids
+/// stacking mounts across repeated capture sessions.
 ///
 /// The idempotency check compares cert *content*, not just the filename: the
 /// filename is the subject hash, and every Tapsmith CA has the same subject, so
@@ -1243,48 +1284,53 @@ async fn device_sdk_int(serial: &str) -> Option<u32> {
 /// user, a cached AVD snapshot, a teammate's AVD) sits at the same path. That
 /// stale CA is replaced, or HTTPS capture and `route()` silently fail
 /// (PILOT-712).
-async fn try_install_apex_ca(serial: &str, cert_filename: &str, tmp_cert_path: &str) -> bool {
-    let script = apex_ca_install_script(
-        APEX_CA_CERT_DIR,
+async fn try_install_overlay_ca(
+    serial: &str,
+    store_dir: &str,
+    cert_filename: &str,
+    tmp_cert_path: &str,
+) -> bool {
+    let script = overlay_ca_install_script(
+        store_dir,
         "/data/local/tmp/tapsmith-cacerts",
         cert_filename,
         tmp_cert_path,
     );
 
     match shell_lenient(serial, &script).await {
-        Ok(out) => match parse_apex_outcome(&out) {
-            ApexInstallOutcome::Installed => {
+        Ok(out) => match parse_overlay_outcome(&out) {
+            OverlayInstallOutcome::Installed => {
                 info!(
-                    %serial, cert_filename,
-                    "CA certificate injected into Conscrypt APEX trust store (Android 14+); \
+                    %serial, cert_filename, store_dir,
+                    "CA certificate injected into the runtime trust store; \
                      trusted by apps launched after this point"
                 );
                 true
             }
-            ApexInstallOutcome::Replaced => {
+            OverlayInstallOutcome::Replaced => {
                 info!(
-                    %serial, cert_filename,
-                    "Replaced a different Tapsmith CA in the Conscrypt APEX trust store \
+                    %serial, cert_filename, store_dir,
+                    "Replaced a different Tapsmith CA in the runtime trust store \
                      (left by an earlier ~/.tapsmith, AVD snapshot or shared AVD) with the \
                      current ~/.tapsmith/ca.pem; trusted by apps launched after this point"
                 );
                 true
             }
-            ApexInstallOutcome::Failed => {
-                debug!(%serial, "APEX CA injection did not confirm success — falling back to user store");
+            OverlayInstallOutcome::Failed => {
+                debug!(%serial, store_dir, "CA trust-store overlay did not confirm success: {}", out.trim());
                 false
             }
         },
         Err(e) => {
-            debug!(%serial, "APEX CA injection failed: {e} — falling back to user store");
+            debug!(%serial, store_dir, "CA trust-store overlay failed: {e}");
             false
         }
     }
 }
 
-/// What [`apex_ca_install_script`] reported.
+/// What [`overlay_ca_install_script`] reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ApexInstallOutcome {
+enum OverlayInstallOutcome {
     /// At least one namespace trusts the current CA (freshly overlaid, or
     /// already byte-identical).
     Installed,
@@ -1294,18 +1340,21 @@ enum ApexInstallOutcome {
     Failed,
 }
 
-fn parse_apex_outcome(out: &str) -> ApexInstallOutcome {
+fn parse_overlay_outcome(out: &str) -> OverlayInstallOutcome {
     let has = |marker: &str| out.lines().any(|l| l.trim() == marker);
-    match (has("TAPSMITH_APEX_OK"), has("TAPSMITH_APEX_REPLACED")) {
-        (true, true) => ApexInstallOutcome::Replaced,
-        (true, false) => ApexInstallOutcome::Installed,
-        _ => ApexInstallOutcome::Failed,
+    match (
+        has("TAPSMITH_CA_OVERLAY_OK"),
+        has("TAPSMITH_CA_OVERLAY_REPLACED"),
+    ) {
+        (true, true) => OverlayInstallOutcome::Replaced,
+        (true, false) => OverlayInstallOutcome::Installed,
+        _ => OverlayInstallOutcome::Failed,
     }
 }
 
-/// The device-side script behind [`try_install_apex_ca`]: assemble the combined
+/// The device-side script behind [`try_install_overlay_ca`]: assemble the combined
 /// cert set once in `stage_dir`, then nsenter into init + every zygote and make
-/// `src_dir` (the APEX cacerts dir) hold our CA. Paths are parameters so the
+/// `src_dir` (the runtime cacerts dir) hold our CA. Paths are parameters so the
 /// unit tests can run the real script on the host.
 ///
 /// Per namespace:
@@ -1317,7 +1366,7 @@ fn parse_apex_outcome(out: &str) -> ApexInstallOutcome {
 ///
 /// The SELinux relabel to `system_security_cacerts_file` is mandatory — apps
 /// can't read certs left with the default tmpfs label.
-fn apex_ca_install_script(
+fn overlay_ca_install_script(
     src_dir: &str,
     stage_dir: &str,
     cert_filename: &str,
@@ -1360,8 +1409,8 @@ for PID in 1 $(pidof zygote) $(pidof zygote64); do
   fi
 done
 rm -rf "$TMP"
-[ "$replaced" = 1 ] && echo TAPSMITH_APEX_REPLACED
-[ "$ok" = 1 ] && echo TAPSMITH_APEX_OK"#
+[ "$replaced" = 1 ] && echo TAPSMITH_CA_OVERLAY_REPLACED
+[ "$ok" = 1 ] && echo TAPSMITH_CA_OVERLAY_OK"#
     )
 }
 
@@ -2047,13 +2096,23 @@ mod tests {
     // ─── CA trust store ───
 
     #[test]
-    fn system_ca_store_is_the_trust_store_only_before_android_14() {
-        assert!(system_store_is_runtime_trust_store(Some(33)));
-        assert!(system_store_is_runtime_trust_store(Some(29)));
-        assert!(!system_store_is_runtime_trust_store(Some(34)));
-        assert!(!system_store_is_runtime_trust_store(Some(36)));
-        // Unknown level: try the system store first, as before.
-        assert!(system_store_is_runtime_trust_store(None));
+    fn runtime_trust_store_is_system_before_android_14_and_apex_from_it() {
+        for sdk in [26, 29, 30, 33] {
+            assert_eq!(
+                runtime_trust_store_dir(Some(sdk)),
+                SYSTEM_CA_CERT_DIR,
+                "API {sdk}"
+            );
+        }
+        for sdk in [34, 36] {
+            assert_eq!(
+                runtime_trust_store_dir(Some(sdk)),
+                APEX_CA_CERT_DIR,
+                "API {sdk}"
+            );
+        }
+        // Unknown level: the system store, as before.
+        assert_eq!(runtime_trust_store_dir(None), SYSTEM_CA_CERT_DIR);
     }
 
     // ─── Screen wakefulness ───
@@ -2561,14 +2620,14 @@ mod tests {
 }
 
 #[cfg(all(test, unix))]
-mod apex_script_tests {
+mod overlay_script_tests {
     //! Run the real APEX install script under the host `/bin/sh`, with shims
     //! for the device-only tools (`nsenter`, `pidof`, `mount`, `chown`,
     //! `chcon`), against temp dirs standing in for the APEX cacerts dir and
     //! the staging dir. Exercises the script's actual control flow — what it
     //! compares, replaces and mounts — rather than its text.
 
-    use super::{apex_ca_install_script, parse_apex_outcome, ApexInstallOutcome};
+    use super::{overlay_ca_install_script, parse_overlay_outcome, OverlayInstallOutcome};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -2670,7 +2729,7 @@ mod apex_script_tests {
     }
 
     fn run(f: &Fixture) -> String {
-        let script = apex_ca_install_script(
+        let script = overlay_ca_install_script(
             &f.src.to_string_lossy(),
             &f.stage.to_string_lossy(),
             CERT,
@@ -2714,8 +2773,8 @@ mod apex_script_tests {
         let f = fixture();
         let out = run(&f);
         assert_eq!(
-            parse_apex_outcome(&out),
-            ApexInstallOutcome::Installed,
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Installed,
             "{out}"
         );
         assert_eq!(mounts(&f), 1);
@@ -2730,8 +2789,8 @@ mod apex_script_tests {
         fs::write(f.src.join(CERT), NEW_CA).unwrap();
         let out = run(&f);
         assert_eq!(
-            parse_apex_outcome(&out),
-            ApexInstallOutcome::Installed,
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Installed,
             "{out}"
         );
         assert_eq!(
@@ -2751,8 +2810,8 @@ mod apex_script_tests {
         fs::write(f.src.join(CERT), STALE_CA).unwrap();
         let out = run(&f);
         assert_eq!(
-            parse_apex_outcome(&out),
-            ApexInstallOutcome::Replaced,
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Replaced,
             "{out}"
         );
         assert_eq!(installed(&f), NEW_CA);
@@ -2791,13 +2850,39 @@ mod apex_script_tests {
         fs::set_permissions(&f.src, fs::Permissions::from_mode(0o555)).unwrap();
         let out = run(&f);
         assert_eq!(
-            parse_apex_outcome(&out),
-            ApexInstallOutcome::Replaced,
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Replaced,
             "{out}"
         );
         assert_eq!(mounts(&f), 1);
         assert_eq!(installed(&f), NEW_CA);
         assert!(f.src.join("bbbbbbbb.0").exists());
+    }
+
+    // Before Android 14 the store is /system/etc/security/cacerts, read-only
+    // on an emulator booted without -writable-system (PILOT-1340): the CA
+    // still lands, in an overlay holding every stock CA.
+    #[test]
+    fn read_only_store_without_our_cert_gets_an_overlay_with_every_system_ca() {
+        if is_root() {
+            // Permission bits do not stop root; the read-only layer cannot be
+            // simulated.
+            return;
+        }
+        let f = fixture();
+        fs::set_permissions(&f.src, fs::Permissions::from_mode(0o555)).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Installed,
+            "{out}"
+        );
+        assert_eq!(mounts(&f), 1);
+        assert_eq!(installed(&f), NEW_CA);
+        assert!(f.src.join("aaaaaaaa.0").exists());
+        assert!(f.src.join("bbbbbbbb.0").exists());
+        let chcon = fs::read_to_string(f.root.join("chcon.log")).unwrap();
+        assert!(chcon.contains("system_security_cacerts_file"), "{chcon}");
     }
 
     #[test]
@@ -2809,8 +2894,8 @@ mod apex_script_tests {
         fs::write(zygote_src.join(CERT), STALE_CA).unwrap();
         let out = run(&f);
         assert_eq!(
-            parse_apex_outcome(&out),
-            ApexInstallOutcome::Replaced,
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Replaced,
             "{out}"
         );
         assert_eq!(fs::read_to_string(zygote_src.join(CERT)).unwrap(), NEW_CA);
@@ -2825,8 +2910,8 @@ mod apex_script_tests {
         fs::write(f.src.join(CERT), STALE_CA).unwrap();
         let out = run(&f);
         assert_eq!(
-            parse_apex_outcome(&out),
-            ApexInstallOutcome::Replaced,
+            parse_overlay_outcome(&out),
+            OverlayInstallOutcome::Replaced,
             "{out}"
         );
         assert_eq!(installed(&f), NEW_CA);
@@ -2841,19 +2926,19 @@ mod apex_script_tests {
 
     #[test]
     fn outcome_parsing() {
-        assert_eq!(parse_apex_outcome(""), ApexInstallOutcome::Failed);
+        assert_eq!(parse_overlay_outcome(""), OverlayInstallOutcome::Failed);
         assert_eq!(
-            parse_apex_outcome("noise\nTAPSMITH_APEX_OK\n"),
-            ApexInstallOutcome::Installed
+            parse_overlay_outcome("noise\nTAPSMITH_CA_OVERLAY_OK\n"),
+            OverlayInstallOutcome::Installed
         );
         assert_eq!(
-            parse_apex_outcome("TAPSMITH_APEX_REPLACED\nTAPSMITH_APEX_OK\n"),
-            ApexInstallOutcome::Replaced
+            parse_overlay_outcome("TAPSMITH_CA_OVERLAY_REPLACED\nTAPSMITH_CA_OVERLAY_OK\n"),
+            OverlayInstallOutcome::Replaced
         );
         // A replacement without a patched namespace is still a failure.
         assert_eq!(
-            parse_apex_outcome("TAPSMITH_APEX_REPLACED\n"),
-            ApexInstallOutcome::Failed
+            parse_overlay_outcome("TAPSMITH_CA_OVERLAY_REPLACED\n"),
+            OverlayInstallOutcome::Failed
         );
     }
 }
