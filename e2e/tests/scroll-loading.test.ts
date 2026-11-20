@@ -12,6 +12,8 @@ describe("scrollIntoView() on a list that is still loading", () => {
   test("waits for the list to load, then scrolls to the row", async ({ device, delayedListScreen }) => {
     await device.openDeepLink("tapsmithtest:///delayed-list")
     await delayedListScreen.loadButton.tap()
+    // The list is loading: the scroll below starts on a spinner, which is what it tests.
+    await expect(delayedListScreen.spinner).toBeVisible()
 
     const row = delayedListScreen.row(30)
     await row.scrollIntoView({ timeout: 40_000 })
