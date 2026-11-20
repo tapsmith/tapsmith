@@ -10,10 +10,10 @@ export async function screenShape(device: Device): Promise<Orientation> {
 }
 
 /**
- * Turn the device and wait until the screen has the new shape. Android's
- * setOrientation() returns before the display turns, so a layout read straight
- * after it can still see the old shape. Not waited for on iOS: some simulator
- * runtimes turn the device but not the app, and the tests skip there instead.
+ * Turn the device and check that the screen has the new shape. setOrientation()
+ * resolves once the screen has turned; this checks it did. Not checked
+ * on iOS: some simulator runtimes turn the device but not the app, and the
+ * tests skip there instead.
  */
 export async function turnTo(device: Device, orientation: Orientation): Promise<void> {
   await device.setOrientation(orientation)

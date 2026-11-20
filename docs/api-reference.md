@@ -591,6 +591,8 @@ const text = await device.getClipboard();
 
 Set the device orientation. Accepts `"portrait"` or `"landscape"`, which name the screen's shape: `"portrait"` is taller than wide and `"landscape"` wider than tall, also on Android tablets whose screens are landscape when held the natural way. A turn made in a test, its `beforeEach` and `afterEach` hooks or its fixtures is undone after the test, whether it passed or failed, so the next test finds the device in the orientation the test found it in. A turn made in a `beforeAll` or `afterAll` hook is not undone.
 
+On Android it resolves once the screen has turned, so the next action already sees the turned screen, and throws if the screen is still turning after 10 s. On iOS it waits up to 2 s for the app's window to turn, then resolves either way. When the app in front holds its own orientation, the screen does not turn and the call resolves without error.
+
 ```typescript
 await device.setOrientation("landscape");
 await device.setOrientation("portrait");
