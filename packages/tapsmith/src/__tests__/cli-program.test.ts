@@ -404,7 +404,9 @@ describe('commands', () => {
     expect((await run(['show-report'])).calls).toEqual([['showReport', { dir: undefined }]]);
     expect((await run(['show-report', 'out'])).calls).toEqual([['showReport', { dir: 'out' }]]);
     expect((await run(['merge-reports', 'blobs', '-c', 'x.mjs'])).calls)
-      .toEqual([['mergeReports', { dir: 'blobs', config: 'x.mjs' }]]);
+      .toEqual([['mergeReports', { dir: 'blobs', config: 'x.mjs', reporter: undefined }]]);
+    expect((await run(['merge-reports', '--reporter', 'html,list'])).calls)
+      .toEqual([['mergeReports', { dir: undefined, config: undefined, reporter: 'html,list' }]]);
   });
 
   it('list-devices and doctor take --json (and doctor -c)', async () => {

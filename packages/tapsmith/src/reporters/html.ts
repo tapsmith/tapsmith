@@ -77,14 +77,20 @@ export class HtmlReporter implements TapsmithReporter {
     fs.writeFileSync(indexPath, html);
 
     const hasFailed = result.tests.some((t) => t.status === 'failed');
-    const shouldOpen =
-      this._open === 'always' || (this._open === 'on-failure' && hasFailed);
+    // Never in CI, as in Playwright: nobody is there to look, and a runner
+    // often has no opener at all.
+    const shouldOpen = !process.env.CI &&
+      (this._open === 'always' || (this._open === 'on-failure' && hasFailed));
 
     if (shouldOpen) {
       try {
         const { spawn } = await import('node:child_process');
         const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-        spawn(cmd, [indexPath], { detached: true, stdio: 'ignore' }).unref();
+        const opener = spawn(cmd, [indexPath], { detached: true, stdio: 'ignore' });
+        // A missing opener is reported as an 'error' event, which would
+        // otherwise crash the process after the report was written.
+        opener.on('error', () => {});
+        opener.unref();
       } catch {
         // Best-effort open
       }

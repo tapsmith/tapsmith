@@ -1,14 +1,62 @@
 /**
  * `tapsmith merge-reports [dir]` — merge sharded blob reports into one run
- * and feed it to the configured reporters.
+ * and feed it to the `--reporter` reporters, else the configured ones, else
+ * `list` and `html`.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TapsmithConfig } from './config.js';
-import { createReporters, normalizeReporterConfig, ReporterDispatcher, type TapsmithReporter } from './reporter.js';
+import {
+  createReporters,
+  normalizeReporterConfig,
+  ReporterDispatcher,
+  type ReporterDescription,
+  type TapsmithReporter,
+} from './reporter.js';
 import { BlobMergeError, BlobOutputDirError, BlobReporter, describeMergedBlobs, incompleteMergeMessage, mergeBlobs } from './reporters/blob.js';
 import { bold, dim, green, red } from './reporters/base.js';
+
+/** Options `tapsmith merge-reports` takes on the command line. */
+export interface MergeReportsOptions {
+  /** `--reporter`: comma-separated reporter names that replace the config's. */
+  reporter?: string
+}
+
+/**
+ * The reporters to merge with when neither `--reporter` nor the config names
+ * one besides `blob` — the config `init` writes sets none, and sharded CI
+ * configs often set only `blob`. The HTML report is what the merge job
+ * uploads, so it is written to its default `tapsmith-report/`; it is never
+ * opened, since nobody asked for it (and a CI runner has no browser).
+ */
+const DEFAULT_MERGE_REPORTERS: ReporterDescription[] = ['list', ['html', { open: 'never' }]];
+
+const reporterName = (d: ReporterDescription): string => (typeof d === 'string' ? d : d[0]);
+
+/** The reporters for the merge, or the refusal message for a bad `--reporter`. */
+function mergeReporterDescriptions(
+  config: TapsmithConfig,
+  cliReporter: string | undefined,
+): ReporterDescription[] | string {
+  if (cliReporter !== undefined) {
+    const names = cliReporter.split(',').map((n) => n.trim()).filter((n) => n !== '');
+    if (names.length === 0) return '--reporter needs at least one reporter name, e.g. --reporter html';
+    if (names.includes('blob')) {
+      return '--reporter blob is not available here: merge-reports reads blob reports and never writes one';
+    }
+    return names;
+  }
+  // A configured blob reporter would clear its output directory — often the
+  // very directory being merged — or add a merged blob to it that the next
+  // merge would count twice. merge-reports reads blobs; it never writes one.
+  // An unset reporter is checked here, as normalizeReporterConfig would fill
+  // in `tapsmith test`'s default (`list` alone).
+  const configured = config.reporter
+    ? normalizeReporterConfig(config.reporter).filter((d) => reporterName(d) !== 'blob')
+    : [];
+  return configured.length > 0 ? configured : DEFAULT_MERGE_REPORTERS;
+}
 
 /**
  * Returns the process exit code. A merge that cannot be trusted (no blobs, a
@@ -19,10 +67,28 @@ import { bold, dim, green, red } from './reporters/base.js';
  * merge-reports does the same (the shard jobs carry the failure) — so the
  * final line states the merged status outright.
  */
-export async function runMergeReports(blobDir: string, config: TapsmithConfig): Promise<number> {
+export async function runMergeReports(
+  blobDir: string,
+  config: TapsmithConfig,
+  options: MergeReportsOptions = {},
+): Promise<number> {
   const resolvedDir = path.resolve(process.cwd(), blobDir);
   if (!fs.existsSync(resolvedDir)) {
     console.error(red(`merge-reports: No blob directory found at ${resolvedDir}`));
+    return 1;
+  }
+
+  // Load the reporters first, so a bad name is refused before any output.
+  const descriptions = mergeReporterDescriptions(config, options.reporter);
+  if (typeof descriptions === 'string') {
+    console.error(red(`merge-reports: ${descriptions}`));
+    return 1;
+  }
+  let reporters: TapsmithReporter[];
+  try {
+    reporters = (await createReporters(descriptions)).filter((r) => !(r instanceof BlobReporter));
+  } catch (err) {
+    console.error(red(`merge-reports: ${err instanceof Error ? err.message : String(err)}`));
     return 1;
   }
 
@@ -39,14 +105,6 @@ export async function runMergeReports(blobDir: string, config: TapsmithConfig): 
   console.log(dim(resolvedDir));
   console.log();
 
-  // A configured blob reporter would clear its output directory — often the
-  // very directory being merged — or add a merged blob to it that the next
-  // merge would count twice. merge-reports reads blobs; it never writes one.
-  let reporters = (await createReporters(config.reporter ?? 'list'))
-    .filter((r) => !(r instanceof BlobReporter));
-  // A blob-only config (common for sharded CI) would leave nothing to report
-  // the merge with; fall back to the default, as an unset config would.
-  if (reporters.length === 0) reporters = await createReporters('list');
   const dispatcher = new ReporterDispatcher(reporters);
   dispatcher.onRunStart(config, 0, { merge: true });
   await dispatcher.onRunEnd(result);

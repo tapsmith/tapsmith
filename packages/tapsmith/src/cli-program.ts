@@ -102,7 +102,7 @@ export interface CliHandlers {
   test(args: TestCommandArgs): Promise<number | void>;
   showTrace(opts: { file: string }): Promise<number | void>;
   showReport(opts: { dir?: string }): Promise<number | void>;
-  mergeReports(opts: { dir?: string; config?: string }): Promise<number | void>;
+  mergeReports(opts: { dir?: string; config?: string; reporter?: string }): Promise<number | void>;
   listDevices(opts: { json: boolean }): Promise<number | void>;
   createAvd(opts: CreateAvdCommandOptions): Promise<number | void>;
   iosSetupDevice(opts: { json: boolean }): Promise<number | void>;
@@ -431,8 +431,9 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .description('Merge blob reports from sharded runs')
     .argument('[dir]', 'Blob report directory (default: blob-report)')
     .addOption(configOption())
-    .action((dir: string | undefined, opts: { config?: string }) =>
-      act('merge-reports', handlers.mergeReports)({ dir, config: opts.config }));
+    .option('--reporter <names>', 'Reporters to use, comma-separated, in place of the config\'s (default: list,html)')
+    .action((dir: string | undefined, opts: { config?: string; reporter?: string }) =>
+      act('merge-reports', handlers.mergeReports)({ dir, config: opts.config, reporter: opts.reporter }));
 
   // ── devices and environment ──
   program
