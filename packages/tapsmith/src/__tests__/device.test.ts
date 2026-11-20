@@ -1307,6 +1307,43 @@ describe('Device.pressHome()', () => {
   });
 });
 
+describe('Device trace screenshots', () => {
+  async function pressHomeTraced(takeScreenshot: TapsmithGrpcClient['takeScreenshot']): Promise<ConsoleTraceEvent[]> {
+    const client = makeMockClient({ pressKey: vi.fn(async () => successResponse()), takeScreenshot });
+    const device = new Device(client);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-shot-trace-'));
+    const collector = new TraceCollector({
+      mode: 'on', screenshots: true, snapshots: false, sources: false,
+      attachments: false, network: false, deviceLogs: false, daemonLogs: false,
+    }, tempDir);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    setActiveTraceCollector(collector);
+    try {
+      await device.pressHome();
+      return collector.events.filter((e): e is ConsoleTraceEvent => e.type === 'console');
+    } finally {
+      setActiveTraceCollector(null);
+      stderr.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  it("says in the trace why a screenshot failed, with the daemon's reason", async () => {
+    const events = await pressHomeTraced(vi.fn(async () => ({
+      requestId: '1', success: false, data: Buffer.alloc(0),
+      errorMessage: 'screencap output does not appear to be valid PNG data (device test)',
+    })));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ level: 'warn', source: 'daemon' });
+    expect(events[0].message).toContain('valid PNG data (device test)');
+  });
+
+  it('stays silent when the daemon could not be asked', async () => {
+    const events = await pressHomeTraced(vi.fn(async () => { throw new Error('14 UNAVAILABLE'); }));
+    expect(events).toHaveLength(0);
+  });
+});
+
 describe('Device.openNotifications()', () => {
   it('delegates to client.openNotifications', async () => {
     const openNotifications = vi.fn(async () => successResponse());
