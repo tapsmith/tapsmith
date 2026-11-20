@@ -1574,26 +1574,48 @@ const TO_PASS_STAND_IN = notSupportedYet(
 // (the SDK from dist and from a test file's own import, or a global CLI and a
 // project's own install at another version) shares one record. The errors
 // stay an array under the original key, which every SDK version reads and
-// writes, and are read afresh on each access because older copies replace
-// the array when they flush. The runner owns them: it takes them all at the
-// end of each attempt. `flushSoftErrors()` only reads, keeping its place
-// under a key of its own, so a test that reads its failures still fails, as
-// in Playwright.
-interface SoftErrorCursor {
-  /** The errors array the count refers to; a replaced array starts at 0. */
-  of: Error[];
-  /** How many of `of` the test has already read with `flushSoftErrors()`. */
-  count: number;
+// writes. Older copies empty the record by assigning a new array to the key
+// when the test calls their flushSoftErrors(), so the key is an accessor that
+// keeps what such an assignment replaces: the runner owns every error of the
+// attempt and takes them all at its end. This copy's `flushSoftErrors()` only
+// reads, keeping its place under a key of its own, so a test that reads its
+// failures still fails, as in Playwright.
+interface SoftErrorStore {
+  /** The array on the shared key, which copies push to. */
+  current: Error[];
+  /** Errors in arrays an older copy's flush assigned away, oldest first. */
+  replaced: Error[];
+  /** How many of `current` the test has already read with `flushSoftErrors()`. */
+  flushed: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _G = globalThis as any;
 const SOFT_ERRORS_KEY = Symbol.for('tapsmith.softErrors');
-const SOFT_ERRORS_CURSOR_KEY = Symbol.for('tapsmith.softErrorsFlushed');
-if (!_G[SOFT_ERRORS_KEY]) _G[SOFT_ERRORS_KEY] = [] as Error[];
+const SOFT_ERROR_STORE_KEY = Symbol.for('tapsmith.softErrorStore');
 
-function softErrors(): Error[] { return _G[SOFT_ERRORS_KEY]; }
-function recordSoftError(err: Error): void { softErrors().push(err); }
+function softErrorStore(): SoftErrorStore {
+  let store = _G[SOFT_ERROR_STORE_KEY] as SoftErrorStore | undefined;
+  if (store) return store;
+  // An older copy loaded first may already have put a plain array here.
+  const existing: unknown = _G[SOFT_ERRORS_KEY];
+  const created: SoftErrorStore = { current: Array.isArray(existing) ? existing : [], replaced: [], flushed: 0 };
+  store = created;
+  Object.defineProperty(globalThis, SOFT_ERRORS_KEY, {
+    configurable: true,
+    get: () => created.current,
+    set: (next: unknown) => {
+      created.replaced.push(...created.current);
+      created.current = Array.isArray(next) ? next : [];
+      created.flushed = 0;
+    },
+  });
+  _G[SOFT_ERROR_STORE_KEY] = store;
+  return store;
+}
+softErrorStore();
+
+function recordSoftError(err: Error): void { softErrorStore().current.push(err); }
 
 /**
  * Return the soft assertion failures recorded since the previous call.
@@ -1602,11 +1624,10 @@ function recordSoftError(err: Error): void { softErrors().push(err); }
  * soft assertion failed. Use this to inspect or log the failures mid-test.
  */
 export function flushSoftErrors(): Error[] {
-  const errors = softErrors();
-  const cursor = _G[SOFT_ERRORS_CURSOR_KEY] as SoftErrorCursor | undefined;
-  const from = cursor?.of === errors ? cursor.count : 0;
-  _G[SOFT_ERRORS_CURSOR_KEY] = { of: errors, count: errors.length } satisfies SoftErrorCursor;
-  return errors.slice(from);
+  const store = softErrorStore();
+  const errors = store.current.slice(store.flushed);
+  store.flushed = store.current.length;
+  return errors;
 }
 
 /**
@@ -1614,9 +1635,11 @@ export function flushSoftErrors(): Error[] {
  * the test runner at the end of each attempt; not part of the public API.
  */
 export function takeSoftErrors(): Error[] {
-  const errors = softErrors();
-  _G[SOFT_ERRORS_KEY] = [] as Error[];
-  _G[SOFT_ERRORS_CURSOR_KEY] = undefined;
+  const store = softErrorStore();
+  const errors = [...store.replaced, ...store.current];
+  store.replaced = [];
+  store.current = [];
+  store.flushed = 0;
   return errors;
 }
 

@@ -141,13 +141,19 @@ describe('soft errors shared with another copy of the SDK', () => {
     g[LEGACY_KEY].push(new Error('from an older copy'));
     softExpect.soft(1).toBe(2);
 
-    // What an older runner's flush does: read the array and replace it.
+    // An older runner's flush: read the array, then assign an empty one.
     const seenByOlderRunner = g[LEGACY_KEY];
-    g[LEGACY_KEY] = [];
     expect(seenByOlderRunner.map((e) => e.message)).toEqual(['from an older copy', 'Expected 1 to be 2']);
+  });
 
+  it('keeps failures an older copy\'s flush assigned away during the test, so this runner still fails the test', async () => {
+    const { expect: softExpect } = await import('../expect.js');
+    softExpect.soft(1).toBe(2);
+    // The test calls an older copy's flushSoftErrors(), which empties the record by assignment.
+    g[LEGACY_KEY] = [];
     g[LEGACY_KEY].push(new Error('after the older flush'));
-    expect(takeSoftErrors().map((e) => e.message)).toEqual(['after the older flush']);
+    expect(takeSoftErrors().map((e) => e.message)).toEqual(['Expected 1 to be 2', 'after the older flush']);
+    expect(takeSoftErrors()).toEqual([]);
   });
 
   it('starts flushSoftErrors() over when an older copy replaced the array', async () => {
