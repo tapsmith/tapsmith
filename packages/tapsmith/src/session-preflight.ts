@@ -817,6 +817,14 @@ export async function executeAppReset(
     await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, {
       onRelaunch: () => { relaunched = true; },
     }));
+    // A run that starts on an app prepared earlier sends the iOS agent no
+    // launch and no link, the points where it cancels a leftover "Open in"
+    // prompt (one `npx expo run:ios` raised while UI mode sat between runs).
+    // Its readiness check looks for one (at most every 15 s) and returns at
+    // once for an app that has rendered. A relaunch already looked.
+    if (ctx.config.platform === 'ios' && !relaunched) {
+      await step('leftoverPromptCheck', () => checkLeftoverPrompt(ctx, ctx.config.package!));
+    }
     // The prepared state stands, but not necessarily on this scope's start
     // route: one navigation instead of a whole reset. An app the readiness
     // check had to relaunch is on its launch screen, whatever was prepared.
@@ -1573,6 +1581,22 @@ async function waitForAppReady(
 ): Promise<void> {
   if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, options);
   return waitForAndroidAppReady(ctx);
+}
+
+/** How long the iOS readiness call made only for its leftover-prompt check
+ *  may take: the app is already up, so it answers at once unless the agent
+ *  is cancelling a prompt (a tap and up to 2 s for it to close). */
+const LEFTOVER_PROMPT_CHECK_TIMEOUT_MS = 3_000;
+
+/** Have the iOS agent look for (and cancel) a leftover "Open in" prompt by
+ *  way of its readiness check. Best effort: an older agent or a failed call
+ *  leaves the prompt to be named in errors. */
+async function checkLeftoverPrompt(ctx: SessionPreflightContext, pkg: string): Promise<void> {
+  try {
+    await ctx.client.waitForAppReady(pkg, LEFTOVER_PROMPT_CHECK_TIMEOUT_MS, LEFTOVER_PROMPT_CHECK_TIMEOUT_MS + APP_READY_RPC_SLACK_MS);
+  } catch {
+    // Best effort.
+  }
 }
 
 /**

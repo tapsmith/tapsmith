@@ -28,6 +28,12 @@ struct SystemAlert: Equatable {
         return "\(name) (\(list))"
     }
 
+    /// Leftover "Open in" prompts one check cancels at most. Each unanswered
+    /// `simctl openurl` (say `npx expo run:ios` run twice) queues another,
+    /// shown as soon as the one before it closes; the bound keeps a prompt
+    /// that will not close from holding the check.
+    static let maxLeftoverPromptsPerCheck = 3
+
     /// Whether a warm deep-link delivery, by how it went (`deliverWarmURL`'s
     /// answer), can have raised an "Open in" prompt of Tapsmith's own.
     /// testmanagerd's open-URL request ("daemon") hands the URL to the app

@@ -136,6 +136,10 @@ class CommandHandler {
     /// The alerts the agent answered on its own, for `takeSystemDialogEvents`.
     private var systemAlertEvents = SystemAlertEvents()
 
+    /// How long, after cancelling a prompt, SpringBoard takes to show the next
+    /// queued one.
+    private static let queuedPromptSettle: TimeInterval = 0.7
+
     /// When `waitForAppReady` next looks for a leftover "Open in" prompt.
     private var leftoverPromptCheck = LeftoverPromptCheck()
 
@@ -154,28 +158,32 @@ class CommandHandler {
     @discardableResult
     private func cancelLeftoverOpenInPrompt() -> Bool {
         leftoverPromptCheck.checked(at: Date())
-        guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { return false }
-        NSLog("[SystemDialog] Cancelling a leftover %@ before using the app", alert.description)
-        var gone = false
-        _ = ObjCExceptionCatcher.catchException {
-            let element = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
-            element.buttons["Cancel"].tap()
-            let deadline = Date(timeIntervalSinceNow: 2.0)
-            while Date() < deadline {
-                if !element.exists { gone = true; return }
-                Thread.sleep(forTimeInterval: 0.1)
+        var cancelled = false
+        for _ in 0..<SystemAlert.maxLeftoverPromptsPerCheck {
+            guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { break }
+            NSLog("[SystemDialog] Cancelling a leftover %@ before using the app", alert.description)
+            var gone = false
+            _ = ObjCExceptionCatcher.catchException {
+                let element = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+                element.buttons["Cancel"].tap()
+                let deadline = Date(timeIntervalSinceNow: 2.0)
+                while Date() < deadline {
+                    if !element.exists { gone = true; return }
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
             }
+            systemAlertEvents.record(
+                title: alert.title,
+                button: "Cancel",
+                timestampMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
+            )
+            cancelled = true
+            // Another unanswered openurl's prompt comes up a moment after
+            // this one closes (or is already up): give it that moment, then
+            // read again. Paid only after a cancel.
+            if gone { Thread.sleep(forTimeInterval: Self.queuedPromptSettle) }
         }
-        guard gone else {
-            NSLog("[SystemDialog] %@ was still up after Cancel", alert.description)
-            return false
-        }
-        systemAlertEvents.record(
-            title: alert.title,
-            button: "Cancel",
-            timestampMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
-        )
-        return true
+        return cancelled
     }
 
     /// True when the app's accessibility tree has rendered interactive content.

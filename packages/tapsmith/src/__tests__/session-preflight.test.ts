@@ -380,6 +380,29 @@ describe('session-preflight', () => {
     expect(report.reason).toMatch(/satisfied by startup launch at .* \(took 9\.8s\)/);
   });
 
+  it('on iOS, a prepared device still has the agent look for a leftover "Open in" prompt before the first test', async () => {
+    // A run that starts on an app prepared earlier (UI mode's background
+    // preparation, the startup launch) sends the agent no launch and no link,
+    // the other points where it cancels such a prompt.
+    const ctx = makeContext({ config: { package: 'com.example.app', platform: 'ios' } });
+    const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'background preparation' };
+
+    const report = await executeAppReset(ctx, { mode: 'restart', scope: 'file' }, { phase: 'file reset', prepared });
+
+    expect(report.origin).toBe('prepared');
+    expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', expect.any(Number), expect.any(Number));
+    expect(report.steps.map((s) => s.name)).toContain('leftoverPromptCheck');
+  });
+
+  it('on Android, a prepared device makes no extra call', async () => {
+    const ctx = makeContext();
+    const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'background preparation' };
+
+    const report = await executeAppReset(ctx, { mode: 'restart', scope: 'file' }, { phase: 'file reset', prepared });
+
+    expect(report.steps.map((s) => s.name)).not.toContain('leftoverPromptCheck');
+  });
+
   it('a prepared device that does not satisfy the policy is ignored', async () => {
     const ctx = makeContext();
     const prepared = { policy: { mode: 'restart' as const, scope: 'file' as const }, preparedAt: Date.now(), durationMs: 1, source: 'x' };

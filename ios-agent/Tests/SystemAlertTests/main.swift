@@ -102,6 +102,9 @@ expect("an unanswered testmanagerd request may have fallen back: assume it can",
        SystemAlert.deliveryMayRaiseOwnPrompt("daemon-timeout"))
 expect("so may anything unknown", SystemAlert.deliveryMayRaiseOwnPrompt("none"))
 
+expect("one check cancels a few stacked leftover prompts, not an unbounded number",
+       SystemAlert.maxLeftoverPromptsPerCheck == 3)
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)
