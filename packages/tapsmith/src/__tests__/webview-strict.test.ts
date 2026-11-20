@@ -222,10 +222,10 @@ describe('WebView strict mode (PILOT-227)', () => {
 
     it('getByRole treats an explicit empty accessible name as a filter, not "no filter"', () => {
       const { handle } = makeHandle([]);
-      // Mapped role: goes through the accessible-name computation.
-      expect(handle.getByRole('button', { name: '' })._finderAllJs).toContain('accessibleName');
-      // Unmapped role: filters on aria-label/text.
-      expect(handle.getByRole('banner', { name: '' })._finderAllJs).toContain('aria-label');
+      // Mapped and unmapped roles both filter on the accessible name
+      // (webview-shadow-dom.test.ts runs these against a page).
+      expect(handle.getByRole('button', { name: '' })._finderAllJs).toContain('__ts.name(el) === ""');
+      expect(handle.getByRole('banner', { name: '' })._finderAllJs).toContain('__ts.name(el) === ""');
     });
   });
 

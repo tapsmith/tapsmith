@@ -13,6 +13,7 @@ import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 import type { TraceCollector } from './trace/trace-collector.js';
 import { extractStack } from './trace/trace-collector.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
+import { deepQueryAllJs, deepQueryJs, withDomHelpers } from './webview-dom-js.js';
 
 const WEB_SOCKET_CONNECT_TIMEOUT_MS = 5_000;
 const WEBVIEW_CLOSE_RPC_TIMEOUT_MS = 2_000;
@@ -236,7 +237,7 @@ export class WebViewHandle {
   /** @internal — Get the screen-space bounds of an element inside the WebView. */
   async _getElementBounds(selectorOrFinderJs: string, finderJs?: string): Promise<{ left: number; top: number; right: number; bottom: number } | undefined> {
     try {
-      const finder = finderJs ?? `document.querySelector(${JSON.stringify(selectorOrFinderJs)})`;
+      const finder = finderJs ?? deepQueryJs(selectorOrFinderJs);
       // On Android, XCUITest returns bounds in px so we scale by devicePixelRatio.
       // On iOS, XCUITest returns bounds in points (= CSS px), so no scaling needed.
       const useDpr = this._platform === 'android';
@@ -589,7 +590,7 @@ export class WebViewHandle {
       let found: unknown;
       try {
         found = await this._evaluate(
-          `document.querySelector(${JSON.stringify(selector)}) !== null`,
+          `(${deepQueryJs(selector)}) !== null`,
           remaining,
         );
       } catch (err) {
@@ -1048,7 +1049,7 @@ export class WebViewHandle {
     return this._traced('click', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).click()`,
+        `(${deepQueryJs(selector)}).click()`,
         remainingUntil(deadline),
       );
     }, undefined, timeout);
@@ -1066,7 +1067,7 @@ export class WebViewHandle {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const escaped = JSON.stringify(value);
       await this._evaluate(`(() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
+        const el = (${deepQueryJs(selector)});
         el.value = ${escaped};
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1085,7 +1086,7 @@ export class WebViewHandle {
     return this._traced('textContent', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).textContent`,
+        `(${deepQueryJs(selector)}).textContent`,
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
@@ -1103,7 +1104,7 @@ export class WebViewHandle {
     return this._traced('innerHTML', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).innerHTML`,
+        `(${deepQueryJs(selector)}).innerHTML`,
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
@@ -1121,7 +1122,7 @@ export class WebViewHandle {
     return this._traced('getAttribute', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).getAttribute(${JSON.stringify(name)})`,
+        `(${deepQueryJs(selector)}).getAttribute(${JSON.stringify(name)})`,
         remainingUntil(deadline),
       );
       return result as string | null;
@@ -1139,7 +1140,7 @@ export class WebViewHandle {
     return this._traced('inputValue', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}).value`,
+        `(${deepQueryJs(selector)}).value`,
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
@@ -1172,7 +1173,7 @@ export class WebViewHandle {
   /** Single DOM read behind the string-selector visibility probes. */
   private async _isVisibleSelector(selector: string): Promise<boolean> {
     const result = await this._evaluate(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
+      const el = (${deepQueryJs(selector)});
       if (!el) return false;
       if (el.getClientRects().length === 0) return false;
       const style = window.getComputedStyle(el);
@@ -1217,9 +1218,11 @@ export class WebViewHandle {
   /** Locate an element by its visible text content. Substring match by default. */
   getByText(text: string, options?: { exact?: boolean }): WebViewLocator {
     const escaped = JSON.stringify(text);
-    const finderAllJs = options?.exact
-      ? `(() => { const out = []; for (const el of document.querySelectorAll('*')) { if (el.children.length === 0 && el.textContent?.trim() === ${escaped}) out.push(el); } return out; })()`
-      : `(() => { const out = []; for (const el of document.querySelectorAll('*')) { if (el.children.length === 0 && el.textContent?.includes(${escaped})) out.push(el); } return out; })()`;
+    // Leaf elements only, over the document and its open shadow roots;
+    // never a <script> or <style> (Stencil puts one in every shadow root).
+    const test = options?.exact ? `(el.textContent ?? '').trim() === ${escaped}` : `(el.textContent ?? '').includes(${escaped})`;
+    const finderAllJs = withDomHelpers(
+      `__ts.all(document).filter((el) => el.children.length === 0 && !__ts.skipText(el) && ${test})`);
     return new WebViewLocator(this, `text=${text}`, this._timeoutMs, finderAllJs);
   }
 
@@ -1234,9 +1237,11 @@ export class WebViewHandle {
       // interpolating the role into a CSS selector, where special
       // characters could break the query.
       const roleEscaped = JSON.stringify(role);
-      const finderAllJs = hasName
-        ? `(() => { const out = []; for (const el of document.querySelectorAll('[role]')) { if (el.getAttribute('role') === ${roleEscaped} && (el.getAttribute('aria-label') === ${JSON.stringify(options!.name)} || el.textContent?.trim() === ${JSON.stringify(options!.name)})) out.push(el); } return out; })()`
-        : `(() => { const out = []; for (const el of document.querySelectorAll('[role]')) { if (el.getAttribute('role') === ${roleEscaped}) out.push(el); } return out; })()`;
+      const nameTest = hasName
+        ? ` && (__ts.name(el) === ${JSON.stringify(options!.name)} || __ts.flatText(el).trim() === ${JSON.stringify(options!.name)})`
+        : '';
+      const finderAllJs = withDomHelpers(
+        `__ts.queryAll('[role]').filter((el) => el.getAttribute('role') === ${roleEscaped}${nameTest})`);
       return new WebViewLocator(this, `role=${role}${displaySuffix}`, this._timeoutMs, finderAllJs);
     }
 
@@ -1244,51 +1249,36 @@ export class WebViewHandle {
     const displayName = `role=${role}${displaySuffix}`;
 
     if (!hasName) {
-      return new WebViewLocator(this, displayName, this._timeoutMs,
-        `Array.from(document.querySelectorAll(${JSON.stringify(selectorList)}))`);
+      return new WebViewLocator(this, displayName, this._timeoutMs, deepQueryAllJs(selectorList));
     }
 
     // Non-null: hasName guarantees options.name is set (TS can't narrow through the const).
     const nameEscaped = JSON.stringify(options!.name);
-    // W3C Accessible Name computation (matches Playwright's getByRole):
-    // 1. aria-labelledby  2. aria-label  3. <label> (for or wrapping)
-    // 4. title  5. placeholder  6. textContent (buttons/links only)
-    const finderAllJs = `(() => {
-      function accessibleName(el) {
-        var lblBy = el.getAttribute('aria-labelledby');
-        if (lblBy) { var ref = document.getElementById(lblBy); if (ref) return ref.textContent?.trim() || ''; }
-        if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
-        if (el.id) { var lbl = document.querySelector('label[for=' + JSON.stringify(el.id) + ']'); if (lbl) return lbl.textContent?.trim() || ''; }
-        if (el.closest('label')) { var wrapper = el.closest('label'); var clone = wrapper.cloneNode(true); clone.querySelectorAll('input,select,textarea').forEach(function(c){c.remove();}); var t = clone.textContent?.trim(); if (t) return t; }
-        if (el.getAttribute('title')) return el.getAttribute('title');
-        if (el.getAttribute('placeholder')) return el.getAttribute('placeholder');
-        return el.textContent?.trim() || '';
-      }
-      const out = [];
-      for (const el of document.querySelectorAll(${JSON.stringify(selectorList)})) {
-        if (accessibleName(el) === ${nameEscaped}) out.push(el);
-      }
-      return out;
-    })()`;
+    // Accessible name (webview-dom-js.ts `name`), each id and label looked
+    // up in the element's own tree: 1. aria-labelledby 2. aria-label
+    // 3. <label> (for or wrapping) 4. title 5. placeholder 6. text content,
+    // flattened through slots and shadow roots.
+    const finderAllJs = withDomHelpers(
+      `__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => __ts.name(el) === ${nameEscaped})`);
     return new WebViewLocator(this, displayName, this._timeoutMs, finderAllJs);
   }
 
   /** Locate an element by its placeholder text. */
   getByPlaceholder(text: string): WebViewLocator {
     return new WebViewLocator(this, `placeholder=${text}`, this._timeoutMs,
-      `Array.from(document.querySelectorAll('[placeholder=' + JSON.stringify(${JSON.stringify(text)}) + ']'))`);
+      deepQueryAllJs(`[placeholder=${JSON.stringify(text)}]`));
   }
 
   /** Locate an element by its `data-testid` attribute. */
   getByTestId(testId: string): WebViewLocator {
     return new WebViewLocator(this, `testId=${testId}`, this._timeoutMs,
-      `Array.from(document.querySelectorAll('[data-testid=' + JSON.stringify(${JSON.stringify(testId)}) + ']'))`);
+      deepQueryAllJs(`[data-testid=${JSON.stringify(testId)}]`));
   }
 
   /** Locate an element by its `aria-label`. */
   getByLabel(text: string): WebViewLocator {
     return new WebViewLocator(this, `label=${text}`, this._timeoutMs,
-      `Array.from(document.querySelectorAll('[aria-label=' + JSON.stringify(${JSON.stringify(text)}) + ']'))`);
+      deepQueryAllJs(`[aria-label=${JSON.stringify(text)}]`));
   }
 
   /** Locate an element by CSS selector. */
