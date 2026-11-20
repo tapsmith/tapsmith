@@ -62,6 +62,9 @@ class HierarchyDumper {
         RoleMapping.markNavigationTitles(in: &dict)
         // A scroll view's indicator is no seekbar (PILOT-1329).
         RoleMapping.markScrollIndicators(in: &dict)
+        // The row title getByLabel matches a settings row's switch by
+        // (RowName), so the picker can suggest it.
+        RowName.markRowLabels(in: &dict)
         var keyboardTop: CGFloat?
         dumpNode(dict, depth: 1, inTabBar: false, insideNonApp: false, keyboardTop: &keyboardTop, into: &xml)
         xml += "</hierarchy>\n"
@@ -154,6 +157,12 @@ class HierarchyDumper {
         // of its screen, and non-app nodes are edges the scroll region avoids.
         if isEmptyBarHost {
             xml += " tapsmith-empty-bar-host=\"true\""
+        }
+        // A settings row's title, which labels the switch UIKit labels with
+        // the row's texts (RowName); the attribute Android's dump uses too.
+        let rowLabel = RowName.label(of: node)
+        if !rowLabel.isEmpty {
+            xml += " \(RowName.labelDumpAttribute)=\"\(escapeXML(rowLabel))\""
         }
 
         let children = node["children"] as? [[String: Any]] ?? []

@@ -175,6 +175,117 @@ final class UIKitTableViewController: UITableViewController {
     }
 }
 
+// ─── Settings ───
+
+/// A UIKit settings screen: grouped rows whose switch is the cell's
+/// accessory, as in the Settings app. The switch has no label of its own;
+/// VoiceOver reads it with its row's text ("Wi-Fi, Join known networks,
+/// switch button, on").
+final class UIKitSettingsViewController: UITableViewController {
+    private struct Row {
+        let title: String
+        var subtitle: String?
+        var isOn: Bool
+        /// The switch's own accessibilityLabel, which names it instead of the row.
+        var switchLabel: String?
+        /// Lay the title and switch out in the content view instead of using
+        /// the cell's accessoryView.
+        var inContentView = false
+        /// Use the cell's (deprecated, still common) textLabel and
+        /// detailTextLabel instead of a content configuration.
+        var legacy = false
+    }
+
+    private var rows = [
+        Row(title: "Airplane Mode", isOn: false),
+        Row(title: "Wi-Fi", subtitle: "Join known networks", isOn: true),
+        Row(title: "Bluetooth", isOn: true, switchLabel: "Bluetooth radio"),
+        Row(title: "Sync Photos", isOn: false, inContentView: true),
+        Row(title: "Cellular Data", isOn: true, legacy: true),
+        Row(title: "Personal Hotspot", subtitle: "Off", isOn: false, legacy: true),
+    ]
+    private let status = makeLabel("Airplane Mode: off")
+
+    init() { super.init(style: .insetGrouped) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+        status.accessibilityIdentifier = "uikit-settings-status"
+        status.textAlignment = .center
+        status.frame = CGRect(x: 0, y: 0, width: 0, height: 44)
+        tableView.tableHeaderView = status
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        section == 0 ? rows.count : 1
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if indexPath.section == 0, rows[indexPath.row].legacy {
+            let row = rows[indexPath.row]
+            let cell = UITableViewCell(style: row.subtitle == nil ? .default : .subtitle, reuseIdentifier: nil)
+            cell.textLabel?.text = row.title
+            cell.detailTextLabel?.text = row.subtitle
+            cell.selectionStyle = .none
+            cell.accessoryView = makeSwitch(for: row, at: indexPath)
+            return cell
+        }
+        let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
+        cell.contentView.subviews.filter { $0.tag == 1 }.forEach { $0.removeFromSuperview() }
+        cell.accessoryView = nil
+        cell.accessoryType = .none
+        guard indexPath.section == 0 else {
+            // A plain row with no control: nothing for a switch to be named by.
+            var content = cell.defaultContentConfiguration()
+            content.text = "About"
+            cell.contentConfiguration = content
+            cell.accessoryType = .disclosureIndicator
+            return cell
+        }
+        let row = rows[indexPath.row]
+        cell.selectionStyle = .none
+        let toggle = makeSwitch(for: row, at: indexPath)
+        if row.inContentView {
+            // A custom row: its own label and switch side by side.
+            cell.contentConfiguration = nil
+            let stack = makeStack([makeLabel(row.title), UIView(), toggle], axis: .horizontal)
+            stack.tag = 1
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            cell.contentView.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.leadingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.leadingAnchor),
+                stack.trailingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.trailingAnchor),
+                stack.topAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.topAnchor),
+                stack.bottomAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.bottomAnchor),
+            ])
+        } else {
+            var content = row.subtitle == nil ? cell.defaultContentConfiguration() : UIListContentConfiguration.subtitleCell()
+            content.text = row.title
+            content.secondaryText = row.subtitle
+            cell.contentConfiguration = content
+            cell.accessoryView = toggle
+        }
+        return cell
+    }
+
+    private func makeSwitch(for row: Row, at indexPath: IndexPath) -> UISwitch {
+        let toggle = UISwitch()
+        toggle.isOn = row.isOn
+        toggle.accessibilityLabel = row.switchLabel
+        toggle.addAction(UIAction { [weak self] action in
+            guard let self else { return }
+            let isOn = (action.sender as! UISwitch).isOn
+            self.rows[indexPath.row].isOn = isOn
+            self.status.text = "\(row.title): \(isOn ? "on" : "off")"
+        }, for: .valueChanged)
+        return toggle
+    }
+}
+
 // ─── Dialogs ───
 
 final class UIKitDialogsViewController: UIViewController {

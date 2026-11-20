@@ -250,6 +250,18 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/RowNameTests/main.swift \
+  TapsmithAgent/RowName.swift \
+  TapsmithAgent/DescendantText.swift \
+  TapsmithAgent/CellAccessories.swift \
+  TapsmithAgent/NonAppElements.swift \
+  TapsmithAgent/TextContent.swift \
+  TapsmithAgent/TextMatch.swift \
+  -o "$OUT/row-name-tests"
+"$OUT/row-name-tests"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/RowAnchorTests/main.swift \
   TapsmithAgent/RowAnchor.swift \
   -o "$OUT/row-anchor-tests"

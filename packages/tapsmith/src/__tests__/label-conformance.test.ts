@@ -36,6 +36,8 @@ interface Case {
   contentDesc?: string
   /** Android: the text of the node's children, each a TextView. */
   childTexts?: string[]
+  /** iOS: the title of the settings row the control sits in (`tapsmith-label`, the agent's RowName). */
+  rowLabel?: string
   /** A string query, or a RegExp as source + flags. */
   query: string | { source: string; flags: string }
   matches: boolean
@@ -81,6 +83,11 @@ const CASES: Case[] = [
   { why: 'RegExp on a button', platform: 'ios', type: 'XCUIElementTypeButton', label: 'Save', query: { source: 'Save', flags: '' }, matches: false },
   { why: 'RegExp substring', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Your email', query: { source: 'email', flags: '' }, matches: true },
   { why: 'RegExp not found', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Your email', query: { source: 'phone', flags: '' }, matches: false },
+  // A UIKit settings row's switch, which UIKit labels with the row's texts joined by ", ", is labelled by the row's title too.
+  { why: "a settings row's title labels its switch", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Wi-Fi, Join known networks', rowLabel: 'Wi-Fi', query: 'Wi-Fi', matches: true },
+  { why: "a settings row switch's whole label still labels it", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Wi-Fi, Join known networks', rowLabel: 'Wi-Fi', query: 'Wi-Fi, Join known networks', matches: true },
+  { why: "a settings row's subtitle is no label", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Wi-Fi, Join known networks', rowLabel: 'Wi-Fi', query: 'Join known networks', matches: false },
+  { why: "RegExp tests a settings row's title", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Personal Hotspot, Off', rowLabel: 'Personal Hotspot', query: { source: '^personal hotspot$', flags: 'i' }, matches: true },
 
   // Android: the classes of the agent's label roles, named by content-desc.
   { why: 'EditText', platform: 'android', type: 'android.widget.EditText', contentDesc: 'Email', query: 'Email', matches: true },
@@ -114,6 +121,7 @@ function nodeFor(c: Case): HierarchyNode {
     : { class: c.type, text: '', 'resource-id': '' };
   if (c.title !== undefined) attrs.title = c.title;
   if (c.contentDesc !== undefined) attrs['content-desc'] = c.contentDesc;
+  if (c.rowLabel !== undefined) attrs['tapsmith-label'] = c.rowLabel;
   const children = (c.childTexts ?? []).map((text): HierarchyNode => ({
     tagName: 'node',
     attributes: new Map(Object.entries({ class: 'android.widget.TextView', text, 'resource-id': '' })),

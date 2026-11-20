@@ -268,16 +268,21 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   // A name that is nothing but glyphs (an icon-only element) stays whole:
   // it is the element's only name.
   // A text field with no other name is named by its placeholder, as the
-  // agents name it (PILOT-834).
+  // agents name it (PILOT-834). An iOS settings row's switch, which UIKit
+  // labels with the row's texts joined by ", ", is suggested by the row's
+  // title (`tapsmith-label`, the agent's RowName): a part of its name that
+  // getByRole's substring match and getByLabel both accept, and that a
+  // changing subtitle does not break.
   const named = (value: string): string => (value.trim() ? value : '');
+  const iosRowLabel = ios ? named(node.attributes.get('tapsmith-label') ?? '') : '';
   const fullName = ios
-    ? (named(label) || placeholderName(node))
+    ? (iosRowLabel || named(label) || placeholderName(node))
     : (named(contentDesc) || placeholderName(node) || text);
   const accessibleName = roleNameFor(fullName) || fullName;
   // getByLabel matches Android's content-desc (or a labelling view, which
   // the dump does not carry) — never the field's own text, which is its
-  // typed value or hint — and iOS's label or title.
-  const labelName = ios ? (label || (node.attributes.get('title') ?? '')) : contentDesc;
+  // typed value or hint — and iOS's label or title, or a settings row's title.
+  const labelName = ios ? (iosRowLabel || label || (node.attributes.get('title') ?? '')) : contentDesc;
 
   // Demote role-based selectors when the role is generic OR when it came from
   // the agent's accessibility-trait heuristic (tapsmith-role) on a node whose

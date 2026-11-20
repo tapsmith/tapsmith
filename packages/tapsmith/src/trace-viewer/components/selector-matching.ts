@@ -601,8 +601,10 @@ function iosNodeMatchesText(node: HierarchyNode, selector: ParsedSelector, conta
  * (the agent also follows a labelling view, which the dump does not carry)
  * or, for a text field, the text of one of its descendants — a Compose
  * TextField's label is a child of the field (PILOT-828), while a Spinner's
- * child is its value — and iOS's label or title. iOS tests an empty label
- * like any other text, as its agent does.
+ * child is its value — and iOS's label or title, or a settings row's title
+ * (`tapsmith-label`, the agent's RowName) for the control UIKit labels with
+ * the row's texts. iOS tests an empty label like any other text, as its
+ * agent does.
  */
 function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean): boolean {
   if (node.attributes.has('class')) {
@@ -610,7 +612,9 @@ function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean):
     if (contentDesc !== undefined && contentDesc !== '' && test(contentDesc)) return true;
     return ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '') && descendantText(node).some(test);
   }
-  return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '');
+  const rowLabel = node.attributes.get('tapsmith-label');
+  return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '')
+    || (rowLabel !== undefined && rowLabel !== '' && test(rowLabel));
 }
 
 function isWebViewNode(node: HierarchyNode): boolean {

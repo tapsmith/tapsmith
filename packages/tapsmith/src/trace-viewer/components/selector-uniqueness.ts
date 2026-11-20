@@ -124,9 +124,15 @@ function tryExactRoleNameUpgrade(
   return null;
 }
 
-/** The node's whole accessible name, as role-name matching reads it first. */
+/**
+ * The node's whole accessible name, as role-name matching reads it first —
+ * for an iOS settings row's switch its row's title (`tapsmith-label`), one
+ * part of its ", "-joined label that an exact name matches, so a pinned
+ * name never holds the row's subtitle.
+ */
 function fullAccessibleName(node: HierarchyNode): string {
-  return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
+  const iosRowLabel = node.attributes.has('class') ? '' : node.attributes.get('tapsmith-label');
+  return iosRowLabel || node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
 }
 
 /** (b) Ambiguous getByRole without a name → try adding the accessible name. */

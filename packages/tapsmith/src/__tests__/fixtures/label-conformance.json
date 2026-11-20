@@ -318,6 +318,47 @@
       "matches": false
     },
     {
+      "why": "a settings row's title labels its switch",
+      "platform": "ios",
+      "type": "XCUIElementTypeSwitch",
+      "label": "Wi-Fi, Join known networks",
+      "rowLabel": "Wi-Fi",
+      "query": "Wi-Fi",
+      "matches": true
+    },
+    {
+      "why": "a settings row switch's whole label still labels it",
+      "platform": "ios",
+      "type": "XCUIElementTypeSwitch",
+      "label": "Wi-Fi, Join known networks",
+      "rowLabel": "Wi-Fi",
+      "query": "Wi-Fi, Join known networks",
+      "matches": true
+    },
+    {
+      "why": "a settings row's subtitle is no label",
+      "platform": "ios",
+      "type": "XCUIElementTypeSwitch",
+      "label": "Wi-Fi, Join known networks",
+      "rowLabel": "Wi-Fi",
+      "query": "Join known networks",
+      "matches": false
+    },
+    {
+      "why": "RegExp tests a settings row's title",
+      "platform": "ios",
+      "type": "XCUIElementTypeSwitch",
+      "label": "Personal Hotspot, Off",
+      "rowLabel": "Personal Hotspot",
+      "query": {
+        "source": "^personal hotspot$",
+        "flags": "i",
+        "pattern": "\\Apersonal\\u0020hotspot\\z",
+        "ignoreCase": true
+      },
+      "matches": true
+    },
+    {
       "why": "EditText",
       "platform": "android",
       "type": "android.widget.EditText",

@@ -236,6 +236,9 @@ class SnapshotElementFinder {
         RoleMapping.markNavigationTitles(in: &snapshotDict)
         // A scroll view's indicator is no seekbar (PILOT-1329).
         RoleMapping.markScrollIndicators(in: &snapshotDict)
+        // A settings row's switch is labelled by the row's title too
+        // (RowName). After the indicators are marked, which are no text.
+        RowName.markRowLabels(in: &snapshotDict)
         return snapshotDict
     }
 
@@ -1925,14 +1928,19 @@ class SnapshotElementFinder {
             if isExpanded != wantExpanded { return false }
         }
 
-        // Label selector: an input named by its label or title (LabelMatch,
-        // PILOT-666); a RegExp tests the raw text (PILOT-520).
+        // Label selector: an input named by its label or title, or its
+        // settings row's title (LabelMatch, PILOT-666, RowName); a RegExp
+        // tests the raw text (PILOT-520).
         if let labelSelector = selector.label,
-           !LabelMatch.matches(elementType: elType, label: label, title: title, query: labelSelector) {
+           !LabelMatch.matches(
+               elementType: elType, label: label, title: title, rowLabel: RowName.label(of: node), query: labelSelector
+           ) {
             return false
         }
         if let labelRegex = selector.labelRegex,
-           !LabelMatch.matches(elementType: elType, label: label, title: title, regex: labelRegex) {
+           !LabelMatch.matches(
+               elementType: elType, label: label, title: title, rowLabel: RowName.label(of: node), regex: labelRegex
+           ) {
             return false
         }
 
