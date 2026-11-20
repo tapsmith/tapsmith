@@ -30,7 +30,8 @@ pub(super) enum HidReach {
 pub(super) const UNREACHABLE_REASON: &str =
     "the simulator's touch input is driven by Xcode's DeviceHub (it was opened in DeviceHub \
      before its first touch in this boot), so touches sent through the simulator's HID input \
-     never reach the app";
+     never reach the app (close the simulator's DeviceHub window and reboot the simulator to \
+     get them back)";
 
 /// The session's reach from the agent's answer to `hidTouchInput`. `None`
 /// when the answer says nothing that lasts (the agent did not answer, or

@@ -2431,9 +2431,7 @@ impl TapsmithServiceImpl {
                         };
                     warn!(
                         udid,
-                        "iOS simulator HID touches would not reach the app: {why}. {instead}. \
-                         Close the simulator's DeviceHub window and reboot the simulator to get \
-                         HID touches back"
+                        "iOS simulator HID touches would not reach the app: {why}. {instead}"
                     );
                 }
                 known.insert(udid.to_string(), reach.clone());
@@ -2508,7 +2506,13 @@ impl TapsmithServiceImpl {
         };
         if is_down {
             if let Err(e) = self.ensure_hid(&udid).await {
-                warn!(%udid, error = %e, "iOS HID helper unavailable; falling back to agent");
+                // Said once a session when DeviceHub holds the touchscreen
+                // (`ensure_hid`); a helper that cannot start is worth a warning.
+                if self.hid_known_unreachable(&udid).await {
+                    debug!(%udid, error = %e, "iOS HID route unavailable; using the agent's touch");
+                } else {
+                    warn!(%udid, error = %e, "iOS HID helper unavailable; falling back to agent");
+                }
                 return false;
             }
         } else if self.hid_known_unreachable(&udid).await {
