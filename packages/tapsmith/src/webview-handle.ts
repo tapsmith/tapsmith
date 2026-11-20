@@ -983,13 +983,15 @@ export class WebViewHandle {
         // The nodes for el: itself, or, when it has no box of its own (a
         // <slot> or other display: contents element), its children's nodes in
         // its place, so a slot's content can still be picked.
+        // depth counts the nodes emitted above el, not the shadow roots and
+        // box-less elements walked through, which component trees are full of.
         function walk(el, depth) {
-          if (depth > 20) return [];
+          if (depth > 40) return [];
           const tag = el.tagName?.toLowerCase() || '';
           if (!tag || tag === 'script' || tag === 'style' || tag === 'head') return [];
           const kids = kidsOf(el);
           const r = el.getBoundingClientRect();
-          if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth + 1));
+          if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth));
           const node = {
             tag: tag,
             id: el.id || '',
@@ -997,6 +999,8 @@ export class WebViewHandle {
             text: __ts.isLeaf(el) ? (el.textContent || '').trim().slice(0, 200) : '',
             // In a shadow root, where an id need only be unique per tree.
             shadow: el.getRootNode() !== document,
+            // Hidden from assistive technology, which getByRole skips.
+            a11yHidden: __ts.a11yHidden(el),
             // The attribute, which getByPlaceholder matches: a component's
             // host carries it without the input element's property.
             placeholder: el.getAttribute('placeholder') || '',
@@ -1062,6 +1066,7 @@ export class WebViewHandle {
         if (node.type) attrs.push(`webview-type="${escapeXmlAttr(node.type)}"`);
         if (node.href) attrs.push(`webview-href="${escapeXmlAttr(node.href)}"`);
         if (node.shadow) attrs.push('webview-shadow="true"');
+        if (node.a11yHidden) attrs.push('webview-a11y-hidden="true"');
         attrs.push('webview="true"');
 
         if (node.children.length === 0) {
@@ -1388,6 +1393,7 @@ interface DomNode {
   type: string
   href: string
   shadow?: boolean
+  a11yHidden?: boolean
   bounds: { left: number; top: number; right: number; bottom: number }
   children: DomNode[]
 }

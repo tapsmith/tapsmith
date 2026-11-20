@@ -745,6 +745,8 @@ function webViewNodeMatchesSelector(node: HierarchyNode, selector: ParsedSelecto
     case 'wv-text-contains':
       return text.includes(selector.value);
     case 'wv-role': {
+      // getByRole skips what assistive technology does not see.
+      if (node.attributes.get('webview-a11y-hidden') === 'true') return false;
       const role = getNodeRole(node);
       if (role !== selector.value) return false;
       if (selector.name) {

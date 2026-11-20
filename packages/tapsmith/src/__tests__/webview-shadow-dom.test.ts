@@ -406,5 +406,40 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
       const light = nodes.find((n) => n.attributes.get('webview-id') === 'result')!;
       expect(generateSelectors(light).map((g) => g.code)).toContain('webview.locator("#result")');
     });
+
+    it('a pick on a control inside another control stays on the control picked', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body data-rect="0,0,100,100">'
+        + '<a href="/item" data-rect="0,0,100,40"><button data-rect="10,10,90,30">Buy</button></a>'
+        + '<div role="button" aria-label="Card" data-rect="0,50,100,90"><input placeholder="Qty" data-rect="10,60,90,80"></div></body>');
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      expect(pickNodeAt(roots, 50, 20)!.node.attributes.get('webview-tag')).toBe('button');
+      expect(pickNodeAt(roots, 50, 70)!.node.attributes.get('webview-tag')).toBe('input');
+    });
+
+    it('counts getByRole offline as the page does, without what assistive technology does not see', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body data-rect="0,0,100,100">'
+        + '<div aria-hidden="true" data-rect="0,0,100,20"><button data-rect="0,0,50,20">Save</button></div>'
+        + '<button data-rect="0,30,50,50">Save</button><button data-rect="0,60,50,80">Save</button></body>');
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      const offline = findMatchingNodes(roots, parseSelectorString('webview.getByRole("button", { name: "Save" })')!);
+      expect(offline).toHaveLength(2);
+      expect(await handle.getByRole('button', { name: 'Save' }).count()).toBe(2);
+    });
+
+    it('reaches controls deep in a component tree', async () => {
+      // An Ionic tabs + grid + form page nests a field's input well past 20
+      // levels once each component's shadow internals are counted.
+      const { handle } = handleOn('<!DOCTYPE html><body></body>', (doc) => {
+        let parent: Element = doc.body;
+        for (let i = 0; i < 12; i++) {
+          const host = parent.appendChild(doc.createElement('x-wrap'));
+          host.attachShadow({ mode: 'open' }).innerHTML = '<div class="inner"><slot></slot></div>';
+          parent = host;
+        }
+        parent.appendChild(doc.createElement('input')).id = 'deep';
+      });
+      const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
+      expect(nodes.some((n) => n.attributes.get('webview-id') === 'deep')).toBe(true);
+    });
   });
 });

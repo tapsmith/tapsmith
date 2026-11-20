@@ -36,13 +36,17 @@ function owningSwitch(roots: HierarchyNode[], part: HierarchyNode): HierarchyNod
   return current;
 }
 
+/** WebView roles a pick stays on: the control the user clicked, even inside another one. */
+const WEBVIEW_CONTROL_ROLES = new Set(['button', 'link', 'textfield', 'checkbox', 'radio', 'switch', 'combobox', 'slider']);
+
 /**
  * The web button or link a WebView node is part of (a span or icon inside
- * it, such as the inner parts of an ion-button), or null. A pick there picks
- * the control, as Playwright's picker does.
+ * it, such as the inner parts of an ion-button), or null when the node is a
+ * control itself or inside none. A pick there picks the control, as
+ * Playwright's picker does.
  */
 function owningWebViewControl(roots: HierarchyNode[], node: HierarchyNode): HierarchyNode | null {
-  if (node.attributes.get('webview') !== 'true') return null;
+  if (node.attributes.get('webview') !== 'true' || WEBVIEW_CONTROL_ROLES.has(getNodeRole(node))) return null;
   for (let current = findParent(roots, node); current?.attributes.get('webview') === 'true'; current = findParent(roots, current)) {
     const role = getNodeRole(current);
     if ((role === 'button' || role === 'link') && getNodeBounds(current)) return current;
