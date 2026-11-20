@@ -36,6 +36,10 @@ interface Case {
   contentDesc?: string
   /** Android: the text of the node's children, each a TextView. */
   childTexts?: string[]
+  /** Android: the name a nameless control takes from its row (`tapsmith-name`, the agent's RowName.name). */
+  rowName?: string
+  /** Android: that row's label (`tapsmith-label`, RowName.label): its title. */
+  rowLabel?: string
   /** A string query, or a RegExp as source + flags. */
   query: string | { source: string; flags: string }
   matches: boolean
@@ -105,6 +109,11 @@ const CASES: Case[] = [
   { why: 'children are not joined', platform: 'android', type: 'android.widget.EditText', childTexts: ['Email', 'Required'], query: 'Email Required', matches: false },
   { why: 'RegExp tests a child text', platform: 'android', type: 'android.widget.EditText', childTexts: ['E-mail'], query: { source: '^e-?mail$', flags: 'i' }, matches: true },
   { why: "a Spinner's child (its selected value) is no label", platform: 'android', type: 'android.widget.Spinner', childTexts: ['Canada'], query: 'Canada', matches: false },
+  // An androidx Preference's unnamed switch or checkbox is labelled by its row's title.
+  { why: "a row's title labels its unnamed switch", platform: 'android', type: 'android.widget.Switch', rowName: 'Full black Use full black for the dark theme', rowLabel: 'Full black', query: 'Full black', matches: true },
+  { why: "a row's summary is no label", platform: 'android', type: 'android.widget.Switch', rowName: 'Full black Use full black for the dark theme', rowLabel: 'Full black', query: 'Use full black for the dark theme', matches: false },
+  { why: "a row's whole name is no label", platform: 'android', type: 'android.widget.Switch', rowName: 'Full black Use full black for the dark theme', rowLabel: 'Full black', query: 'Full black Use full black for the dark theme', matches: false },
+  { why: "RegExp tests a row's title", platform: 'android', type: 'android.widget.CheckBox', rowName: 'Wi-Fi only', rowLabel: 'Wi-Fi only', query: { source: '^wi-fi', flags: 'i' }, matches: true },
 ];
 
 /** The case's element as a hierarchy node, the way each agent's dump writes it. */
@@ -114,6 +123,8 @@ function nodeFor(c: Case): HierarchyNode {
     : { class: c.type, text: '', 'resource-id': '' };
   if (c.title !== undefined) attrs.title = c.title;
   if (c.contentDesc !== undefined) attrs['content-desc'] = c.contentDesc;
+  if (c.rowName !== undefined) attrs['tapsmith-name'] = c.rowName;
+  if (c.rowLabel !== undefined) attrs['tapsmith-label'] = c.rowLabel;
   const children = (c.childTexts ?? []).map((text): HierarchyNode => ({
     tagName: 'node',
     attributes: new Map(Object.entries({ class: 'android.widget.TextView', text, 'resource-id': '' })),

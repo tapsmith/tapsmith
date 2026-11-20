@@ -631,6 +631,10 @@ class ElementFinder(
                 }
             }
 
+            // A listitem is a list's row: a layout whose parent is a list,
+            // not every layout nested in the row (or holding the screen).
+            if (selector.role != null && isListItemRole(selector.role) && !isListRow(roleCandidate)) return false
+
             // Role name: match contentDescription, text, or the joined
             // descendant text. Like Playwright, a case-insensitive substring by
             // default and a case-sensitive whole-string match with `exact`
@@ -661,7 +665,10 @@ class ElementFinder(
          * 2. the text of the node it is labeled by (AccessibilityNodeInfo's
          *    labeledBy/labelFor relationship — the native Android pattern; one
          *    round-trip, only for inputs strategy 1 rejects), or
-         * 3. for a text field, the text of one of its descendants: a Compose
+         * 3. for a control with no name of its own in an actionable row (an
+         *    androidx SwitchPreferenceCompat's switch), the row's label
+         *    ([RowName.label]), or
+         * 4. for a text field, the text of one of its descendants: a Compose
          *    TextField's `label = { Text("Email") }` is a child of the field
          *    (PILOT-828). Not for other inputs: a Spinner's child shows its
          *    selected value, which is no label.
@@ -672,15 +679,49 @@ class ElementFinder(
         ): Boolean {
             if (labelMatches(candidate.contentDescription)) return true
             if (labelMatches(candidate.labeledByText())) return true
+            candidate.rowName()?.let { if (labelMatches(it.label)) return true }
             if (!EDIT_TEXT_HINT_CLASS_PATTERN.matcher(candidate.className ?: "").matches()) return false
             return candidate.descendantTextParts().any(labelMatches)
+        }
+
+        /** Whether [role] (as a query writes it) is listitem. */
+        private fun isListItemRole(role: String): Boolean {
+            val lowered = role.lowercase()
+            return (ROLE_ALIASES[lowered] ?: lowered) == "listitem"
+        }
+
+        /** The list classes, whose children are listitems. */
+        private val listClasses: Set<String> by lazy { roleClassMap["list"].orEmpty().toSet() }
+
+        /**
+         * Whether a listitem-class layout is a row of a list: its parent is
+         * a list. The class alone would make every LinearLayout, RelativeLayout
+         * and FrameLayout a listitem — a row's inner wrappers and the
+         * screen's content frames with it, so `filter({ hasText })` could not
+         * pick the row.
+         */
+        internal fun isListRow(candidate: FindCandidate): Boolean = candidate.parentClassName() in listClasses
+
+        /**
+         * The role a class gives an element: [classToRoleMap]'s, except that
+         * a listitem-class layout is a listitem only as a list's row
+         * ([isListRow]). [parentClassName] is read only for those classes.
+         */
+        internal fun roleForClass(
+            className: String,
+            parentClassName: () -> String?,
+        ): String {
+            val role = classToRoleMap[className] ?: return ""
+            return if (role == "listitem" && parentClassName() !in listClasses) "" else role
         }
 
         /**
          * Whether [candidate]'s accessible name matches the selector's role
          * name: its contentDescription, its text, or its joined descendant
          * text (read only when the first two don't match) — or, for an
-         * EditText with no other name, its hint (PILOT-834).
+         * EditText with no other name, its hint (PILOT-834). A control with
+         * no name of its own in an actionable row is named by the row
+         * ([RowName.name]) instead.
          */
         private fun matchesAccessibleName(
             candidate: FindCandidate,
@@ -689,6 +730,14 @@ class ElementFinder(
             val regex = selector.nameRegex
             val name = selector.name
             if (regex == null && name == null) return true
+            val row = candidate.rowName()
+            if (row != null) {
+                return if (regex != null) {
+                    regex.matches(TextMatch.normalize(row.name))
+                } else {
+                    TextMatch.accessibleNameMatches(row.name, null, false, { null }, name!!, selector.nameExact)
+                }
+            }
             val text = candidate.text
             val contentDescription = candidate.contentDescription
             // An empty EditText reports its hint as its text; that hint is a
@@ -1105,7 +1154,64 @@ class ElementFinder(
         }
 
         override fun descendantTextParts(): List<String> = if (node.childCount == 0) emptyList() else descendantTextParts(node, fresh)
+
+        override fun rowName(): RowName? = rowNameOf(node, fresh)
+
+        override fun parentClassName(): String? = node.parent?.className?.toString()
     }
+
+    /**
+     * The name [node] takes from its row ([RowName.of]), or null. Only a
+     * checkable control with no name and no focus of its own reads its
+     * ancestors (a parent read each, up to [RowName.MAX_ROW_DEPTH]) and the
+     * row's text.
+     */
+    internal fun rowNameOf(
+        node: AccessibilityNodeInfo,
+        fresh: Boolean,
+    ): RowName? {
+        if (!RowName.mayTakeRowName(rowShapeOf(node)) || node.childCount > 0 && descendantTextParts(node, fresh).isNotEmpty()) {
+            return null
+        }
+        return RowName.of(
+            node,
+            shape = ::rowShapeOf,
+            parent = { it.parent?.takeIf { p -> fresh || p.refresh() } },
+            textParts = { row -> rowTextParts(row, fresh) },
+        )
+    }
+
+    /** What [RowName.of] reads of [node]: local reads of its snapshot. */
+    private fun rowShapeOf(node: AccessibilityNodeInfo): RowName.NodeShape =
+        RowName.NodeShape(
+            className = node.className?.toString(),
+            text = node.text,
+            contentDescription = node.contentDescription,
+            checkable = node.isCheckable,
+            clickable = node.isClickable,
+            longClickable = node.isLongClickable,
+            focusable = node.isFocusable,
+            scrollable = node.isScrollable,
+        )
+
+    /**
+     * A row's text for [RowName]: its descendants' ([descendantTextParts]),
+     * less any actionable descendant's, which TalkBack reads on its own.
+     */
+    private fun rowTextParts(
+        row: AccessibilityNodeInfo,
+        fresh: Boolean,
+    ): List<String> =
+        FindRules.descendantTextParts(
+            row,
+            children = { visibleChildren(it, fresh) },
+            ownText = { child ->
+                child.text?.toString()?.takeIf { it.isNotEmpty() }
+                    ?: child.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
+            },
+            skip = { child -> NonAppNodes.isHooksMarker(child.text, child.contentDescription) || RowName.isActionable(rowShapeOf(child)) },
+            maxDepth = MAX_DESCENDANT_TEXT_DEPTH,
+        )
 
     /** The enabled/checked/focused/selected/expanded state filters. */
     private fun matchesStateFilters(
@@ -1221,7 +1327,7 @@ class ElementFinder(
                     isScrollable = elem.getAttribute("scrollable") == "true",
                     isSelected = elem.getAttribute("selected") == "true",
                     childCount = elem.childNodes.length,
-                    role = resolveRole(className),
+                    role = roleForClass(className) { (elem.parentNode as? org.w3c.dom.Element)?.getAttribute("class") },
                     viewportRatio = computeViewportRatio(bounds),
                     isVisible = computeViewportRatio(bounds) > 0f,
                 ),
@@ -1580,7 +1686,9 @@ class ElementFinder(
         // Prefer the framework-set RoleDescription (React Native's
         // accessibilityRole) over the className-based mapping when present;
         // a Compose control without either takes its carrier's (PILOT-828).
-        val role = (extractRoleDescription(node) ?: resolveRole(className)).ifEmpty { carriedRoleOf(node, fresh) ?: "" }
+        val role =
+            (extractRoleDescription(node) ?: roleForClass(className) { node.parent?.className?.toString() })
+                .ifEmpty { carriedRoleOf(node, fresh) ?: "" }
         val viewportRatio = computeViewportRatio(bounds)
 
         val info =

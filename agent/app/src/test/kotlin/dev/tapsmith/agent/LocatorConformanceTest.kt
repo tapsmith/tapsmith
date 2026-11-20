@@ -60,6 +60,14 @@ class LocatorConformanceTest {
         override fun labeledByText(): CharSequence? = labeledBy
 
         override fun descendantTextParts(): List<String> = childTexts
+
+        private val rowName =
+            c.optStringOrNull("rowName")?.let { RowName(it, c.optStringOrNull("rowLabel") ?: it) }
+        private val parentClass = c.optStringOrNull("parentType")
+
+        override fun rowName(): RowName? = rowName
+
+        override fun parentClassName(): String? = parentClass
     }
 
     private fun regexOf(q: JSONObject): TextRegex =

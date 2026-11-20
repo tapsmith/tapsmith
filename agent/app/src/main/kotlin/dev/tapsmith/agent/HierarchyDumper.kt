@@ -21,13 +21,17 @@ import java.io.ByteArrayOutputStream
  * bundle extras but the stock dump doesn't include, and `tapsmith-expanded`
  * for elements with an expanded state (their expand/collapse actions). A
  * Jetpack Compose control gets the role of its role carrier, which is marked
- * `tapsmith-role-carrier` ([ComposeRoles], PILOT-828).
+ * `tapsmith-role-carrier` ([ComposeRoles], PILOT-828). A control with no
+ * name of its own that takes its row's ([RowName]) gets `tapsmith-name` and
+ * `tapsmith-label`, so the picker and the playground can name it.
  */
 class HierarchyDumper internal constructor(
     private val device: UiDevice,
     private val instrumentation: Instrumentation,
     /** The finder's reading of a node for [ComposeRoles], so the dump and getByRole agree. */
     private val composeShapeOf: (AccessibilityNodeInfo) -> ComposeRoles.NodeShape,
+    /** The finder's row name for a node ([RowName]), so the dump and getByRole/getByLabel agree. */
+    private val rowNameOf: (AccessibilityNodeInfo) -> RowName?,
 ) {
     companion object {
         private const val TAG = "TapsmithHierarchy"
@@ -182,10 +186,15 @@ class HierarchyDumper internal constructor(
         val carried = carriedRole(node, children.lastOrNull())
         val role = if (isCarrier) null else extractRoleFromNodeInfo(node)
         val expanded = extractExpandedFromNodeInfo(node)
-        if (role != null || expanded != null) {
+        val row = if (node.isCheckable) rowNameOf(node) else null
+        if (role != null || expanded != null || row != null) {
             val attrs = attrMap.getOrPut(dumpedBoundsKey(node, clip)) { mutableMapOf() }
             role?.let { attrs["tapsmith-role"] = it }
             expanded?.let { attrs["tapsmith-expanded"] = it.toString() }
+            row?.let {
+                attrs[RowName.NAME_DUMP_ATTRIBUTE] = it.name
+                attrs[RowName.LABEL_DUMP_ATTRIBUTE] = it.label
+            }
         }
         carried?.let { (carriedRole, carrier) ->
             carriers[HierarchyAttributes.nodeKey(dumpedBounds(carrier, clip), carrier.className?.toString())] = carriedRole

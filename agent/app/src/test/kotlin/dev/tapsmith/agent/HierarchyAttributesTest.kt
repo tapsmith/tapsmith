@@ -181,6 +181,15 @@ class HierarchyAttributesTest {
         )
     }
 
+    @Test
+    fun `keeps a row name's line breaks and drops characters XML cannot hold`() {
+        val xml = """<node bounds="[0,0][1,1]" />"""
+        assertEquals(
+            """<node bounds="[0,0][1,1]" tapsmith-name="Full black&#10;Dark&#9;theme" />""",
+            HierarchyAttributes.inject(xml, mapOf("[0,0][1,1]" to mapOf("tapsmith-name" to "Full black\nDark\ttheme\u0001"))),
+        )
+    }
+
     // ─── Non-app window roots (PILOT-756) ───
 
     private val statusBar = HierarchyAttributes.windowRootKey(Box(0, 0, 1080, 63), "com.android.systemui")

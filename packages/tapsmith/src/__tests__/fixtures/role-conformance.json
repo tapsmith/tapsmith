@@ -1769,6 +1769,151 @@
         "ignoreCase": false
       },
       "matches": true
+    },
+    {
+      "why": "an unnamed switch is named by its row's title",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "name": "Full black",
+      "matches": true
+    },
+    {
+      "why": "and by its summary, a part of the row's name",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "name": "dark theme",
+      "matches": true
+    },
+    {
+      "why": "not by another row's title",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "name": "Dynamic colors",
+      "matches": false
+    },
+    {
+      "why": "exact compares the row's whole name",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "name": "Full black",
+      "exact": true,
+      "matches": false
+    },
+    {
+      "why": "exact matches the row's whole name",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "name": "Full black Use full black for the dark theme",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "a RegExp tests the row's name",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "name": {
+        "source": "^full black",
+        "flags": "i",
+        "pattern": "\\Afull\\u0020black",
+        "ignoreCase": true
+      },
+      "matches": true
+    },
+    {
+      "why": "a RegExp for no name does not match a row-named switch",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "name": {
+        "source": "^$",
+        "flags": "",
+        "pattern": "\\A\\z",
+        "ignoreCase": false
+      },
+      "matches": false
+    },
+    {
+      "why": "a CheckBoxPreference's checkbox is named by its row",
+      "platform": "android",
+      "type": "android.widget.CheckBox",
+      "role": "checkbox",
+      "rowName": "Wi-Fi only",
+      "rowLabel": "Wi-Fi only",
+      "name": "Wi-Fi only",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "a row-named switch is still found without a name",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "role": "switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "matches": true
+    },
+    {
+      "why": "a RecyclerView's row is a listitem",
+      "platform": "android",
+      "type": "android.widget.LinearLayout",
+      "role": "listitem",
+      "parentType": "androidx.recyclerview.widget.RecyclerView",
+      "matches": true
+    },
+    {
+      "why": "a ListView's row is a listitem",
+      "platform": "android",
+      "type": "android.widget.RelativeLayout",
+      "role": "listitem",
+      "parentType": "android.widget.ListView",
+      "childTexts": [
+        "Full black"
+      ],
+      "name": "Full black",
+      "matches": true
+    },
+    {
+      "why": "a layout inside a row is no listitem",
+      "platform": "android",
+      "type": "android.widget.RelativeLayout",
+      "role": "listitem",
+      "parentType": "android.widget.LinearLayout",
+      "matches": false
+    },
+    {
+      "why": "a content frame is no listitem",
+      "platform": "android",
+      "type": "android.widget.FrameLayout",
+      "role": "listitem",
+      "parentType": "android.widget.FrameLayout",
+      "matches": false
+    },
+    {
+      "why": "a root layout is no listitem",
+      "platform": "android",
+      "type": "android.widget.LinearLayout",
+      "role": "listitem",
+      "matches": false
     }
   ]
 }

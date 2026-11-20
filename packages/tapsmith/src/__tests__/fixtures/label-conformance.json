@@ -510,6 +510,47 @@
       ],
       "query": "Canada",
       "matches": false
+    },
+    {
+      "why": "a row's title labels its unnamed switch",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "query": "Full black",
+      "matches": true
+    },
+    {
+      "why": "a row's summary is no label",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "query": "Use full black for the dark theme",
+      "matches": false
+    },
+    {
+      "why": "a row's whole name is no label",
+      "platform": "android",
+      "type": "android.widget.Switch",
+      "rowName": "Full black Use full black for the dark theme",
+      "rowLabel": "Full black",
+      "query": "Full black Use full black for the dark theme",
+      "matches": false
+    },
+    {
+      "why": "RegExp tests a row's title",
+      "platform": "android",
+      "type": "android.widget.CheckBox",
+      "rowName": "Wi-Fi only",
+      "rowLabel": "Wi-Fi only",
+      "query": {
+        "source": "^wi-fi",
+        "flags": "i",
+        "pattern": "\\Awi\\-fi",
+        "ignoreCase": true
+      },
+      "matches": true
     }
   ]
 }

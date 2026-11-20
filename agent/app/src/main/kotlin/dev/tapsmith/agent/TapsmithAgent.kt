@@ -86,7 +86,7 @@ class TapsmithAgent : Instrumentation() {
                 answerSystemDialogs = systemDialogs::answer,
             )
         val actionExecutor = ActionExecutor(device, this, occlusionGuard, input)
-        val hierarchyDumper = HierarchyDumper(device, this, elementFinder::composeShapeOf)
+        val hierarchyDumper = HierarchyDumper(device, this, elementFinder::composeShapeOf) { elementFinder.rowNameOf(it, fresh = true) }
         val commandHandler =
             CommandHandler(
                 context = targetContext,
