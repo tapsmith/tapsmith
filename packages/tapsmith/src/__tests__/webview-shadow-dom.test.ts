@@ -441,5 +441,29 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
       const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
       expect(nodes.some((n) => n.attributes.get('webview-id') === 'deep')).toBe(true);
     });
+
+    it('a pick on a switch\'s or tab\'s own parts picks the switch or tab', async () => {
+      // ion-toggle (the host is the switch) and ion-tab-button (role="tab")
+      // with an aria-hidden icon inside.
+      const { handle } = handleOn('<!DOCTYPE html><body data-rect="0,0,100,100">'
+        + '<x-toggle id="t" role="switch" data-rect="0,0,100,40">Email notifications</x-toggle>'
+        + '<x-tab id="b" role="tab" data-rect="0,50,100,90"><x-icon aria-hidden="true" data-rect="40,55,60,75"></x-icon>Settings</x-tab></body>', (doc) => {
+        doc.getElementById('t')!.attachShadow({ mode: 'open' }).innerHTML =
+          '<label data-rect="0,0,100,40"><div class="label-text-wrapper" data-rect="0,0,70,40"><slot></slot></div>'
+          + '<div class="toggle-inner" data-rect="70,0,100,40"></div></label>';
+        doc.querySelector('x-icon')!.attachShadow({ mode: 'open' }).innerHTML = '<svg data-rect="40,55,60,75"><path data-rect="45,60,55,70"></path></svg>';
+      });
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      for (const [x, y] of [[30, 20], [85, 20]]) {
+        expect(generateSelectors(pickNodeAt(roots, x!, y!)!.node)[0]?.code).toBe('webview.getByRole("switch", { name: "Email notifications" })');
+      }
+      expect(pickNodeAt(roots, 50, 65)!.node.attributes.get('webview-id')).toBe('b');
+    });
+
+    it('suggests no role locator for an element assistive technology does not see', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><button aria-hidden="true">Hidden</button></body>');
+      const button = parseHierarchyXml((await handle._dumpDomHierarchy())!)[0]!.children[0]!;
+      expect(generateSelectors(button).map((g) => g.code).filter((c) => c.includes('getByRole'))).toEqual([]);
+    });
   });
 });

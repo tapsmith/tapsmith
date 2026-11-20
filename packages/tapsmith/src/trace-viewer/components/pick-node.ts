@@ -37,19 +37,22 @@ function owningSwitch(roots: HierarchyNode[], part: HierarchyNode): HierarchyNod
 }
 
 /** WebView roles a pick stays on: the control the user clicked, even inside another one. */
-const WEBVIEW_CONTROL_ROLES = new Set(['button', 'link', 'textfield', 'checkbox', 'radio', 'switch', 'combobox', 'slider']);
+const WEBVIEW_CONTROL_ROLES = new Set(['button', 'link', 'textfield', 'checkbox', 'radio', 'switch', 'tab', 'combobox', 'slider']);
+
+/** WebView controls a pick on their own parts (a label, a knob, an icon) moves up to. */
+const WEBVIEW_PICK_TARGET_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'switch', 'tab']);
 
 /**
- * The web button or link a WebView node is part of (a span or icon inside
- * it, such as the inner parts of an ion-button), or null when the node is a
- * control itself or inside none. A pick there picks the control, as
- * Playwright's picker does.
+ * The web control a WebView node is part of (a span, knob or icon inside a
+ * button, link, switch, checkbox, radio or tab, such as the inner parts of an
+ * ion-button or ion-toggle), or null when the node is a control itself or
+ * inside none. A pick there picks the control, as Playwright's picker does.
  */
 function owningWebViewControl(roots: HierarchyNode[], node: HierarchyNode): HierarchyNode | null {
   if (node.attributes.get('webview') !== 'true' || WEBVIEW_CONTROL_ROLES.has(getNodeRole(node))) return null;
   for (let current = findParent(roots, node); current?.attributes.get('webview') === 'true'; current = findParent(roots, current)) {
     const role = getNodeRole(current);
-    if ((role === 'button' || role === 'link') && getNodeBounds(current)) return current;
+    if (WEBVIEW_PICK_TARGET_ROLES.has(role) && getNodeBounds(current)) return current;
   }
   return null;
 }
