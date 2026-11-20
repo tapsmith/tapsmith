@@ -6,6 +6,8 @@ export class HomeScreen {
   get header() { return this.device.getByText("Test Screens", { exact: true }) }
   /** The navigation bar's title: the app's name, which is also the iOS application element's label. */
   get navigationTitle() { return this.device.getByText("Tapsmith Test App", { exact: true }) }
+  /** Android: the activity's AppCompat root view, by its bare R.id name or a whole resource id. */
+  appRoot(id = "action_bar_root") { return this.device.locator({ id }) }
 
 
   // Navigation cards

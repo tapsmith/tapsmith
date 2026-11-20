@@ -1053,7 +1053,7 @@ class ActionExecutor(
                         By.text(TextMatch.containsPattern(targetSelector.textContains))
                     targetSelector.textRegex != null -> By.text(targetSelector.textRegex.fullMatchPattern())
                     targetSelector.contentDesc != null -> By.desc(targetSelector.contentDesc)
-                    targetSelector.id != null -> By.res(targetSelector.id)
+                    targetSelector.id != null -> By.res(ResourceIdMatch.pattern(targetSelector.id))
                     else -> throw InvalidSelectorException("scrollTo requires text, textContains, textRegex, contentDesc, or id")
                 }
 

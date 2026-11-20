@@ -147,7 +147,7 @@ device.locator({ xpath: "//android.widget.Button[@text='OK']" })
 
 | Option | Type | Description |
 |---|---|---|
-| `id` | `string` | Native resource id (Android `R.id.foo` or iOS `accessibilityIdentifier`). |
+| `id` | `string` | Native resource id. On Android, the bare `R.id` name (`"email_input"`) matches that id under any package, so it works whatever `applicationIdSuffix` the build adds; a package-qualified id (`"com.myapp.debug:id/email_input"`, with the installed app's package) matches only itself. On iOS, the whole `accessibilityIdentifier`. |
 | `xpath` | `string` | XPath expression. Android-only, and for use on its own. `and()`/`or()` refuse an xpath operand with an error (its text and bounds come from a different agent read and could never match the other side). Narrowing (`filter()`, `first()`/`nth()`) and chaining it off another locator still query, but actions through such an xpath locator fail at the agent — it cannot act on an xpath match by id. |
 | `className` | `string` | Native widget class name. |
 
