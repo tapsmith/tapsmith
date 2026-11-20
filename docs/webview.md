@@ -87,7 +87,7 @@ if (kDebugMode && platform is WebKitWebViewController) {
 
 On iOS, Tapsmith connects via the simulator's WebKit Inspector protocol directly. No additional tooling or browser setup is required.
 
-Tapsmith finds your app's WebView by its bundle identifier. A simulator build made with code signing turned off (`xcodebuild … CODE_SIGNING_ALLOWED=NO`, common in CI recipes) has none as far as the WebKit Inspector is concerned: it lists the app as `process-<executable name>`. Tapsmith then matches the app by the process ID it runs under on the simulator, so such builds work too; the app must be running when `device.webview()` is called, as it must be anyway. If the connect still times out, the error names the apps that had inspectable pages, and says when one of them had no bundle identifier.
+Tapsmith finds your app's WebView by its bundle identifier. A simulator build made with code signing turned off (`xcodebuild … CODE_SIGNING_ALLOWED=NO`, common in CI recipes) has none as far as the WebKit Inspector is concerned: it lists the app as `process-<executable name>`. Tapsmith then matches the app by the process ID it runs under on the simulator, so such builds work too. If the connect still times out, the error names the apps that had inspectable pages, and says when one of them had no bundle identifier.
 
 ## Switching to WebView Context
 
