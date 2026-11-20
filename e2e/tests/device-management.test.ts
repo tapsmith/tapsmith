@@ -31,6 +31,24 @@ describe("App lifecycle", () => {
     expect(state).toBe("foreground");
   });
 
+  // Expo's default bundle id has a hyphen (com.anonymous.my-app): iOS allows
+  // one, so the daemon must pass it to the agent; Android's package names
+  // cannot have one, so it is refused up front with Android's rule.
+  test("getAppState() takes a hyphenated iOS bundle id, refused on Android", async ({
+    device,
+  }) => {
+    const id = "dev.tapsmith.not-installed";
+    if (device.platform === "ios") {
+      expect(await device.getAppState(id)).toBe("stopped");
+    } else {
+      const error = await device.getAppState(id).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(
+        /invalid Android package name.*letters, digits, dots and underscores/,
+      );
+    }
+  });
+
   test("terminateApp() stops the app", async ({ device }) => {
     await device.terminateApp(PKG);
     const state = await device.getAppState(PKG);
