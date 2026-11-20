@@ -1842,21 +1842,16 @@ async fn wait_for_turn(serial: &str, wanted: u8) -> Result<(), String> {
         let output = adb::shell(serial, probe)
             .await
             .map_err(|e| format!("could not read the display's rotation: {e}"))?;
-        if probe == TURN_PROBE
-            && default_display_section(&output).is_some_and(|s| display_rotation(s).is_none())
-        {
-            probe = LEGACY_TURN_PROBE;
-            continue;
-        }
-        match turn_state(&output, wanted) {
-            TurnState::Unknown => {
+        match next_turn_step(&output, probe, wanted, started.elapsed()) {
+            TurnStep::UseLegacyProbe => {
+                probe = LEGACY_TURN_PROBE;
+                continue;
+            }
+            TurnStep::Unreadable => {
                 warn!("Could not read the display's rotation; not waiting for it to turn");
                 return Ok(());
             }
-            TurnState::Settled {
-                turned,
-                setting_seen,
-            } if turned || setting_seen || started.elapsed() >= TURN_UNSEEN_GRACE => {
+            TurnStep::Done { turned } => {
                 if !turned {
                     info!(
                         wanted,
@@ -1865,15 +1860,57 @@ async fn wait_for_turn(serial: &str, wanted: u8) -> Result<(), String> {
                 }
                 return Ok(());
             }
-            _ => {}
+            TurnStep::TimedOut => {
+                return Err(format!(
+                    "the screen was still turning {} s after it was asked to turn",
+                    TURN_TIMEOUT.as_secs()
+                ));
+            }
+            TurnStep::Poll => tokio::time::sleep(TURN_POLL).await,
         }
-        if started.elapsed() >= TURN_TIMEOUT {
-            return Err(format!(
-                "the screen was still turning {} s after it was asked to turn",
-                TURN_TIMEOUT.as_secs()
-            ));
+    }
+}
+
+/// What [`wait_for_turn`] does after reading `probe`'s `output`, `elapsed`
+/// into the wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnStep {
+    /// The display's section shows no rotation: read [`LEGACY_TURN_PROBE`]
+    /// from now on.
+    UseLegacyProbe,
+    /// Nothing to wait on: the output cannot be read.
+    Unreadable,
+    /// At rest; `turned` is false when the app in front holds its orientation.
+    Done { turned: bool },
+    /// Still turning at [`TURN_TIMEOUT`].
+    TimedOut,
+    /// Read again after [`TURN_POLL`].
+    Poll,
+}
+
+fn next_turn_step(output: &str, probe: &str, wanted: u8, elapsed: Duration) -> TurnStep {
+    if probe == TURN_PROBE
+        && default_display_section(output).is_some_and(|s| display_rotation(s).is_none())
+    {
+        return TurnStep::UseLegacyProbe;
+    }
+    match turn_state(output, wanted) {
+        TurnState::Unknown => return TurnStep::Unreadable,
+        // A display that has not turned is only taken as held once the
+        // window manager is known to have the setting, or has had the grace
+        // to start turning.
+        TurnState::Settled {
+            turned,
+            setting_seen,
+        } if turned || setting_seen || elapsed >= TURN_UNSEEN_GRACE => {
+            return TurnStep::Done { turned };
         }
-        tokio::time::sleep(TURN_POLL).await;
+        _ => {}
+    }
+    if elapsed >= TURN_TIMEOUT {
+        TurnStep::TimedOut
+    } else {
+        TurnStep::Poll
     }
 }
 
@@ -2109,6 +2146,80 @@ mod tests {
                 turned: true,
                 setting_seen: true
             }
+        );
+    }
+
+    #[test]
+    fn the_wait_ends_once_the_turn_settles_and_fails_only_at_the_timeout() {
+        let ms = Duration::from_millis;
+        assert_eq!(
+            next_turn_step(API36_TURNING, TURN_PROBE, 1, ms(100)),
+            TurnStep::Poll
+        );
+        assert_eq!(
+            next_turn_step(API36_TURNING, TURN_PROBE, 1, TURN_TIMEOUT),
+            TurnStep::TimedOut
+        );
+        assert_eq!(
+            next_turn_step(API36_TURNED, TURN_PROBE, 1, ms(100)),
+            TurnStep::Done { turned: true }
+        );
+        // Settled wins over the timeout.
+        assert_eq!(
+            next_turn_step(API36_TURNED, TURN_PROBE, 1, TURN_TIMEOUT),
+            TurnStep::Done { turned: true }
+        );
+        // Output that cannot be read tries the whole dump, then gives up.
+        assert_eq!(
+            next_turn_step("garbage", TURN_PROBE, 1, ms(0)),
+            TurnStep::UseLegacyProbe
+        );
+        assert_eq!(
+            next_turn_step("garbage", LEGACY_TURN_PROBE, 1, ms(0)),
+            TurnStep::Unreadable
+        );
+    }
+
+    #[test]
+    fn a_held_orientation_ends_the_wait_at_once_when_the_setting_is_seen() {
+        let held = "  Display: mDisplayId=0\n    init=1080x2400 420dpi cur=1080x2400\n  DisplayRotation\n    mRotation=0 mDeferredRotationPauseCount=0\n    mUserRotation=ROTATION_90\n";
+        assert_eq!(
+            next_turn_step(held, TURN_PROBE, 1, Duration::ZERO),
+            TurnStep::Done { turned: false }
+        );
+    }
+
+    #[test]
+    fn without_the_setting_an_unturned_display_counts_as_held_only_after_the_grace() {
+        // Shows a rotation but no user rotation: the setting may not be taken yet.
+        let unseen =
+            "  Display: mDisplayId=0\n    init=1080x2400 420dpi cur=1080x2400\n    mRotation=0\n";
+        assert_eq!(
+            next_turn_step(unseen, TURN_PROBE, 1, Duration::from_millis(200)),
+            TurnStep::Poll
+        );
+        assert_eq!(
+            next_turn_step(unseen, TURN_PROBE, 1, TURN_UNSEEN_GRACE),
+            TurnStep::Done { turned: false }
+        );
+    }
+
+    #[test]
+    fn a_display_section_without_a_rotation_switches_to_the_whole_dump() {
+        let api28_displays = "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  Display: mDisplayId=0\n    init=1080x1920 420dpi cur=1080x1920 app=1080x1794\n";
+        assert_eq!(
+            next_turn_step(api28_displays, TURN_PROBE, 1, Duration::ZERO),
+            TurnStep::UseLegacyProbe
+        );
+        // The whole dump is then read as it is, without switching again.
+        assert_eq!(
+            next_turn_step(API28_TURNING, LEGACY_TURN_PROBE, 1, Duration::ZERO),
+            TurnStep::Poll
+        );
+        let turned = API28_TURNING.replace("  mScreenRotationAnimation:\n", "");
+        assert_eq!(
+            next_turn_step(&turned, LEGACY_TURN_PROBE, 1, Duration::ZERO),
+            TurnStep::Done { turned: true }
         );
     }
 
