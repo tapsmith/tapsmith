@@ -2416,12 +2416,19 @@ impl TapsmithServiceImpl {
                     return Ok(());
                 };
                 if let hid_reach::HidReach::Unreachable(why) = &reach {
+                    let instead =
+                        if hid_required_from(std::env::var(REQUIRE_IOS_HID_ENV).ok().as_deref()) {
+                            format!("{REQUIRE_IOS_HID_ENV} is set, so they fail instead")
+                        } else {
+                            "Taps, double taps, long presses and scroll drags use the agent's \
+                         synthesized touches for this session instead"
+                                .to_string()
+                        };
                     warn!(
                         udid,
-                        "iOS simulator HID touches would not reach the app: {why}. Taps, \
-                         double taps, long presses and scroll drags use the agent's \
-                         synthesized touches for this session instead. Close the simulator's \
-                         DeviceHub window and reboot the simulator to get HID touches back"
+                        "iOS simulator HID touches would not reach the app: {why}. {instead}. \
+                         Close the simulator's DeviceHub window and reboot the simulator to get \
+                         HID touches back"
                     );
                 }
                 known.insert(udid.to_string(), reach.clone());
@@ -2432,6 +2439,16 @@ impl TapsmithServiceImpl {
             hid_reach::HidReach::Reachable => Ok(()),
             hid_reach::HidReach::Unreachable(why) => Err(anyhow::anyhow!(why)),
         }
+    }
+
+    /// The agent said this session that `udid`'s HID touches would be
+    /// dropped (`ensure_hid`).
+    #[cfg(target_os = "macos")]
+    async fn hid_known_unreachable(&self, udid: &str) -> bool {
+        matches!(
+            self.hid_reach.lock().await.get(udid),
+            Some(hid_reach::HidReach::Unreachable(_))
+        )
     }
 
     /// Try to handle a streamed-touch event via the iOS-simulator HID path.
@@ -2459,6 +2476,10 @@ impl TapsmithServiceImpl {
                 warn!(%udid, error = %e, "iOS HID helper unavailable; falling back to agent");
                 return false;
             }
+        } else if self.hid_known_unreachable(&udid).await {
+            // The gesture's down went to the agent (`ensure_hid` refused it
+            // with the helper running), so the rest of it goes there too.
+            return false;
         }
         // A gesture's down may move to a new helper if the old one's stdin
         // broke; the rest of the gesture may not.
@@ -2890,6 +2911,7 @@ impl TapsmithServiceImpl {
                 &step,
                 self.hid_drag_seen_moving
                     .load(std::sync::atomic::Ordering::Relaxed),
+                hid_required_from(std::env::var(REQUIRE_IOS_HID_ENV).ok().as_deref()),
             ) {
                 debug!(
                     "scroll step: the list held still after a HID drag, and no HID drag has \
@@ -9120,6 +9142,10 @@ mod tests {
         // Asked once a session: later touches go straight to the agent.
         assert!(svc.ensure_hid("SIM-1").await.is_err());
         assert_eq!(*seen.lock().unwrap(), vec!["hidTouchInput"]);
+        // The helper is running, so a streamed gesture's moves and lift must
+        // follow its down to the agent rather than go to the helper.
+        assert!(svc.hid_known_unreachable("SIM-1").await);
+        assert!(!svc.hid_known_unreachable("SIM-OTHER").await);
         svc.hid_injector.shutdown("SIM-1").await;
     }
 
@@ -9133,6 +9159,7 @@ mod tests {
         svc.ensure_hid("SIM-2").await.unwrap();
         svc.ensure_hid("SIM-2").await.unwrap();
         assert_eq!(*seen.lock().unwrap(), vec!["hidTouchInput"]);
+        assert!(!svc.hid_known_unreachable("SIM-2").await);
         svc.hid_injector.shutdown("SIM-2").await;
     }
 

@@ -62,11 +62,16 @@ fn reach_from_data(data: &Value) -> HidReach {
 /// the step answers `unsupported`, so the SDK makes that scroll the old way,
 /// with the agent's swipe, rather than giving up on a list the helper never
 /// touched. A step that found the element on screen stands: the scroll is done.
+/// So does every step when the HID route is required
+/// (`TAPSMITH_REQUIRE_IOS_HID`): a HID drag that moved nothing must fail
+/// there, not pass on the agent's swipe.
 pub(super) fn distrust_still_step(
     step: &crate::proto::ScrollStepResponse,
     hid_drag_seen_moving: bool,
+    hid_required: bool,
 ) -> bool {
-    step.moved == crate::proto::scroll_step_response::Moved::No as i32
+    !hid_required
+        && step.moved == crate::proto::scroll_step_response::Moved::No as i32
         && step.error_message.is_empty()
         && !step.elements.iter().any(|e| e.visible)
         && !hid_drag_seen_moving
@@ -158,25 +163,29 @@ mod tests {
     #[test]
     fn a_still_step_is_distrusted_until_a_hid_drag_has_moved_a_list() {
         use crate::proto::scroll_step_response::Moved;
-        assert!(distrust_still_step(&step(Moved::No, false), false));
+        assert!(distrust_still_step(&step(Moved::No, false), false, false));
         assert!(
-            !distrust_still_step(&step(Moved::No, false), true),
+            !distrust_still_step(&step(Moved::No, false), true, false),
             "a list end, once HID is proven"
         );
-        assert!(!distrust_still_step(&step(Moved::Yes, false), false));
+        assert!(!distrust_still_step(&step(Moved::Yes, false), false, false));
         assert!(
-            !distrust_still_step(&step(Moved::Unspecified, false), false),
+            !distrust_still_step(&step(Moved::Unspecified, false), false, false),
             "the agent could not tell"
         );
         assert!(
-            !distrust_still_step(&step(Moved::No, true), false),
+            !distrust_still_step(&step(Moved::No, true), false, false),
             "the element is on screen: the scroll is done"
         );
         let mut failed = step(Moved::No, false);
         failed.error_message = "boom".into();
         assert!(
-            !distrust_still_step(&failed, false),
+            !distrust_still_step(&failed, false, false),
             "a failed step reports its failure"
+        );
+        assert!(
+            !distrust_still_step(&step(Moved::No, false), false, true),
+            "under TAPSMITH_REQUIRE_IOS_HID a still step stands"
         );
     }
 }
