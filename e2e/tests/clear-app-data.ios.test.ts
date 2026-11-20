@@ -49,8 +49,10 @@ describe("clearAppData on an iOS simulator", () => {
     const statePath = path.join(process.cwd(), "tapsmith-results", `preferences-state${suffix}.tar.gz`)
 
     await preferencesScreen.open()
+    // cfprefsd writes a domain's first plist at once but defers later
+    // changes, so the value to save is the second write, saved at once.
+    await preferencesScreen.save("first-value")
     await preferencesScreen.save("saved-value")
-    // No wait: cfprefsd has not written the value to disk yet.
     await device.saveAppState(PKG, statePath)
 
     await device.launchApp(PKG)
