@@ -27,6 +27,7 @@ describe('parseStatements — accepted forms', () => {
     'await device.getByRole("button", { name: "Save" }).tap({ timeout: 2000 });',
     'await device.getByText("Row 40").scrollIntoView();',
     'await device.getByText("Row 40").scrollIntoView({ direction: "down", maxScrolls: 20 });',
+    'await device.getByText("Row 40").scrollIntoView({ timeout: 10000 });',
     'await device.getByText("Item").longPress();',
     'await device.getByText("Item").longPress(1500);',
     'await device.getByText("Item").longPress(1500, { timeout: 3000 });',

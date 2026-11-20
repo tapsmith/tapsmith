@@ -5,6 +5,7 @@ import { CoversScreen } from "./screens/covers.screen.js"
 import { ApiCallsScreen } from "./screens/api-calls.screen.js"
 import { CarouselScreen } from "./screens/carousel.screen.js"
 import { StackScreen } from "./screens/stack.screen.js"
+import { DelayedListScreen } from "./screens/delayed-list.screen.js"
 import { DialogsScreen } from "./screens/dialogs.screen.js"
 import { DragScreen } from "./screens/drag.screen.js"
 import { GesturesScreen } from "./screens/gestures.screen.js"
@@ -34,6 +35,7 @@ type ScreenFixtures = {
   coversScreen: CoversScreen
   carouselScreen: CarouselScreen
   stackScreen: StackScreen
+  delayedListScreen: DelayedListScreen
   dialogsScreen: DialogsScreen
   dragScreen: DragScreen
   gesturesScreen: GesturesScreen
@@ -75,6 +77,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   stackScreen: async ({ device }, use) => {
     await use(new StackScreen(device))
+  },
+  delayedListScreen: async ({ device }, use) => {
+    await use(new DelayedListScreen(device))
   },
   dialogsScreen: async ({ device }, use) => {
     await use(new DialogsScreen(device))

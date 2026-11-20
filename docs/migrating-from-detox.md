@@ -57,7 +57,7 @@ This guide is for teams with a Detox suite who want to move it to Tapsmith. Of t
 | `.clearText()` | [`.clear()`](api-reference.md#elementhandleclearoptions-promisevoid) |
 | `.tapReturnKey()` | [`device.pressKey("ENTER")`](api-reference.md#devicepresskeykey-devicekey-promisevoid) |
 | `.scroll(200, "down")` | [`.scroll("down")`](api-reference.md#elementhandlescrolldirection-swipedirection-options-promisevoid) scrolls the view by a step of its own size (no offset in points); to reach an element, prefer `scrollIntoView()` |
-| `waitFor(el).toBeVisible().whileElement(by.id("list")).scroll(50, "down")` | [`el.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid) |
+| `waitFor(el).toBeVisible().whileElement(by.id("list")).scroll(50, "down")` | [`el.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number-timeout-number--promisevoid) |
 | `.swipe("up")` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid) |
 | `.pinch(0.5)` (iOS) | [`.pinchIn()`](api-reference.md#elementhandlepinchinoptions-promisevoid) / [`.pinchOut()`](api-reference.md#elementhandlepinchoutoptions-promisevoid), on both platforms |
 
