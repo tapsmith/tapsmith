@@ -63,7 +63,6 @@ function uniquelyMatches(code: string, roots: HierarchyNode[], node: HierarchyNo
   return matches.length === 1 && nodeIndexIn(matches, node) === 0;
 }
 
-/** (a) Ambiguous substring getByText → try the { exact: true } variant. */
 /**
  * A bare `locator({ id })` that another package's id shares → the node's
  * full package-qualified id, if that pins it.
@@ -80,6 +79,7 @@ function tryFullResourceIdUpgrade(
   return { ...s, code: upgraded };
 }
 
+/** (a) Ambiguous substring getByText → try the { exact: true } variant. */
 function tryExactTextUpgrade(
   s: GeneratedSelector,
   roots: HierarchyNode[],
