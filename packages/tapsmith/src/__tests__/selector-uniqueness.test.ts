@@ -837,9 +837,11 @@ describe('Android: a row-named switch whose title is in another row', () => {
   const schedule = sw('Schedule', 'Turn on dark theme at sunset');
   const roots = [makeNode('node', { class: 'android.widget.FrameLayout' }, [dark, schedule])];
 
-  it('pins the title by the whole row name, exact, not by position', () => {
-    const best = disambiguateSelectors(roots, dark, generateSelectors(dark))[0];
-    expect(best.code).toBe('device.getByRole("switch", { name: "Dark theme Use a dark background", exact: true })');
+  it('pins it by its row title as a label: not by position, nor by a summary a toggle changes', () => {
+    const suggestions = disambiguateSelectors(roots, dark, generateSelectors(dark));
+    const best = suggestions[0];
+    expect(best.code).toBe('device.getByLabel("Dark theme")');
     expect(findMatchingNodes(roots, parseSelectorString(best.code)!)).toEqual([dark]);
+    expect(suggestions.map((s) => s.code).join('\n')).not.toContain('Use a dark background');
   });
 });

@@ -108,13 +108,14 @@ function tryExactRoleNameUpgrade(
 }
 
 /**
- * The node's whole accessible name, as role-name matching reads it first — or,
- * for an Android control with none of its own, the name its row gives it
- * (`tapsmith-name`), as agent-suggestions.ts reads it.
+ * The node's whole accessible name, as role-name matching reads it first. Not
+ * an Android row name (`tapsmith-name`): it ends with the row's summary, which
+ * a SwitchPreference changes when it is toggled, so pinning it exactly would
+ * break right after a tap. An ambiguous row title is pinned by `getByLabel`
+ * (the row's title alone) instead.
  */
 function fullAccessibleName(node: HierarchyNode): string {
-  return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text')
-    || node.attributes.get('tapsmith-name') || '';
+  return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
 }
 
 /** (b) Ambiguous getByRole without a name → try adding the accessible name. */
