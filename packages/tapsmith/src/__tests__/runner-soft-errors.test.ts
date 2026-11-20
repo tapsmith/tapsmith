@@ -128,3 +128,34 @@ describe('runTestFile — soft assertion failures', () => {
     expect(results.map((r) => [r.status, r.retry])).toEqual([['passed', 1], ['passed', undefined]]);
   });
 });
+
+describe('soft errors shared with another copy of the SDK', () => {
+  // A global CLI and the project's own install can be different versions in
+  // one process. Older copies keep the errors as an array on this key, push
+  // to it, and replace it with an empty one when they flush.
+  const LEGACY_KEY = Symbol.for('tapsmith.softErrors');
+  const g = globalThis as unknown as Record<symbol, Error[]>;
+
+  it('takes failures an older copy recorded, and gives an older runner the ones this copy recorded', async () => {
+    const { expect: softExpect } = await import('../expect.js');
+    g[LEGACY_KEY].push(new Error('from an older copy'));
+    softExpect.soft(1).toBe(2);
+
+    // What an older runner's flush does: read the array and replace it.
+    const seenByOlderRunner = g[LEGACY_KEY];
+    g[LEGACY_KEY] = [];
+    expect(seenByOlderRunner.map((e) => e.message)).toEqual(['from an older copy', 'Expected 1 to be 2']);
+
+    g[LEGACY_KEY].push(new Error('after the older flush'));
+    expect(takeSoftErrors().map((e) => e.message)).toEqual(['after the older flush']);
+  });
+
+  it('starts flushSoftErrors() over when an older copy replaced the array', async () => {
+    const { expect: softExpect, flushSoftErrors } = await import('../expect.js');
+    softExpect.soft(1).toBe(2);
+    softExpect.soft(3).toBe(4);
+    expect(flushSoftErrors()).toHaveLength(2);
+    g[LEGACY_KEY] = [new Error('recorded after an older flush')];
+    expect(flushSoftErrors().map((e) => e.message)).toEqual(['recorded after an older flush']);
+  });
+});

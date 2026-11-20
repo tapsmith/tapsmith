@@ -1571,36 +1571,42 @@ const TO_PASS_STAND_IN = notSupportedYet(
 // ─── PILOT-43: Soft assertions ───
 
 // Kept on globalThis so that every copy of this module loaded in one process
-// (the SDK from dist and from a test file's own import) shares one record.
-// The runner owns `errors`: it takes them all at the end of each attempt.
-// `flushSoftErrors()` only reads, so a test that reads its failures still
-// fails, as in Playwright.
-interface SoftErrorState {
-  errors: Error[];
-  /** How many of `errors` the test has already read with `flushSoftErrors()`. */
-  flushed: number;
+// (the SDK from dist and from a test file's own import, or a global CLI and a
+// project's own install at another version) shares one record. The errors
+// stay an array under the original key, which every SDK version reads and
+// writes, and are read afresh on each access because older copies replace
+// the array when they flush. The runner owns them: it takes them all at the
+// end of each attempt. `flushSoftErrors()` only reads, keeping its place
+// under a key of its own, so a test that reads its failures still fails, as
+// in Playwright.
+interface SoftErrorCursor {
+  /** The errors array the count refers to; a replaced array starts at 0. */
+  of: Error[];
+  /** How many of `of` the test has already read with `flushSoftErrors()`. */
+  count: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _G = globalThis as any;
-const SOFT_ERRORS_KEY = Symbol.for('tapsmith.softErrorState');
-if (!_G[SOFT_ERRORS_KEY]) _G[SOFT_ERRORS_KEY] = { errors: [], flushed: 0 } satisfies SoftErrorState;
+const SOFT_ERRORS_KEY = Symbol.for('tapsmith.softErrors');
+const SOFT_ERRORS_CURSOR_KEY = Symbol.for('tapsmith.softErrorsFlushed');
+if (!_G[SOFT_ERRORS_KEY]) _G[SOFT_ERRORS_KEY] = [] as Error[];
 
-function softErrorState(): SoftErrorState { return _G[SOFT_ERRORS_KEY]; }
-function recordSoftError(err: Error): void { softErrorState().errors.push(err); }
+function softErrors(): Error[] { return _G[SOFT_ERRORS_KEY]; }
+function recordSoftError(err: Error): void { softErrors().push(err); }
 
 /**
- * Return the soft assertion failures recorded since the previous call (or
- * since the test started).
+ * Return the soft assertion failures recorded since the previous call.
  *
  * Reading them does not clear them: the test still fails at its end when any
  * soft assertion failed. Use this to inspect or log the failures mid-test.
  */
 export function flushSoftErrors(): Error[] {
-  const state = softErrorState();
-  const errors = state.errors.slice(state.flushed);
-  state.flushed = state.errors.length;
-  return errors;
+  const errors = softErrors();
+  const cursor = _G[SOFT_ERRORS_CURSOR_KEY] as SoftErrorCursor | undefined;
+  const from = cursor?.of === errors ? cursor.count : 0;
+  _G[SOFT_ERRORS_CURSOR_KEY] = { of: errors, count: errors.length } satisfies SoftErrorCursor;
+  return errors.slice(from);
 }
 
 /**
@@ -1608,10 +1614,9 @@ export function flushSoftErrors(): Error[] {
  * the test runner at the end of each attempt; not part of the public API.
  */
 export function takeSoftErrors(): Error[] {
-  const state = softErrorState();
-  const errors = state.errors;
-  state.errors = [];
-  state.flushed = 0;
+  const errors = softErrors();
+  _G[SOFT_ERRORS_KEY] = [] as Error[];
+  _G[SOFT_ERRORS_CURSOR_KEY] = undefined;
   return errors;
 }
 

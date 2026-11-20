@@ -1570,7 +1570,7 @@ await expect.poll(() => fetchStatus(), { timeout: 10000 }).toBe("ready");
 
 ### `flushSoftErrors(): Error[]`
 
-Return the soft assertion failures recorded since the previous call (or since the test started). Reading them does not clear them: the test still fails at its end when any soft assertion failed. Use it to inspect or log failures part-way through a test; you never need it to make a test fail.
+Return the soft assertion failures recorded since the previous call. Reading them does not clear them: the test still fails at its end when any soft assertion failed. Use it to inspect or log failures part-way through a test; you never need it to make a test fail.
 
 ```typescript
 await expect.soft(device.getByText("Header", { exact: true })).toBeVisible();
