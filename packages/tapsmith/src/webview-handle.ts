@@ -980,7 +980,9 @@ export class WebViewHandle {
             id: el.id || '',
             cls: el.className || '',
             text: el.children.length === 0 ? (el.textContent || '').trim().slice(0, 200) : '',
-            placeholder: el.placeholder || '',
+            // The attribute, which getByPlaceholder matches: a component's
+            // host carries it without the input element's property.
+            placeholder: el.getAttribute('placeholder') || '',
             role: el.getAttribute('role') || '',
             ariaLabel: (() => {
               const by = __ts.labelledBy(el);

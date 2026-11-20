@@ -25,6 +25,7 @@ const SKIP_TEXT_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'];
  */
 const HELPERS_JS = `(() => {
   const SKIP = new Set(${JSON.stringify(SKIP_TEXT_TAGS)});
+  const CONTROLS = new Set(['INPUT', 'SELECT', 'TEXTAREA']);
   function all(root) {
     const out = [];
     const stack = [];
@@ -54,7 +55,7 @@ const HELPERS_JS = `(() => {
     return queryAll(css)[0] ?? null;
   }
   function skipText(el) { return SKIP.has(el.nodeName.toUpperCase()); }
-  function flatText(node) {
+  function flatText(node, skipControls) {
     let s = '';
     const visit = (n) => {
       if (n.nodeType === 3) { s += n.data; return; }
@@ -63,6 +64,7 @@ const HELPERS_JS = `(() => {
         // Hidden from assistive technology, so not part of a name: an icon's
         // ligature text or SVG <title> (Material Web, ionicons 5).
         if (skipText(n) || (n !== node && n.getAttribute('aria-hidden') === 'true')) return;
+        if (skipControls && CONTROLS.has(n.nodeName.toUpperCase())) return;
         if (n.nodeName.toUpperCase() === 'SLOT' && typeof n.assignedNodes === 'function') {
           for (const a of n.assignedNodes({ flatten: true })) visit(a);
           return;
@@ -86,10 +88,9 @@ const HELPERS_JS = `(() => {
   }
   function wrappingLabel(el) {
     const wrapper = el.closest('label');
-    if (!wrapper) return '';
-    const clone = wrapper.cloneNode(true);
-    clone.querySelectorAll('input,select,textarea').forEach((c) => c.remove());
-    return (clone.textContent || '').trim();
+    // The label's text without its controls', read through slots: a
+    // component's label often wraps a <slot> for the text.
+    return wrapper ? flatText(wrapper, true).trim() : '';
   }
   function name(el) {
     const by = labelledBy(el);

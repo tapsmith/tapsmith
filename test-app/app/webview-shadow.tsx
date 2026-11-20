@@ -52,7 +52,10 @@ const HTML_CONTENT = `
           + '<label for="native-input"></label><input id="native-input" data-testid="display-name-input">';
         root.querySelector('label').textContent = this.getAttribute('label');
         var input = root.querySelector('input');
+        // Moved, not copied, as Ionic's inheritAttributes does: left on the
+        // host too, getByPlaceholder would match both.
         input.placeholder = this.getAttribute('placeholder');
+        this.removeAttribute('placeholder');
         input.addEventListener('input', function () {
           statusEl.textContent = 'Hello, ' + input.value;
         });

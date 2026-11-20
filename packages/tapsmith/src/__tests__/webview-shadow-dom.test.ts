@@ -222,6 +222,29 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
     expect(await handle.locator('#native-input').count()).toBe(2);
   });
 
+  it('names a control by a wrapping <label> whose text is slotted in', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><x-check id="c">Accept terms</x-check></body>', (doc) => {
+      // Shoelace's sl-checkbox: the label wraps the input and a slot, with no for=.
+      doc.getElementById('c')!.attachShadow({ mode: 'open' }).innerHTML =
+        '<label><input type="checkbox"><div class="label"><slot></slot></div></label>';
+    });
+    expect(await handle.getByRole('checkbox', { name: 'Accept terms' }).count()).toBe(1);
+  });
+
+  it('matches both a host and its inner control when both carry the attribute, as Playwright does', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><x-input id="h" placeholder="Search"></x-input></body>', (doc) => {
+      doc.getElementById('h')!.attachShadow({ mode: 'open' }).innerHTML = '<input placeholder="Search">';
+    });
+    const search = handle.getByPlaceholder('Search');
+    expect(await search.count()).toBe(2);
+    expect(isStrictModeViolation(await search.click().catch((e: unknown) => e))).toBe(true);
+    // The Playground's dump reads the host's attribute too (a custom element
+    // has no placeholder property), so it knows the locator is not unique.
+    const host = parseHierarchyXml((await handle._dumpDomHierarchy())!)[0]!.children[0]!;
+    expect(host.attributes.get('webview-tag')).toBe('x-input');
+    expect(host.attributes.get('hint')).toBe('Search');
+  });
+
   it('keeps document order and results on a page without shadow roots', async () => {
     const { handle } = handleOn('<!DOCTYPE html><body><div id="a"><p id="b"></p></div><p id="c"></p></body>');
     expect(await idsOf(handle, handle.locator('p, div')._finderAllJs)).toEqual(['a', 'b', 'c']);
