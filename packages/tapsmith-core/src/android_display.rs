@@ -270,8 +270,8 @@ Display 4619827551948147201 (HWC display 1): port=1 pnpId=GGL displayName=\"EMU_
 
     #[test]
     fn rediscovers_only_an_unpinned_capture_that_guessed() {
-        // Covers the plain retry after a failed pinned capture too: it is
-        // unpinned, so its guess warning is acted on.
+        // The plain retry after a failed pinned capture passes `false`
+        // here, so its guess warning is acted on.
         assert!(should_rediscover(false, WARNING));
         assert!(!should_rediscover(true, WARNING));
         assert!(!should_rediscover(false, ""));

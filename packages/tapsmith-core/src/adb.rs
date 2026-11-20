@@ -504,8 +504,8 @@ pub async fn screencap(serial: &str) -> Result<Vec<u8>> {
     Ok(png)
 }
 
-/// Bound on each display lookup around a capture. They answer in tens of
-/// milliseconds, and a capture without them still works, so a hung lookup
+/// Bound on each display lookup around a capture. They answer in about
+/// 100 ms, and a capture without them still works, so a hung lookup
 /// must leave the capture most of the trace's 5 s capture budget.
 const DISPLAY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -541,9 +541,10 @@ async fn screencap_once(serial: &str, display_id: Option<&str>) -> Result<(Strin
 }
 
 /// The device's physical display ids, cached for the serial. An unanswered
-/// probe reads as one display and is cached as that too, so a hung probe is
-/// not paid again on every capture: a multi-display device still recovers,
-/// since screencap's guess warning sends [`screencap`] back to probing.
+/// probe reads as one display and is cached as that too, so a single-display
+/// device does not pay a hung probe again on every capture. A multi-display
+/// device still recovers: screencap's guess warning sends [`screencap`] back
+/// to probing (and pays the probe again for as long as it keeps failing).
 async fn probe_physical_displays(serial: &str) -> Vec<String> {
     match run_adb(
         Some(serial),
