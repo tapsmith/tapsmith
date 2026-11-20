@@ -1839,7 +1839,7 @@ test("user can log in", async ({ device }) => {
 
 ### `test.only(name, fn)`
 
-Run only this test (and other tests marked with `.only`). All other tests are skipped.
+Run only this test, and the other tests and describes marked with `.only`. As in Playwright, focus applies to the whole file: a `.only` inside a describe also leaves out the tests and describes beside that describe. The tests left out are reported as skipped.
 
 ```typescript
 test.only("focused test", async ({ device }) => {
@@ -2071,6 +2071,8 @@ The callback must register its tests synchronously. An `async` callback that thr
 ### `describe.only(name, fn)` / `describe.skip(name, fn)`
 
 Focus or skip an entire suite. Also available as `test.describe.only` and `test.describe.skip`.
+
+A focused suite runs whole, unless tests or describes inside it are marked `.only` too: it then runs only those. Everything outside it that isn't focused is left out, as with [`test.only`](#testonlyname-fn).
 
 ### `test.describe.serial(name, fn)` / `test.describe.serial.only(name, fn)`
 
