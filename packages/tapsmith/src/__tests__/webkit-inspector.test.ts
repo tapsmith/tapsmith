@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { WebKitInspectorClient } from '../webkit-inspector.js';
+import { WebKitInspectorClient, parseSimulatorLaunchctlPids } from '../webkit-inspector.js';
 
 /**
  * Drives the client's message handler directly (no socket) to verify the
@@ -140,5 +140,28 @@ describe('WebKitInspectorClient page-replacement detection (PILOT-288)', () => {
     await expect(
       client.sendInspectorMessage('PID:100', { id: 1, method: 'Runtime.evaluate', params: {} }, 1_000),
     ).rejects.toThrow(/WebView page was replaced/);
+  });
+});
+
+describe('parseSimulatorLaunchctlPids', () => {
+  // `xcrun simctl spawn <udid> launchctl list` as an iOS 26.5 simulator prints it.
+  const output = [
+    'PID\tStatus\tLabel',
+    '-\t0\tcom.apple.UIKit.KeyboardManagement',
+    '57805\t0\tUIKitApplication:com.apple.family[fbaa][rb-legacy]',
+    '83587\t0\tUIKitApplication:dev.jordan.onboardc[4bee][rb-legacy]',
+    '-\t0\tUIKitApplication:dev.jordan.onboardc.widget[11aa][rb-legacy]',
+    '83600\t0\tUIKitApplication:dev.jordan.onboardcx[22bb][rb-legacy]',
+    '-\t-9\tUIKitApplication:dev.tapsmith.stopped[33cc][rb-legacy]',
+  ].join('\n');
+
+  it('returns the running pid of exactly that bundle id', () => {
+    expect(parseSimulatorLaunchctlPids(output, 'dev.jordan.onboardc')).toEqual([83587]);
+  });
+
+  it('returns nothing for an app that is not running or not listed', () => {
+    expect(parseSimulatorLaunchctlPids(output, 'dev.tapsmith.stopped')).toEqual([]);
+    expect(parseSimulatorLaunchctlPids(output, 'dev.example.absent')).toEqual([]);
+    expect(parseSimulatorLaunchctlPids('', 'dev.jordan.onboardc')).toEqual([]);
   });
 });

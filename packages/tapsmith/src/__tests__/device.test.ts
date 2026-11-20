@@ -395,6 +395,46 @@ describe('Device.webview()', () => {
     expect((forwardWebViewPort.mock.calls[0] as unknown[])[0]).toBe('webview_devtools_remote_app');
   });
 
+  it('names one budget, the WebViews seen and a framework-neutral hint when the app has none', async () => {
+    let calls = 0;
+    const listWebViews = vi.fn(() => {
+      calls++;
+      // A listing cut short by the deadline must not replace the real finding.
+      if (calls > 1) return new Promise<never>(() => {});
+      return Promise.resolve({
+        requestId: '1',
+        webviews: [{ socketName: 'webview_devtools_remote_9', pid: 9, packageName: 'com.android.chrome', url: '', title: '' }],
+        errorMessage: '',
+      });
+    });
+    const client = makeMockClient({ listWebViews });
+    const device = new Device(client, { timeout: 300, package: 'com.example.app' });
+
+    const err = await device.webview().catch((e: Error) => e);
+    const message = (err as Error).message;
+    expect(message.match(/\d+ms/g)).toEqual(['300ms']);
+    expect(message).toMatch(/No WebViews found for package "com\.example\.app"/);
+    expect(message).toMatch(/WebViews seen: webview_devtools_remote_9 \(pid 9, com\.android\.chrome\)/);
+    expect(message).toMatch(/setWebContentsDebuggingEnabled\(true\)/);
+    expect(message).toMatch(/webviewDebuggingEnabled/);
+    expect(message).not.toMatch(/isInspectable/);
+  });
+
+  it('gives no debugging hint once the app\'s WebView was found', async () => {
+    const listWebViews = vi.fn(async () => ({
+      requestId: '1',
+      webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }],
+      errorMessage: '',
+    }));
+    const forwardWebViewPort = vi.fn(async () => ({ requestId: '1', success: false, localPort: 0, errorMessage: 'not forwarded' }));
+    const client = makeMockClient({ listWebViews, forwardWebViewPort });
+    const device = new Device(client, { timeout: 100, package: 'com.example.app' });
+
+    const err = await device.webview().catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/Failed to forward WebView port: not forwarded/);
+    expect((err as Error).message).not.toMatch(/setWebContentsDebuggingEnabled/);
+  });
+
   it('handles a WebView call\'s rejection even when the call starts after its deadline has passed', async () => {
     // A forward started with no time left rejects; with nothing handling
     // it, that rejection is fatal in the UI server.
