@@ -395,6 +395,12 @@ xcrun swiftc -sdk "$SDK" \
   -o "$OUT/app-readiness-tests"
 "$OUT/app-readiness-tests"
 
+xcrun swiftc -sdk "$SDK" \
+  Tests/SystemAlertTests/main.swift \
+  TapsmithAgent/SystemAlert.swift \
+  -o "$OUT/system-alert-tests"
+"$OUT/system-alert-tests"
+
 # XCTestIssueRelay needs the Objective-C exception catcher it raises into.
 xcrun clang -c -fobjc-arc -isysroot "$SDK" \
   TapsmithAgent/ObjCExceptionCatcher.m \

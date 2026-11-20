@@ -1268,9 +1268,10 @@ class ElementFinder(
             by = if (by != null) by.clazz(selector.className) else By.clazz(selector.className)
         }
 
-        // Resource ID
+        // Resource ID: whole, or a bare entry name under any package
         if (selector.id != null) {
-            by = if (by != null) by.res(selector.id) else By.res(selector.id)
+            val idPattern = ResourceIdMatch.pattern(selector.id)
+            by = if (by != null) by.res(idPattern) else By.res(idPattern)
         }
 
         // Test ID — React Native's `testID` prop is exposed as `resource-id`

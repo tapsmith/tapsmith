@@ -13,6 +13,7 @@ import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.j
 import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
 import { generateSelectors, glyphAware, roleNameFor } from '../trace-viewer/components/selector-generation.js';
 import { parseSelectorString } from '../trace-viewer/components/selector-matching.js';
+import { fullResourceIdUpgrade } from '../trace-viewer/components/resource-id.js';
 import { escapeJsString } from '../js-string-escape.js';
 import type { Selector } from '../selectors.js';
 import { collapseSameTargetDuplicates } from '../element-handle.js';
@@ -82,13 +83,17 @@ function fullAccessibleName(node: HierarchyNode): string {
 /**
  * The variants that can pin an ambiguous candidate to this node: an exact
  * text match, an exact role name (the glyph-free name, then the full name),
- * or a name added to a nameless role.
+ * a name added to a nameless role, or a bare resource id's full id.
  */
 function upgradesFor(s: GeneratedSelector, node: HierarchyNode): GeneratedSelector[] {
   const parsed = parseSelectorString(s.code);
   if (!parsed) return [];
   if (parsed.type === 'textContains') {
     return [{ ...s, code: `device.getByText("${escapeJsString(parsed.value)}", { exact: true })` }];
+  }
+  if (parsed.type === 'id') {
+    const full = fullResourceIdUpgrade(parsed.value, node);
+    return full ? [{ ...s, code: full }] : [];
   }
   if (parsed.type !== 'role' || parsed.nameRegex) return [];
   const role = escapeJsString(parsed.value);

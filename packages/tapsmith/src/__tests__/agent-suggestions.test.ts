@@ -377,3 +377,38 @@ describe('which agent match is the node', () => {
     expect(codes(byNode, hidden)).toEqual([]);
   });
 });
+
+describe('agentValidatedSuggestions: native resource ids', () => {
+  const idBounds = B(0, 300, 100, 350);
+  function idNode(rid: string, bounds: Bounds): HierarchyNode {
+    return {
+      tagName: 'node',
+      attributes: new Map([['class', 'android.widget.FrameLayout'], ['resource-id', rid], ['bounds', fmt(bounds)]]),
+      children: [],
+      depth: 0,
+    };
+  }
+  const isId = (s: Selector, value: string) => s.kind.type === 'id' && s.kind.value === value;
+
+  it('suggests the bare entry name, which survives an applicationIdSuffix', async () => {
+    const n = idNode('com.app.debug:id/titleLabel', idBounds);
+    const a = agent((s) => (isId(s, 'titleLabel') || isId(s, 'com.app.debug:id/titleLabel')
+      ? [el(idBounds, '', 'android.widget.FrameLayout')] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [n]);
+    expect(codes(byNode, n)).toContain('device.locator({ id: "titleLabel" })');
+    expect(codes(byNode, n)).not.toContain('device.locator({ id: "com.app.debug:id/titleLabel" })');
+  });
+
+  it('pins the full id when another package shares the entry name', async () => {
+    const other = B(0, 400, 100, 450);
+    const n = idNode('com.app:id/title', idBounds);
+    const a = agent((s) => {
+      if (isId(s, 'title')) return [el(idBounds, '', 'android.widget.FrameLayout'), el(other, '', 'android.widget.FrameLayout')];
+      if (isId(s, 'com.app:id/title')) return [el(idBounds, '', 'android.widget.FrameLayout')];
+      return [];
+    });
+    const { byNode } = await agentValidatedSuggestions(a, [n]);
+    expect(codes(byNode, n)).toContain('device.locator({ id: "com.app:id/title" })');
+    expect(codes(byNode, n).some((c) => c.startsWith('device.locator({ id: "title" })'))).toBe(false);
+  });
+});

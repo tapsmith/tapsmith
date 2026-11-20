@@ -353,11 +353,16 @@ On Android, `getByTestId` matches React Native's `testID` prop, which becomes th
 Find an element by its native resource id. On Android this is the `R.id.foo` resource id; on iOS, the `accessibilityIdentifier`.
 
 ```typescript
-await device.locator({ id: "com.myapp:id/email_input" }).type("user@example.com")
-
-// Short form also works if the package prefix is unambiguous
+// Android: the R.id name, whatever package the build gives the app
 await device.locator({ id: "email_input" }).type("user@example.com")
+
+// Android: the full resource id, with the installed app's package
+await device.locator({ id: "com.myapp.debug:id/email_input" }).type("user@example.com")
 ```
+
+On Android, an id without a package (no `:`) matches `<any package>:id/email_input`, as well as a resource id that is exactly `email_input` (a React Native `testID`). The full id matches only itself, and its package is the installed app's, which includes any `applicationIdSuffix` (`com.myapp.debug`, not the `R` class's `com.myapp`). When views from two packages share the name — the app's `title` and the framework's `android:id/title` on a settings screen, say — the short form matches both, so an action through it fails [strict mode](api-reference.md#strict-mode); use the full id there. Locator suggestions in UI mode, the trace viewer and the MCP tools use the short form, and the full id when the short form is ambiguous.
+
+On iOS, the `accessibilityIdentifier` is matched whole.
 
 > **Warning:** Resource IDs are implementation details. They break when views are refactored, renamed, or replaced. Prefer accessible locators whenever possible.
 

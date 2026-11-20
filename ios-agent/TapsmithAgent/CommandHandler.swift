@@ -91,6 +91,103 @@ class CommandHandler {
         return false
     }
 
+    /// What a warm delivery's wait loop does about an "Open in" prompt: Open
+    /// when the delivery may have raised it (`acceptOpenInAppDialogIfPresent`),
+    /// Cancel when it cannot have (SystemAlert.deliveryMayRaiseOwnPrompt), so
+    /// a leftover is not opened. Either way one query when none is up.
+    private func answerOpenInPrompt(springboard: XCUIApplication, ownPossible: Bool) -> Bool {
+        if ownPossible {
+            return acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0)
+        }
+        var up = false
+        _ = ObjCExceptionCatcher.catchException { up = springboard.buttons["Open"].exists }
+        return up && cancelLeftoverOpenInPrompt()
+    }
+
+    /// SpringBoard's frontmost alert, read in one snapshot, or nil when none is
+    /// up (or SpringBoard cannot be read). Costs one existence query when no
+    /// alert is up, so callers keep it off hot paths: a launch, a failure.
+    private func readSpringBoardAlert() -> SystemAlert? {
+        var found: SystemAlert?
+        _ = ObjCExceptionCatcher.catchException {
+            let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+            guard alert.exists, let snapshot = try? alert.snapshot() else { return }
+            var texts: [String] = []
+            var buttons: [String] = []
+            func walk(_ node: XCUIElementSnapshot) {
+                switch node.elementType {
+                case .button:
+                    if !node.label.isEmpty { buttons.append(node.label) }
+                    return
+                case .staticText:
+                    if !node.label.isEmpty { texts.append(node.label) }
+                default:
+                    break
+                }
+                node.children.forEach(walk)
+            }
+            walk(snapshot)
+            found = SystemAlert(title: snapshot.label.isEmpty ? (texts.first ?? "") : snapshot.label,
+                                buttons: buttons)
+        }
+        return found
+    }
+
+    /// The alerts the agent answered on its own, for `takeSystemDialogEvents`.
+    private var systemAlertEvents = SystemAlertEvents()
+
+    /// How long, after cancelling a prompt, SpringBoard takes to show the next
+    /// queued one.
+    private static let queuedPromptSettle: TimeInterval = 0.7
+
+    /// When `waitForAppReady` next looks for a leftover "Open in" prompt.
+    private var leftoverPromptCheck = LeftoverPromptCheck()
+
+    /// Cancel a leftover "Open in “App”?" prompt before a launch, before a
+    /// reset delivers Tapsmith's own link, or before the session's first use
+    /// of an app it found already running. True when one was cancelled.
+    ///
+    /// Tapsmith's own deep links answer this prompt inside the daemon's
+    /// openurl flow, so one that is up when a launch starts came from
+    /// somewhere else: `npx expo run:ios` ends with `simctl openurl`, and the
+    /// prompt it leaves survives every relaunch, covering the app for the
+    /// whole run. Cancel, not Open: Open would deliver a URL no test asked
+    /// for (for an Expo dev client, a dev-server URL that can switch the
+    /// bundle it loads), and the launch that follows brings the app up
+    /// anyway. Recorded for the daemon to report (`takeSystemDialogEvents`).
+    @discardableResult
+    private func cancelLeftoverOpenInPrompt() -> Bool {
+        leftoverPromptCheck.checked(at: Date())
+        var cancelled = false
+        for _ in 0..<SystemAlert.maxLeftoverPromptsPerCheck {
+            guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { break }
+            NSLog("[SystemDialog] Cancelling a leftover %@ before using the app", alert.description)
+            var gone = false
+            _ = ObjCExceptionCatcher.catchException {
+                let element = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+                element.buttons["Cancel"].tap()
+                let deadline = Date(timeIntervalSinceNow: 2.0)
+                while Date() < deadline {
+                    if !element.exists { gone = true; return }
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+            }
+            systemAlertEvents.record(
+                title: alert.title,
+                button: "Cancel",
+                timestampMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
+            )
+            cancelled = true
+            // Another unanswered openurl's prompt comes up a moment after
+            // this one closes: give it that moment, then read again. After
+            // every Cancel, whether or not the poll saw the alert go (it can
+            // miss the moment between two prompts). Paid only after a cancel.
+            if !gone { NSLog("[SystemDialog] the alert was still up 2 s after Cancel") }
+            Thread.sleep(forTimeInterval: Self.queuedPromptSettle)
+        }
+        return cancelled
+    }
+
     /// True when the app's accessibility tree has rendered interactive content.
     ///
     /// Uses `app.snapshot()` — the same mechanism as `GetUiHierarchy` — rather
@@ -243,7 +340,8 @@ class CommandHandler {
         _ app: XCUIApplication,
         greaterThan navBefore: UInt64,
         bootBefore: String?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        ownPromptPossible: Bool = true
     ) -> Bool {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
@@ -265,7 +363,7 @@ class CommandHandler {
             }
             if acknowledged { return true }
             // Dialog accepted: re-check at once.
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            if self.answerOpenInPrompt(springboard: springboard, ownPossible: ownPromptPossible) { continue }
             Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return false
@@ -288,7 +386,8 @@ class CommandHandler {
         _ app: XCUIApplication,
         greaterThan epochBefore: UInt64,
         bootBefore: String?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        ownPromptPossible: Bool = true
     ) -> HooksEpochOutcome {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deadline = Date(timeIntervalSinceNow: timeout)
@@ -311,7 +410,7 @@ class CommandHandler {
             }
             if let outcome { return outcome }
             // Dialog accepted: re-check at once.
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) { continue }
+            if self.answerOpenInPrompt(springboard: springboard, ownPossible: ownPromptPossible) { continue }
             Self.pollWait(DeepLinkVerify.pollInterval(elapsed: timeout - deadline.timeIntervalSinceNow))
         }
         return .timedOut
@@ -337,7 +436,8 @@ class CommandHandler {
     private func waitForDeepLinkNavigation(
         _ app: XCUIApplication,
         before: String,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        ownPromptPossible: Bool = true
     ) -> Bool {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let dumper = HierarchyDumper(app: app)
@@ -345,7 +445,7 @@ class CommandHandler {
         while Date() < deadline {
             // Same shape as waitForDeepLinkDestination: one SpringBoard query
             // per iteration in case "Open in <app>?" gates the warm delivery.
-            if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
+            if self.answerOpenInPrompt(springboard: springboard, ownPossible: ownPromptPossible) {
                 // Dialog accepted — re-check on the next iteration.
             } else {
                 var navigated = false
@@ -1412,7 +1512,7 @@ class CommandHandler {
         // The taps recorded the field as focused; it is not.
         snapshotFinder.clearFocusedTextInputHint()
         let at = tried.isEmpty ? "the element" : tried.map(Self.describe).joined(separator: ", ")
-        throw Self.notFocusedError(tried: at)
+        throw notFocusedError(tried: at)
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
@@ -1431,10 +1531,15 @@ class CommandHandler {
         "(\(Int(point.x.rounded())), \(Int(point.y.rounded())))"
     }
 
-    private static func notFocusedError(tried: String) -> AgentError {
-        .actionFailed(
-            "Tapping the field at \(tried) did not give it keyboard focus, so nothing was typed. " +
-                "The field may not accept text input there, or may not be editable."
+    /// Names a SpringBoard alert when one is up: it takes the focusing taps,
+    /// and is the likelier cause than the field.
+    private func notFocusedError(tried: String) -> AgentError {
+        let message = "Tapping the field at \(tried) did not give it keyboard focus, so nothing was typed. "
+        if let alert = readSpringBoardAlert() {
+            return .actionFailed(message + alert.coveringSentence)
+        }
+        return .actionFailed(
+            message + "The field may not accept text input there, or may not be editable."
         )
     }
 
@@ -3003,6 +3108,8 @@ class CommandHandler {
             // If the app was terminated, this launches a fresh process.
             // If running in background, this brings it to foreground.
             let targetApp = rebindApp(bundleId: targetBundleId(fallback: params))
+            // Before activate(): the prompt stays on top of the app it launches.
+            cancelLeftoverOpenInPrompt()
             targetApp.activate()
             // Wait for the state instead of a fixed 0.5 s (PILOT-976).
             // activate() normally returns with the app already in front, so
@@ -3074,6 +3181,12 @@ class CommandHandler {
         case "waitForAppReady":
             let bundleId = targetBundleId(fallback: params)
             let timeoutMs = (params["timeout"] as? NSNumber)?.intValue ?? 10_000
+            // A session can adopt an app that is already running, and a warm
+            // reset reuses it, with no launchApp: cancel a leftover prompt
+            // here too, at most once per LeftoverPromptCheck interval.
+            if leftoverPromptCheck.due(now: Date()) {
+                cancelLeftoverOpenInPrompt()
+            }
             // A process launched outside the runner (simctl launch / openurl)
             // can stay invisible to an XCUIApplication bound while it was
             // still registering, and XCTest learns of it through XPC callbacks
@@ -3127,6 +3240,15 @@ class CommandHandler {
             var phases = PhaseClock()
 
             if deliverInProcess {
+                // Nothing of Tapsmith's is pending yet, so an Open-in prompt
+                // up now is a leftover: cancel it (a warm reset in a
+                // long-lived session never launches the app). On the
+                // readiness clock, as warm resets deliver a link every test;
+                // in between, the wait loops below cancel rather than open a
+                // prompt that this delivery cannot have raised.
+                if leftoverPromptCheck.due(now: Date()) {
+                    cancelLeftoverOpenInPrompt()
+                }
                 guard #available(iOS 16.4, *) else {
                     throw AgentError.actionFailed(
                         "openDeepLink requires iOS 16.4 or newer for in-process delivery"
@@ -3169,9 +3291,10 @@ class CommandHandler {
                 // miss and the daemon falls back to its cold path.
                 let delivery = activateError == nil ? deliverWarmURL(url, bundleId: bundleId, app: targetApp) : "none"
                 phases.lap("deliver")
+                let ownPromptPossible = SystemAlert.deliveryMayRaiseOwnPrompt(delivery)
 
                 if let epochBefore = ackEpochGreaterThan {
-                    let outcome = waitForHooksEpoch(targetApp, greaterThan: epochBefore, bootBefore: ackBootBefore, timeout: 8.0)
+                    let outcome = waitForHooksEpoch(targetApp, greaterThan: epochBefore, bootBefore: ackBootBefore, timeout: 8.0, ownPromptPossible: ownPromptPossible)
                     phases.lap("verify")
                     switch outcome {
                     case .acknowledged(let epoch):
@@ -3196,7 +3319,7 @@ class CommandHandler {
                 }
 
                 if let navBefore = ackNavGreaterThan {
-                    if waitForHooksNav(targetApp, greaterThan: navBefore, bootBefore: ackBootBefore, timeout: 8.0) {
+                    if waitForHooksNav(targetApp, greaterThan: navBefore, bootBefore: ackBootBefore, timeout: 8.0, ownPromptPossible: ownPromptPossible) {
                         phases.lap("verify")
                         if displayAppearsBlack() {
                             throw AgentError.actionFailed(
@@ -3216,7 +3339,7 @@ class CommandHandler {
                 }
 
                 if let before = preOpenHierarchy {
-                    if waitForDeepLinkNavigation(targetApp, before: before, timeout: 5.0) {
+                    if waitForDeepLinkNavigation(targetApp, before: before, timeout: 5.0, ownPromptPossible: ownPromptPossible) {
                         phases.lap("verify")
                         // The hierarchy check can pass against a display that
                         // has stopped compositing (a11y stays healthy while
@@ -3283,6 +3406,22 @@ class CommandHandler {
             throw AgentError.actionFailed(
                 "openDeepLink: app did not reach foreground after opening \(urlString)"
             )
+
+        case "cancelLeftoverOpenInPrompt":
+            // The daemon, before its cold path's `simctl openurl` raises a
+            // prompt of Tapsmith's own: one up now is a leftover.
+            return ["cancelled": cancelLeftoverOpenInPrompt()]
+
+        case "systemAlert":
+            // The SpringBoard alert covering the app, for the SDK's
+            // not-found message.
+            guard let alert = readSpringBoardAlert() else { return ["present": false] }
+            return ["present": true, "title": alert.title, "buttons": alert.buttons]
+
+        case "takeSystemDialogEvents":
+            // The prompts cancelLeftoverOpenInPrompt answered since the last
+            // call, in the Android agent's event shape.
+            return ["events": systemAlertEvents.take()]
 
         case "acceptOpenInAppDialog":
             let timeoutMs = params["timeout"] as? Int64 ?? 1000
