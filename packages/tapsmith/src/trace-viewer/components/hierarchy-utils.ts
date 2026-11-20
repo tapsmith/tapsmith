@@ -32,8 +32,10 @@ export function parseHierarchyXml(xml: string): HierarchyNode[] {
   const stack: HierarchyNode[] = [];
 
   // A tag name may end in `(<n>)`: the iOS agent names an element type it
-  // has no name for by its raw value, e.g. `XCUIElementType(2)`.
-  const tagRe = /<(\/?)([a-zA-Z_][\w.]*(?:\(\d+\))?)((?:\s+[\w:.-]+="[^"]*")*)\s*(\/?)>/g;
+  // has no name for by its raw value, e.g. `XCUIElementType(2)`. A WebView
+  // node is named after its tag, which for a custom element has a hyphen
+  // (`webview.ion-button`).
+  const tagRe = /<(\/?)([a-zA-Z_][\w.-]*(?:\(\d+\))?)((?:\s+[\w:.-]+="[^"]*")*)\s*(\/?)>/g;
   let match: RegExpExecArray | null;
 
   while ((match = tagRe.exec(xml)) !== null) {

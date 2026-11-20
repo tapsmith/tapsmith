@@ -3539,7 +3539,7 @@ Playwright-style locators for DOM elements, mirroring the native `device.getBy*`
 | Method | Matches |
 |---|---|
 | `webview.getByText(text, { exact? })` | Leaf elements by visible text (substring by default; unlike `device.getByText`, case-sensitive) |
-| `webview.getByRole(role, { name? })` | ARIA/HTML role, optionally filtered by accessible name |
+| `webview.getByRole(role, { name? })` | ARIA/HTML role, optionally filtered by accessible name. Like Playwright's, skips elements hidden from assistive technology (`display: none`, `visibility: hidden`, `aria-hidden`) |
 | `webview.getByPlaceholder(text)` | `placeholder` attribute |
 | `webview.getByTestId(testId)` | `data-testid` attribute |
 | `webview.getByLabel(text)` | `aria-label` attribute |
@@ -3549,6 +3549,8 @@ await webview.getByRole("button", { name: "Login" }).click()
 await webview.getByPlaceholder("Enter your email").fill("user@test.com")
 await expect(webview.getByText("Welcome back")).toBeVisible()
 ```
+
+**Shadow DOM.** As in Playwright, every WebView locator, and the string-selector methods (`webview.click(css)`, …), also finds elements inside open shadow roots, where Ionic, Stencil, Lit and Shoelace render their native controls: `webview.getByRole("button", { name: "Sign in" })` finds the `<button>` inside an `<ion-button>Sign in</ion-button>`. Matches come in shadow-including document order (an element, then its shadow root's contents, then its children). Playwright lists a tree's own matches before its shadow roots', so when a locator matches in both, `.first()` and `.nth()` can differ from Playwright's. Prefer a role or name to a position there. A `getByRole` name reads text slotted into the component, and `aria-labelledby` and `<label for>` are looked up in the element's own shadow tree. Elements inside closed shadow roots cannot be found. An attribute a component keeps on its host and also copies onto its inner control (a `placeholder`, a `data-testid`) matches both elements, as in Playwright: narrow with `getByRole(…)` or `.first()`. A CSS selector is matched within each tree separately, so its combinators do not cross a shadow boundary: `webview.locator("ion-button button")` finds nothing, while `webview.locator("button")` finds the button inside every `ion-button`.
 
 #### `webview.close(): Promise<void>`
 

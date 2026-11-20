@@ -750,6 +750,8 @@ function webViewNodeMatchesSelector(node: HierarchyNode, selector: ParsedSelecto
     case 'wv-text-contains':
       return text.includes(selector.value);
     case 'wv-role': {
+      // getByRole skips what assistive technology does not see.
+      if (node.attributes.get('webview-a11y-hidden') === 'true') return false;
       const role = getNodeRole(node);
       if (role !== selector.value) return false;
       if (selector.name) {
@@ -790,13 +792,13 @@ function matchCssSelector(css: string, tag: string, id: string, cssClass: string
   }
 
   // tag#id
-  const tagIdMatch = trimmed.match(/^(\w+)#(\S+)$/);
+  const tagIdMatch = trimmed.match(/^([a-zA-Z][\w-]*)#(\S+)$/);
   if (tagIdMatch) {
     return isCssIdentifier(tagIdMatch[2]) && tag === tagIdMatch[1] && id === tagIdMatch[2];
   }
 
   // tag.class
-  const tagClassMatch = trimmed.match(/^(\w+)\.(\S+)$/);
+  const tagClassMatch = trimmed.match(/^([a-zA-Z][\w-]*)\.(\S+)$/);
   if (tagClassMatch) {
     return isCssIdentifier(tagClassMatch[2]) && tag === tagClassMatch[1] && classes.includes(tagClassMatch[2]);
   }
