@@ -4455,8 +4455,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     ) -> Result<Response<proto::ResetAppResponse>, Status> {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
-        self.check_app_id(&req.package_name).await?;
+        // Resolve the device first: it may auto-select the only one connected,
+        // and the id is judged by that device's platform rules.
         let serial = self.active_serial().await?;
+        self.check_app_id(&req.package_name).await?;
         let supports_cold_delivery = self.backend().await?.supports_cold_deep_link().await;
         let idle_timeout_ms = if req.idle_timeout_ms > 0 {
             req.idle_timeout_ms
