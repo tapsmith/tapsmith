@@ -74,10 +74,12 @@ struct SystemAlertEvents {
 /// When a readiness check (`waitForAppReady`) looks for a leftover "Open in"
 /// prompt. Not on every call: warm resets wait for readiness every test, and
 /// the SpringBoard query costs tens of milliseconds. Not once per agent
-/// process either: UI mode, watch and the MCP server keep one agent across
-/// runs, and a prompt `npx expo run:ios` raised between two runs must be
-/// cancelled when the next one starts. So at most once per `interval`, which
-/// a launch's own check (`checked(at:)`) also restarts.
+/// process either: a session can adopt an app that is already running long
+/// after the agent started. So at most once per `interval`, which any other
+/// check (a launch, a link delivery: `checked(at:)`) also restarts. A prompt
+/// a readiness check skips stays up and is named in errors; the checks
+/// before Tapsmith delivers a link, which would press its Open, are never
+/// skipped.
 struct LeftoverPromptCheck {
     let interval: TimeInterval
     private var last: Date?

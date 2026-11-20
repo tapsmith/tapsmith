@@ -1670,7 +1670,9 @@ export class ElementHandle {
     const near = this._hasModifiers() || budgetMs <= 0
       ? ''
       : await nearMissHint(this._client, this._selector, signal, budgetMs);
-    return `. ${[alert, near, hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
+    // With an alert named, the locator hints (off-screen, unnamed role)
+    // would send the reader to the wrong cause.
+    return `. ${[alert, near, alert ? '' : hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
   }
 
   /** {@link _missHint} as a bare sentence (with its leading space), to follow one that ends in a full stop. */

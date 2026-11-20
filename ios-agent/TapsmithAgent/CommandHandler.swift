@@ -3211,11 +3211,10 @@ class CommandHandler {
                 // Nothing of Tapsmith's is pending yet, so an Open-in prompt
                 // up now is a leftover: cancel it before the wait loops below
                 // would press its Open (a warm reset in a long-lived session
-                // never launches the app). On the readiness clock, as warm
-                // resets deliver a link every test.
-                if leftoverPromptCheck.due(now: Date()) {
-                    cancelLeftoverOpenInPrompt()
-                }
+                // never launches the app). Every time, not on the readiness
+                // clock: a prompt raised between two runs seconds apart would
+                // otherwise be opened.
+                cancelLeftoverOpenInPrompt()
                 guard #available(iOS 16.4, *) else {
                     throw AgentError.actionFailed(
                         "openDeepLink requires iOS 16.4 or newer for in-process delivery"

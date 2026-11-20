@@ -275,6 +275,14 @@ describe("a not-found error names a system alert covering the app (iOS)", () => 
     }
   });
 
+  it("drops the off-screen hint, which would point the wrong way", async () => {
+    const { client } = alertClient(async () => OPEN_IN);
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    const message = await err(d.getByText("Sign in", { exact: true }).tap());
+    vitestExpect(message).toContain(COVERING);
+    vitestExpect(message).not.toContain("off-screen");
+  });
+
   it("names an untitled alert, and one without buttons", async () => {
     const { client } = alertClient(async () => ({ requestId: "a", present: true, title: "", buttons: [] }));
     const d = new Device(client, { platform: "ios", timeout: 50 });

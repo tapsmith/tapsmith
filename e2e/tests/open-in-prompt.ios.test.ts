@@ -7,13 +7,28 @@
  * Raising it needs the simulator's UDID on the host (`TAPSMITH_IOS_UDID`,
  * set by the iOS E2E workflow), so the test is skipped without it.
  */
-import { spawn, type ChildProcess } from "node:child_process"
+import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { describe, expect, test } from "../fixtures.js"
 
 const UDID = process.env.TAPSMITH_IOS_UDID
 const COVERING = "A system alert is covering the app: \"Open in “"
 
-/** `simctl openurl` blocks until the prompt is answered, so leave it running. */
+/**
+ * Once Open has been pressed on a `simctl openurl` prompt for the scheme (the
+ * daemon's cold deep-link path does), the simulator opens later ones without
+ * asking. Forget that approval so the prompt comes up whatever ran before.
+ */
+function forgetSchemeApproval(udid: string): void {
+  try {
+    execFileSync("xcrun", ["simctl", "spawn", udid, "defaults", "delete",
+      "com.apple.launchservices.schemeapproval", "com.apple.CoreSimulator.CoreSimulatorBridge-->tapsmithtest"],
+    { stdio: "ignore", timeout: 30_000 })
+  } catch {
+    // Not approved yet: nothing to forget.
+  }
+}
+
+/** `simctl openurl` can block until the prompt is answered, so leave it running. */
 function raiseOpenInPrompt(udid: string): ChildProcess {
   const child = spawn("xcrun", ["simctl", "openurl", udid, "tapsmithtest://from-a-dev-tool"], { stdio: "ignore" })
   child.on("error", () => {})
@@ -29,6 +44,7 @@ describe("an Open-in prompt left on the simulator", () => {
     await homeScreen.loginCard.tap()
     await expect(loginScreen.heading).toBeVisible()
 
+    forgetSchemeApproval(UDID as string)
     const openurl = raiseOpenInPrompt(UDID as string)
     try {
       // Wait for SpringBoard to show it: until then the miss is an ordinary one.
