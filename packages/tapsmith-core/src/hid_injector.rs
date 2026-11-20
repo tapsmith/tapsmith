@@ -303,7 +303,7 @@ impl HidInjector {
     }
 
     #[cfg(test)]
-    fn with_helper_path(helper_path: PathBuf) -> Self {
+    pub(crate) fn with_helper_path(helper_path: PathBuf) -> Self {
         Self {
             helper_path,
             helpers: Mutex::new(HashMap::new()),

@@ -31,6 +31,8 @@ use crate::screenshot;
 
 mod android_backend;
 mod device_backend;
+#[cfg(any(target_os = "macos", test))]
+mod hid_reach;
 mod ios_backend;
 mod scroll_step;
 
@@ -331,6 +333,16 @@ pub struct TapsmithServiceImpl {
     /// same build, so it keeps the flag.
     #[cfg(target_os = "macos")]
     agent_predates_hid_tap: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether each simulator's HID helper reaches its touchscreen, as the
+    /// agent answered `hidTouchInput` this session (`hid_reach`). Asked
+    /// before the first HID touch; cleared when StartAgent launches an agent.
+    #[cfg(target_os = "macos")]
+    hid_reach: Arc<tokio::sync::Mutex<std::collections::HashMap<String, hid_reach::HidReach>>>,
+    /// A HID scroll-step drag has moved a list this session, so a step whose
+    /// list held still is at the list's end, not a drag that never landed
+    /// (`hid_reach::distrust_still_step`). Cleared with `hid_reach`.
+    #[cfg(target_os = "macos")]
+    hid_drag_seen_moving: Arc<std::sync::atomic::AtomicBool>,
     /// In-process broadcast of daemon `tracing` events, fanned out by the
     /// `StreamDaemonLogs` RPC so the SDK can fold daemon logs into traces.
     daemon_log_bus: crate::daemon_log_bus::DaemonLogBus,
@@ -530,6 +542,10 @@ impl TapsmithServiceImpl {
             hid_injector: Arc::new(crate::hid_injector::HidInjector::new()),
             #[cfg(target_os = "macos")]
             agent_predates_hid_tap: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(target_os = "macos")]
+            hid_reach: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            #[cfg(target_os = "macos")]
+            hid_drag_seen_moving: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -2374,6 +2390,50 @@ impl TapsmithServiceImpl {
         Ok(parse_component_name(&output))
     }
 
+    /// Start (or reuse) `udid`'s HID helper, and make sure its touches reach
+    /// the simulator's touchscreen: once a session, before the first HID
+    /// touch, the agent is asked (`hid_reach`). Err — the caller uses the
+    /// agent's touch — when the helper cannot start, or when its touches
+    /// would be dropped (said once a session).
+    #[cfg(target_os = "macos")]
+    async fn ensure_hid(&self, udid: &str) -> anyhow::Result<()> {
+        self.hid_injector.ensure(udid).await?;
+        let mut known = self.hid_reach.lock().await;
+        let reach = match known.get(udid) {
+            Some(reach) => reach.clone(),
+            None => {
+                let answer = self
+                    .send_agent_command_with_timeout(
+                        &AgentCommand::HidTouchInput {},
+                        HID_REACH_QUESTION_MS,
+                    )
+                    .await;
+                let Some(reach) = hid_reach::reach_from_answer(&answer) else {
+                    debug!(
+                        udid,
+                        "the agent could not say whether HID touches land; using HID"
+                    );
+                    return Ok(());
+                };
+                if let hid_reach::HidReach::Unreachable(why) = &reach {
+                    warn!(
+                        udid,
+                        "iOS simulator HID touches would not reach the app: {why}. Taps, \
+                         double taps, long presses and scroll drags use the agent's \
+                         synthesized touches for this session instead. Close the simulator's \
+                         DeviceHub window and reboot the simulator to get HID touches back"
+                    );
+                }
+                known.insert(udid.to_string(), reach.clone());
+                reach
+            }
+        };
+        match reach {
+            hid_reach::HidReach::Reachable => Ok(()),
+            hid_reach::HidReach::Unreachable(why) => Err(anyhow::anyhow!(why)),
+        }
+    }
+
     /// Try to handle a streamed-touch event via the iOS-simulator HID path.
     /// Returns true if it was injected via HID; false means the caller should
     /// fall back to the agent command. `is_down` ensures the helper is spawned
@@ -2395,7 +2455,7 @@ impl TapsmithServiceImpl {
             }
         };
         if is_down {
-            if let Err(e) = self.hid_injector.ensure(&udid).await {
+            if let Err(e) = self.ensure_hid(&udid).await {
                 warn!(%udid, error = %e, "iOS HID helper unavailable; falling back to agent");
                 return false;
             }
@@ -2478,7 +2538,7 @@ impl TapsmithServiceImpl {
                 _ => return HidOutcome::NotHandled,
             }
         };
-        if let Err(e) = self.hid_injector.ensure(&udid).await {
+        if let Err(e) = self.ensure_hid(&udid).await {
             return hid_unavailable(&udid, "double-tap", &e);
         }
         let (x, y, hold_ms) = match self
@@ -2548,7 +2608,7 @@ impl TapsmithServiceImpl {
         if self.agent_predates_hid_tap.load(Ordering::Relaxed) {
             return hid_unavailable(&udid, "tap", &AGENT_TOO_OLD);
         }
-        if let Err(e) = self.hid_injector.ensure(&udid).await {
+        if let Err(e) = self.ensure_hid(&udid).await {
             return hid_unavailable(&udid, "tap", &e);
         }
         let (x, y, hold_ms) = match self
@@ -2656,7 +2716,7 @@ impl TapsmithServiceImpl {
                 _ => return HidOutcome::NotHandled,
             }
         };
-        if let Err(e) = self.hid_injector.ensure(&udid).await {
+        if let Err(e) = self.ensure_hid(&udid).await {
             return hid_unavailable(&udid, "long-press", &e);
         }
         let (x, y) = match self
@@ -2699,7 +2759,7 @@ impl TapsmithServiceImpl {
                 _ => return HidOutcome::NotHandled,
             }
         };
-        if let Err(e) = self.hid_injector.ensure(&udid).await {
+        if let Err(e) = self.ensure_hid(&udid).await {
             return hid_unavailable(&udid, "scroll drag", &e);
         }
         let Some((first, rest)) = path.split_first() else {
@@ -2821,7 +2881,23 @@ impl TapsmithServiceImpl {
             let result = self
                 .send_agent_command_with_timeout(&command, deadline_ms)
                 .await;
-            scroll_step::step_response(request_id, "scrollStepFind", result, Some(region))
+            let step =
+                scroll_step::step_response(request_id, "scrollStepFind", result, Some(region));
+            if step.moved == proto::scroll_step_response::Moved::Yes as i32 {
+                self.hid_drag_seen_moving
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            } else if hid_reach::distrust_still_step(
+                &step,
+                self.hid_drag_seen_moving
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ) {
+                debug!(
+                    "scroll step: the list held still after a HID drag, and no HID drag has \
+                     moved a list yet this session; scrolling the old way"
+                );
+                return scroll_step::unsupported(step.request_id);
+            }
+            step
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -2847,7 +2923,7 @@ impl TapsmithServiceImpl {
                 _ => return false,
             }
         };
-        if let Err(e) = self.hid_injector.ensure(&udid).await {
+        if let Err(e) = self.ensure_hid(&udid).await {
             debug!(%udid, error = %e, "iOS HID helper unavailable for long-press; using agent route");
             return false;
         }
@@ -4032,8 +4108,13 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         *self.last_hooks_marker.write().await = None;
         *self.nav_probe_found_no_marker.write().await = false;
         #[cfg(target_os = "macos")]
-        self.agent_predates_hid_tap
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        {
+            self.agent_predates_hid_tap
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.hid_reach.lock().await.clear();
+            self.hid_drag_seen_moving
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
         // Session-start breakdown (PILOT-1134). Not for a reused agent above,
         // which does no work worth timing.
         let mut timer = crate::timing::PhaseTimer::new("boot", "start_agent");
@@ -6664,6 +6745,12 @@ fn double_tap_ms(interval_ms: u64) -> u64 {
 #[cfg(target_os = "macos")]
 const HID_TAP_BARRIER: Duration = Duration::from_millis(60);
 
+/// How long the agent has to say whether the HID helper's touches reach the
+/// simulator's touchscreen (`hid_reach`). It reads a list of input services,
+/// which takes milliseconds; a loaded simulator's agent answers far later.
+#[cfg(target_os = "macos")]
+const HID_REACH_QUESTION_MS: u64 = 5_000;
+
 /// A gesture's outcome when the HID helper can't take it (`what` says why):
 /// the agent's route, or — when [`REQUIRE_IOS_HID_ENV`] is set — a failure
 /// naming the reason. The helper's own first start failure is already
@@ -8993,6 +9080,89 @@ mod tests {
             .unwrap()
             .into_inner();
         assert!(resp.unsupported);
+    }
+
+    /// A service whose HID helper is a stub that starts and answers every
+    /// line, and whose agent answers `hidTouchInput` with `answer`.
+    #[cfg(target_os = "macos")]
+    async fn service_with_hid_answer(
+        answer: Value,
+    ) -> (
+        TapsmithServiceImpl,
+        Arc<std::sync::Mutex<Vec<String>>>,
+        tempfile::TempDir,
+    ) {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let (mut svc, seen) = service_with_mock_agent(move |_, _| answer.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tapsmith-ios-hid");
+        let mut f = std::fs::File::create(&path).unwrap();
+        write!(
+            f,
+            "#!/bin/sh\necho 'ready 1179 2556 3.0 screen 1 target 0x32'\nwhile IFS= read -r line; do echo ok; done\n"
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        svc.hid_injector = Arc::new(crate::hid_injector::HidInjector::with_helper_path(path));
+        (svc, seen, dir)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn hid_touches_go_to_the_agent_when_devicehub_holds_the_touchscreen() {
+        let (svc, seen, _dir) = service_with_hid_answer(json!({"result": {
+            "known": true, "legacyTouchscreen": false, "coreDeviceTouchscreen": true
+        }}))
+        .await;
+        let err = svc.ensure_hid("SIM-1").await.unwrap_err().to_string();
+        assert!(err.contains("DeviceHub"), "{err}");
+        // Asked once a session: later touches go straight to the agent.
+        assert!(svc.ensure_hid("SIM-1").await.is_err());
+        assert_eq!(*seen.lock().unwrap(), vec!["hidTouchInput"]);
+        svc.hid_injector.shutdown("SIM-1").await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn hid_touches_stay_on_hid_when_the_touchscreen_is_reachable() {
+        let (svc, seen, _dir) = service_with_hid_answer(json!({"result": {
+            "known": true, "legacyTouchscreen": true, "coreDeviceTouchscreen": true
+        }}))
+        .await;
+        svc.ensure_hid("SIM-2").await.unwrap();
+        svc.ensure_hid("SIM-2").await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec!["hidTouchInput"]);
+        svc.hid_injector.shutdown("SIM-2").await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_agent_that_predates_the_question_is_asked_once_and_keeps_hid() {
+        let (svc, seen, _dir) = service_with_hid_answer(json!({"error": {
+            "type": "ACTION_FAILED", "message": "Unknown method: hidTouchInput"
+        }}))
+        .await;
+        svc.ensure_hid("SIM-3").await.unwrap();
+        svc.ensure_hid("SIM-3").await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec!["hidTouchInput"]);
+        svc.hid_injector.shutdown("SIM-3").await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_failed_question_keeps_hid_and_is_asked_again() {
+        let (svc, seen, _dir) = service_with_hid_answer(json!({"error": {
+            "type": "ACTION_FAILED", "message": "the runner is busy"
+        }}))
+        .await;
+        svc.ensure_hid("SIM-4").await.unwrap();
+        svc.ensure_hid("SIM-4").await.unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["hidTouchInput", "hidTouchInput"]
+        );
+        svc.hid_injector.shutdown("SIM-4").await;
     }
 
     #[tokio::test]
