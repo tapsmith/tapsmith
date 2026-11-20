@@ -421,7 +421,7 @@ impl DeviceBackend for IosBackend<'_> {
             .await
         {
             Ok(ref container) => {
-                ios::device::wipe_simulator_app_data(serial, container).await;
+                ios::device::wipe_simulator_app_data(serial, package_name, container).await;
             }
             Err(e) => {
                 debug!(error = %e, "Could not get app container (app may not be installed)");
@@ -785,7 +785,13 @@ impl DeviceBackend for IosBackend<'_> {
                     .await
                 {
                     Ok(ref container) => {
-                        if let Err(e) = ios::device::clear_container(container).await {
+                        if let Err(e) = ios::device::clear_simulator_container(
+                            &serial,
+                            &req.package_name,
+                            container,
+                        )
+                        .await
+                        {
                             warn!(error = %e, "Failed to clear app container");
                         }
                     }
@@ -933,24 +939,14 @@ impl DeviceBackend for IosBackend<'_> {
             }));
         }
         let serial = self.svc.active_serial().await?;
-        // Clear the data container (AsyncStorage, UserDefaults, caches)
-        // but do NOT terminate the app — launchApp handles that and
-        // properly re-establishes the XCUITest accessibility bridge.
-        // Clearing data while the app is running is fine because the
-        // app will be relaunched anyway.
-        match self
-            .svc
-            .get_app_container_cached(&serial, &req.package_name)
-            .await
-        {
-            Ok(ref container) => {
-                // Data container, then the device-global keychain — acceptable
-                // for test-owned simulators.
-                ios::device::wipe_simulator_app_data(&serial, container).await;
-            }
-            Err(e) => {
-                debug!(error = %e, "Could not get app container (app may not be installed)");
-            }
+        // Stopped first, as `pm clear` stops an Android app: a running app
+        // keeps its UserDefaults in memory and writes them back, undoing
+        // the clear. The next launchApp starts it again.
+        if let Err(message) = self.wipe_app_data(&serial, &req.package_name).await {
+            return Ok(self
+                .svc
+                .action_error(request_id, "ACTION_FAILED", message)
+                .await);
         }
         Ok(Response::new(proto::ActionResponse {
             request_id,
@@ -1068,6 +1064,15 @@ impl DeviceBackend for IosBackend<'_> {
                     .await);
             }
         };
+
+        // cfprefsd writes UserDefaults to disk seconds after the app
+        // sets them: put what it holds into the plists first, or the
+        // archive misses the app's last writes (a sign-in just before
+        // the save). Non-fatal, like the keychain below.
+        if let Err(e) = ios::device::write_back_app_preferences(&serial, &container, pkg).await {
+            warn!(%pkg, error = %e, "Failed to read UserDefaults from cfprefsd; the archive has the copy on disk, which may miss the app's latest writes");
+        }
+        timer.phase("prefs");
 
         // Stage the simulator's device-level keychain db so the
         // archive captures keychain-backed state (Firebase Auth and
@@ -1340,7 +1345,7 @@ impl DeviceBackend for IosBackend<'_> {
         // its internal bundle-id → container UUID mapping, making
         // the app launch into a fresh container instead of the one
         // we extracted into.
-        if let Err(e) = ios::device::clear_container(&container).await {
+        if let Err(e) = ios::device::clear_simulator_container(&serial, pkg, &container).await {
             warn!(%pkg, error = %e, "clear_container failed, continuing");
         }
         timer.phase("container");
@@ -1400,6 +1405,19 @@ impl DeviceBackend for IosBackend<'_> {
 
         match output {
             Ok(out) if out.status.success() => {
+                // The app's UserDefaults are read through cfprefsd, which
+                // knows nothing of the extracted plists until told.
+                if let Err(e) = ios::device::import_app_preferences(&serial, &container).await {
+                    return Ok(self
+                        .svc
+                        .action_error(
+                            request_id,
+                            "APP_STATE_RESTORE_FAILED",
+                            format!("Failed to load the restored UserDefaults: {e}"),
+                        )
+                        .await);
+                }
+                timer.phase("prefs");
                 if has_keychain && !ios::device::keychain_state_disabled() {
                     let restored =
                         restore_simulator_keychain(&serial, &container, local_path).await;
