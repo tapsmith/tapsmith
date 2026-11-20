@@ -5,6 +5,8 @@ use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
+use crate::android_display;
+
 /// Locate the `adb` binary on PATH.
 pub async fn find_adb() -> Result<PathBuf> {
     let cmd = if cfg!(windows) { "where" } else { "which" };
@@ -455,25 +457,145 @@ pub async fn shell(serial: &str, command: &str) -> Result<String> {
 }
 
 /// Capture a screenshot from the device, returning raw PNG bytes.
+///
+/// On a device with more than one display (a foldable), captures the display
+/// apps run on — it changes with the fold posture, so it is looked up for
+/// every capture (see [`crate::android_display`]).
 #[instrument]
 pub async fn screencap(serial: &str) -> Result<Vec<u8>> {
-    let timeout = Duration::from_secs(15);
-    let png = run_adb(Some(serial), &["exec-out", "screencap", "-p"], timeout).await?;
+    let physical = match android_display::cached_physical_displays(serial) {
+        Some(ids) => ids,
+        None => probe_physical_displays(serial).await,
+    };
+    let display_id = capture_display(serial, &physical).await;
+    // Whether the capture that answered was pinned to a display.
+    let mut pinned = display_id.is_some();
+    let (prefix, png) = match screencap_once(serial, display_id.as_deref()).await {
+        Ok(captured) => captured,
+        // The display went away between the lookup and the capture (a
+        // posture change mid-capture): a plain capture still answers.
+        Err(e) if display_id.is_some() && e.downcast_ref::<AdbTimeout>().is_none() => {
+            debug!(
+                ?display_id,
+                "screencap -d failed, retrying without it: {e:#}"
+            );
+            pinned = false;
+            screencap_once(serial, None).await?
+        }
+        Err(e) => return Err(e),
+    };
 
-    if png.len() < 8 {
+    // An unpinned capture on a display this daemon did not know about (the
+    // probe failed, one was attached later, or the pinned capture above
+    // failed): screencap guessed and said so. Learn the displays and capture
+    // the right one; the guess is the fallback.
+    if android_display::should_rediscover(pinned, &prefix) {
+        let physical = probe_physical_displays(serial).await;
+        if let Some(display_id) = capture_display(serial, &physical).await {
+            match screencap_once(serial, Some(&display_id)).await {
+                Ok((_, png)) => return Ok(png),
+                Err(e) => debug!(
+                    display_id,
+                    "screencap -d failed, keeping the default display: {e:#}"
+                ),
+            }
+        } else {
+            debug!("screencap guessed between several displays and the active one is unknown");
+        }
+    }
+    Ok(png)
+}
+
+/// Bound on each display lookup around a capture. They answer in about
+/// 100 ms, and a capture without them still works, so a hung lookup
+/// must leave the capture most of the trace's 5 s capture budget.
+const DISPLAY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// One `screencap -p` (with `-d <display>` when given): the text printed
+/// before the PNG, and the PNG.
+async fn screencap_once(serial: &str, display_id: Option<&str>) -> Result<(String, Vec<u8>)> {
+    let timeout = Duration::from_secs(15);
+    let mut args = vec!["exec-out", "screencap", "-p"];
+    if let Some(display_id) = display_id {
+        args.extend(["-d", display_id]);
+    }
+    let out = run_adb(Some(serial), &args, timeout).await?;
+
+    if out.len() < 8 {
         bail!(
             "screencap returned too few bytes ({}), device may be locked",
-            png.len()
+            out.len()
         );
     }
 
-    // Validate PNG magic bytes
-    if &png[..4] != b"\x89PNG" {
-        bail!("screencap output does not appear to be valid PNG data");
+    let (prefix, png) = android_display::split_screencap_output(&out).map_err(|text| {
+        if text.is_empty() {
+            anyhow::anyhow!("screencap output does not appear to be valid PNG data")
+        } else {
+            anyhow::anyhow!("screencap output does not appear to be valid PNG data: {text}")
+        }
+    })?;
+    if !prefix.is_empty() {
+        debug!(display_id = ?display_id, prefix, "screencap printed text before the PNG");
     }
+    debug!(bytes = png.len(), display_id = ?display_id, "Screenshot captured");
+    Ok((prefix, png.to_vec()))
+}
 
-    debug!(bytes = png.len(), "Screenshot captured");
-    Ok(png)
+/// The device's physical display ids, cached for the serial. An unanswered
+/// probe reads as one display and is cached as that too, so a single-display
+/// device does not pay a hung probe again on every capture. A multi-display
+/// device still recovers: screencap's guess warning sends [`screencap`] back
+/// to probing (and pays the probe again for as long as it keeps failing).
+async fn probe_physical_displays(serial: &str) -> Vec<String> {
+    match run_adb(
+        Some(serial),
+        &["shell", "dumpsys SurfaceFlinger --display-id"],
+        DISPLAY_QUERY_TIMEOUT,
+    )
+    .await
+    {
+        Ok(out) => {
+            let ids =
+                android_display::parse_surfaceflinger_display_ids(&String::from_utf8_lossy(&out));
+            debug!(serial, ?ids, "Physical displays");
+            android_display::cache_physical_displays(serial, ids.clone());
+            ids
+        }
+        Err(e) => {
+            debug!(serial, "Could not list physical displays: {e:#}");
+            android_display::cache_physical_displays(serial, Vec::new());
+            Vec::new()
+        }
+    }
+}
+
+/// The display to pass to `screencap -d`, or `None` for a plain capture: a
+/// single-display device, or one whose active display cannot be read.
+async fn capture_display(serial: &str, physical: &[String]) -> Option<String> {
+    if physical.len() < 2 {
+        return None;
+    }
+    match run_adb(
+        Some(serial),
+        &["shell", "dumpsys display"],
+        DISPLAY_QUERY_TIMEOUT,
+    )
+    .await
+    {
+        Ok(out) => {
+            let display_id =
+                android_display::capture_display_id(physical, &String::from_utf8_lossy(&out));
+            if display_id.is_none() {
+                debug!(serial, "Could not read which display is active");
+            }
+            display_id
+        }
+        Err(e) => {
+            debug!(serial, "dumpsys display failed: {e:#}");
+            None
+        }
+    }
 }
 
 /// Spawn `adb shell screenrecord` to record the device screen to a file

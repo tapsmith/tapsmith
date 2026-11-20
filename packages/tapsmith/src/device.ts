@@ -362,14 +362,20 @@ export class Device {
     return this.tracing._currentCollector ?? getActiveTraceCollector();
   }
 
-  /** @internal — Take a screenshot and return the raw buffer. */
+  /**
+   * @internal — A screenshot for the trace. Rejects with the daemon's reason when the
+   * device could not take one, so the trace can say why it has no images;
+   * resolves `undefined` when the daemon could not be asked at all.
+   */
   private async _takeScreenshotBuffer(): Promise<Buffer | undefined> {
+    let res: ScreenshotResponse;
     try {
-      const res = await this._client.takeScreenshot();
-      return res.success ? res.data : undefined;
+      res = await this._client.takeScreenshot();
     } catch {
       return undefined;
     }
+    if (!res.success) throw new Error(res.errorMessage || 'the device returned no screenshot');
+    return res.data;
   }
 
   /**

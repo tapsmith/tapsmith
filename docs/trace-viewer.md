@@ -99,6 +99,8 @@ Shows before/after screenshots for the selected action:
 - **Action** — before screenshot with tap/swipe coordinate overlay
 - **After** — the screen once the action completed: the next step's before screenshot, or, for the last step, a final screenshot taken when the test ends
 
+On a device with more than one display, such as a foldable, the screenshots show the display the app is on, which changes when the device is folded or unfolded. If a screenshot fails with an error, the trace's Console tab says why, and the run output says so once. A screenshot that only times out is left out without a note.
+
 ### Detail Tabs (right)
 
 - **Call** — Action type, locator, bounds, wall time, raw action/assertion time, wait time, retry count
