@@ -212,6 +212,51 @@ describe('TraceCollector', () => {
     });
   });
 
+  it('notes a failed screenshot once in the trace and once on stderr', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const collector = new TraceCollector(config, tempDir);
+      const failing = () => Promise.reject(new Error('screencap output does not appear to be valid PNG data (test 1)'));
+      const hierarchy = () => Promise.resolve(undefined);
+
+      const { actionIndex } = await collector.captureBeforeAction(failing, hierarchy);
+      await collector.captureAfterAction(actionIndex, failing, hierarchy);
+      await collector.captureBeforeAction(failing, hierarchy);
+
+      const warnings = collector.events.filter((e): e is ConsoleTraceEvent => e.type === 'console');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].level).toBe('warn');
+      expect(warnings[0].message).toContain('Screenshot capture failed');
+      expect(warnings[0].message).toContain('valid PNG data (test 1)');
+      expect(collector.screenshots).toHaveLength(0);
+
+      // A second trace in the same process says so again in its own trace,
+      // but not again on the terminal.
+      const next = new TraceCollector(config, tempDir);
+      await next.captureBeforeAction(failing, hierarchy);
+      expect(next.events.filter((e) => e.type === 'console')).toHaveLength(1);
+
+      const printed = stderr.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('Screenshot'));
+      expect(printed).toHaveLength(1);
+      expect(printed[0]).toContain('valid PNG data (test 1)');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('does not note a screenshot that only timed out or returned nothing', async () => {
+    vi.useFakeTimers();
+    const collector = new TraceCollector(config, tempDir);
+    const capture = collector.captureBeforeAction(
+      () => new Promise<Buffer>(() => {}),
+      () => Promise.resolve(undefined),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await capture;
+    await collector.captureBeforeAction(() => Promise.resolve(undefined), () => Promise.resolve(undefined));
+    expect(collector.events.filter((e) => e.type === 'console')).toHaveLength(0);
+  });
+
   it('records logcat entries', () => {
     const collector = new TraceCollector(config, tempDir);
     collector.addLogcatEntry('info', 'App launched');
