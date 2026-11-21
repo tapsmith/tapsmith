@@ -161,6 +161,20 @@ export function generateSelectors(node: HierarchyNode): GeneratedSelector[] {
   return generateNativeSelectors(node);
 }
 
+/**
+ * The `{ exact: true }` variant of a generated webview.getByRole-with-name or
+ * webview.getByLabel suggestion, which match a case-insensitive substring by
+ * default (as in Playwright), or null when there is none to try. The live
+ * picker and the offline Playground both pin an ambiguous one with it.
+ */
+export function exactWebViewVariant(code: string): string | null {
+  const role = /^webview\.getByRole\(("(?:[^"\\]|\\.)*"), \{ name: ("(?:[^"\\]|\\.)*") \}\)$/.exec(code);
+  if (role) return `webview.getByRole(${role[1]}, { name: ${role[2]}, exact: true })`;
+  const label = /^webview\.getByLabel\(("(?:[^"\\]|\\.)*")\)$/.exec(code);
+  if (label) return `webview.getByLabel(${label[1]}, { exact: true })`;
+  return null;
+}
+
 // Priority follows Testing Library order:
 // Role → LabelText → Placeholder → Text → TestID → CSS
 function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {

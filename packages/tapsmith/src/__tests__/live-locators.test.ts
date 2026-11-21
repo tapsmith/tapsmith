@@ -58,7 +58,8 @@ function fakePage(viewport?: Bounds): { page: WebViewHandle; matches: Record<str
     return { count: all.length, total: all.length, matches: all.slice(0, max), viewport };
   });
   for (const method of ['getByText', 'getByRole', 'getByTestId', 'getByPlaceholder', 'getByLabel', 'locator']) {
-    handle[method] = vi.fn((arg: string) => loc(`${method}:${arg}`));
+    // `:exact` for { exact: true }, which a getByRole name or label takes.
+    handle[method] = vi.fn((arg: string, opts?: { exact?: boolean }) => loc(`${method}:${arg}${opts?.exact ? ':exact' : ''}`));
   }
   return { page: handle as unknown as WebViewHandle, matches };
 }
@@ -137,6 +138,21 @@ describe('suggestLiveLocators', () => {
     vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
     expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Submit")']);
+  });
+
+  it('pins a WebView name or label that matches as a substring with exact, when the whole one finds only the pick', async () => {
+    const { page, matches } = fakePage();
+    const save = domEl({ tag: 'button', bounds: B(0, 0, 100, 50) });
+    const draft = domEl({ tag: 'button', bounds: B(0, 60, 100, 110) });
+    // "Save" also names "Save draft"; nothing else finds only the pick.
+    matches['getByRole:button'] = [save, draft];
+    matches['getByRole:button:exact'] = [save];
+    matches['getByText:Save'] = [save, draft];
+    matches['locator:button'] = [save, draft];
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    const picked = node({ webview: 'true', 'webview-tag': 'button', 'webview-aria-role': 'button', 'content-desc': 'Save', text: 'Save', bounds: '[0,0][100,50]' });
+    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', picked, { ios: false });
+    expect(suggestions.map((s) => s.code)[0]).toBe('webview.getByRole("button", { name: "Save", exact: true })');
   });
 
   it('rejects a WebView candidate whose one match in the page is another element', async () => {

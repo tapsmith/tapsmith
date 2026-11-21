@@ -1001,6 +1001,8 @@ export class WebViewHandle {
           const kids = kidsOf(el);
           const r = el.getBoundingClientRect();
           if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth));
+          const name = __ts.name(el).slice(0, 200);
+          const nameWithHidden = __ts.name(el, true).slice(0, 200);
           const node = {
             tag: tag,
             id: el.id || '',
@@ -1017,13 +1019,10 @@ export class WebViewHandle {
             // The role and accessible name getByRole matches it by, and the
             // label texts getByLabel matches (Playwright's rules, PILOT-1361).
             ariaRole: __ts.role(el) || '',
-            ariaLabel: __ts.name(el).slice(0, 200),
+            ariaLabel: name,
             // The name getByRole matches with includeHidden, when hidden
             // content changes it (an aria-hidden control, an icon's text).
-            ariaLabelWithHidden: (() => {
-              const n = __ts.name(el, true).slice(0, 200);
-              return n !== __ts.name(el).slice(0, 200) ? n : undefined;
-            })(),
+            ariaLabelWithHidden: nameWithHidden !== name ? nameWithHidden : undefined,
             // Raw, as a getByLabel RegExp tests them; a string match normalises.
             labels: __ts.labelTexts(el).map((t) => t.slice(0, 200)),
             // The attribute alone: what webview.getByLabel matches (PILOT-666).

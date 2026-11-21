@@ -10,7 +10,7 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes, getNodeBounds } from './selector-matching.js';
 import type { GeneratedSelector } from './selector-generation.js';
-import { glyphAware, roleNameFor } from './selector-generation.js';
+import { glyphAware, roleNameFor, exactWebViewVariant } from './selector-generation.js';
 import { escapeJsString } from '../../js-string-escape.js';
 import { fullResourceIdUpgrade } from './resource-id.js';
 
@@ -125,26 +125,14 @@ function tryExactRoleNameUpgrade(
   return null;
 }
 
-/**
- * An ambiguous webview.getByRole name or getByLabel text (a case-insensitive
- * substring, as in Playwright) → try the { exact: true } variant.
- */
+/** An ambiguous webview.getByRole name or getByLabel text → try the { exact: true } variant. */
 function tryExactWebViewUpgrade(
   s: GeneratedSelector,
   roots: HierarchyNode[],
   node: HierarchyNode,
 ): GeneratedSelector | null {
-  const parsed = parseSelectorString(s.code);
-  if (!parsed || parsed.exact || parsed.regex || parsed.nameRegex) return null;
-  let upgraded: string;
-  if (parsed.type === 'wv-role' && parsed.name) {
-    upgraded = `webview.getByRole("${escapeJsString(parsed.value)}", { name: "${escapeJsString(parsed.name)}", exact: true })`;
-  } else if (parsed.type === 'wv-label' && parsed.value) {
-    upgraded = `webview.getByLabel("${escapeJsString(parsed.value)}", { exact: true })`;
-  } else {
-    return null;
-  }
-  return uniquelyMatches(upgraded, roots, node) ? { ...s, code: upgraded } : null;
+  const upgraded = exactWebViewVariant(s.code);
+  return upgraded && uniquelyMatches(upgraded, roots, node) ? { ...s, code: upgraded } : null;
 }
 
 /**
