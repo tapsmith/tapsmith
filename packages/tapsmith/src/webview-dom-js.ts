@@ -226,19 +226,39 @@ const HELPERS_JS = `(() => {
     }
     return ex;
   }
+  // Per evaluation (the helpers are rebuilt for every expression, and a
+  // finder does not change the page), as Playwright caches them: a name
+  // walks a subtree, and each node of it its ancestors.
+  const styleCache = new Map();
+  const hiddenCache = new Map();
+  function styleOf(el) {
+    let style = styleCache.get(el);
+    if (style === undefined) {
+      style = getComputedStyle(el);
+      styleCache.set(el, style);
+    }
+    return style;
+  }
   // Hidden from assistive technology, for the accessible name's traversal.
   function belongsToHidden(el) {
-    for (let n = el; n; n = parentOrHost(n)) {
-      // A shadow host's child that no slot takes is not rendered.
-      if (n.parentElement && n.parentElement.shadowRoot && !n.assignedSlot) return true;
-      const style = getComputedStyle(n);
-      if (!style || style.display === 'none' || (n.getAttribute('aria-hidden') || '').toLowerCase() === 'true') return true;
+    let hidden = hiddenCache.get(el);
+    if (hidden !== undefined) return hidden;
+    // A shadow host's child that no slot takes is not rendered.
+    hidden = !!(el.parentElement && el.parentElement.shadowRoot && !el.assignedSlot);
+    if (!hidden) {
+      const style = styleOf(el);
+      hidden = !style || style.display === 'none' || (el.getAttribute('aria-hidden') || '').toLowerCase() === 'true';
     }
-    return false;
+    if (!hidden) {
+      const parent = parentOrHost(el);
+      if (parent) hidden = belongsToHidden(parent);
+    }
+    hiddenCache.set(el, hidden);
+    return hidden;
   }
   function hiddenForAria(el) {
     if (skipText(el)) return true;
-    const style = getComputedStyle(el);
+    const style = styleOf(el);
     const isSlot = el.nodeName === 'SLOT';
     if (style && style.display === 'contents' && !isSlot) {
       for (let c = el.firstChild; c; c = c.nextSibling) {
@@ -273,7 +293,7 @@ const HELPERS_JS = `(() => {
     const visit = (n, skipSlotted) => {
       if (skipSlotted && n.assignedSlot) return;
       if (n.nodeType === 1) {
-        const style = getComputedStyle(n);
+        const style = styleOf(n);
         let token = alt(n, o);
         if ((style && style.display || 'inline') !== 'inline' || n.nodeName === 'BR') token = ' ' + token + ' ';
         s += token;

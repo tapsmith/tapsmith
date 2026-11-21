@@ -18,6 +18,7 @@ import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/component
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { findMatchingNodes, parseSelectorString } from '../trace-viewer/components/selector-matching.js';
 import { pickNodeAt } from '../trace-viewer/components/pick-node.js';
+import { withDomHelpers } from '../webview-dom-js.js';
 import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
 
 const SHADOW_PAGE = `<!DOCTYPE html><html><body>
@@ -666,6 +667,22 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
       expect(await handle.getByLabel(/^\s+Email/).count()).toBe(1);
       const input = flatten(roots).find((n) => n.attributes.get('webview-id') === 'e')!;
       expect(generateSelectors(input).map((g) => g.code)).toContain('webview.getByLabel("Email")');
+    });
+
+    it('reads each element\'s style once while naming every element, however deep the names', async () => {
+      // A list whose rows are links named by their content, deep in the page:
+      // every name walks its row, and every node of it its ancestors.
+      const row = (i: number) => `<li><a href="#${i}"><h2>Item ${i}</h2><p>Detail <span>${i}</span></p><button>Open</button></a></li>`;
+      const nest = (html: string, depth: number): string => depth === 0 ? html : `<div>${nest(html, depth - 1)}</div>`;
+      const { handle, window } = handleOn(`<!DOCTYPE html><body>${nest(`<ul>${Array.from({ length: 30 }, (_, i) => row(i)).join('')}</ul>`, 15)}</body>`);
+      const elements = window.document.querySelectorAll('*').length;
+      const original = window.getComputedStyle.bind(window);
+      let calls = 0;
+      window.getComputedStyle = ((el: Element, pseudo?: string | null) => { calls++; return original(el, pseudo); }) as typeof window.getComputedStyle;
+      // Every element's name, as the DOM dump computes them.
+      const names = await handle._evaluate(withDomHelpers('__ts.all(document).map((el) => __ts.name(el))')) as string[];
+      expect(names).toContain('Item 3 Detail 3 Open');
+      expect(calls).toBeLessThanOrEqual(elements);
     });
 
     it('reads a dump from before PILOT-1361', () => {
