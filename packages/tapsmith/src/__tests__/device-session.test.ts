@@ -1538,6 +1538,28 @@ describe('a rebuilt app in a long-lived session', () => {
     expect(installedApkMatches).toHaveBeenCalledTimes(1);
   });
 
+  it('stamps the build on disk before the startup comparison, not alongside it', async () => {
+    const { localBuildStamp } = await import('../build-stamp.js');
+    const { installedApkMatches } = await import('../emulator.js');
+    const order: string[] = [];
+    vi.mocked(localBuildStamp).mockImplementationOnce(async () => { await new Promise((r) => setTimeout(r, 20)); order.push('local stamped'); return mocks.localStamp; });
+    vi.mocked(installedApkMatches).mockImplementationOnce(() => { order.push('compared'); return true; });
+    await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+    expect(order).toEqual(['local stamped', 'compared']);
+  });
+
+  it('never takes another app\'s simulator container for this one', async () => {
+    const { installedSimulatorAppStamp } = await import('../build-stamp.js');
+    rememberInstalledBuilds({ 'SIM-8': '/other/Other.app\nlocal\napp:/sims/X/Bundle/UUID-O/Other.app:abc' });
+    vi.mocked(installedSimulatorAppStamp).mockClear();
+    await openDeviceSession(
+      { name: 'device-1', serial: 'SIM-8', daemonAddress: 'localhost:50051' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app', simulator: 'iPhone 16' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false },
+    );
+    expect(installedSimulatorAppStamp).toHaveBeenCalledWith('SIM-8', 'com.example.app', undefined);
+  });
+
   it('records the device\'s copy as it was before the comparison, never one installed meanwhile', async () => {
     const { installedApkMatches } = await import('../emulator.js');
     vi.mocked(installedApkMatches).mockClear();

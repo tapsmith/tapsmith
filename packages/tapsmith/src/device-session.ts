@@ -608,19 +608,20 @@ export async function installConfiguredApp(
 // ─── Rebuilt apps in long-lived sessions (PILOT-1397) ───
 
 /** The stamp of the copy installed on an emulator or simulator (`build-stamp.ts`). */
-async function installedBuildStamp(config: TapsmithConfig, serial: string): Promise<string | undefined> {
+async function installedBuildStamp(config: TapsmithConfig, serial: string, artifact: string): Promise<string | undefined> {
   if (!config.package) return undefined;
   return config.platform === 'ios'
-    // Where the last proof found the bundle: a watch or MCP child is a fresh
-    // process, and asking simctl again costs most of a second per run.
-    ? installedSimulatorAppStamp(serial, config.package, simulatorContainerOf(verifiedBuilds.get(serial)))
+    // Where the last proof of this same build found the bundle: a watch or
+    // MCP child is a fresh process, and asking simctl again costs most of a
+    // second per run. Never another app's: the token must name this artifact.
+    ? installedSimulatorAppStamp(serial, config.package, simulatorContainerOf(verifiedBuilds.get(serial), artifact))
     : installedApkStamp(serial, config.package);
 }
 
-/** The simulator container path a verified-build token holds (`…\napp:<container>:<hash>`), if any. */
-function simulatorContainerOf(token: string | undefined): string | undefined {
-  const installed = token?.split('\n')[2];
-  if (!installed?.startsWith('app:')) return undefined;
+/** The simulator container path a verified-build token for `artifact` holds (`<artifact>\n…\napp:<container>:<hash>`), if any. */
+function simulatorContainerOf(token: string | undefined, artifact: string): string | undefined {
+  const [tokenArtifact, , installed] = token?.split('\n') ?? [];
+  if (tokenArtifact !== artifact || !installed?.startsWith('app:')) return undefined;
   const end = installed.lastIndexOf(':');
   return end > 4 ? installed.slice(4, end) : undefined;
 }
@@ -649,20 +650,26 @@ async function checkInstallAndRemember(
   }
   // A physical iPhone has no simulator container: it stamps as `undefined`,
   // and nothing is recorded (its later checks never run).
-  const stamps = artifact
-    ? Promise.all([localBuildStamp(artifact), installedBuildStamp(config, serial)])
-    : undefined;
+  // The local stamp is awaited: a `.app` is a tree walk that would otherwise
+  // trail the comparison and could read a rebuild written meanwhile. The
+  // device's runs alongside (a reinstall elsewhere moves or fails it).
+  const installedBefore = artifact ? installedBuildStamp(config, serial, artifact) : undefined;
+  installedBefore?.catch(() => {});
+  const localBefore = artifact ? await localBuildStamp(artifact) : undefined;
+  const stamps = installedBefore ? installedBefore.then((installed) => [localBefore, installed] as const) : undefined;
   stamps?.catch(() => {});
   const install = await installAppUnderTest(config, device, serial, opts);
   if (stamps && !install.installed) {
     void stamps.then(([built, installed]) => {
       if (built && installed) verifiedBuilds.set(serial, `${artifact}\n${built}\n${installed}`);
     }).catch(() => {});
-  } else if (stamps && install.uncompared) {
+  } else if (artifact && localBefore && install.uncompared) {
     // A device whose copy cannot be compared reinstalls on every full check:
     // the copy found after this install is the best evidence there is.
-    void stamps.then(async ([built]) => {
-      const installed = await installedBuildStamp(config, serial);
+    const built = localBefore;
+    const verifiedArtifact = artifact;
+    void (install.pending ?? Promise.resolve()).then(async () => {
+      const installed = await installedBuildStamp(config, serial, verifiedArtifact);
       if (built && installed) verifiedBuilds.set(serial, `${artifact}\n${built}\n${installed}`);
     }).catch(() => {});
   }
@@ -715,7 +722,7 @@ export async function reinstallChangedBuild(
 
   // Stamped before the check, so a build written while it runs is never
   // recorded as the one it compared.
-  const [local, before] = await Promise.all([localBuildStamp(artifact), installedBuildStamp(config, serial)]);
+  const [local, before] = await Promise.all([localBuildStamp(artifact), installedBuildStamp(config, serial, artifact)]);
   const token = (installed: string | undefined): string | undefined =>
     local && installed ? `${artifact}\n${local}\n${installed}` : undefined;
   const known = token(before);
@@ -737,7 +744,7 @@ export async function reinstallChangedBuild(
   // full check would reinstall, so the copy found after this install is
   // recorded as the best evidence there is.
   if (install.uncompared) {
-    const verified = token(await installedBuildStamp(config, serial));
+    const verified = token(await installedBuildStamp(config, serial, artifact));
     if (verified !== undefined) verifiedBuilds.set(serial, verified);
   }
 
