@@ -87,6 +87,20 @@ describe('isWebViewOverlayPending', () => {
     expect(isWebViewOverlayPending(roots, 196, 324)).toBe(true);
   });
 
+  it("false inside an in-app browser's page, which never gets a DOM overlay (PILOT-1384)", () => {
+    const inBrowser = `<hierarchy>
+      <XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][393,852]">
+        <XCUIElementTypeOther identifier="BrowserView?IsPageLoaded=true&amp;WebViewProcessID=1" bounds="[0,69][393,852]">
+          <XCUIElementTypeButton label="Done" identifier="Close" bounds="[14,80][55,113]" />
+          <XCUIElementTypeWebView type="XCUIElementTypeWebView" bounds="[0,120][393,852]">
+            <XCUIElementTypeTextField placeholderValue="Search" bounds="[24,300][369,348]" />
+          </XCUIElementTypeWebView>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeApplication>
+    </hierarchy>`;
+    expect(isWebViewOverlayPending(parseHierarchyXml(inBrowser), 196, 324)).toBe(false);
+  });
+
   it('false outside the WebView container', () => {
     const roots = parseHierarchyXml(withoutOverlay);
     expect(isWebViewOverlayPending(roots, 60, 84)).toBe(false); // Back button

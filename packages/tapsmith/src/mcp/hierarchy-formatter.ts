@@ -1,7 +1,7 @@
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { getNodeRole } from '../trace-viewer/components/hierarchy-utils.js';
 import { isNonAppNode, isNonAppSubtree } from '../trace-viewer/components/non-app-nodes.js';
-import { isNativeWebViewContainer } from '../trace-viewer/components/pick-node.js';
+import { isInAppBrowserRoot, isNativeWebViewContainer } from '../trace-viewer/components/pick-node.js';
 import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
 import { escapeJsString } from '../js-string-escape.js';
 
@@ -88,6 +88,14 @@ function formatNode(
   const lines: string[] = [];
   const indent = '  '.repeat(depth);
 
+  // An in-app browser's page is not one `device.webview()` reaches
+  // (PILOT-1384): its WebView is listed as native content, unmarked.
+  if (!webview.inside && isInAppBrowserRoot(node)) {
+    webview.inside = true;
+    lines.push(...formatNode(node, depth, refs, suggestions, webview));
+    webview.inside = false;
+    return lines;
+  }
   // A WebView (iOS nests three) is marked once, at its outermost element,
   // and its content listed under it.
   if (!webview.inside && isNativeWebViewContainer(node)) {

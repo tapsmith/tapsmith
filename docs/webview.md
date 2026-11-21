@@ -19,16 +19,18 @@ If your app is fully native, you do not need this. Stick with the standard [Loca
 A link that opens in the system's in-app browser — `expo-web-browser`'s `openBrowserAsync()` (the `ExternalLink` in the `create-expo-app` template), `SFSafariViewController` on iOS, a Custom Tab on Android — shows a browser that another process draws over your app. Its controls are native elements, so close it with an ordinary locator:
 
 ```typescript
+const explore = device.getByRole("tab", { name: "Explore" })
 await device.getByText("Expo documentation").tap()   // opens the in-app browser
+await expect(explore).toBeHidden()                     // the browser covers the app
 if (device.platform === "ios") {
   await device.getByRole("button", { name: "Done", exact: true }).tap()
 } else {
   await device.pressBack()   // a Custom Tab is another app's window
 }
-await expect(device.getByText("Expo documentation")).toBeVisible()
+await expect(explore).toBeVisible()
 ```
 
-On iOS, while a full-screen browser is up (`expo-web-browser`'s default presentation) it covers the app: the app's own screen is not in the hierarchy, so its locators do not match (`toBeHidden()` passes), and what locators, the trace viewer and the MCP snapshot see is the browser — its Done button, address bar and the page's accessibility elements. iOS 26 and later leave the browser out of the app's accessibility snapshot; Tapsmith reads it in from the browser itself, which adds a fraction of a second to each lookup while the browser is up.
+On iOS, while a full-screen browser is up (`expo-web-browser`'s default presentation) it covers the app: the app's own screen is not in the hierarchy, so its locators do not match, and what locators, the trace viewer and the MCP snapshot see is the browser — its Done button, address bar and the page's accessibility elements. A locator for text the page shows too (often the link's own text) can match the page, so check the app's screen with something only the app shows, such as a tab. The page is not a WebView of your app: `device.webview()` does not reach it. iOS 26 and later leave the browser out of the app's accessibility snapshot; Tapsmith reads it in from the browser itself, which adds a fraction of a second to each lookup while the browser is up.
 
 ## Prerequisites
 

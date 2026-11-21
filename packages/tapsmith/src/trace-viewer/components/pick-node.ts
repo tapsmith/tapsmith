@@ -106,6 +106,16 @@ export function pickNodeAt(
 
 // ─── WebView overlay detection (live mirror pick) ───
 
+/**
+ * The root of an iOS in-app browser (SFSafariViewController), which the
+ * agent names by SafariViewService's identifier (PILOT-1384). Its page is
+ * SafariViewService's, not the app's: `device.webview()` cannot attach to
+ * it, so its content is matched with native locators only.
+ */
+export function isInAppBrowserRoot(node: HierarchyNode): boolean {
+  return (node.attributes.get('identifier') ?? '').startsWith('BrowserView?');
+}
+
 /** A native WebView element: what holds a page's accessibility projection. */
 export function isNativeWebViewContainer(node: HierarchyNode): boolean {
   // iOS: <XCUIElementTypeWebView …>. Android: <node class="android.webkit.WebView" …>.
@@ -128,6 +138,8 @@ export function isWebViewOverlayPending(roots: HierarchyNode[], x: number, y: nu
   const contains = (bounds: Bounds) =>
     x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
   function walk(node: HierarchyNode) {
+    // An in-app browser's page never gets a DOM overlay to wait for.
+    if (isInAppBrowserRoot(node)) return;
     const bounds = getNodeBounds(node);
     if (node.attributes.get('webview') === 'true') {
       // Only an overlay covering the pick point counts — with multiple
