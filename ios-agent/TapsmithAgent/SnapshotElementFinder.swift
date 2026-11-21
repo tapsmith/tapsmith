@@ -1539,6 +1539,7 @@ class SnapshotElementFinder {
         insideSwitch: Bool = false,
         inAlert: Bool = false,
         row: RowContext? = nil,
+        rowCell: [String: Any]? = nil,
         listExposesEveryRow: Bool = false,
         rowCounts: [String: Int]? = nil,
         containerLabel: String,
@@ -1653,7 +1654,7 @@ class SnapshotElementFinder {
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
             focusedHint: focusedHint
-        ) {
+        ), !repeatsRowText(nodeDict, rowCell: rowCell, containerLabel: containerLabel, selector: selector) {
             let myId = nodeDict["identifier"] as? String ?? ""
             let myLabel = nodeDict["label"] as? String ?? ""
             let raw = parseUInt(nodeDict["elementType"]) ?? 0
@@ -1757,6 +1758,7 @@ class SnapshotElementFinder {
                     // (RoleMapping.matches, PILOT-919).
                     inAlert: inAlert || nodeType == .alert,
                     row: ownRow ?? row,
+                    rowCell: nodeType == .cell ? nodeDict : rowCell,
                     listExposesEveryRow: nodeType == .table
                         || (nodeType != .collectionView && listExposesEveryRow),
                     rowCounts: rowCounts,
@@ -1956,6 +1958,26 @@ class SnapshotElementFinder {
         if !hasAnySelector { return false }
 
         return true
+    }
+
+    /// Whether an exact getByText match of `node` is only a ", "-joined part
+    /// of its label that its table row (`rowCell`, the nearest enclosing
+    /// cell) shows as a static text outside it: UIKit's edit-mode Remove and
+    /// Reorder controls repeat their row's texts (TextContent.matchesExact,
+    /// PILOT-1374). The row's text is the match.
+    private func repeatsRowText(
+        _ node: [String: Any], rowCell: [String: Any]?, containerLabel: String, selector: ElementSelector
+    ) -> Bool {
+        guard let query = selector.text, rowCell != nil else { return false }
+        let type = XCUIElement.ElementType(rawValue: parseUInt(node["elementType"]) ?? 0) ?? .other
+        let texts = TextContent.texts(
+            elementType: type,
+            label: node["label"] as? String ?? "",
+            title: node["title"] as? String ?? "",
+            value: node["value"] as? String ?? "",
+            containerLabel: containerLabel
+        )
+        return TextContent.rowShows(query, texts: texts, node: node, rowCell: rowCell)
     }
 
     /// Whether a generic wrapper's label is only a name-only child's name on

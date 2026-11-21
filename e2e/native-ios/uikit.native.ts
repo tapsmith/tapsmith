@@ -188,6 +188,29 @@ describe("UIKit: table view", () => {
   })
 })
 
+// UIKit labels a row's edit-mode Remove and Reorder controls with the row's
+// texts; getByText finds the row's text alone (PILOT-1374).
+describe("UIKit: table in edit mode", () => {
+  test.beforeEach(async ({ device, uikitEdit }) => {
+    await openScreen(device, "uikitedit")
+    await expect(uikitEdit.account("Alpha (a@example.com)")).toBeVisible()
+  })
+
+  test("getByText exact finds a row's text, not its Remove and Reorder controls", async ({ uikitEdit }) => {
+    await expect(uikitEdit.account("Alpha (a@example.com)")).toHaveCount(1)
+    await expect(uikitEdit.account("Alpha (a@example.com)")).toHaveRole("text")
+    await expect(uikitEdit.accountText("Alpha (a@example.com)")).toHaveCount(1)
+    await expect(uikitEdit.codes).toHaveCount(3)
+  })
+
+  test("the Remove control is still found by its name, and deletes its row", async ({ uikitEdit }) => {
+    await uikitEdit.remove("Bravo (b@example.com)").tap()
+    await uikitEdit.confirmDelete.tap()
+    await expect(uikitEdit.account("Bravo (b@example.com)")).toBeHidden()
+    await expect(uikitEdit.codes).toHaveCount(2)
+  })
+})
+
 describe("UIKit: UIAlertController", () => {
   test.beforeEach(async ({ device, uikitDialogs }) => {
     await openScreen(device, "uikitdialogs")

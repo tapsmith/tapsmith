@@ -224,6 +224,25 @@ export class UIKitSettingsScreen {
   get status() { return this.device.getByTestId("uikit-settings-status") }
 }
 
+/**
+ * A UIKit table in edit mode (`uikitedit`): account rows, each an initial, a
+ * code and a name, with the Remove and Reorder controls UIKit labels with the
+ * row's texts ("Remove A, 981 195, Alpha (a@example.com)", PILOT-1374).
+ */
+export class UIKitEditScreen {
+  constructor(private device: Device) {}
+
+  /** An account's name, the row's static text. */
+  account(name: string) { return this.device.getByText(name, { exact: true }) }
+  /** The row's static text, by role. */
+  accountText(name: string) { return this.device.getByRole("text", { name, exact: true }) }
+  /** A row's Remove control, named by the row's texts after the verb. */
+  remove(name: string) { return this.device.getByRole("button", { name: `Remove ${name[0]}, 981 195, ${name}`, exact: true }) }
+  /** The Delete button a Remove control reveals. */
+  get confirmDelete() { return this.device.getByRole("button", { name: "Delete", exact: true }) }
+  get codes() { return this.device.getByText("981 195", { exact: true }) }
+}
+
 export class UIKitDialogsScreen {
   constructor(private device: Device) {}
 
