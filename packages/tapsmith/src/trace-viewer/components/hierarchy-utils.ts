@@ -336,7 +336,7 @@ export function pathToNode(roots: HierarchyNode[], target: HierarchyNode): numbe
 
 /**
  * The root of an iOS in-app browser (SFSafariViewController), which the
- * agent names by SafariViewService's identifier (PILOT-1384). Its page is
+ * agent names by SafariViewService's identifier. Its page is
  * SafariViewService's, not the app's: `device.webview()` cannot attach to
  * it, so its content is matched with native locators only.
  */
