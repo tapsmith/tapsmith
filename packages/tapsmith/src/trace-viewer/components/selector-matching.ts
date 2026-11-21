@@ -4,6 +4,7 @@ import { getNodeRole, isComposeRoleCarrier, isLabelField, getNodeBounds, webView
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
+import { unknownWebViewRoleMessage } from '../../webview-dom-js.js';
 import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES, iosBackButtonName } from '../../accessible-name.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
@@ -991,12 +992,14 @@ function nodeHasRole(node: HierarchyNode, role: string, named: boolean, parentCl
 }
 
 /**
- * Why a parsed locator would throw when the test builds it, or `null`. Today
- * that is a native getByRole role the runtime rejects; WebView
- * roles are DOM ARIA roles and are not checked.
+ * Why a parsed locator would throw when the test builds it, or `null`: a
+ * getByRole role the runtime rejects, native or WebView (which takes ARIA
+ * roles and Tapsmith's textfield and image).
  */
 export function parsedSelectorError(selector: ParsedSelector): string | null {
-  return selector.type === 'role' ? unknownRoleMessage(selector.value) : null;
+  if (selector.type === 'role') return unknownRoleMessage(selector.value);
+  if (selector.type === 'wv-role') return unknownWebViewRoleMessage(selector.value);
+  return null;
 }
 
 export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelector): HierarchyNode[] {

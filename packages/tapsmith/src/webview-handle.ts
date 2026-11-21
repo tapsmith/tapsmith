@@ -13,19 +13,13 @@ import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 import type { TraceCollector } from './trace/trace-collector.js';
 import { extractStack } from './trace/trace-collector.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
-import { ARIA_ROLES, WEBVIEW_ROLE_ALIASES, webViewRolesFor, deepQueryAllJs, deepQueryJs, withDomHelpers } from './webview-dom-js.js';
+import { unknownWebViewRoleMessage, webViewRolesFor, deepQueryAllJs, deepQueryJs, withDomHelpers } from './webview-dom-js.js';
 import { assertTextArg } from './selectors.js';
 
 const WEB_SOCKET_CONNECT_TIMEOUT_MS = 5_000;
 const WEBVIEW_CLOSE_RPC_TIMEOUT_MS = 2_000;
 const WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS = 2_000;
 const WEBVIEW_CDP_MESSAGE_TIMEOUT_MS = 30_000;
-
-/** The roles webview.getByRole accepts, for the unknown-role error. */
-function webViewRoleList(): string {
-  const aliases = Object.entries(WEBVIEW_ROLE_ALIASES).map(([alias, roles]) => `${alias} (${roles.join(', ')})`).join(', ');
-  return `ARIA roles (${ARIA_ROLES.join(', ')}), or Tapsmith's ${aliases}`;
-}
 
 /** Options for `webview.getByRole()`: Playwright's `page.getByRole` options Tapsmith supports. */
 export interface WebViewRoleOptions {
@@ -1299,10 +1293,7 @@ export class WebViewHandle {
     // Playwright lowercases the role.
     const wanted = role.toLowerCase();
     const roles = webViewRolesFor(wanted);
-    if (!roles) {
-      throw new Error(`webview.getByRole(): unknown role ${JSON.stringify(role)}. WebView roles are ${webViewRoleList()}. ` +
-        'For an element with a role attribute that is not an ARIA role, use webview.locator(\'[role="…"]\').');
-    }
+    if (!roles) throw new Error(unknownWebViewRoleMessage(role)!);
     const name = options?.name;
     if (name !== undefined) assertTextArg(name, 'webview.getByRole() option `name`');
     const includeHidden = !!options?.includeHidden;

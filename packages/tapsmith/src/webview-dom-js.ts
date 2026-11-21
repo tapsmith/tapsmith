@@ -45,6 +45,17 @@ export const WEBVIEW_ROLE_ALIASES: Readonly<Record<string, readonly string[]>> =
   image: ['img'],
 };
 
+/**
+ * Why webview.getByRole rejects `role`, or null when it takes it: the
+ * runtime's error, which the Locator Playground shows too.
+ */
+export function unknownWebViewRoleMessage(role: string): string | null {
+  if (webViewRolesFor(role)) return null;
+  const aliases = Object.entries(WEBVIEW_ROLE_ALIASES).map(([alias, roles]) => `${alias} (${roles.join(', ')})`).join(', ');
+  return `webview.getByRole(): unknown role ${JSON.stringify(role)}. WebView roles are ARIA roles (${ARIA_ROLES.join(', ')}), ` +
+    `or Tapsmith's ${aliases}. For an element with a role attribute that is not an ARIA role, use webview.locator('[role="…"]').`;
+}
+
 /** The ARIA roles a webview.getByRole role name finds (case-insensitive), or undefined for an unknown name. */
 export function webViewRolesFor(role: string): readonly string[] | undefined {
   const wanted = role.toLowerCase();

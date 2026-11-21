@@ -16,7 +16,7 @@ import type { WebViewLocator } from '../webview-locator.js';
 import { isStrictModeViolation } from '../element-handle.js';
 import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
-import { findMatchingNodes, parseSelectorString } from '../trace-viewer/components/selector-matching.js';
+import { findMatchingNodes, parsedSelectorError, parseSelectorString } from '../trace-viewer/components/selector-matching.js';
 import { pickNodeAt } from '../trace-viewer/components/pick-node.js';
 import { withDomHelpers } from '../webview-dom-js.js';
 import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
@@ -683,6 +683,17 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
       const names = await handle._evaluate(withDomHelpers('__ts.all(document).map((el) => __ts.name(el))')) as string[];
       expect(names).toContain('Item 3 Detail 3 Open');
       expect(calls).toBeLessThanOrEqual(elements);
+    });
+
+    it('shows the error the page throws for a role webview.getByRole rejects', () => {
+      const { handle } = handleOn('<!DOCTYPE html><body></body>');
+      const thrown = (() => { try { handle.getByRole('textfeild'); } catch (e) { return (e as Error).message; } return null; })();
+      expect(thrown).not.toBeNull();
+      expect(parsedSelectorError(parseSelectorString('webview.getByRole("textfeild")')!)).toBe(thrown);
+      // An old dump's role attribute that is not an ARIA role is not suggested.
+      const roots = parseHierarchyXml('<webview.div bounds="[0,0][10,10]" class="webview.div" webview-tag="div"'
+        + ' webview-role="toast" text="Saved" webview="true" />');
+      expect(generateSelectors(roots[0]!).map((g) => g.code).filter((c) => c.includes('getByRole'))).toEqual([]);
     });
 
     it('reads a dump from before PILOT-1361', () => {

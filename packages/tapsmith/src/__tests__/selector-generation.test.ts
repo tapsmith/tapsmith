@@ -874,8 +874,11 @@ describe('role names in the playground match the runtime', () => {
     expect(parsedSelectorError(parseSelectorString('device.getByText("OK")')!)).toBeNull();
   });
 
-  it('leaves WebView roles alone (DOM ARIA roles)', () => {
+  it('takes WebView ARIA roles and refuses the ones webview.getByRole rejects, as the runtime does', () => {
     expect(parsedSelectorError(parseSelectorString('webview.getByRole("banner")')!)).toBeNull();
+    expect(parsedSelectorError(parseSelectorString('webview.getByRole("textfield")')!)).toBeNull();
+    expect(parsedSelectorError(parseSelectorString('webview.getByRole("textfeild")')!))
+      .toMatch(/^webview\.getByRole\(\): unknown role "textfeild"/);
   });
 
   it('suggests no getByRole for a role getByRole rejects', () => {

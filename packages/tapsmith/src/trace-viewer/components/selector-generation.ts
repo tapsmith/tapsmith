@@ -3,6 +3,7 @@ import { getNodeRole, isLabelField, webViewAccessibleName, webViewLabels, WEBVIE
 import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
+import { webViewRolesFor } from '../../webview-dom-js.js';
 import { isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { resourceIdEntryName } from './resource-id.js';
 import { placeholderName } from './selector-matching.js';
@@ -70,8 +71,9 @@ function getWebViewRole(node: HierarchyNode): string | null {
     if (!computed || ['none', 'presentation', 'generic'].includes(computed)) return null;
     return node.attributes.get('webview-role') || SUGGESTED_IMPLICIT_ROLES.has(computed) ? computed : null;
   }
+  // A dump from before: a role attribute getByRole takes.
   const explicitRole = node.attributes.get('webview-role');
-  if (explicitRole) return explicitRole;
+  if (explicitRole) return webViewRolesFor(explicitRole) ? explicitRole : null;
 
   const tag = node.attributes.get('webview-tag') ?? '';
   const inputType = node.attributes.get('webview-type') ?? '';
