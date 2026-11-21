@@ -1918,7 +1918,7 @@ pub async fn setup_iptables_redirect(
         }
         warn!(
             %serial,
-            "iptables owner-match rules unavailable; OS-service traffic will not be told apart from the app's"
+            "iptables redirect with owner-match rules failed; retrying without them, so OS-service traffic will not be told apart from the app's"
         );
     }
     setup_iptables_redirect_with(serial, proxy_port, http_ports, None).await
@@ -2015,10 +2015,10 @@ fn iptables_redirect_commands(
     // send later requests as QUIC over UDP 443 straight to the server, past
     // the proxy: routes never fire, waits time out, the trace misses them.
     // Refuse that UDP so they fall back to TCP, as iOS capture does by
-    // dropping non-DNS UDP. REJECT (an ICMP port-unreachable) rather than
-    // DROP makes the client's connected QUIC socket fail at once, so it marks
-    // the alternative broken and uses TCP instead of waiting out a handshake
-    // timeout. The filter table, unlike nat, sees every packet, so a QUIC
+    // dropping non-DNS UDP. A locally generated packet refused here makes the
+    // client's send fail at once (EPERM), and REJECT also answers with an ICMP
+    // port-unreachable, so Chromium marks the alternative broken and uses TCP
+    // instead of waiting out a handshake timeout. The filter table, unlike nat, sees every packet, so a QUIC
     // connection already open when capture starts is cut off too. Only port
     // 443: unlike iOS's per-process redirect this rule is device-wide, and
     // refusing all UDP would break NTP, WebRTC media and the like for every
