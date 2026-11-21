@@ -1411,8 +1411,18 @@ export interface RunOptions {
    */
   beforeEachTest?: (fullName: string) => Promise<void>;
   abortFileOnError?: (error: Error) => boolean;
-  /** @internal — controller whose signal is wired to abortSignal; aborted by abortFileOnError. */
-  _abortFileController?: AbortController;
+  /**
+   * This is the embedder's last attempt at the file: it will not re-run the
+   * file after an `abortFileOnError` abort. The tests the abort leaves unrun
+   * are then reported as failed ("Did not run: …") instead of being left out
+   * of the results, and a recoverable error in the file-entry reset fails
+   * every test of the file instead of propagating (PILOT-1383). Without it, a
+   * file abort holds those results back for the embedder's retry
+   * ({@link takeDeferredNotRunResults}).
+   */
+  finalFileAttempt?: boolean;
+  /** @internal — the file's abort state: set up by runTestFile when abortFileOnError is. */
+  _fileAbort?: FileAbortState;
   /** Pre-resolved worker-scoped fixture values (set by worker-runner). */
   workerFixtures?: Record<string, unknown>;
   /** Test file path — used by trace packager for testFile metadata and source inclusion. */
@@ -2603,7 +2613,10 @@ async function runSuiteContext(
     // surfacing it as failed results here would record a failed attempt and
     // then flag every test in the file as flaky — main's between-file reset
     // recovered transparently, and so does this.
-    if (fileEntryResetError && opts.abortFileOnError?.(fileEntryResetError)) {
+    // On the embedder's last attempt nothing re-runs the file: the reset
+    // error fails every test below, as any failed scope setup does
+    // (PILOT-1383).
+    if (fileEntryResetError && opts.abortFileOnError?.(fileEntryResetError) && !opts.finalFileAttempt) {
       beforeAllCollector?.cleanup();
       throw fileEntryResetError;
     }
@@ -2717,13 +2730,21 @@ async function runSuiteContext(
 
   // Run tests
   for (const entry of ctx.tests) {
-    // Abort: stop running remaining tests but don't record them as
-    // 'skipped' — a user-initiated stop should leave untouched tests with
-    // whatever prior status they had, not overwrite them with a synthetic
-    // skipped result.
-    if (opts.abortSignal?.aborted) break;
-
     const fullName = parentPrefix ? `${parentPrefix} > ${entry.name}` : entry.name;
+
+    // Abort: stop running remaining tests. A user-initiated stop leaves
+    // untouched tests with whatever prior status they had, not overwritten
+    // with a synthetic result. A file abort reports each of them as not run
+    // (PILOT-1383): they would otherwise drop out of every report.
+    if (opts.abortSignal?.aborted) {
+      const notRunError = fileAbortNotRunError(opts);
+      if (!notRunError) break;
+      if (passesTestFilter(fullName, opts)) {
+        const skipped = entry.skip || !!ctx.skipped || skippedByBeforeAll || (focused && !entry.only);
+        recordNotRun(result, { tests: [notRunResult(entry.name, fullName, skipped ? undefined : notRunError, opts)], suites: [] }, opts);
+      }
+      continue;
+    }
 
     // A test the selection filters exclude is not part of the run at all —
     // neither reported nor counted as skipped, as Playwright filters it out
@@ -3815,16 +3836,26 @@ async function runSuiteContext(
     if (status === 'failed' && canReset) retryState.freshStartPending = true;
 
     if (status === 'failed' && error && opts.abortFileOnError?.(error)) {
-      opts._abortFileController?.abort();
-      break;
+      // The rest of the file is reported as not run (the loop's abort check
+      // above, and the child suites' below).
+      opts._fileAbort?.abort(fullName, error);
+      if (!opts.abortSignal?.aborted) break;
     }
   }
 
   // Run child suites
   for (const suiteEntry of ctx.suites) {
-    // Abort: same semantics as the test loop — stop here without recording
-    // the remaining suites' tests as 'skipped'.
-    if (opts.abortSignal?.aborted) break;
+    // Abort: same semantics as the test loop — a user stop records nothing
+    // for the remaining suites, a file abort reports their tests as not run.
+    if (opts.abortSignal?.aborted) {
+      const notRunError = fileAbortNotRunError(opts);
+      if (!notRunError) break;
+      const prefix = parentPrefix ? `${parentPrefix} > ${suiteEntry.name}` : suiteEntry.name;
+      const scopeSkipped = suiteEntry.skip || (focused && !suiteFocused(suiteEntry)) || !!ctx.skipped || skippedByBeforeAll;
+      const unrun = notRunAll(materializeSuiteEntry(suiteEntry), prefix, opts, scopeSkipped ? undefined : notRunError);
+      recordNotRun(result, { tests: [], suites: [unrun] }, opts);
+      continue;
+    }
 
     if (suiteEntry.skip || (focused && !suiteFocused(suiteEntry))
       || serialGroup?.failed || ctx.skipped || skippedByBeforeAll) {
@@ -3880,7 +3911,7 @@ async function runSuiteContext(
     // a suite whose direct tests were all filtered out can still have run
     // tests in nested describes, and those are the right attribution target.
     const lastRunTest = shouldRecord(traceConfig.mode, 0)
-      ? [...collectResults(result)].reverse().find((r) => r.status !== 'skipped')
+      ? [...collectResults(result)].reverse().find((r) => r.status !== 'skipped' && !notRunResults.has(r))
       : undefined;
     // When no test ran at all, skip traced streaming entirely: there is no
     // test to attach the events to, and streaming them anyway would pollute
@@ -4048,6 +4079,113 @@ function failAll(ctx: SuiteContext, prefix: string, error: Error, opts: RunOptio
     result.suites.push(failAll(childCtx, childPrefix, error, opts, screenshotPath, tracePath));
   }
   return result;
+}
+
+// ─── Tests a file abort left unrun (PILOT-1383) ───
+
+/**
+ * A file's abort state when its embedder recovers from infrastructure errors
+ * (`abortFileOnError`): the signal that stops the rest of the file, and what
+ * its unrun tests are reported with.
+ */
+class FileAbortState {
+  private readonly _controller = new AbortController();
+  /** The error each test the abort left unrun fails with. */
+  notRunError?: Error;
+  /** Not-run results held back on an attempt the embedder will retry. */
+  readonly deferred: TestResult[] = [];
+
+  /** `userSignal`: the embedder's own signal, a user stop. */
+  constructor(readonly userSignal: AbortSignal | undefined) {}
+
+  get signal(): AbortSignal {
+    return this._controller.signal;
+  }
+
+  abort(fullName: string, error: Error): void {
+    this.notRunError ??= new Error(
+      `Did not run: the file was stopped by an infrastructure error in "${fullName}" that Tapsmith could not recover from: ${error.message}`,
+    );
+    this._controller.abort();
+  }
+}
+
+/** Results standing in for tests a file abort left unrun: not tests that ran. */
+const notRunResults = new WeakSet<TestResult>();
+
+/** Not-run results a non-final attempt held back, by the suite it returned. */
+const deferredNotRun = new WeakMap<SuiteResult, TestResult[]>();
+
+/**
+ * The error a test left unrun by a file abort is failed with — undefined when
+ * nothing aborted the file or the user stopped the run (a stop leaves
+ * untouched tests unreported, PILOT-222).
+ */
+function fileAbortNotRunError(opts: RunOptions): Error | undefined {
+  const fileAbort = opts._fileAbort;
+  if (!fileAbort?.notRunError || fileAbort.userSignal?.aborted) return undefined;
+  return fileAbort.notRunError;
+}
+
+/** A not-run result: failed with `error`, or skipped (no error) when the test would have been skipped anyway. */
+function notRunResult(name: string, fullName: string, error: Error | undefined, opts: RunOptions): TestResult {
+  const result: TestResult = {
+    name,
+    fullName,
+    status: error ? 'failed' : 'skipped',
+    durationMs: 0,
+    ...(error ? { error } : {}),
+    project: opts.projectName,
+    filePath: opts.testFilePath,
+  };
+  notRunResults.add(result);
+  return result;
+}
+
+/** {@link notRunResult} for every test of a scope the file abort never reached. */
+function notRunAll(ctx: SuiteContext, prefix: string, opts: RunOptions, error: Error | undefined): SuiteResult {
+  const result: SuiteResult = { name: prefix, tests: [], suites: [], durationMs: 0 };
+  const focused = holdsFocus(ctx);
+  const scopeError = ctx.skipped ? undefined : error;
+  for (const t of ctx.tests) {
+    const fullName = prefix ? `${prefix} > ${t.name}` : t.name;
+    if (!passesTestFilter(fullName, opts)) continue;
+    result.tests.push(notRunResult(t.name, fullName, t.skip || (focused && !t.only) ? undefined : scopeError, opts));
+  }
+  for (const s of ctx.suites) {
+    const childPrefix = prefix ? `${prefix} > ${s.name}` : s.name;
+    const childError = s.skip || (focused && !suiteFocused(s)) ? undefined : scopeError;
+    result.suites.push(notRunAll(materializeSuiteEntry(s), childPrefix, opts, childError));
+  }
+  return result;
+}
+
+/**
+ * Record not-run results in the scope's result and report them — on the
+ * embedder's last attempt. On an attempt it will retry they are held back:
+ * the retry re-runs them, and the embedder takes them only when it falls
+ * back to this attempt's results.
+ */
+function recordNotRun(result: SuiteResult, unrun: Pick<SuiteResult, 'tests' | 'suites'>, opts: RunOptions): void {
+  const flat = collectResults({ name: '', durationMs: 0, ...unrun });
+  if (!opts.finalFileAttempt) {
+    opts._fileAbort?.deferred.push(...flat);
+    return;
+  }
+  result.tests.push(...unrun.tests);
+  result.suites.push(...unrun.suites);
+  for (const tr of flat) opts.reporter?.onTestEnd?.(tr);
+}
+
+/**
+ * The not-run results a file abort held back on an attempt that was not the
+ * embedder's last (`finalFileAttempt` unset): for an embedder that ends up
+ * reporting that attempt after all. Each suite's results are handed out once.
+ */
+export function takeDeferredNotRunResults(suite: SuiteResult): TestResult[] {
+  const results = deferredNotRun.get(suite) ?? [];
+  deferredNotRun.delete(suite);
+  return results;
 }
 
 /**
@@ -4288,7 +4426,7 @@ async function runTestFileOwned(
     }
   }
 
-  const abortFileController = opts.abortFileOnError ? new AbortController() : undefined;
+  const fileAbort = opts.abortFileOnError ? new FileAbortState(opts.abortSignal) : undefined;
   const fileOpts: RunOptions = {
     ...opts,
     workerFixtures,
@@ -4296,11 +4434,11 @@ async function runTestFileOwned(
     _prepared: new Map(opts.devices.flatMap((d) => (d.prepared ? [[d.name, d.prepared] as const] : []))),
     _applied: {},
     _startRoute: {},
-    _abortFileController: abortFileController,
-    abortSignal: abortFileController
+    _fileAbort: fileAbort,
+    abortSignal: fileAbort
       ? (opts.abortSignal
-        ? AbortSignal.any([abortFileController.signal, opts.abortSignal])
-        : abortFileController.signal)
+        ? AbortSignal.any([fileAbort.signal, opts.abortSignal])
+        : fileAbort.signal)
       : opts.abortSignal,
   };
 
@@ -4313,6 +4451,7 @@ async function runTestFileOwned(
   const fileStartedAt = Date.now();
   try {
     const suite = await runSuiteContext(rootCtx, '', [], [], fileOpts);
+    if (fileAbort && fileAbort.deferred.length > 0) deferredNotRun.set(suite, fileAbort.deferred);
     reportRunTelemetry(fileOpts, suite, Date.now() - fileStartedAt);
     return suite;
   } finally {
@@ -4430,7 +4569,8 @@ function reportRunTelemetry(opts: RunOptions, suite: SuiteResult, durationMs: nu
     // which loop on `isRecoverableInfrastructureError`); watch and MCP run a
     // file exactly once with in-place recovery, so their single infra-degraded
     // run is the real outcome and must still be counted (PILOT-330 review 2).
-    if (opts.abortFileOnError
+    // The embedder's last attempt (`finalFileAttempt`) is the real outcome.
+    if (opts.abortFileOnError && !opts.finalFileAttempt
       && results.some((r) => r.status === 'failed' && isRecoverableInfrastructureError(r.error))) {
       return;
     }
@@ -4555,4 +4695,4 @@ function discoverSuiteContext(
 
 /** @internal — exposed for unit testing only. */
 function resetFixtureRegistry(): void { setActiveFixtureRegistry(new FixtureRegistry()); }
-export const _internal = { pushContext, popContext, runSuiteContext, resolvePlatformFixture, resetFixtureRegistry };
+export const _internal = { pushContext, popContext, runSuiteContext, resolvePlatformFixture, resetFixtureRegistry, FileAbortState };

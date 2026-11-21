@@ -14,7 +14,8 @@ import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDe
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
-import { runTestFile, loadFailureResult, collectResults, markFileRetryFlakes, type RunDevice, type TestResult, type SuiteResult } from './runner.js';
+import { runTestFile, loadFailureResult, collectResults, type RunDevice, type TestResult, type SuiteResult } from './runner.js';
+import { runFileWithSessionRecovery } from './file-recovery.js';
 import { runnerClaimsUnhandledRejection } from './unhandled-errors.js';
 import { telemetry, readSdkVersion, ensureSessionEnv } from './telemetry.js';
 import { createReporters, ReporterDispatcher, type FullResult } from './reporter.js';
@@ -3256,102 +3257,63 @@ async function runTestFileWithRecovery(
   const grep = normalizeGrep(opts.config.grep);
   const grepInvert = normalizeGrep(opts.config.grepInvert);
   const { sessions } = opts;
-  let firstAttemptSuite: SuiteResult | undefined;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const suite = await runTestFile(file, {
-        config: opts.config,
-        // Each session's prepared state (the startup launch on the first
-        // file, a recovery relaunch on a retry — itself a fresh `clear`) is
-        // consumed here, exactly once.
-        devices: sessions.map((s): RunDevice => ({
-          name: s.name,
-          device: s.device,
-          serial: s.serial,
-          sessionContext: { ...s.context, config: { ...opts.config, device: s.serial } },
-          prepared: consumePrepared(s),
-        })),
-        screenshotDir: opts.screenshotDir,
-        reporter: opts.reporter,
-        beforeEachTest: async (fullName) => {
-          // Mirror the worker path: a recovery here relaunched the app, so any
-          // beforeAll-established state (navigation, auth) is gone. Throw the
-          // infra-shaped error so the file retries and beforeAll re-runs —
-          // otherwise the test runs against the recovered app's home screen
-          // and fails with a misleading assertion error. Every device of the
-          // group is checked; a recovery on any of them retries the file.
-          const recoveries: string[] = [];
-          await Promise.all(sessions.map((s) => ensureSessionReady(
-            { ...s.context, config: { ...opts.config, device: s.serial } },
-            `before test ${fullName}`,
-            undefined,
-            {
-              onRecovery: (err) => {
-                const reason = err instanceof Error ? err.message : String(err);
-                recoveries.push(sessions.length > 1 ? `${s.name}: ${reason}` : reason);
-              },
+  return runFileWithSessionRecovery({
+    fileName: path.basename(file),
+    runAttempt: (finalFileAttempt) => runTestFile(file, {
+      config: opts.config,
+      // Each session's prepared state (the startup launch on the first
+      // file, a recovery relaunch on a retry — itself a fresh `clear`) is
+      // consumed here, exactly once.
+      devices: sessions.map((s): RunDevice => ({
+        name: s.name,
+        device: s.device,
+        serial: s.serial,
+        sessionContext: { ...s.context, config: { ...opts.config, device: s.serial } },
+        prepared: consumePrepared(s),
+      })),
+      screenshotDir: opts.screenshotDir,
+      reporter: opts.reporter,
+      beforeEachTest: async (fullName) => {
+        // Mirror the worker path: a recovery here relaunched the app, so any
+        // beforeAll-established state (navigation, auth) is gone. Throw the
+        // infra-shaped error so the file retries and beforeAll re-runs —
+        // otherwise the test runs against the recovered app's home screen
+        // and fails with a misleading assertion error. Every device of the
+        // group is checked; a recovery on any of them retries the file.
+        const recoveries: string[] = [];
+        await Promise.all(sessions.map((s) => ensureSessionReady(
+          { ...s.context, config: { ...opts.config, device: s.serial } },
+          `before test ${fullName}`,
+          undefined,
+          {
+            onRecovery: (err) => {
+              const reason = err instanceof Error ? err.message : String(err);
+              recoveries.push(sessions.length > 1 ? `${s.name}: ${reason}` : reason);
             },
-          )));
-          if (recoveries.length > 0) {
-            throw new Error(
-              `session recovered during before test ${fullName}; retrying file so beforeAll hooks run against the recovered app: ${recoveries.join('; ')}`,
-            );
-          }
-        },
-        abortFileOnError: isRecoverableInfrastructureError,
-        resetCapabilities: sessions[0].capabilities,
-        runMode: 'test',
-        networkApisInRun: opts.networkApisInRun,
-        projectUseOptions: opts.projectUseOptions,
-        projectName: opts.projectName,
-        grep: grep.length > 0 ? grep : undefined,
-        grepInvert: grepInvert.length > 0 ? grepInvert : undefined,
-        projectGrep: opts.projectGrep,
-        projectGrepInvert: opts.projectGrepInvert,
-      });
-      const fileResults = collectResults(suite);
-      const infraFailure = fileResults.find(
-        (r) => r.status === 'failed' && r.error && isRecoverableInfrastructureError(r.error),
-      );
-      if (!infraFailure) {
-        // If this is a retry that produced fewer results than the first
-        // attempt (e.g. crashed before running any tests), prefer the
-        // first attempt's results so the original failure is visible.
-        if (attempt === 2 && firstAttemptSuite) {
-          const firstResults = collectResults(firstAttemptSuite);
-          if (fileResults.length < firstResults.length) {
-            return firstAttemptSuite;
-          }
-          // Tests that failed on the discarded first attempt must surface as
-          // flaky, not as clean passes — the summary would otherwise hide
-          // that the file was re-run at all.
-          markFileRetryFlakes(firstAttemptSuite, suite);
+          },
+        )));
+        if (recoveries.length > 0) {
+          throw new Error(
+            `session recovered during before test ${fullName}; retrying file so beforeAll hooks run against the recovered app: ${recoveries.join('; ')}`,
+          );
         }
-        return suite;
-      }
-      if (attempt === 2) {
-        return suite;
-      }
-      firstAttemptSuite = suite;
-      process.stderr.write(
-        dim(`Recovering session after infrastructure error in ${path.basename(file)}: ${infraFailure.error?.message ?? 'unknown'}\n`),
-      );
-      await recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`);
-    } catch (err) {
-      if (!isRecoverableInfrastructureError(err) || attempt === 2) {
-        // If the retry itself crashed, return the first attempt's results
-        // (which contain the original failure) so it's counted in the summary.
-        if (firstAttemptSuite) return firstAttemptSuite;
-        throw err;
-      }
-      process.stderr.write(
-        dim(`Recovering session after infrastructure error in ${path.basename(file)}: ${err instanceof Error ? err.message : err}\n`),
-      );
-      await recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`);
-    }
-  }
-  // Unreachable — loop always returns or throws
-  throw new Error(`Exhausted recovery attempts for ${path.basename(file)}`);
+      },
+      abortFileOnError: isRecoverableInfrastructureError,
+      finalFileAttempt,
+      resetCapabilities: sessions[0].capabilities,
+      runMode: 'test',
+      networkApisInRun: opts.networkApisInRun,
+      projectUseOptions: opts.projectUseOptions,
+      projectName: opts.projectName,
+      grep: grep.length > 0 ? grep : undefined,
+      grepInvert: grepInvert.length > 0 ? grepInvert : undefined,
+      projectGrep: opts.projectGrep,
+      projectGrepInvert: opts.projectGrepInvert,
+    }),
+    recover: () => recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`),
+    onTestEnd: (result) => opts.reporter.onTestEnd(result),
+    log: (message) => process.stderr.write(dim(`${message}\n`)),
+  });
 }
 
 main().catch(async (err) => {
