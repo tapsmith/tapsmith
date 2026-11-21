@@ -1296,6 +1296,29 @@ describe('runner execution', () => {
         }
       });
 
+      // PILOT-246: routes never apply to a WebSocket (as in Playwright), so
+      // one opened before the route is no reason the route did not fire.
+      it('does not name a WebSocket the app opened before a route matching its URL', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'wss://api.example.com/todos/live', routeAction: '', isHttps: true, method: 'GET', startTimeMs: T + 1_000 },
+            { url: 'ws://api.example.com/todos/live', routeAction: '', isHttps: false, method: 'GET', startTimeMs: T + 1_500 },
+          ],
+          registrations: [{ pattern: '**/todos*', registeredAtMs: T + 6_000, matches: (u) => u.includes('/todos') }],
+        });
+        try {
+          await runBody('opens a socket at launch', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).not.toContain('/todos/live');
+          expect(warnings[0]).not.toContain('before the route');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
       // A file-scoped reset (and beforeAll) runs before the first test starts
       // capture, and that start clears what the proxy captured meanwhile.
       /**

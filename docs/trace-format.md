@@ -189,6 +189,8 @@ Bodies are never inlined in `network.json`. A body stays byte-exact, so binary p
 
 A `routeAction` of `passthrough` marks a TLS connection that was tunneled without interception. It is recorded as one `CONNECT` entry per connection, with no request or response detail.
 
+A WebSocket is recorded as one entry with a `ws://` or `wss://` `url` and `status` 101. Its sizes count the bytes passed through each way after the handshake, and it has no bodies.
+
 ## Validating an archive
 
 The schema describes format version 2 only; it rejects a v1 archive's absolute paths. So check `metadata.version` before validating. Validate a v2 archive against the schema. Read a v1 archive knowing its paths are absolute, or skip it. Refuse anything newer.
