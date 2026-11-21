@@ -23,10 +23,10 @@ describe("an in-app browser", () => {
     await expect(webviewScreen.heading).toBeVisible()
 
     await webviewScreen.openInAppBrowserButton.tap()
-    // The browser covers the app: its screen is gone and the browser's
-    // controls are what locators see.
-    await expect(webviewScreen.inAppBrowserDoneButton).toBeVisible({ timeout: 20_000 })
-    await expect(webviewScreen.heading).toBeHidden()
+    // The browser covers the app: its screen is gone (the screen's own Done
+    // with it) and the browser's controls are what locators see.
+    await expect(webviewScreen.heading).toBeHidden({ timeout: 20_000 })
+    await expect(webviewScreen.inAppBrowserDoneButton).toBeVisible()
 
     await webviewScreen.inAppBrowserDoneButton.tap()
     await expect(webviewScreen.heading).toBeVisible({ timeout: 10_000 })

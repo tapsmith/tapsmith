@@ -28,7 +28,7 @@ if (device.platform === "ios") {
 await expect(device.getByText("Expo documentation")).toBeVisible()
 ```
 
-On iOS, while the browser is up it covers the app: the app's own screen is not in the hierarchy, so its locators do not match (`toBeHidden()` passes), and what locators, the trace viewer and the MCP snapshot see is the browser — its Done button, address bar and the page's accessibility elements. iOS 26 and later leave the browser out of the app's accessibility snapshot; Tapsmith reads it in from the browser itself, which adds a fraction of a second to each lookup while the browser is up.
+On iOS, while a full-screen browser is up (`expo-web-browser`'s default presentation) it covers the app: the app's own screen is not in the hierarchy, so its locators do not match (`toBeHidden()` passes), and what locators, the trace viewer and the MCP snapshot see is the browser — its Done button, address bar and the page's accessibility elements. iOS 26 and later leave the browser out of the app's accessibility snapshot; Tapsmith reads it in from the browser itself, which adds a fraction of a second to each lookup while the browser is up.
 
 ## Prerequisites
 
