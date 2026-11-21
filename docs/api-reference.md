@@ -1751,7 +1751,7 @@ await expect(device.getByRole("image")).toHaveAccessibleName(/Profile/);
 
 #### `.toHaveAccessibleDescription(description: string | RegExp, options?): Promise<void>`
 
-Assert that the element has the given accessible description. On Android, this maps to the `hint` property. A Jetpack Compose text field publishes no hint, so its `label` and `placeholder` text are its hint.
+Assert that the element has the given accessible description. On Android, this maps to the `hint` property. A Jetpack Compose text field publishes no hint, so its hint is the text it draws inside itself, joined with spaces: its `label` and `placeholder`, and also any icon's `contentDescription`, `prefix`, `suffix` and `supportingText` (`"Email Required"` for a field with `supportingText = { Text("Required") }`), the same text `getByRole("textfield", { name, exact: true })` names it by. Match part of it with a RegExp (`toHaveAccessibleDescription(/Email/)`), or find the field with `getByLabel("Email")`, which matches the label alone.
 
 ```typescript
 await expect(device.getByRole("image")).toHaveAccessibleDescription("Profile photo");

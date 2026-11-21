@@ -192,7 +192,7 @@ Row(
 }
 ```
 
-A text field's `label = { Text("Email") }` is its label, so both `getByLabel("Email")` and `getByRole("textfield", { name: "Email" })` find it. The label and the `placeholder` are not the field's value: an empty `TextField` or `OutlinedTextField` has an `inputValue()` of `""` and passes `toBeEmpty()`, before typing and after `clear()`, as on iOS. `find()` reports them as the field's `hint`, which is also what `toHaveAccessibleDescription()` reads on Android. Compose's `Switch` and `Tab` publish their role as a description in the device's language, which Tapsmith reads only in English, so run `switch` and `tab` queries on an Android device set to English.
+A text field's `label = { Text("Email") }` is its label, so both `getByLabel("Email")` and `getByRole("textfield", { name: "Email" })` find it. The label and the `placeholder` are not the field's value: an empty `TextField` or `OutlinedTextField` has an `inputValue()` of `""` and passes `toBeEmpty()`, before typing and after `clear()`, as on iOS. `find()` reports the text drawn inside the field (the label and placeholder, and any icon description, prefix, suffix or supporting text, joined) as its `hint`, which is also what `toHaveAccessibleDescription()` reads on Android. Compose's `Switch` and `Tab` publish their role as a description in the device's language, which Tapsmith reads only in English, so run `switch` and `tab` queries on an Android device set to English.
 
 `Modifier.testTag()` is not a test id by default. Compose exposes test tags to UI Automator, and so to `getByTestId()`, only where `testTagsAsResourceId` is on. Set it once on the root of your content and every tag below it becomes a test id:
 
