@@ -81,7 +81,9 @@ const ALWAYS_GENERIC_ROLES = new Set(['other', 'none']);
 // UIAccessibilityTraitHeader → "heading", UIAccessibilityTraitButton →
 // "button"). These are trustworthy even on generic XCUIElementTypeOther
 // elements because the app explicitly declared them.
-const TRUSTED_TRAIT_ROLES = new Set(['heading', 'link', 'searchfield', 'button', 'image', 'seekbar']);
+// A tab is the role an Android item publishes as a role description (Material,
+// Compose, React Native) or that a Flutter tab's position marks.
+const TRUSTED_TRAIT_ROLES = new Set(['heading', 'link', 'searchfield', 'button', 'image', 'seekbar', 'tab']);
 
 /** Check whether the node's native class/type already maps to a known role
  * (without relying on tapsmith-role). If so, the role is trustworthy. */
@@ -275,11 +277,17 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   // break. On iOS that is a switch UIKit labels with the row's texts joined by
   // ", "; on Android a control with no name of its own in an actionable row
   // (a SwitchPreferenceCompat's switch), whose full name is `tapsmith-name`.
+  // A Flutter tab is named by its label without the "Tab 2 of 3" Flutter
+  // appends to it: each agent dumps that label as `tapsmith-name` with no
+  // `tapsmith-label` (FlutterTab), possibly "" for an icon with no label.
   const named = (value: string): string => (value.trim() ? value : '');
   const rowLabel = named(node.attributes.get('tapsmith-label') ?? '');
-  const fullName = ios
-    ? (rowLabel || named(label) || placeholderName(node))
-    : (named(contentDesc) || placeholderName(node) || text || rowLabel);
+  const tabName = node.attributes.has('tapsmith-label') ? undefined : node.attributes.get('tapsmith-name');
+  const fullName = tabName !== undefined
+    ? named(tabName)
+    : ios
+      ? (rowLabel || named(label) || placeholderName(node))
+      : (named(contentDesc) || placeholderName(node) || text || rowLabel);
   const accessibleName = roleNameFor(fullName) || fullName;
   // getByLabel matches Android's content-desc (or a labelling view, which
   // the dump does not carry, or a nameless control's row title) — never the

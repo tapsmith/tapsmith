@@ -111,9 +111,10 @@ class HierarchyDumper {
         // Resolve role from traits (heading, link, alert, etc.) and element type.
         let traits = SnapshotElementFinder.extractTraits(from: node)
         let isEmptyBarHost = node[BarHost.emptyHostKey] as? Bool ?? false
+        let rawLabel = node["label"] as? String ?? ""
         let role = RoleMapping.resolveRole(
             for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost,
-            isTabBarHost: BarHost.isMarkedTabBarHost(node)
+            isTabBarHost: BarHost.isMarkedTabBarHost(node), label: rawLabel
         )
 
         xml += "\(indent)<\(typeName)"
@@ -128,6 +129,9 @@ class HierarchyDumper {
         xml += " type=\"\(typeName)\""
         if !role.isEmpty {
             xml += " tapsmith-role=\"\(escapeXML(role))\""
+        }
+        if let tabName = FlutterTab.name(of: rawLabel) {
+            xml += " \(FlutterTab.nameDumpAttribute)=\"\(escapeXML(tabName))\""
         }
         xml += " enabled=\"\(isEnabled)\""
         xml += " visible=\"\(visible)\""
@@ -240,7 +244,7 @@ class HierarchyDumper {
             if let v = raw as? NSNumber { return v.uint64Value }
             return 0
         }()
-        let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
+        let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar, label: element.label)
 
         xml += "\(indent)<\(typeName)"
         xml += " label=\"\(label)\""
@@ -255,6 +259,9 @@ class HierarchyDumper {
         xml += " type=\"\(typeName)\""
         if !role.isEmpty {
             xml += " tapsmith-role=\"\(escapeXML(role))\""
+        }
+        if let tabName = FlutterTab.name(of: element.label) {
+            xml += " \(FlutterTab.nameDumpAttribute)=\"\(escapeXML(tabName))\""
         }
         xml += " enabled=\"\(element.isEnabled)\""
         xml += " visible=\"\(element.exists && frame.width > 0 && frame.height > 0)\""

@@ -43,13 +43,22 @@ internal object FindRules {
     /**
      * The role an element publishes: "heading" for a heading (React
      * Native's `accessibilityRole="header"` sets the heading flag), else its
-     * [canonicalRoleDescription]. getByRole matches with it, and the
-     * hierarchy dump writes it as `tapsmith-role`, so the two agree.
+     * [canonicalRoleDescription], else "tab" for a Flutter tab, known by the
+     * position Flutter appends to its [contentDescription] ([FlutterTab]).
+     * getByRole matches with it, and the hierarchy dump writes it as
+     * `tapsmith-role`, so the two agree.
      */
     fun publishedRole(
         isHeading: Boolean,
         rawDescription: String?,
-    ): String? = if (isHeading) "heading" else canonicalRoleDescription(rawDescription)
+        contentDescription: CharSequence?,
+    ): String? =
+        when {
+            isHeading -> "heading"
+            !rawDescription.isNullOrEmpty() -> canonicalRoleDescription(rawDescription)
+            FlutterTab.nameOf(contentDescription) != null -> "tab"
+            else -> null
+        }
 
     /**
      * An element's expanded state from the accessibility actions it offers:

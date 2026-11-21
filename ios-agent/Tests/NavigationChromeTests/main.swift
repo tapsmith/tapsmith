@@ -96,10 +96,10 @@ func named(_ role: String, _ name: String, exact: Bool = false, in tree: [String
         RoleMapping.matches(
             role: role, elementType: $0.type, traits: $0.traits, value: nil, hasNameFilter: true,
             inTabBar: $0.inTabBar, inAlert: false, isEmptyBarHost: $0.isEmptyBarHost,
-            isTabBarHost: $0.isTabBarHost
+            isTabBarHost: $0.isTabBarHost, label: $0.label
         ) && RoleName.matches(
             elementType: $0.type, label: $0.label, title: $0.title, placeholder: "", identifier: $0.identifier,
-            name: name, exact: exact
+            name: name, exact: exact, tabQuery: RoleMapping.normalize(role) == "tab"
         )
     }.map(\.identifier)
 }
@@ -246,10 +246,10 @@ func collapsedCount(_ role: String, _ name: String, in tree: [String: Any]) -> I
         RoleMapping.matches(
             role: role, elementType: $0.type, traits: $0.traits, value: nil, hasNameFilter: true,
             inTabBar: $0.inTabBar, inAlert: false, isEmptyBarHost: $0.isEmptyBarHost,
-            isTabBarHost: $0.isTabBarHost
+            isTabBarHost: $0.isTabBarHost, label: $0.label
         ) && RoleName.matches(
             elementType: $0.type, label: $0.label, title: $0.title, placeholder: "", identifier: $0.identifier,
-            name: name, exact: true
+            name: name, exact: true, tabQuery: RoleMapping.normalize(role) == "tab"
         ) && seen.insert("\($0.frame)|\($0.label)").inserted
     }.count
 }

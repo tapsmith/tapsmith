@@ -150,7 +150,7 @@ class ElementFinder {
                     return RoleName.matches(
                         elementType: elem.elementType, label: label, title: title,
                         placeholder: placeholder(elem, label, title), identifier: identifier(elem, label, title),
-                        name: name, exact: selector.nameExact
+                        name: name, exact: selector.nameExact, tabQuery: RoleMapping.normalize(role) == "tab"
                     )
                 }
             } else if let nameRegex = selector.nameRegex {
@@ -160,7 +160,7 @@ class ElementFinder {
                     return RoleName.matches(
                         elementType: elem.elementType, label: label, title: title,
                         placeholder: placeholder(elem, label, title), identifier: identifier(elem, label, title),
-                        regex: nameRegex
+                        regex: nameRegex, tabQuery: RoleMapping.normalize(role) == "tab"
                     )
                 }
             }

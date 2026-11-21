@@ -26,6 +26,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/occlusion-analyzer-tests"
 "$OUT/occlusion-analyzer-tests"
@@ -42,6 +43,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/bar-host-tests"
 "$OUT/bar-host-tests"
@@ -60,6 +62,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/RoleName.swift \
   TapsmithAgent/TextMatch.swift \
   TapsmithAgent/Models/AgentError.swift \
@@ -81,6 +84,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/keyboard-space-tests"
 "$OUT/keyboard-space-tests" Tests/Fixtures
@@ -95,6 +99,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/RoleMappingTests/main.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/role-mapping-tests"
 # Several runs, each with a freshly seeded Dictionary hash: an order-dependent
@@ -116,6 +121,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/keyboard-dismiss-planner-tests"
 "$OUT/keyboard-dismiss-planner-tests"
@@ -132,6 +138,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/back-button-tests"
 "$OUT/back-button-tests"
@@ -187,6 +194,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/LabelMatch.swift \
   TapsmithAgent/TextMatch.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/label-match-tests"
 "$OUT/label-match-tests" "../packages/tapsmith/src/__tests__/fixtures/label-conformance.json"
@@ -197,6 +205,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/RoleName.swift \
   TapsmithAgent/TextMatch.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/role-name-tests"
 "$OUT/role-name-tests" "../packages/tapsmith/src/__tests__/fixtures/role-conformance.json"
@@ -207,6 +216,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/TextContent.swift \
   TapsmithAgent/TextMatch.swift \
   TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/text-content-tests"
 "$OUT/text-content-tests" "../packages/tapsmith/src/__tests__/fixtures/text-content-conformance.json"

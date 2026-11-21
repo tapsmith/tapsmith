@@ -234,7 +234,7 @@ struct ElementInfo {
         let traits = ElementInfo.extractTraits(from: element)
         let role = RoleMapping.resolveRole(
             for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost,
-            isTabBarHost: isTabBarHost
+            isTabBarHost: isTabBarHost, label: label
         )
 
         let isSelected = element.isSelected

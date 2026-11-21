@@ -846,6 +846,26 @@ describe('Android: a row-named switch whose title is in another row', () => {
   });
 });
 
+describe('Android: a Flutter tab whose label is part of another\'s', () => {
+  // Flutter NavigationRail destinations: the dump writes each label as the
+  // tab's name (tapsmith-name); the content description ends "Tab i of n".
+  function tab(label: string, i: number): HierarchyNode {
+    return makeNode('node', {
+      class: 'android.view.View', clickable: 'true', bounds: `[0,${i * 100}][200,${i * 100 + 100}]`,
+      'content-desc': `${label}\nTab ${i} of 2`, 'tapsmith-role': 'tab', 'tapsmith-name': label,
+    });
+  }
+  const post = tab('Post', 1);
+  const posts = tab('Posts', 2);
+  const roots = [makeNode('node', { class: 'android.widget.FrameLayout' }, [post, posts])];
+
+  it('pins it by its exact label, not its position', () => {
+    const best = disambiguateSelectors(roots, post, generateSelectors(post))[0];
+    expect(best.code).toBe('device.getByRole("tab", { name: "Post", exact: true })');
+    expect(findMatchingNodes(roots, parseSelectorString(best.code)!)).toEqual([post]);
+  });
+});
+
 describe('locator({ id }) parity with the Android agent', () => {
   // A bare entry name matches that id under any package (an R.id name with
   // any applicationIdSuffix); a package-qualified id matches only itself.

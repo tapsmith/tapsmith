@@ -42,7 +42,7 @@ describe("nearMissProbes()", () => {
   it("checks a named role's words under the other getters, then the role alone", () => {
     vitestExpect(codes(_role("button", { name: "Sign in" }))).toEqual([
       'getByText("Sign in")', 'getByLabel("Sign in")', 'getByPlaceholder("Sign in")', 'getByDescription("Sign in")',
-      'getByRole("button")',
+      'getByRole("tab", { name: "Sign in" })', 'getByRole("button")',
     ]);
   });
 
@@ -54,29 +54,52 @@ describe("nearMissProbes()", () => {
   it("checks an exact text as a substring first, and each word getter under the others", () => {
     vitestExpect(codes(_text("Welcome"))).toEqual([
       'getByText("Welcome")', 'getByLabel("Welcome")', 'getByPlaceholder("Welcome")', 'getByDescription("Welcome")',
+      'getByRole("tab", { name: "Welcome" })',
     ]);
     vitestExpect(codes(_hint("Email"))).toEqual(['getByText("Email")', 'getByLabel("Email")', 'getByDescription("Email")']);
-    vitestExpect(codes(_label("Email"))).toEqual(['getByText("Email")', 'getByPlaceholder("Email")', 'getByDescription("Email")']);
-    vitestExpect(codes(_contentDesc("Close"))).toEqual(['getByText("Close")', 'getByLabel("Close")', 'getByPlaceholder("Close")']);
-    vitestExpect(codes(_textContains("Hi"))).toEqual(['getByLabel("Hi")', 'getByPlaceholder("Hi")', 'getByDescription("Hi")']);
+    vitestExpect(codes(_label("Email"))).toEqual([
+      'getByText("Email")', 'getByPlaceholder("Email")', 'getByDescription("Email")', 'getByRole("tab", { name: "Email" })',
+    ]);
+    vitestExpect(codes(_contentDesc("Close"))).toEqual([
+      'getByText("Close")', 'getByLabel("Close")', 'getByPlaceholder("Close")', 'getByRole("tab", { name: "Close" })',
+    ]);
+    vitestExpect(codes(_textContains("Hi"))).toEqual([
+      'getByLabel("Hi")', 'getByPlaceholder("Hi")', 'getByDescription("Hi")', 'getByRole("tab", { name: "Hi" })',
+    ]);
   });
 
   it("also checks words ending in punctuation without it, as text and description (PILOT-880)", () => {
     // On iOS a React Native link labelled "Forgot password" hides its "Forgot password?" text.
     vitestExpect(codes(_textContains("Forgot password?"))).toEqual([
       'getByLabel("Forgot password?")', 'getByPlaceholder("Forgot password?")', 'getByDescription("Forgot password?")',
+      'getByText("Forgot password")', 'getByDescription("Forgot password")', 'getByRole("tab", { name: "Forgot password?" })',
+    ]);
+    vitestExpect(codes(_text("Done!")).slice(-3, -1)).toEqual(['getByText("Done")', 'getByDescription("Done")']);
+    vitestExpect(codes(_textContains("Forgot password? ")).slice(-3, -1)).toEqual([
       'getByText("Forgot password")', 'getByDescription("Forgot password")',
     ]);
-    vitestExpect(codes(_text("Done!")).slice(-2)).toEqual(['getByText("Done")', 'getByDescription("Done")']);
-    vitestExpect(codes(_textContains("Forgot password? ")).slice(-2)).toEqual([
-      'getByText("Forgot password")', 'getByDescription("Forgot password")',
-    ]);
-    vitestExpect(codes(_role("link", { name: "Help?" })).slice(-3)).toEqual([
-      'getByText("Help")', 'getByDescription("Help")', 'getByRole("link")',
+    vitestExpect(codes(_role("link", { name: "Help?" })).slice(-4)).toEqual([
+      'getByText("Help")', 'getByDescription("Help")', 'getByRole("tab", { name: "Help?" })', 'getByRole("link")',
     ]);
     // Punctuation alone, or none, adds nothing.
-    vitestExpect(codes(_textContains("?"))).toEqual(['getByLabel("?")', 'getByPlaceholder("?")', 'getByDescription("?")']);
-    vitestExpect(codes(_textContains("Hi")).length).toBe(3);
+    vitestExpect(codes(_textContains("?"))).toEqual([
+      'getByLabel("?")', 'getByPlaceholder("?")', 'getByDescription("?")', 'getByRole("tab", { name: "?" })',
+    ]);
+    vitestExpect(codes(_textContains("Hi")).length).toBe(4);
+  });
+
+  it("checks the words as a tab's name for a description, a text, a label or another role's name", () => {
+    // A Flutter NavigationRail destination: its description is "Contact\nTab 2 of 3", and it is a tab named "Contact".
+    vitestExpect(codes(_contentDesc("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
+    vitestExpect(codes(_text("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
+    vitestExpect(codes(_textContains("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
+    vitestExpect(codes(_label("Contact")).at(-1)).toBe('getByRole("tab", { name: "Contact" })');
+    vitestExpect(codes(_role("button", { name: "Contact" })).slice(-2)).toEqual([
+      'getByRole("tab", { name: "Contact" })', 'getByRole("button")',
+    ]);
+    // Not for a tab query, nor for a placeholder, which only a text field has.
+    vitestExpect(codes(_role("tab", { name: "Contact" })).join()).not.toContain('getByRole("tab", { name');
+    vitestExpect(codes(_hint("Email")).join()).not.toContain("getByRole");
   });
 
   it("checks nothing for a scoped selector, an id, or a RegExp text, and only the role for a RegExp name", () => {
@@ -118,7 +141,8 @@ describe("a not-found error lists the near misses the agent finds", () => {
   });
 
   it("says the role exists under other names when only the role matches", async () => {
-    const { client } = missingClient((s) => (s.kind.type === "role" ? [element("a", "Log in"), element("b", "Help", 100)] : []));
+    const { client } = missingClient((s) =>
+      s.kind.type === "role" && s.kind.value.role === "button" ? [element("a", "Log in"), element("b", "Help", 100)] : []);
     const d = new Device(client, { platform: "android", timeout: 50 });
     vitestExpect(await err(d.getByRole("button", { name: "Sign in" }).find())).toBe(
       'Element getByRole("button", { name: "Sign in" }) was not found after waiting 50ms. ' +
