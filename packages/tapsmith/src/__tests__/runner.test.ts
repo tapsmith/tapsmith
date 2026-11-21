@@ -476,7 +476,6 @@ describe('runner execution', () => {
 
       const result = await runTestFile(pathToFileURL(filePath).href, makeOpts({
         config: makeConfig({ platform: 'android' }),
-        bustImportCache: true,
       }));
 
       expect(collectResults(result).map(t => t.status)).toEqual(['passed', 'passed']);

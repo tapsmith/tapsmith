@@ -18,6 +18,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { locateSyntaxErrors } from './config.js';
+import { TEST_FILE_IMPORT_QUERY } from './test-file-import.js';
 import type { TestTreeNode } from './ui-mode/ui-protocol.js';
 
 /**
@@ -134,8 +135,8 @@ interface MissingImport {
 const IMPORT_LINE_RE = /\b(import|require|from)\b/;
 const STRING_LITERAL_RE = /(['"`])([^'"`\n]+)\1/g;
 
-/** The `?t=<ms>` query Tapsmith appends to re-imported test files to bust the ESM cache. */
-const CACHE_BUST_RE = /\?t=\d+/g;
+/** The query Tapsmith appends to a re-imported test file's URL to load it fresh (PILOT-953). */
+const CACHE_BUST_RE = new RegExp(`\\?${TEST_FILE_IMPORT_QUERY}=\\d+`, 'g');
 
 /**
  * The error a file that failed to load reports: a copy of the thrown value

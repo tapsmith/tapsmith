@@ -140,7 +140,6 @@ describe('runner refuses a group that does not match the project', () => {
       await expect(runTestFile(pathToFileURL(filePath).href, makeOpts([alice], makeConfig({ devices: undefined }), {
         projectName: 'pair',
         projectUseOptions: { devices: [{ name: 'alice' }, { name: 'bob' }] },
-        bustImportCache: true,
       }))).rejects.toThrow(/Project "pair" declares a device group of 2 .* was given 1 device\(s\) \(alice=emulator-alice\)/);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -163,16 +162,9 @@ describe('runner refuses a group that does not match the project', () => {
       const bob = makeDevice('bob');
       await expect(runTestFile(pathToFileURL(filePath).href, makeOpts([alice, bob], makeConfig({ devices: undefined }), {
         projectName: 'solo',
-        bustImportCache: true,
       }))).rejects.toThrow(/Project "solo" declares no device group \(a single device\) but the run was given 2 device\(s\) \(alice=emulator-alice, bob=emulator-bob\)/);
-      // A root-level `devices` counts as the project's declaration. (A second
-      // path: two imports of one URL in the same millisecond share the module
-      // cache despite `bustImportCache`, and register nothing.)
-      const rootedPath = path.join(tempDir, 'solo-rooted.mjs');
-      fs.copyFileSync(filePath, rootedPath);
-      const rooted = await runTestFile(pathToFileURL(rootedPath).href, makeOpts([alice, bob], makeConfig({ devices: 2 }), {
-        bustImportCache: true,
-      }));
+      // A root-level `devices` counts as the project's declaration.
+      const rooted = await runTestFile(pathToFileURL(filePath).href, makeOpts([alice, bob], makeConfig({ devices: 2 })));
       expect(collectResults(rooted).map((t) => t.status)).toEqual(['passed']);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -196,7 +188,7 @@ describe('runner refuses a group that does not match the project', () => {
       `);
       const alice = makeDevice('alice');
       const bob = makeDevice('bob');
-      const soloOpts = makeOpts([alice], makeConfig({ devices: undefined }), { projectName: 'solo', bustImportCache: true });
+      const soloOpts = makeOpts([alice], makeConfig({ devices: undefined }), { projectName: 'solo' });
       const solo = await runTestFile(pathToFileURL(soloPath).href, soloOpts);
       expect(collectResults(solo).map((t) => t.status)).toEqual(['passed']);
       const seen = (globalThis as { __tapsmithSeen?: { tag?: string; count: number } }).__tapsmithSeen;
@@ -215,7 +207,7 @@ describe('runner refuses a group that does not match the project', () => {
         });
       `);
       const pairOpts = makeOpts([alice, bob], makeConfig({ devices: undefined }), {
-        projectUseOptions: { devices: 2 }, bustImportCache: true,
+        projectUseOptions: { devices: 2 },
       });
       const pair = await runTestFile(pathToFileURL(pairPath).href, pairOpts);
       expect(collectResults(pair).map((t) => t.status)).toEqual(['passed']);
@@ -227,7 +219,7 @@ describe('runner refuses a group that does not match the project', () => {
       const namedPath = path.join(tempDir, 'named.mjs');
       fs.copyFileSync(pairPath, namedPath);
       const namedOpts = makeOpts([alice, bob], makeConfig({ devices: undefined }), {
-        projectUseOptions: { devices: [{ name: 'alice' }, { name: 'bob' }] }, bustImportCache: true,
+        projectUseOptions: { devices: [{ name: 'alice' }, { name: 'bob' }] },
       });
       await runTestFile(pathToFileURL(namedPath).href, namedOpts);
       expect((globalThis as { __tapsmithSeen?: { tags: string[] } }).__tapsmithSeen).toEqual({ tags: ['alice', 'bob'] });
@@ -250,16 +242,9 @@ describe('runner refuses a group that does not match the project', () => {
       const bob = makeDevice('bob');
       const paired = await runTestFile(pathToFileURL(filePath).href, makeOpts([alice, bob], makeConfig({ devices: undefined }), {
         projectUseOptions: { devices: 2 },
-        bustImportCache: true,
       }));
       expect(collectResults(paired).map((t) => t.status)).toEqual(['passed']);
-      // A second file: two imports of one URL in the same millisecond share
-      // the module cache despite `bustImportCache`, and register nothing.
-      const soloPath = path.join(tempDir, 'solo-again.mjs');
-      fs.copyFileSync(filePath, soloPath);
-      const solo = await runTestFile(pathToFileURL(soloPath).href, makeOpts([alice], makeConfig({ devices: undefined }), {
-        bustImportCache: true,
-      }));
+      const solo = await runTestFile(pathToFileURL(filePath).href, makeOpts([alice], makeConfig({ devices: undefined })));
       expect(collectResults(solo).map((t) => t.status)).toEqual(['passed']);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -467,7 +452,6 @@ describe('runner reports one anonymous telemetry event per file (PILOT-330)', ()
       const config = makeConfig({ devices: 2, platform: 'ios' });
       const suite = await runTestFile(pathToFileURL(filePath).href, makeOpts([alice, bob], config, {
         runMode: 'test-parallel',
-        bustImportCache: true,
       }));
       expect(collectResults(suite).map((t) => t.status).sort()).toEqual(['failed', 'passed', 'skipped']);
 
@@ -513,7 +497,6 @@ describe('runner reports one anonymous telemetry event per file (PILOT-330)', ()
       const suite = await runTestFile(pathToFileURL(filePath).href, makeOpts([alice], makeConfig({ devices: undefined }), {
         runMode: 'test-parallel',
         abortFileOnError: () => true,
-        bustImportCache: true,
       }));
       expect(collectResults(suite).map((t) => t.status)).toEqual(['failed']);
       expect(recordRun).not.toHaveBeenCalled();
@@ -539,7 +522,6 @@ describe('runner reports one anonymous telemetry event per file (PILOT-330)', ()
       const alice = makeDevice('alice');
       await runTestFile(pathToFileURL(filePath).href, makeOpts([alice], makeConfig({ devices: undefined }), {
         runMode: 'watch',
-        bustImportCache: true,
       }));
       expect(recordRun).toHaveBeenCalledTimes(1);
       expect(recordRun.mock.calls[0][1]).toMatchObject({ mode: 'watch', tests: 1, failed: 1, passed: 0 });
@@ -559,7 +541,7 @@ describe('runner reports one anonymous telemetry event per file (PILOT-330)', ()
         import { test } from ${JSON.stringify(runnerUrl)};
         test('one', async () => {});
       `);
-      await runTestFile(pathToFileURL(filePath).href, makeOpts([], makeConfig(), { bustImportCache: true }));
+      await runTestFile(pathToFileURL(filePath).href, makeOpts([], makeConfig(), {}));
       expect(recordRun).not.toHaveBeenCalled();
     } finally {
       recordRun.mockRestore();

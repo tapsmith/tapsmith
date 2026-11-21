@@ -397,7 +397,6 @@ async function runFileWithRecovery(
         devices: runDevices(projectUseOptions),
         screenshotDir,
         reporter: reporterProxy,
-        bustImportCache: true,
         abortSignal,
         onTestStart: async (fullName, options) => {
           const policy = options?.policy;

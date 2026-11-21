@@ -3302,10 +3302,6 @@ async function runTestFileWithRecovery(
         resetCapabilities: sessions[0].capabilities,
         runMode: 'test',
         networkApisInRun: opts.networkApisInRun,
-        // In-process retries need the same ESM cache busting as worker
-        // retries; otherwise import() returns the cached module and the
-        // retry registers no tests.
-        bustImportCache: attempt > 1,
         projectUseOptions: opts.projectUseOptions,
         projectName: opts.projectName,
         grep: grep.length > 0 ? grep : undefined,

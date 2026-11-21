@@ -236,10 +236,6 @@ async function runFileWithRecovery(
         resetCapabilities: sessions[0].capabilities,
         runMode: 'test-parallel',
         networkApisInRun,
-        // On retry (attempt 2), bust the ESM import cache so the file's
-        // test registrations re-execute. Without this, import() returns the
-        // cached module and no tests are registered for the retry.
-        bustImportCache: attempt > 1,
         projectUseOptions,
         projectName,
         grep: rootGrep,

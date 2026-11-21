@@ -161,7 +161,7 @@ function frameFilePath(rawFile: string): string | undefined {
   if (file.startsWith('file://')) {
     try {
       // Strip any ?query / #fragment first — ESM loaders (tsx, vite, jiti)
-      // append cache-busting queries like `?t=123` to import URLs, and
+      // append cache-busting queries (`?t=123`, Tapsmith's `?tapsmithImport=…`) to import URLs, and
       // fileURLToPath would otherwise fold them into the path so the file
       // can't be found on disk. Clear search/hash on the URL object and let
       // fileURLToPath do the conversion rather than rebuilding the string.

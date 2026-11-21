@@ -423,7 +423,7 @@ describe('test.describe.configure', () => {
       `test.describe('later', () => { test('two', async () => {}); });`,
     ].join('\n'));
     try {
-      const result = await runTestFile(pathToFileURL(file).href, makeOpts({ bustImportCache: true }));
+      const result = await runTestFile(pathToFileURL(file).href, makeOpts());
       expect(statuses(result)).toEqual({ one: 'failed', 'later > two': 'skipped' });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

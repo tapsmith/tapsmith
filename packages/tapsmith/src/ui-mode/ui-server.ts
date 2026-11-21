@@ -3659,7 +3659,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
   /**
    * Restart a worker's Node process against its existing daemon so the next
-   * run imports fresh code. `bustImportCache` only re-imports the entry test
+   * run imports fresh code. The runner re-imports only the entry test
    * file; page objects and helpers it imports stay in the ESM cache for the
    * life of the process. The device is untouched.
    */
