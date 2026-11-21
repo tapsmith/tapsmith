@@ -8,11 +8,27 @@ Use WebView testing when your app renders web content inside a native container:
 
 - **Login and authentication screens** served by an OAuth provider or identity service inside an embedded browser.
 - **Payment flows** rendered by Stripe, Braintree, or similar providers in a WebView.
-- **In-app browsers** opened via Android Custom Tabs or iOS `SFSafariViewController` / `WKWebView`.
+- **In-app browsers** built on a `WKWebView` of the app's own. A system in-app browser (iOS `SFSafariViewController`, Android Custom Tabs) is not a WebView of the app: test it with native locators ([In-app browsers](#in-app-browsers)).
 - **Cordova / Ionic / Capacitor apps** where the entire UI is web-based but wrapped in a native shell.
 - **React Native WebView components** used to embed specific web pages or forms within an otherwise native app.
 
 If your app is fully native, you do not need this. Stick with the standard [Locators Guide](locators.md) and native locators.
+
+## In-app browsers
+
+A link that opens in the system's in-app browser — `expo-web-browser`'s `openBrowserAsync()` (the `ExternalLink` in the `create-expo-app` template), `SFSafariViewController` on iOS, a Custom Tab on Android — shows a browser that another process draws over your app. Its controls are native elements, so close it with an ordinary locator:
+
+```typescript
+await device.getByText("Expo documentation").tap()   // opens the in-app browser
+if (device.platform === "ios") {
+  await device.getByRole("button", { name: "Done", exact: true }).tap()
+} else {
+  await device.pressBack()   // a Custom Tab is another app's window
+}
+await expect(device.getByText("Expo documentation")).toBeVisible()
+```
+
+On iOS, while the browser is up it covers the app: the app's own screen is not in the hierarchy, so its locators do not match (`toBeHidden()` passes), and what locators, the trace viewer and the MCP snapshot see is the browser — its Done button, address bar and the page's accessibility elements. iOS 26 and later leave the browser out of the app's accessibility snapshot; Tapsmith reads it in from the browser itself, which adds a fraction of a second to each lookup while the browser is up.
 
 ## Prerequisites
 
