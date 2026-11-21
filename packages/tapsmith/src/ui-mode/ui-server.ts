@@ -67,6 +67,7 @@ import type {
   UIDiscoverMessage,
   UIDiscoverChildMessage,
   UIWorkerChildMessage,
+  UIWorkerAppReinstalledMessage,
   UIWorkerMessage,
   TestTreeUseOptions,
   RunSelectionEntry,
@@ -634,6 +635,19 @@ export async function startUIServer(
   }
 
   /**
+   * A worker reinstalled a rebuilt app (PILOT-1397): one Device activity row
+   * and one terminal line, so a run against the new build never looks like
+   * one against the old.
+   */
+  function reportAppReinstalled(worker: UIWorkerHandle, msg: UIWorkerAppReinstalledMessage): void {
+    pushActivity({
+      type: 'device-activity', id: `install-${worker.id}-${msg.startedAt}`, workerId: worker.id, kind: 'install', status: 'completed',
+      label: 'Reinstalled app', detail: msg.message, timestamp: msg.startedAt, durationMs: msg.durationMs,
+    });
+    console.log(`  ${msg.message} on ${msg.deviceSerial}`);
+  }
+
+  /**
    * A worker learned something new about its device (a reset detected hooks
    * the startup probe missed). Upgrade-only merge, then let readiness
    * re-evaluate: a `ready` prepared under the old resolution may no longer
@@ -651,6 +665,9 @@ export async function startUIServer(
     switch (msg.type) {
       case 'capabilities':
         upgradeWorkerCapabilities(worker, msg.capabilities);
+        break;
+      case 'app-reinstalled':
+        reportAppReinstalled(worker, msg);
         break;
       case 'prepared': {
         const started = worker.readiness?.state;
@@ -2447,6 +2464,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             if (launchProgress) events?.onProgress?.(msg.message);
             else console.log(`${DIM}  Worker ${id} (${deviceSerial}): ${msg.message}${RESET}`);
             broadcastWorkerStatus(worker, 'initializing');
+          } else if (msg.type === 'app-reinstalled' && msg.workerId === id) {
+            reportAppReinstalled(worker, msg);
           } else if (msg.type === 'error' && msg.workerId === id) {
             clearTimeout(timeout);
             cleanup();
@@ -3228,6 +3247,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             }
             case 'capabilities':
               upgradeWorkerCapabilities(worker, msg.capabilities);
+              break;
+            case 'app-reinstalled':
+              reportAppReinstalled(worker, msg);
               break;
             case 'progress':
               // Slow-device-action progress during the between-file preflight

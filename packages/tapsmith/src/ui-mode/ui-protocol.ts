@@ -373,7 +373,7 @@ export interface DeviceActivityMessage {
   type: 'device-activity'
   id: string
   workerId: number
-  kind: 'prepare' | 'validate' | 'recycle' | 'mirror' | 'respawn'
+  kind: 'prepare' | 'validate' | 'recycle' | 'mirror' | 'respawn' | 'install'
   status: 'started' | 'completed' | 'error' | 'cancelled'
   /** e.g. "Prepare device (clear)", "Mirror: 3 taps" */
   label: string
@@ -1100,6 +1100,21 @@ export interface UIWorkerCapabilitiesMessage {
   capabilities: import('../app-reset.js').ResetCapabilities
 }
 
+/**
+ * UI worker → server: before a run (or while adopting the device), the worker
+ * found that the configured build changed and reinstalled it (PILOT-1397).
+ * The server shows it in Device activity and the terminal.
+ */
+export interface UIWorkerAppReinstalledMessage {
+  type: 'app-reinstalled'
+  workerId: number
+  deviceSerial: string
+  /** e.g. `Reinstalled app-release.apk (build changed since the last run)`. */
+  message: string
+  startedAt: number
+  durationMs: number
+}
+
 /** UI worker → server: a background preparation finished. */
 export interface UIWorkerPreparedMessage {
   type: 'prepared'
@@ -1220,3 +1235,4 @@ export type UIWorkerChildMessage =
   | UIWorkerPreparedMessage
   | UIWorkerPrepareFailedMessage
   | UIWorkerCapabilitiesMessage
+  | UIWorkerAppReinstalledMessage

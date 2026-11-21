@@ -163,8 +163,9 @@ function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | nul
         const pending = (opts._preflightWarnings ??= []);
         if (!pending.includes(message)) pending.push(message);
       }
-      // Not a dialog: the reset row already shows the clear it caused.
-      if (notice.kind === 'hooks-missing') continue;
+      // Not a dialog: the reset row already shows the clear (or the
+      // relaunch of the reinstalled app) it caused.
+      if (notice.kind === 'hooks-missing' || notice.kind === 'app-reinstalled') continue;
       // Stamped now, not when the dialog was handled (possibly before this
       // trace began): rows keep their order on the timeline. The handling
       // time goes in the log.

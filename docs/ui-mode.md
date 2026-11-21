@@ -147,6 +147,10 @@ Teams can set the session default in the config — `ui: { prepareBetweenRuns: f
 
 Test files are re-imported on every run. Files they import — page objects, fixtures, helpers — live in the worker's module cache, so when one of those changes under your project root the UI recycles the worker (a ~1–2 s process restart against the same daemon; the device is untouched). A change during a run is applied as soon as the run ends. Use **Respawn worker** (right-click the device in the top bar) if a device session ever needs to be rebuilt from scratch.
 
+### Rebuilt apps are reinstalled
+
+Before each test file runs, its worker checks that the device still holds the app build the config names (`apk`, or `app` on an iOS simulator), the same check `tapsmith test` makes when it starts. When the build differs — you rebuilt it (`./gradlew assembleRelease`, `xcodebuild`), or another tool installed a different build of the app — the worker reinstalls it and relaunches it from cleared data before the file runs. The reinstall shows in **Device activity** and the terminal, and as a warning on the run's first test: `Reinstalled app-release.apk (build changed since the last run)`. When nothing changed, the check only reads file sizes and timestamps (on the device and on disk), so a run does not pay for comparing the builds' contents. A build that is no longer there (removed by a clean) fails the run with the path Tapsmith looked for, as `tapsmith test` does. A physical iPhone is not re-checked: as at startup, an installed app is kept whatever its build, so restart UI mode with `--force-install` after rebuilding for one.
+
 ## Mutual exclusion
 
 Only one test run can be active at a time, whether triggered from the UI or from an MCP agent. If you click "Run" in the UI while an MCP agent is already running tests, the run is queued. Both sides see the same results.

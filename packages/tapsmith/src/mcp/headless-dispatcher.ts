@@ -19,6 +19,7 @@ import {
 } from '../worker-protocol.js';
 import type { WatchRunMessage, WatchRunChildMessage } from '../watch-run.js';
 import { RunQueue } from '../watch-queue.js';
+import { knownInstalledBuilds, rememberInstalledBuilds } from '../installed-builds.js';
 import { telemetry } from '../telemetry.js';
 import { ensurePlatformTarget, platformTargetIsLive, type PlatformTarget } from './connection.js';
 import { deviceGroupNames, deviceGroupSize, pinnedDeviceSerials, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from '../config.js';
@@ -1557,6 +1558,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
               this._resetCapabilities.set(serial, store);
             }
             if (response.appBehindProxy !== undefined) this._appBehindProxy.set(target.deviceSerial, response.appBehindProxy);
+            rememberInstalledBuilds(response.installedBuilds);
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolveOnce({ results, suite });
@@ -1603,6 +1605,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         // proxy; a later child may have relaunched it behind the proxy.
         proxyStartedBeforeLaunch: this._appBehindProxy.get(target.deviceSerial) ?? false,
         resetCapabilities: this._resetCapabilities.get(target.deviceSerial),
+        installedBuilds: knownInstalledBuilds(),
         ...(target.members && target.members.length > 0 ? {
           groupMembers: target.members.map((m) => ({
             name: m.name,

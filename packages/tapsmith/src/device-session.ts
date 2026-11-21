@@ -39,6 +39,8 @@ import { satisfies, type AppResetPolicy, type PreparedState, type ResetCapabilit
 import { findDaemonBin } from './daemon-bin.js';
 import { timingLog } from './timing-log.js';
 import { resolveAppArtifact } from './app-artifact.js';
+import { installedApkStamp, installedSimulatorAppStamp, localBuildStamp } from './build-stamp.js';
+import { verifiedBuilds } from './installed-builds.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed, type DaemonStartOutcome } from './daemon-start.js';
 import { DaemonClaimedError, claimDeviceOrThrow, daemonDriverElsewhere, releaseDeviceClaim, type SessionIdentity } from './device-claims.js';
 
@@ -195,6 +197,11 @@ export interface OpenDeviceSessionOptions {
   seedCapabilities?: ResetCapabilities
   /** Reinstall the app even when the installed build matches. */
   forceInstall?: boolean
+  /**
+   * With `adopt`: told when the open reinstalled a build that changed since
+   * the daemon installed it ({@link reinstallChangedBuild}).
+   */
+  onReinstalled?: (serial: string, outcome: BuildCheckOutcome) => void
   /** Headless CI emulators have no lockscreen — skip the wake/unlock RPCs. */
   skipWakeUnlock?: boolean
   /**
@@ -394,12 +401,16 @@ export async function resolveAgentArtifacts(
 // ─── App install ───
 
 interface InstallOutcome {
+  /** Whether this check installed the app (a fresh install or a reinstall). */
+  installed: boolean
   /**
    * Whether the install was a *fresh* one — onto a device with no data
    * container for the app — which is the only case the startup launch may
    * skip its clear (a reinstall keeps the data).
    */
   freshInstall: boolean
+  /** It reinstalled because the installed build could not be compared with the one on disk. */
+  uncompared?: boolean
   /**
    * An iOS simulator install still running. It is started here and awaited by
    * the caller right before the agent starts, so agent-artifact resolution
@@ -459,7 +470,7 @@ async function installAppUnderTest(
     if (!artifact) {
       progress('app install skipped');
       phase('install', 'skip', 'no Android APK configured');
-      return { freshInstall: false };
+      return { installed: false, freshInstall: false };
     }
     const resolvedApk = artifact;
     phase('install', 'start', `checking ${path.basename(resolvedApk)}`);
@@ -479,7 +490,7 @@ async function installAppUnderTest(
       progress(`app ${config.package} already installed (matching build), skipping APK install`);
       phase('install', 'complete', `${config.package} already installed (matching build)`);
       timing('matching');
-      return { freshInstall: false };
+      return { installed: false, freshInstall: false };
     }
     const why = !buildDiffers ? ''
       : comparison === false ? ' (installed build differs)'
@@ -496,13 +507,13 @@ async function installAppUnderTest(
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApk)}`);
     timing(wasInstalled ? 'reinstalled' : 'installed');
-    return { freshInstall: !wasInstalled };
+    return { installed: true, freshInstall: !wasInstalled, ...(buildDiffers && comparison === undefined ? { uncompared: true } : {}) };
   }
 
   if (!artifact) {
     progress('app install skipped');
     phase('install', 'skip', 'no iOS app configured');
-    return { freshInstall: false };
+    return { installed: false, freshInstall: false };
   }
   const resolvedApp = artifact;
   phase('install', 'start', `checking ${path.basename(resolvedApp)}`);
@@ -514,7 +525,7 @@ async function installAppUnderTest(
       progress(`app ${config.package} already installed, skipping app install`);
       phase('install', 'complete', `${config.package} already installed on device`);
       timing('present');
-      return { freshInstall: false };
+      return { installed: false, freshInstall: false };
     }
     progress(`${wasInstalled ? 'reinstalling' : 'installing'} ${path.basename(resolvedApp)} on device`);
     try {
@@ -527,13 +538,13 @@ async function installAppUnderTest(
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApp)} on ${serial}`);
     timing(wasInstalled ? 'reinstalled' : 'installed');
-    return { freshInstall: !wasInstalled };
+    return { installed: true, freshInstall: !wasInstalled };
   }
   if (opts.appInstalledFresh) {
     // Timed where it happened (installAppIfAbsent's `stage=boot` line).
     progress('app install complete');
     phase('install', 'complete', `installed ${path.basename(resolvedApp)} while booting the simulator`);
-    return { freshInstall: true };
+    return { installed: true, freshInstall: true };
   }
   // Skip only when the whole installed bundle is byte-identical — simulator
   // state can outlive a run, a presence-only skip silently tests a stale
@@ -547,7 +558,7 @@ async function installAppUnderTest(
     progress(`app ${config.package} already installed (matching build), skipping app install`);
     phase('install', 'complete', `${config.package} already installed (matching build)`);
     timing('matching');
-    return { freshInstall: false };
+    return { installed: false, freshInstall: false };
   }
   const why = compared ? ' (installed build differs)' : '';
   progress(`${wasInstalled ? 'reinstalling' : 'installing'} ${path.basename(resolvedApp)}${why}`);
@@ -571,7 +582,7 @@ async function installAppUnderTest(
   // CLI's fatal handler would tear the run down and lose the message above),
   // so the promise is observed now; the caller's await still sees the error.
   pending.catch(() => {});
-  return { freshInstall: !wasInstalled, pending };
+  return { installed: true, freshInstall: !wasInstalled, pending };
 }
 
 /**
@@ -592,6 +603,93 @@ export async function installConfiguredApp(
   const device = new Device(client, config);
   const install = await installAppUnderTest(config, device, serial, { onProgress: opts.onProgress });
   if (install.pending) await install.pending;
+}
+
+// ─── Rebuilt apps in long-lived sessions (PILOT-1397) ───
+
+/** The stamp of the copy installed on an emulator or simulator (`build-stamp.ts`). */
+async function installedBuildStamp(config: TapsmithConfig, serial: string): Promise<string | undefined> {
+  if (!config.package) return undefined;
+  return config.platform === 'ios'
+    ? installedSimulatorAppStamp(serial, config.package)
+    : installedApkStamp(serial, config.package);
+}
+
+/** What {@link reinstallChangedBuild} did. */
+export interface BuildCheckOutcome {
+  /** The app was reinstalled and relaunched; `session.prepared` is that launch. */
+  reinstalled: boolean
+  /** One line for the user, when it reinstalled, e.g. `Reinstalled app-release.apk (build changed since the last run)`. */
+  message?: string
+  /** How long the reinstall and relaunch took. */
+  durationMs?: number
+}
+
+/**
+ * Before a run in a session that outlives one (UI mode, watch, MCP): make
+ * sure the device still holds the configured build, and reinstall it when
+ * it does not — a rebuild since the session started, or a different build
+ * someone else put on the device. The same check `tapsmith test` makes at
+ * startup (`installAppUnderTest`: a missing build is refused, a comparison
+ * that cannot be made reinstalls), run only when the build on disk or the
+ * copy on the device changed since it last passed.
+ *
+ * A reinstall replaces the running app, so it is relaunched from cleared
+ * data right away, and that launch becomes `session.prepared`: the next file
+ * starts from a fresh launch of the new build. The user hears of it as a
+ * preflight notice (a warning on the next test) and through `onProgress`.
+ *
+ * Physical iPhones are left alone: their startup check is presence only
+ * (a devicectl round trip of seconds), so there is nothing cheaper to repeat.
+ * Without a `package` there is nothing to compare against.
+ */
+export async function reinstallChangedBuild(
+  session: DeviceSession,
+  opts: { onProgress?: (m: string) => void } = {},
+): Promise<BuildCheckOutcome> {
+  const { config, serial } = session;
+  if (!config.package) return { reinstalled: false };
+  if (config.platform === 'ios') {
+    const { isPhysicalDevice } = await import('./ios-devicectl.js');
+    if (isPhysicalDevice(serial)) return { reinstalled: false };
+  }
+  // Refuses a build that has gone (a `gradle clean`), as the startup check does.
+  const artifact = resolveAppArtifact(config);
+  if (!artifact) return { reinstalled: false };
+
+  // Stamped before the check, so a build written while it runs is never
+  // recorded as the one it compared.
+  const [local, before] = await Promise.all([localBuildStamp(artifact), installedBuildStamp(config, serial)]);
+  const token = (installed: string | undefined): string | undefined =>
+    local && installed ? `${artifact}\n${local}\n${installed}` : undefined;
+  const known = token(before);
+  if (known !== undefined && verifiedBuilds.get(serial) === known) return { reinstalled: false };
+
+  verifiedBuilds.delete(serial);
+  const started = Date.now();
+  const install = await installAppUnderTest(config, session.device, serial, { onProgress: opts.onProgress });
+  if (install.pending) await install.pending;
+  const after = install.installed ? await installedBuildStamp(config, serial) : before;
+  const verified = token(after);
+  if (verified !== undefined) verifiedBuilds.set(serial, verified);
+  if (!install.installed) return { reinstalled: false };
+
+  const name = path.basename(artifact);
+  const message = install.freshInstall ? `Installed ${name} (the app was no longer on the device)`
+    : install.uncompared ? `Reinstalled ${name} (could not compare it with the installed build)`
+      : `Reinstalled ${name} (build changed since the last run)`;
+  opts.onProgress?.(`relaunching ${config.package} after the reinstall`);
+  try {
+    // Always from cleared data: a reinstall keeps the old build's data, and
+    // the agent that launches a freshly installed app at its own start is
+    // already running.
+    session.prepared = await launchConfiguredApp(session.context, 'launch after reinstall', { freshInstall: false });
+  } catch (err) {
+    session.prepared = undefined;
+    throw new Error(`${session.label}: ${message}, but failed to launch it: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  session.context.notices.push({ kind: 'app-reinstalled', title: name, message: `${message}.`, timestamp: Date.now() });
+  return { reinstalled: true, message, durationMs: Date.now() - started };
 }
 
 /**
@@ -768,6 +866,14 @@ export async function openDeviceSession(
       Object.assign(session.context, opts.artifacts ?? await resolveAgentArtifacts(config, spec.serial, progress));
       if (opts.seedCapabilities) Object.assign(capabilities, opts.seedCapabilities);
       if (opts.startNetworkProxy && opts.startNetworkProxy.startedBeforeLaunch) device._launchedBehindProxy = true;
+      // The build may have changed since the daemon installed it (a rebuild
+      // between watch or MCP runs, PILOT-1397). A reinstall relaunches the
+      // app, verifying and probing it: that launch is this session's.
+      const build = await reinstallChangedBuild(session, { onProgress: progress });
+      if (build.reinstalled) {
+        opts.onReinstalled?.(spec.serial, build);
+        return session;
+      }
       if (opts.adoptVerify ?? true) {
         progress('attaching to the device session');
         await ensureSessionReady(session.context, `${opts.label} adopt`);

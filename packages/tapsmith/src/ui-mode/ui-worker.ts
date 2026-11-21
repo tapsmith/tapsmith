@@ -30,6 +30,8 @@ import {
   sessionsToPrepare,
   openDeviceGroup,
   recoverDeviceSessions,
+  reinstallChangedBuild,
+  type BuildCheckOutcome,
   type DeviceSession,
 } from '../device-session.js';
 import { currentSession } from '../device-claims.js';
@@ -72,6 +74,13 @@ function send(msg: UIWorkerChildMessage): void {
 
 function sendProgress(message: string): void {
   send({ type: 'progress', workerId, message });
+}
+
+/** Tell the server about a reinstalled build, for Device activity and the terminal. */
+function sendReinstalled(deviceSerial: string, outcome: BuildCheckOutcome): void {
+  if (!outcome.message) return;
+  const durationMs = outcome.durationMs ?? 0;
+  send({ type: 'app-reinstalled', workerId, deviceSerial, message: outcome.message, startedAt: Date.now() - durationMs, durationMs });
 }
 
 /**
@@ -208,6 +217,9 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
       // "Device emulator-5554 not found. Run ListDevices first"), so refresh it.
       refreshDeviceList: true,
       onProgress: (message) => sendProgress(message),
+      // An adopted device whose build changed since the CLI (or the worker
+      // this one replaces) installed it is reinstalled here (PILOT-1397).
+      onReinstalled: sendReinstalled,
     },
   );
   // Each session carries its own prepared state: its startup launch left the
@@ -275,6 +287,16 @@ async function handleRunFile(
       await s.device.wake();
       await s.device.unlock();
     }));
+    // A rebuilt app is reinstalled before the run, as `tapsmith test` would
+    // at its start; this worker outlives many runs (PILOT-1397). Cheap when
+    // nothing changed: a stat of the build and one device query.
+    for (const s of sessionsForRun(group, config!, projectUseOptions)) {
+      const build = await reinstallChangedBuild(s, { onProgress: sendProgress });
+      if (build.reinstalled) {
+        sendReinstalled(s.serial, build);
+        sendProgress('');
+      }
+    }
   } catch (err) {
     // Whether aborted or a genuine preflight failure, this run is over —
     // don't leave a stale controller for a later idle-state abort IPC.

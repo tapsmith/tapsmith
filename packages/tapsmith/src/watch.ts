@@ -38,6 +38,7 @@ import type { WatchRunMessage, WatchRunChildMessage } from './watch-run.js';
 import { isIgnoredWatchModePath } from './test-file-discovery.js';
 import { type DeviceGroupEntry } from './config.js';
 import { startDaemon } from './device-session.js';
+import { knownInstalledBuilds, rememberInstalledBuilds } from './installed-builds.js';
 import type {
   UIWorkerMessage,
   UIWorkerChildMessage,
@@ -719,6 +720,10 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
                 dispatchNext(worker);
                 break;
               }
+              case 'app-reinstalled':
+                // The worker reinstalled a rebuilt app before this file (PILOT-1397).
+                process.stdout.write(`  ${msg.message} on ${msg.deviceSerial}\n`);
+                break;
               case 'error':
                 retireWorker(worker, msg.error.message);
                 break;
@@ -1284,6 +1289,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         // have relaunched the app behind the proxy.
         proxyStartedBeforeLaunch: state.appBehindProxy ?? ctx.networkApisInRun,
         resetCapabilities: ctx.resetCapabilities,
+        installedBuilds: knownInstalledBuilds(),
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {
           groupMembers: ctx.groupMembers.map((m) => ({
             name: m.name,
@@ -1316,6 +1322,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
               if (learned) Object.assign(member.resetCapabilities, learned);
             }
             if (response.appBehindProxy !== undefined) state.appBehindProxy = response.appBehindProxy;
+            rememberInstalledBuilds(response.installedBuilds);
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolve({ results, suite });
