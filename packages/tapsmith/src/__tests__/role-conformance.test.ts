@@ -62,6 +62,15 @@ interface Case {
   heading?: boolean
   /** Android: the text of the node's children, each a TextView (an RN Pressable's label). */
   childTexts?: string[]
+  /**
+   * Android: the name a control with none of its own takes from its row, as the
+   * dump writes it (`tapsmith-name`, the agent's RowName.name).
+   */
+  rowName?: string
+  /** Android: that row's label (`tapsmith-label`, RowName.label). */
+  rowLabel?: string
+  /** Android: the class of the node's parent (a listitem is a list's child). */
+  parentType?: string
   /** A string name, a RegExp as source + flags, or none. */
   name?: string | { source: string; flags: string }
   exact?: boolean
@@ -91,7 +100,13 @@ const I = {
   alert: 'XCUIElementTypeAlert',
 } as const;
 
+/** An androidx SwitchPreferenceCompat row's name: its title, then its summary. */
+const PREF_NAME = 'Full black Use full black for the dark theme';
+
 const A = {
+  relativeLayout: 'android.widget.RelativeLayout',
+  frameLayout: 'android.widget.FrameLayout',
+  listView: 'android.widget.ListView',
   button: 'android.widget.Button',
   imageButton: 'android.widget.ImageButton',
   toggleButton: 'android.widget.ToggleButton',
@@ -322,9 +337,27 @@ const CASES: Case[] = [
   { why: 'a RegExp tests the content description', platform: 'android', type: A.imageButton, role: 'button', contentDesc: 'Close', name: { source: '^close$', flags: 'i' }, matches: true },
   { why: 'a RegExp tests the normalized name', platform: 'android', type: A.button, role: 'button', text: `Sign${NBSP}In`, name: { source: '^Sign In$', flags: '' }, matches: true },
   { why: 'a RegExp tests the children\'s text', platform: 'android', type: A.button, role: 'button', childTexts: ['Sign', 'In'], name: { source: 'n I', flags: '' }, matches: true },
+
+  // ─── A nameless control named by its row: an androidx Preference's switch ───
+  { why: 'an unnamed switch is named by its row\'s title', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', name: 'Full black', matches: true },
+  { why: 'and by its summary, a part of the row\'s name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', name: 'dark theme', matches: true },
+  { why: 'not by another row\'s title', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', name: 'Dynamic colors', matches: false },
+  { why: 'exact compares the row\'s whole name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', name: 'Full black', exact: true, matches: false },
+  { why: 'exact matches the row\'s whole name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', name: PREF_NAME, exact: true, matches: true },
+  { why: 'a RegExp tests the row\'s name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', name: { source: '^full black', flags: 'i' }, matches: true },
+  { why: 'a RegExp for no name does not match a row-named switch', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', name: { source: '^$', flags: '' }, matches: false },
+  { why: 'a CheckBoxPreference\'s checkbox is named by its row', platform: 'android', type: A.checkBox, role: 'checkbox', rowName: 'Wi-Fi only', rowLabel: 'Wi-Fi only', name: 'Wi-Fi only', exact: true, matches: true },
+  { why: 'a row-named switch is still found without a name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', matches: true },
+
+  // ─── listitem: a list's row, not every layout ───
+  { why: 'a RecyclerView\'s row is a listitem', platform: 'android', type: A.linearLayout, role: 'listitem', parentType: A.recyclerView, matches: true },
+  { why: 'a ListView\'s row is a listitem', platform: 'android', type: A.relativeLayout, role: 'listitem', parentType: A.listView, childTexts: ['Full black'], name: 'Full black', matches: true },
+  { why: 'a layout inside a row is no listitem', platform: 'android', type: A.relativeLayout, role: 'listitem', parentType: A.linearLayout, matches: false },
+  { why: 'a content frame is no listitem', platform: 'android', type: A.frameLayout, role: 'listitem', parentType: A.frameLayout, matches: false },
+  { why: 'a root layout is no listitem', platform: 'android', type: A.linearLayout, role: 'listitem', matches: false },
 ];
 
-/** The case's element as a hierarchy node, the way each agent's dump writes it. */
+/** The case's element as a hierarchy node, the way each agent's dump writes it, under its parent or alert. */
 function nodeFor(c: Case): HierarchyNode {
   const attrs: Record<string, string> = c.platform === 'ios'
     ? { type: c.type, label: c.label ?? '', identifier: c.identifier ?? '', value: c.value ?? '', placeholderValue: c.placeholder ?? '' }
@@ -332,6 +365,8 @@ function nodeFor(c: Case): HierarchyNode {
   if (c.title !== undefined) attrs.title = c.title;
   if (c.contentDesc !== undefined) attrs['content-desc'] = c.contentDesc;
   if (c.reportedRole !== undefined) attrs['tapsmith-role'] = c.reportedRole;
+  if (c.rowName !== undefined) attrs['tapsmith-name'] = c.rowName;
+  if (c.rowLabel !== undefined) attrs['tapsmith-label'] = c.rowLabel;
   const children = (c.childTexts ?? []).map((text): HierarchyNode => ({
     tagName: 'node',
     attributes: new Map(Object.entries({ class: 'android.widget.TextView', text, 'resource-id': '' })),
@@ -339,6 +374,10 @@ function nodeFor(c: Case): HierarchyNode {
     depth: 1,
   }));
   const node: HierarchyNode = { tagName: c.platform === 'ios' ? c.type : 'node', attributes: new Map(Object.entries(attrs)), children, depth: 0 };
+  if (c.parentType !== undefined) {
+    node.depth = 1;
+    return { tagName: 'node', attributes: new Map(Object.entries({ class: c.parentType, text: '', 'resource-id': '' })), children: [node], depth: 0 };
+  }
   if (!c.inAlert) return node;
   // The alert the element sits in, untitled so no name query matches it.
   const alert: HierarchyNode = {
@@ -380,7 +419,7 @@ describe('getByRole conformance (PILOT-834, PILOT-707)', () => {
     const parsed = parseSelectorString(codeFor(c));
     expect(parsed).not.toBeNull();
     const root = nodeFor(c);
-    const element = c.inAlert ? root.children[0]! : root;
+    const element = c.inAlert || c.parentType !== undefined ? root.children[0]! : root;
     expect(findMatchingNodes([root], parsed!).includes(element)).toBe(c.matches);
   });
 

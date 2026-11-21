@@ -481,7 +481,8 @@ function descendantText(node: HierarchyNode, depth = 0): string[] {
  * field reports its hint as text), and a typed value is only compared whole.
  * A text field with no other name is named by its placeholder
  * ({@link placeholderName}, PILOT-834), and an iOS back button with no label
- * "Back" ({@link backButtonName}).
+ * "Back" ({@link backButtonName}). An Android control with no name of its own
+ * in an actionable row is named by the row instead ({@link rowName}).
  */
 function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boolean {
   const query = normalizeWhitespace(name);
@@ -490,6 +491,8 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
     const value = normalizeWhitespace(actual);
     return wholeOnly ? value === query : value.toLowerCase().includes(query.toLowerCase());
   };
+  const row = rowName(node);
+  if (row !== undefined) return matches(row, exact);
   const isAndroid = node.attributes.has('class');
   const text = node.attributes.get('text');
   const textIsValue = text !== undefined && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
@@ -504,6 +507,16 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
     || (isAndroid && matches(descendantText(node).join(' '), exact))
     || matches(placeholderName(node), exact)
     || matches(backButtonName(node), exact);
+}
+
+/**
+ * The name an Android control with none of its own takes from the actionable
+ * row it sits in — an androidx SwitchPreferenceCompat's switch, named by its
+ * row's title and summary — as the agent's dump writes it (`tapsmith-name`,
+ * the agent's RowName), or undefined.
+ */
+function rowName(node: HierarchyNode): string | undefined {
+  return node.attributes.get('tapsmith-name') || undefined;
 }
 
 /** An iOS node's name when it is the system back button with no label or title, else ''. */
@@ -557,6 +570,8 @@ export function placeholderName(node: HierarchyNode): string {
 function roleNameMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
   const test = (actual: string | undefined): boolean =>
     actual !== undefined && actual !== '' && re.test(normalizeWhitespace(actual));
+  const row = rowName(node);
+  if (row !== undefined) return test(row);
   const isAndroid = node.attributes.has('class');
   const text = node.attributes.get('text');
   const textIsValue = text !== undefined && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
@@ -601,13 +616,17 @@ function iosNodeMatchesText(node: HierarchyNode, selector: ParsedSelector, conta
  * (the agent also follows a labelling view, which the dump does not carry)
  * or, for a text field, the text of one of its descendants — a Compose
  * TextField's label is a child of the field (PILOT-828), while a Spinner's
- * child is its value — and iOS's label or title. iOS tests an empty label
+ * child is its value, or a nameless control's row label (`tapsmith-label`) —
+ * and iOS's label or title. iOS tests an empty label
  * like any other text, as its agent does.
  */
 function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean): boolean {
   if (node.attributes.has('class')) {
     const contentDesc = node.attributes.get('content-desc');
     if (contentDesc !== undefined && contentDesc !== '' && test(contentDesc)) return true;
+    // A control named by its row is labelled by the row's title (RowName.label).
+    const rowLabel = node.attributes.get('tapsmith-label');
+    if (rowLabel && test(rowLabel)) return true;
     return ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '') && descendantText(node).some(test);
   }
   return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '');
@@ -617,7 +636,7 @@ function isWebViewNode(node: HierarchyNode): boolean {
   return node.attributes.get('webview') === 'true';
 }
 
-function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector): boolean {
+function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector, parentClass: string | undefined): boolean {
   // WebView selector types only match WebView nodes
   if (selector.type.startsWith('wv-')) {
     if (!isWebViewNode(node)) return false;
@@ -674,7 +693,7 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector): boo
       // resolved, and a role it rejects matches nothing.
       if (unknownRoleMessage(selector.value) !== null) return false;
       const named = selector.name !== undefined || selector.nameRegex !== undefined;
-      if (!nodeHasRole(node, normalizeRole(selector.value), named)) return false;
+      if (!nodeHasRole(node, normalizeRole(selector.value), named, parentClass)) return false;
       if (!nodeMatchesRoleStates(node, selector)) return false;
       if (selector.nameRegex) return roleNameMatchesRegex(node, toJsRegExp(selector.nameRegex));
       if (selector.name) return roleNameMatches(node, selector.name, selector.exact === true);
@@ -880,9 +899,11 @@ const ANDROID_DESCRIPTION_ONLY_ROLES = new Set(['heading', 'link']);
  * iOS heading is header-trait only (its reported role), like the agent since
  * PILOT-608: static text is a heading's candidate type, not proof of one.
  * `named` is whether the query has a name, which identifies an iOS generic
- * view no role description marks.
+ * view no role description marks. An Android listitem is a list's row: a
+ * listitem-class layout whose parent (`parentClass`) is a list, not every
+ * layout in the row or around the screen.
  */
-function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean {
+function nodeHasRole(node: HierarchyNode, role: string, named: boolean, parentClass: string | undefined): boolean {
   // A Compose role carrier: its parent has the role (PILOT-828).
   if (isComposeRoleCarrier(node)) return false;
   // iOS 27's empty Toolbar host, the size of its screen or sheet, which the
@@ -901,6 +922,7 @@ function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean
     // without one falls back to its class.
     if (ANDROID_DUAL_PATH_ROLES.has(role)
       && (ANDROID_DESCRIPTION_ONLY_ROLES.has(role) || node.attributes.has('tapsmith-role'))) return false;
+    if (role === 'listitem' && !(ANDROID_ROLE_CLASSES.list?.includes(parentClass ?? '') ?? false)) return false;
     return ANDROID_ROLE_CLASSES[role]?.includes(className) ?? false;
   }
   const type = node.attributes.get('type') ?? node.tagName;
@@ -945,7 +967,7 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   // alert, like the agent (PILOT-919).
   const role = selector.type === 'role' ? normalizeRole(selector.value) : '';
 
-  function walk(node: HierarchyNode, containerLabel: string, inAlert: boolean) {
+  function walk(node: HierarchyNode, containerLabel: string, inAlert: boolean, parentClass: string | undefined) {
     // What isn't the app's never matches (PILOT-756, non-app-nodes.ts).
     if (isNonAppSubtree(node)) return;
     const isIos = !node.attributes.has('class') && !isWebViewNode(node);
@@ -953,7 +975,7 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     const type = node.attributes.get('type') ?? node.tagName;
     const matches = appNode && (iosText && isIos
       ? iosNodeMatchesText(node, selector, containerLabel)
-      : !(isIos && iosInsideNativeAlert(role, type, inAlert)) && nodeMatchesSelector(node, selector));
+      : !(isIos && iosInsideNativeAlert(role, type, inAlert)) && nodeMatchesSelector(node, selector, parentClass));
     let pushed = false;
     if (matches) {
       if (iosText && isIos) {
@@ -972,13 +994,13 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     const childContainer = isIos && appNode && label !== '' ? label : containerLabel;
     const childInAlert = inAlert || (isIos && type === 'XCUIElementTypeAlert');
     for (const child of node.children) {
-      walk(child, childContainer, childInAlert);
+      walk(child, childContainer, childInAlert, node.attributes.get('class'));
     }
     if (pushed) matchedAncestors.pop();
   }
 
   for (const root of roots) {
-    walk(root, '', false);
+    walk(root, '', false, undefined);
   }
 
   const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));

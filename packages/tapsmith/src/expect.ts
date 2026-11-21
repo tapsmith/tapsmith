@@ -152,9 +152,16 @@ function resolveTick(handle: ElementHandle, strict: boolean): Promise<ElementInf
 
 const EDITABLE_CLASSES = new Set(ANDROID_ROLE_CLASSES["textfield"]);
 
+/**
+ * The class fallback for an element the agent reported no role for. Not
+ * listitem: a LinearLayout, RelativeLayout or FrameLayout is a listitem only
+ * as a list's row, which only the agent can see (it reports "" for any
+ * other), so the class alone must not make one.
+ */
 const CLASS_TO_ROLE_MAP: Record<string, string> = (() => {
   const map: Record<string, string> = {};
   for (const [role, classes] of Object.entries(ANDROID_ROLE_CLASSES)) {
+    if (role === "listitem") continue;
     for (const className of classes) {
       if (!(className in map)) {
         map[className] = role;

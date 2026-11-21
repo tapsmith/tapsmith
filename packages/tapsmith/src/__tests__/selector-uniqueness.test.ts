@@ -824,6 +824,28 @@ describe('substring getByText ignores case in the playground, like the agents (P
   });
 });
 
+describe('Android: a row-named switch whose title is in another row', () => {
+  // Two androidx Preference switches: the dump names each by its row
+  // (tapsmith-name) and labels it by the row's title (tapsmith-label).
+  function sw(title: string, summary: string): HierarchyNode {
+    return makeNode('node', {
+      class: 'android.widget.Switch', checkable: 'true', bounds: `[0,${title.length}][10,${title.length + 10}]`,
+      'tapsmith-name': `${title} ${summary}`, 'tapsmith-label': title,
+    });
+  }
+  const dark = sw('Dark theme', 'Use a dark background');
+  const schedule = sw('Schedule', 'Turn on dark theme at sunset');
+  const roots = [makeNode('node', { class: 'android.widget.FrameLayout' }, [dark, schedule])];
+
+  it('pins it by its row title as a label: not by position, nor by a summary a toggle changes', () => {
+    const suggestions = disambiguateSelectors(roots, dark, generateSelectors(dark));
+    const best = suggestions[0];
+    expect(best.code).toBe('device.getByLabel("Dark theme")');
+    expect(findMatchingNodes(roots, parseSelectorString(best.code)!)).toEqual([dark]);
+    expect(suggestions.map((s) => s.code).join('\n')).not.toContain('Use a dark background');
+  });
+});
+
 describe('locator({ id }) parity with the Android agent', () => {
   // A bare entry name matches that id under any package (an R.id name with
   // any applicationIdSuffix); a package-qualified id matches only itself.

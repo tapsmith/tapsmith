@@ -1525,6 +1525,33 @@ describe("toHaveRole()", () => {
     await tapsmithExpect(handle).toHaveRole("button", { timeout: 50 });
   });
 
+  // The agent alone knows a layout's parent: a LinearLayout, RelativeLayout
+  // or FrameLayout is a listitem only as a list's row, and the agent reports
+  // "" for any other, which the class fallback must not turn back into one.
+  it("Android: a layout the agent gives no role is not a listitem", async () => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({ role: "", className: "android.widget.FrameLayout" }),
+      errorMessage: "",
+    }));
+    const handle = makeHandle(client);
+    await vitestExpect(
+      tapsmithExpect(handle).toHaveRole("listitem", { timeout: 50 }),
+    ).rejects.toThrow('to have role "listitem"');
+    await tapsmithExpect(handle).not.toHaveRole("listitem", { timeout: 50 });
+  });
+
+  it("Android: a list row the agent reports as a listitem is one", async () => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({ role: "listitem", className: "android.widget.LinearLayout" }),
+      errorMessage: "",
+    }));
+    await tapsmithExpect(makeHandle(client)).toHaveRole("listitem", { timeout: 50 });
+  });
+
   it("passes with switch role", async () => {
     const client = makeMockClient(async () => ({
       requestId: "1",

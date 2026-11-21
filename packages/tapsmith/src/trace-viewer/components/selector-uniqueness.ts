@@ -124,7 +124,13 @@ function tryExactRoleNameUpgrade(
   return null;
 }
 
-/** The node's whole accessible name, as role-name matching reads it first. */
+/**
+ * The node's whole accessible name, as role-name matching reads it first. Not
+ * an Android row name (`tapsmith-name`): it ends with the row's summary, which
+ * a SwitchPreference changes when it is toggled, so pinning it exactly would
+ * break right after a tap. An ambiguous row title is pinned by `getByLabel`
+ * (the row's title alone) instead.
+ */
 function fullAccessibleName(node: HierarchyNode): string {
   return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
 }
