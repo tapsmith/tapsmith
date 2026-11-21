@@ -74,9 +74,12 @@ interface CandidateLadder {
  * an Android row name (`tapsmith-name`): it ends with the row's summary, which
  * a SwitchPreference changes when it is toggled, so pinning it exactly would
  * break right after a tap. An ambiguous row title is pinned by `getByLabel`
- * (the row's title alone) instead.
+ * (the row's title alone) instead. A Flutter tab's is its label, without the
+ * "Tab 2 of 3" Flutter appends (`tapsmith-name` with no `tapsmith-label`).
  */
 function fullAccessibleName(node: HierarchyNode): string {
+  const tabName = node.attributes.has('tapsmith-label') ? undefined : node.attributes.get('tapsmith-name');
+  if (tabName !== undefined) return tabName;
   return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
 }
 

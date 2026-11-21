@@ -48,7 +48,12 @@ class LocatorConformanceTest {
         override val text: String? = c.optStringOrNull("text")
         override val contentDescription: String? = c.optStringOrNull("contentDesc")
         private val hint = c.optStringOrNull("placeholder")
-        private val role = FindRules.publishedRole(c.optBoolean("heading", false), c.optStringOrNull("roleDescription"))
+        private val role =
+            FindRules.publishedRole(
+                c.optBoolean("heading", false),
+                c.optStringOrNull("roleDescription"),
+                c.optStringOrNull("contentDesc"),
+            )
         private val labeledBy = c.optStringOrNull("labeledBy")
         private val childTexts =
             c.optJSONArray("childTexts")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
@@ -127,9 +132,27 @@ class LocatorConformanceTest {
         // tapsmith-role, which the dump takes from FindRules.publishedRole.
         val failures =
             androidCases("role-conformance.json").mapNotNull { c ->
-                val role = FindRules.publishedRole(c.optBoolean("heading", false), c.optStringOrNull("roleDescription"))
+                val role =
+                    FindRules.publishedRole(
+                        c.optBoolean("heading", false),
+                        c.optStringOrNull("roleDescription"),
+                        c.optStringOrNull("contentDesc"),
+                    )
                 val reported = c.optStringOrNull("reportedRole")
                 if (role == reported) null else "${c.getString("why")}: reports $role, the fixture says $reported"
+            }
+        assertEquals(emptyList<String>(), failures)
+    }
+
+    @Test
+    fun `a Flutter tab's name is the one the hierarchy dump writes`() {
+        // The playground names a Flutter tab by the dump's tapsmith-name,
+        // which the dump takes from FlutterTab.nameOf.
+        val failures =
+            androidCases("role-conformance.json").mapNotNull { c ->
+                val name = FlutterTab.nameOf(c.optStringOrNull("contentDesc"))
+                val dumped = c.optStringOrNull("tabName")
+                if (name == dumped) null else "${c.getString("why")}: named $name, the fixture says $dumped"
             }
         assertEquals(emptyList<String>(), failures)
     }

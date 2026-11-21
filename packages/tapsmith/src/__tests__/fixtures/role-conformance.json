@@ -1873,6 +1873,463 @@
       "matches": true
     },
     {
+      "why": "a Flutter NavigationRail destination is a tab",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "matches": true
+    },
+    {
+      "why": "named by its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "contact",
+      "matches": true
+    },
+    {
+      "why": "exact compares the label without the position",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "and still by its whole label, as before",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact\nTab 2 of 3",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "or a part of it",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Tab 2",
+      "matches": true
+    },
+    {
+      "why": "exact does not match a part of the position",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Tab 2 of 3",
+      "exact": true,
+      "matches": false
+    },
+    {
+      "why": "a RegExp tests the whole label too",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": {
+        "source": "Tab 2 of",
+        "flags": "",
+        "pattern": "Tab\\u00202\\u0020of",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
+      "why": "a RegExp tests the label",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": {
+        "source": "^Contact$",
+        "flags": "",
+        "pattern": "\\AContact\\z",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
+      "why": "and is still static text",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "text",
+      "name": "Contact",
+      "matches": true
+    },
+    {
+      "why": "the selected rail destination, a generic view, is a tab",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "and no menuitem by its name",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "menuitem",
+      "name": "Contact",
+      "matches": false
+    },
+    {
+      "why": "a Flutter NavigationBar destination is a tab",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "and still a button, by a part of its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact",
+      "matches": true
+    },
+    {
+      "why": "its label alone names it only as a tab, so an exact button name stays another button's",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact",
+      "exact": true,
+      "matches": false
+    },
+    {
+      "why": "and so does an anchored RegExp",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "traits": [
+        "button"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": {
+        "source": "^Contact$",
+        "flags": "",
+        "pattern": "\\AContact\\z",
+        "ignoreCase": false
+      },
+      "matches": false
+    },
+    {
+      "why": "nor is static text named by it",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "text",
+      "name": "Contact",
+      "exact": true,
+      "matches": false
+    },
+    {
+      "why": "an unlabelled Flutter tab is a tab named nothing",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Tab 1 of 3",
+      "reportedRole": "tab",
+      "tabName": "",
+      "role": "tab",
+      "matches": true
+    },
+    {
+      "why": "and no label to match",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Tab 1 of 3",
+      "reportedRole": "tab",
+      "tabName": "",
+      "role": "tab",
+      "name": "Home",
+      "matches": false
+    },
+    {
+      "why": "a label without the position is no tab",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "traits": [
+        "staticText"
+      ],
+      "label": "Contact",
+      "reportedRole": "text",
+      "role": "tab",
+      "matches": false
+    },
+    {
+      "why": "a Flutter NavigationRail destination is a tab",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "matches": true
+    },
+    {
+      "why": "named by its label",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "contact",
+      "matches": true
+    },
+    {
+      "why": "exact compares the label without the position",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "and still by its whole description, as before",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact\nTab 2 of 3",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "or a part of it",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Tab 2",
+      "matches": true
+    },
+    {
+      "why": "exact does not match a part of the position",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Tab 2 of 3",
+      "exact": true,
+      "matches": false
+    },
+    {
+      "why": "a RegExp tests the label",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": {
+        "source": "^Contact$",
+        "flags": "",
+        "pattern": "\\AContact\\z",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
+      "why": "not another tab's label",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Posts",
+      "matches": false
+    },
+    {
+      "why": "a NavigationRail destination is no button",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "matches": false
+    },
+    {
+      "why": "a Flutter NavigationBar destination is a tab",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "tab",
+      "name": "Contact",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "and still a button, by a part of its description",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact",
+      "matches": true
+    },
+    {
+      "why": "its label alone names it only as a tab, so an exact button name stays another button's",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": "Contact",
+      "exact": true,
+      "matches": false
+    },
+    {
+      "why": "and so does an anchored RegExp",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "contentDesc": "Contact\nTab 2 of 3",
+      "reportedRole": "tab",
+      "tabName": "Contact",
+      "role": "button",
+      "name": {
+        "source": "^Contact$",
+        "flags": "",
+        "pattern": "\\AContact\\z",
+        "ignoreCase": false
+      },
+      "matches": false
+    },
+    {
+      "why": "an unlabelled Flutter tab is a tab named nothing",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Tab 1 of 3",
+      "reportedRole": "tab",
+      "tabName": "",
+      "role": "tab",
+      "matches": true
+    },
+    {
+      "why": "and no label to match",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Tab 1 of 3",
+      "reportedRole": "tab",
+      "tabName": "",
+      "role": "tab",
+      "name": "Home",
+      "matches": false
+    },
+    {
+      "why": "a description without the position is no tab",
+      "platform": "android",
+      "type": "android.view.View",
+      "contentDesc": "Contact",
+      "role": "tab",
+      "matches": false
+    },
+    {
       "why": "a RecyclerView's row is a listitem",
       "platform": "android",
       "type": "android.widget.LinearLayout",

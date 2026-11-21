@@ -11,7 +11,11 @@ import XCTest
 ///
 /// The placeholder is a fallback, not one more name: a labelled field is
 /// named by its label alone, as in Playwright. So is the system back
-/// button's "Back" (`backButtonName`, PILOT-1260).
+/// button's "Back" (`backButtonName`, PILOT-1260). A Flutter tab queried as
+/// a tab (`tabQuery`) is named by its label without the position Flutter
+/// appends (`FlutterTab`) as well as by its whole label; as a button or text
+/// it keeps its whole label only, so an exact button name does not also find
+/// the tab bar's item with that label.
 enum RoleName {
     /// The element types a placeholder names when they have no label or title.
     static let placeholderNamedTypes: Set<XCUIElement.ElementType> = [
@@ -63,8 +67,12 @@ enum RoleName {
     /// or "Back" is one string, so only whole.
     static func matches(
         elementType: XCUIElement.ElementType, label: String, title: String, placeholder: String,
-        identifier: String, name: String, exact: Bool
+        identifier: String, name: String, exact: Bool, tabQuery: Bool
     ) -> Bool {
+        if tabQuery, let tabName = FlutterTab.name(of: label), !tabName.isEmpty,
+           TextMatch.nameMatches(tabName, name, exact: exact) {
+            return true
+        }
         if TextMatch.nameMatches(label, name, exact: exact) || TextMatch.nameMatches(title, name, exact: exact) {
             return true
         }
@@ -81,8 +89,11 @@ enum RoleName {
     /// matches "" does not match it.
     static func matches(
         elementType: XCUIElement.ElementType, label: String, title: String, placeholder: String,
-        identifier: String, regex: TextRegex
+        identifier: String, regex: TextRegex, tabQuery: Bool
     ) -> Bool {
+        if tabQuery, let tabName = FlutterTab.name(of: label), !tabName.isEmpty, regex.nameMatches(tabName) {
+            return true
+        }
         if let fallback = fallbackName(
             elementType: elementType, label: label, title: title, placeholder: placeholder, identifier: identifier
         ) {

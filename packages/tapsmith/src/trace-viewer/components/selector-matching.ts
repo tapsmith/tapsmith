@@ -482,9 +482,12 @@ function descendantText(node: HierarchyNode, depth = 0): string[] {
  * A text field with no other name is named by its placeholder
  * ({@link placeholderName}, PILOT-834), and an iOS back button with no label
  * "Back" ({@link backButtonName}). An Android control with no name of its own
- * in an actionable row is named by the row instead ({@link rowName}).
+ * in an actionable row is named by the row instead ({@link rowName}), and a
+ * Flutter tab, queried as a tab (`tabQuery`), also by its label alone
+ * ({@link flutterTabName}): as a button it keeps its whole description, so
+ * an exact button name does not also find the tab bar's item with that label.
  */
-function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boolean {
+function roleNameMatches(node: HierarchyNode, name: string, exact: boolean, tabQuery: boolean): boolean {
   const query = normalizeWhitespace(name);
   const matches = (actual: string | undefined, wholeOnly: boolean): boolean => {
     if (actual === undefined || actual === '') return false;
@@ -493,6 +496,7 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
   };
   const row = rowName(node);
   if (row !== undefined) return matches(row, exact);
+  if (tabQuery && matches(flutterTabName(node), exact)) return true;
   const isAndroid = node.attributes.has('class');
   const text = node.attributes.get('text');
   const textIsValue = text !== undefined && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
@@ -512,11 +516,22 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
 /**
  * The name an Android control with none of its own takes from the actionable
  * row it sits in — an androidx SwitchPreferenceCompat's switch, named by its
- * row's title and summary — as the agent's dump writes it (`tapsmith-name`,
- * the agent's RowName), or undefined.
+ * row's title and summary — as the agent's dump writes it (`tapsmith-name`
+ * beside the row's `tapsmith-label`, the agent's RowName), or undefined. It
+ * replaces the control's other names.
  */
 function rowName(node: HierarchyNode): string | undefined {
-  return node.attributes.get('tapsmith-name') || undefined;
+  return node.attributes.has('tapsmith-label') ? node.attributes.get('tapsmith-name') || undefined : undefined;
+}
+
+/**
+ * A Flutter tab's label without the "Tab 2 of 3" position Flutter appends to
+ * it, as either agent's dump writes it (`tapsmith-name` with no
+ * `tapsmith-label`, FlutterTab), or undefined. One more name beside its
+ * whole description or label, which still names it too — for a tab query only.
+ */
+function flutterTabName(node: HierarchyNode): string | undefined {
+  return node.attributes.has('tapsmith-label') ? undefined : node.attributes.get('tapsmith-name');
 }
 
 /** An iOS node's name when it is the system back button with no label or title, else ''. */
@@ -567,11 +582,12 @@ export function placeholderName(node: HierarchyNode): string {
  * against each name source, whitespace-normalized (Playwright tests the
  * normalized accessible name). A typed Android EditText value is not a name.
  */
-function roleNameMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
+function roleNameMatchesRegex(node: HierarchyNode, re: RegExp, tabQuery: boolean): boolean {
   const test = (actual: string | undefined): boolean =>
     actual !== undefined && actual !== '' && re.test(normalizeWhitespace(actual));
   const row = rowName(node);
   if (row !== undefined) return test(row);
+  if (tabQuery && test(flutterTabName(node))) return true;
   const isAndroid = node.attributes.has('class');
   const text = node.attributes.get('text');
   const textIsValue = text !== undefined && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
@@ -695,8 +711,9 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector, pare
       const named = selector.name !== undefined || selector.nameRegex !== undefined;
       if (!nodeHasRole(node, normalizeRole(selector.value), named, parentClass)) return false;
       if (!nodeMatchesRoleStates(node, selector)) return false;
-      if (selector.nameRegex) return roleNameMatchesRegex(node, toJsRegExp(selector.nameRegex));
-      if (selector.name) return roleNameMatches(node, selector.name, selector.exact === true);
+      const tabQuery = normalizeRole(selector.value) === 'tab';
+      if (selector.nameRegex) return roleNameMatchesRegex(node, toJsRegExp(selector.nameRegex), tabQuery);
+      if (selector.name) return roleNameMatches(node, selector.name, selector.exact === true, tabQuery);
       return true;
     }
     default:

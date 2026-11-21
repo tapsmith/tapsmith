@@ -888,3 +888,53 @@ describe('Android: a SwitchPreferenceCompat row', () => {
     expect(findMatchingNodes([root], parseSelectorString('device.getByRole("listitem")')!)).toEqual(rows);
   });
 });
+
+// ─── A Flutter tab: "<label>\nTab <i> of <n>" in its content description ───
+
+describe('Android: Flutter navigation destinations', () => {
+  // A Flutter app's NavigationRail (Views) and NavigationBar (Buttons): the
+  // agent's dump marks each as a tab and writes its label as its name.
+  function destination(cls: string, label: string, i: number, selected = false): HierarchyNode {
+    return makeNode('node', {
+      class: cls, clickable: 'true', selected: String(selected), bounds: `[0,${i * 100}][200,${i * 100 + 100}]`,
+      'content-desc': `${label}\nTab ${i} of 3`, 'tapsmith-role': 'tab', 'tapsmith-name': label,
+    });
+  }
+  const rail = ['Posts', 'Contact', 'Settings'].map((l, i) => destination('android.view.View', l, i + 1, i === 0));
+  const bar = ['Posts', 'Contact', 'Settings'].map((l, i) => destination('android.widget.Button', l, i + 1, i === 0));
+
+  it.each([['NavigationRail', rail], ['NavigationBar', bar]])('suggests a %s destination by the tab role and its label first', (_, items) => {
+    const root = makeNode('node', { class: 'android.widget.FrameLayout' }, items);
+    const contact = items[1];
+    const codes = generateSelectors(contact).map((s) => s.code);
+    expect(codes[0]).toBe('device.getByRole("tab", { name: "Contact" })');
+    expect(generateBestSelector(contact)).toBe(codes[0]);
+    expect(findMatchingNodes([root], parseSelectorString(codes[0])!)).toEqual([contact]);
+  });
+
+  it('an unlabelled destination is suggested by its role alone', () => {
+    const icon = makeNode('node', {
+      class: 'android.view.View', clickable: 'true', 'content-desc': 'Tab 2 of 3', 'tapsmith-role': 'tab', 'tapsmith-name': '',
+    });
+    expect(generateSelectors(icon).map((s) => s.code)).toContain('device.getByRole("tab")');
+  });
+});
+
+describe('iOS: Flutter navigation destinations', () => {
+  // A Flutter app's NavigationRail on iOS: static text (a generic view while
+  // selected), labelled "<label>\nTab i of n"; the agent's dump marks each as a
+  // tab and writes its label as its name.
+  const rail = ['Posts', 'Contact', 'Settings'].map((l, i) => makeNode(i === 0 ? 'XCUIElementTypeOther' : 'XCUIElementTypeStaticText', {
+    type: i === 0 ? 'XCUIElementTypeOther' : 'XCUIElementTypeStaticText', label: `${l}\nTab ${i + 1} of 3`,
+    'tapsmith-role': 'tab', 'tapsmith-name': l, bounds: `[0,${i * 100}][200,${i * 100 + 100}]`,
+  }));
+  const root = makeNode('XCUIElementTypeApplication', { type: 'XCUIElementTypeApplication', label: 'App' }, rail);
+
+  it('suggests a destination by the tab role and its label first', () => {
+    for (const item of rail) {
+      const best = generateBestSelector(item);
+      expect(best).toBe(`device.getByRole("tab", { name: "${item.attributes.get('tapsmith-name')}" })`);
+      expect(findMatchingNodes([root], parseSelectorString(best)!)).toEqual([item]);
+    }
+  });
+});

@@ -23,7 +23,8 @@ import java.io.ByteArrayOutputStream
  * Jetpack Compose control gets the role of its role carrier, which is marked
  * `tapsmith-role-carrier` ([ComposeRoles], PILOT-828). A control with no
  * name of its own that takes its row's ([RowName]) gets `tapsmith-name` and
- * `tapsmith-label`, so the picker and the playground can name it.
+ * `tapsmith-label`, so the picker and the playground can name it, and a
+ * Flutter tab ([FlutterTab]) gets its label as `tapsmith-name`.
  */
 class HierarchyDumper internal constructor(
     private val device: UiDevice,
@@ -187,7 +188,8 @@ class HierarchyDumper internal constructor(
         val role = if (isCarrier) null else extractRoleFromNodeInfo(node)
         val expanded = extractExpandedFromNodeInfo(node)
         val row = if (node.isCheckable) rowNameOf(node) else null
-        if (role != null || expanded != null || row != null) {
+        val tabName = if (row == null) FlutterTab.nameOf(node.contentDescription) else null
+        if (role != null || expanded != null || row != null || tabName != null) {
             val attrs = attrMap.getOrPut(dumpedBoundsKey(node, clip)) { mutableMapOf() }
             role?.let { attrs["tapsmith-role"] = it }
             expanded?.let { attrs["tapsmith-expanded"] = it.toString() }
@@ -195,6 +197,7 @@ class HierarchyDumper internal constructor(
                 attrs[RowName.NAME_DUMP_ATTRIBUTE] = it.name
                 attrs[RowName.LABEL_DUMP_ATTRIBUTE] = it.label
             }
+            tabName?.let { attrs[FlutterTab.NAME_DUMP_ATTRIBUTE] = it }
         }
         carried?.let { (carriedRole, carrier) ->
             carriers[HierarchyAttributes.nodeKey(dumpedBounds(carrier, clip), carrier.className?.toString())] = carriedRole
@@ -260,14 +263,14 @@ class HierarchyDumper internal constructor(
     private fun extractRoleFromNodeInfo(node: AccessibilityNodeInfo): String? {
         try {
             if (Build.VERSION.SDK_INT >= 28 && node.isHeading) {
-                return FindRules.publishedRole(isHeading = true, rawDescription = null)
+                return FindRules.publishedRole(isHeading = true, rawDescription = null, contentDescription = null)
             }
-            val extras = node.extras ?: return null
-            val packed = extras.getInt(COMPAT_BOOLEAN_PROPERTY_KEY, 0)
+            val extras = node.extras
+            val packed = extras?.getInt(COMPAT_BOOLEAN_PROPERTY_KEY, 0) ?: 0
             val raw =
-                extras.getCharSequence(ROLE_DESCRIPTION_EXTRA_KEY)?.toString()
-                    ?: extras.getCharSequence(ROLE_DESCRIPTION_LONG_FORM_KEY)?.toString()
-            return FindRules.publishedRole((packed and COMPAT_BOOLEAN_PROPERTY_IS_HEADING) != 0, raw)
+                extras?.getCharSequence(ROLE_DESCRIPTION_EXTRA_KEY)?.toString()
+                    ?: extras?.getCharSequence(ROLE_DESCRIPTION_LONG_FORM_KEY)?.toString()
+            return FindRules.publishedRole((packed and COMPAT_BOOLEAN_PROPERTY_IS_HEADING) != 0, raw, node.contentDescription)
         } catch (e: Exception) {
             return null
         }

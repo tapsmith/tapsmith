@@ -684,6 +684,12 @@ class ElementFinder(
             return candidate.descendantTextParts().any(labelMatches)
         }
 
+        /** Whether [role] (as a query writes it) is tab. */
+        private fun isTabRole(role: String?): Boolean {
+            val lowered = role?.lowercase() ?: return false
+            return (ROLE_ALIASES[lowered] ?: lowered) == "tab"
+        }
+
         /** Whether [role] (as a query writes it) is listitem. */
         private fun isListItemRole(role: String): Boolean {
             val lowered = role.lowercase()
@@ -721,7 +727,8 @@ class ElementFinder(
          * text (read only when the first two don't match) — or, for an
          * EditText with no other name, its hint (PILOT-834). A control with
          * no name of its own in an actionable row is named by the row
-         * ([RowName.name]) instead.
+         * ([RowName.name]) instead, and a Flutter tab, queried as a tab,
+         * also by its label alone ([FlutterTab.nameOf]).
          */
         private fun matchesAccessibleName(
             candidate: FindCandidate,
@@ -737,6 +744,22 @@ class ElementFinder(
                 } else {
                     TextMatch.accessibleNameMatches(row.name, null, false, { null }, name!!, selector.nameExact)
                 }
+            }
+            // A Flutter tab queried as a tab is also named by its label
+            // alone, without the position Flutter appends to it
+            // ("Contact\nTab 2 of 3", FlutterTab); its whole description
+            // still names it too. As a button it keeps that whole
+            // description only, so an exact button name does not also find
+            // the tab bar's item with that label.
+            val tabName = if (isTabRole(selector.role)) FlutterTab.nameOf(candidate.contentDescription) else null
+            if (!tabName.isNullOrEmpty()) {
+                val matched =
+                    if (regex != null) {
+                        regex.matches(TextMatch.normalize(tabName))
+                    } else {
+                        TextMatch.accessibleNameMatches(tabName, null, false, { null }, name!!, selector.nameExact)
+                    }
+                if (matched) return true
             }
             val text = candidate.text
             val contentDescription = candidate.contentDescription
@@ -1464,7 +1487,7 @@ class ElementFinder(
             // 1. Heading flag (API 28+) — React Native writes here for
             //    `accessibilityRole="header"`.
             if (android.os.Build.VERSION.SDK_INT >= 28 && node.isHeading) {
-                return FindRules.publishedRole(isHeading = true, rawDescription = null)
+                return FindRules.publishedRole(isHeading = true, rawDescription = null, contentDescription = null)
             }
 
             // 2. Compat-shimmed heading flag for older API levels: read the
@@ -1484,7 +1507,7 @@ class ElementFinder(
             // accessibilityRole="Header" would otherwise surface as
             // "Header"), and read RN's multi-word descriptions ("Progress
             // Bar") as the role name.
-            return FindRules.publishedRole(compatHeading, raw)
+            return FindRules.publishedRole(compatHeading, raw, node.contentDescription)
         } catch (e: Exception) {
             // A malformed extras bundle must not fail the whole find; log so
             // a regression in every role-from-RN mapping is visible.

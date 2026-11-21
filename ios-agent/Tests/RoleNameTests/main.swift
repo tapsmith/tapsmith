@@ -78,19 +78,22 @@ if let data = FileManager.default.contents(atPath: fixturePath),
             traits |= bit
         }
         let want = c["matches"] as? Bool ?? false
-        let reported = RoleMapping.resolveRole(for: type, traits: traits, inTabBar: inTabBar)
+        let reported = RoleMapping.resolveRole(for: type, traits: traits, inTabBar: inTabBar, label: label)
         expect("reports \(c["reportedRole"] as? String ?? "no role") \(why)",
                reported == (c["reportedRole"] as? String ?? ""))
+        // The playground names a Flutter tab by the dump's tapsmith-name.
+        expect("names \(c["tabName"] as? String ?? "no tab") \(why)",
+               FlutterTab.name(of: label) == c["tabName"] as? String)
         let isRole = RoleMapping.matches(
             role: role, elementType: type, traits: traits, value: value,
-            hasNameFilter: c["name"] != nil, inTabBar: inTabBar, inAlert: inAlert
+            hasNameFilter: c["name"] != nil, inTabBar: inTabBar, inAlert: inAlert, label: label
         )
         if c["name"] == nil {
             expect("role \(role) \(why)", isRole == want)
         } else if let name = c["name"] as? String {
             let got = isRole && RoleName.matches(
                 elementType: type, label: label, title: title, placeholder: placeholder, identifier: identifier,
-                name: name, exact: c["exact"] as? Bool ?? false
+                name: name, exact: c["exact"] as? Bool ?? false, tabQuery: RoleMapping.normalize(role) == "tab"
             )
             expect("string \(why)", got == want)
         } else if let name = c["name"] as? [String: Any] {
@@ -103,7 +106,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
             )
             let got = isRole && RoleName.matches(
                 elementType: type, label: label, title: title, placeholder: placeholder, identifier: identifier,
-                regex: re
+                regex: re, tabQuery: RoleMapping.normalize(role) == "tab"
             )
             expect("regex /\(source)/\(flags) \(why)", re.error == nil && got == want)
         } else {

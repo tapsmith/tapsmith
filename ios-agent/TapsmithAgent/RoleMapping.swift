@@ -237,10 +237,11 @@ enum RoleMapping {
     /// TabView host or the iPad's floating tab bar (`BarHost.markHosts`,
     /// PILOT-1260, PILOT-1282), which is the tab bar.
     /// A live element can't tell either; its callers pass what was found
-    /// with it.
+    /// with it. `label`: the element's label, whose line-broken "Tab 2 of 3"
+    /// suffix makes a Flutter navigation destination a tab (`FlutterTab`).
     static func resolveRole(
         for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool, isEmptyBarHost: Bool = false,
-        isTabBarHost: Bool = false
+        isTabBarHost: Bool = false, label: String = ""
     ) -> String {
         typealias Trait = AccessibilityTrait
 
@@ -252,7 +253,7 @@ enum RoleMapping {
         if traits & Trait.header != 0 { return "heading" }
         if traits & Trait.link != 0 { return "link" }
 
-        if isTabBarItem(elementType, inTabBar: inTabBar) { return "tab" }
+        if isTabBarItem(elementType, inTabBar: inTabBar) || FlutterTab.name(of: label) != nil { return "tab" }
 
         // A text view that can't be edited is text on screen, not an input.
         if isReadOnlyTextView(elementType, traits: traits) {
@@ -309,7 +310,7 @@ enum RoleMapping {
 
     /// The element types a type query must cover to find every element of
     /// `role`: its `roleToElementTypes` entry plus, for "tab", the buttons a
-    /// tab bar's items are, for "tablist" the bar host the iPhone Duo's
+    /// tab bar's items are and the views a Flutter tab is, for "tablist" the bar host the iPhone Duo's
     /// TabView is (PILOT-1260; the iPad's floating tab bar is a generic
     /// `.other`, already a tablist type), and for "alert" the static text an RN `Text`
     /// is (`staticTextRoles`), and for "seekbar" and "searchfield" the generic
@@ -320,7 +321,8 @@ enum RoleMapping {
     static func queryTypes(for role: String) throws -> [XCUIElement.ElementType] {
         let types = try elementTypes(for: role)
         let canonical = normalize(role)
-        if canonical == "tab" { return types + [.button] }
+        // A Flutter tab is a button, static text or a generic view (FlutterTab).
+        if canonical == "tab" { return types + [.button, .staticText, .other] }
         if canonical == "tablist" { return types + [.toolbar] }
         if staticTextRoles.contains(canonical) { return types + [.staticText] }
         if canonical == "seekbar" || canonical == "searchfield" { return types + [.other] }
@@ -428,8 +430,9 @@ enum RoleMapping {
     /// - textfield: a text view only while it can be edited
     ///   (`isReadOnlyTextView`, PILOT-697).
     /// - tab: a `.tab` element or a tab bar's item (`isTabBarItem`; `inTabBar`
-    ///   is whether the element has a `.tabBar` ancestor). The bar itself is a
-    ///   tablist (PILOT-514).
+    ///   is whether the element has a `.tabBar` ancestor), or a Flutter
+    ///   navigation destination, known by its `label` (`FlutterTab`). The bar
+    ///   itself is a tablist (PILOT-514).
     /// - alert: also a native `.alert`; and nothing inside one but another
     ///   `.alert` (`inAlert`: the element has an `.alert` ancestor), so a
     ///   named query finds the alert, not also its title text (PILOT-919).
@@ -449,7 +452,8 @@ enum RoleMapping {
         inTabBar: Bool,
         inAlert: Bool,
         isEmptyBarHost: Bool = false,
-        isTabBarHost: Bool = false
+        isTabBarHost: Bool = false,
+        label: String = ""
     ) -> Bool {
         if isEmptyBarHost { return false }
         let canonical = normalize(role)
@@ -462,6 +466,7 @@ enum RoleMapping {
         }
         if canonical == "tab" {
             return elementType == .tab || isTabBarItem(elementType, inTabBar: inTabBar)
+                || FlutterTab.name(of: label) != nil
         }
         if canonical == "textfield" && isReadOnlyTextView(elementType, traits: traits) {
             return false
@@ -471,7 +476,7 @@ enum RoleMapping {
             let generic = elementType == .other || (elementType == .staticText && staticTextRoles.contains(canonical))
             if !generic { return types.contains(elementType) }
             if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
-            return hasNameFilter && resolveRole(for: .other, traits: traits, inTabBar: false).isEmpty
+            return hasNameFilter && resolveRole(for: .other, traits: traits, inTabBar: false, label: label).isEmpty
         }
         return types.contains(elementType) || matchesTrait(role: canonical, elementType: elementType, traits: traits)
     }

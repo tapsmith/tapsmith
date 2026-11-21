@@ -69,6 +69,11 @@ interface Case {
   rowName?: string
   /** Android: that row's label (`tapsmith-label`, RowName.label). */
   rowLabel?: string
+  /**
+   * Android: a Flutter tab's name, as the dump writes it (`tapsmith-name`, the
+   * agent's FlutterTab.nameOf its content description).
+   */
+  tabName?: string
   /** Android: the class of the node's parent (a listitem is a list's child). */
   parentType?: string
   /** A string name, a RegExp as source + flags, or none. */
@@ -134,6 +139,9 @@ const A = {
 } as const;
 
 const NBSP = '\u00a0';
+
+/** A Flutter tab's content description: its label, then the position Flutter appends for TalkBack. */
+const FLUTTER_TAB = 'Contact\nTab 2 of 3';
 
 const CASES: Case[] = [
   // iOS: a SwiftUI TextField("Title", text:) has an empty label and the text as its placeholder.
@@ -349,6 +357,45 @@ const CASES: Case[] = [
   { why: 'a CheckBoxPreference\'s checkbox is named by its row', platform: 'android', type: A.checkBox, role: 'checkbox', rowName: 'Wi-Fi only', rowLabel: 'Wi-Fi only', name: 'Wi-Fi only', exact: true, matches: true },
   { why: 'a row-named switch is still found without a name', platform: 'android', type: A.switch, role: 'switch', rowName: PREF_NAME, rowLabel: 'Full black', matches: true },
 
+  // ─── iOS: a Flutter tab, the same label; a NavigationBar item is a button, a rail's static text (generic while selected) ───
+  { why: 'a Flutter NavigationRail destination is a tab', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', matches: true },
+  { why: 'named by its label', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'contact', matches: true },
+  { why: 'exact compares the label without the position', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and still by its whole label, as before', platform: 'ios', type: I.button, traits: ['button'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: FLUTTER_TAB, exact: true, matches: true },
+  { why: 'or a part of it', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Tab 2', matches: true },
+  { why: 'exact does not match a part of the position', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Tab 2 of 3', exact: true, matches: false },
+  { why: 'a RegExp tests the whole label too', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: { source: 'Tab 2 of', flags: '' }, matches: true },
+  { why: 'a RegExp tests the label', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: { source: '^Contact$', flags: '' }, matches: true },
+  { why: 'and is still static text', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'text', name: 'Contact', matches: true },
+  { why: 'the selected rail destination, a generic view, is a tab', platform: 'ios', type: I.other, label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and no menuitem by its name', platform: 'ios', type: I.other, label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'menuitem', name: 'Contact', matches: false },
+  { why: 'a Flutter NavigationBar destination is a tab', platform: 'ios', type: I.button, traits: ['button'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and still a button, by a part of its label', platform: 'ios', type: I.button, traits: ['button'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: 'Contact', matches: true },
+  { why: 'its label alone names it only as a tab, so an exact button name stays another button\'s', platform: 'ios', type: I.button, traits: ['button'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: 'Contact', exact: true, matches: false },
+  { why: 'and so does an anchored RegExp', platform: 'ios', type: I.button, traits: ['button'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: { source: '^Contact$', flags: '' }, matches: false },
+  { why: 'nor is static text named by it', platform: 'ios', type: I.text, traits: ['staticText'], label: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'text', name: 'Contact', exact: true, matches: false },
+  { why: 'an unlabelled Flutter tab is a tab named nothing', platform: 'ios', type: I.other, label: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', matches: true },
+  { why: 'and no label to match', platform: 'ios', type: I.other, label: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', name: 'Home', matches: false },
+  { why: 'a label without the position is no tab', platform: 'ios', type: I.text, traits: ['staticText'], label: 'Contact', reportedRole: 'text', role: 'tab', matches: false },
+
+  // ─── A Flutter tab: "<label>\nTab <i> of <n>" and no role (NavigationBar, NavigationRail, TabBar) ───
+  { why: 'a Flutter NavigationRail destination is a tab', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', matches: true },
+  { why: 'named by its label', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'contact', matches: true },
+  { why: 'exact compares the label without the position', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and still by its whole description, as before', platform: 'android', type: A.button, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: FLUTTER_TAB, exact: true, matches: true },
+  { why: 'or a part of it', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Tab 2', matches: true },
+  { why: 'exact does not match a part of the position', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Tab 2 of 3', exact: true, matches: false },
+  { why: 'a RegExp tests the label', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: { source: '^Contact$', flags: '' }, matches: true },
+  { why: 'not another tab\'s label', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Posts', matches: false },
+  { why: 'a NavigationRail destination is no button', platform: 'android', type: A.view, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', matches: false },
+  { why: 'a Flutter NavigationBar destination is a tab', platform: 'android', type: A.button, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'tab', name: 'Contact', exact: true, matches: true },
+  { why: 'and still a button, by a part of its description', platform: 'android', type: A.button, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: 'Contact', matches: true },
+  { why: 'its label alone names it only as a tab, so an exact button name stays another button\'s', platform: 'android', type: A.button, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: 'Contact', exact: true, matches: false },
+  { why: 'and so does an anchored RegExp', platform: 'android', type: A.button, contentDesc: FLUTTER_TAB, reportedRole: 'tab', tabName: 'Contact', role: 'button', name: { source: '^Contact$', flags: '' }, matches: false },
+  { why: 'an unlabelled Flutter tab is a tab named nothing', platform: 'android', type: A.view, contentDesc: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', matches: true },
+  { why: 'and no label to match', platform: 'android', type: A.view, contentDesc: 'Tab 1 of 3', reportedRole: 'tab', tabName: '', role: 'tab', name: 'Home', matches: false },
+  { why: 'a description without the position is no tab', platform: 'android', type: A.view, contentDesc: 'Contact', role: 'tab', matches: false },
+
   // ─── listitem: a list's row, not every layout ───
   { why: 'a RecyclerView\'s row is a listitem', platform: 'android', type: A.linearLayout, role: 'listitem', parentType: A.recyclerView, matches: true },
   { why: 'a ListView\'s row is a listitem', platform: 'android', type: A.relativeLayout, role: 'listitem', parentType: A.listView, childTexts: ['Full black'], name: 'Full black', matches: true },
@@ -367,6 +414,7 @@ function nodeFor(c: Case): HierarchyNode {
   if (c.reportedRole !== undefined) attrs['tapsmith-role'] = c.reportedRole;
   if (c.rowName !== undefined) attrs['tapsmith-name'] = c.rowName;
   if (c.rowLabel !== undefined) attrs['tapsmith-label'] = c.rowLabel;
+  if (c.tabName !== undefined) attrs['tapsmith-name'] = c.tabName;
   const children = (c.childTexts ?? []).map((text): HierarchyNode => ({
     tagName: 'node',
     attributes: new Map(Object.entries({ class: 'android.widget.TextView', text, 'resource-id': '' })),
@@ -426,7 +474,9 @@ describe('getByRole conformance (PILOT-834, PILOT-707)', () => {
   it('every case says what the element\'s dump reports', () => {
     // An iOS element always reports a role or none; the replays check which.
     for (const c of CASES) {
-      if (c.platform === 'android') expect(c.reportedRole === undefined, c.why).toBe(c.roleDescription === undefined && !c.heading);
+      if (c.platform === 'android') {
+        expect(c.reportedRole === undefined, c.why).toBe(c.roleDescription === undefined && !c.heading && c.tabName === undefined);
+      }
     }
   });
 

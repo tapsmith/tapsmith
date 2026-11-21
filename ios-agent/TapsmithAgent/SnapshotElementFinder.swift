@@ -436,7 +436,7 @@ class SnapshotElementFinder {
             let isTabBarHost = BarHost.isMarkedTabBarHost(nodeDict)
             let role = RoleMapping.resolveRole(
                 for: elType, traits: traits, inTabBar: inTabBar, isEmptyBarHost: isEmptyBarHost,
-                isTabBarHost: isTabBarHost
+                isTabBarHost: isTabBarHost, label: label
             )
             let isEnabled = nodeDict["enabled"] as? Bool ?? true
             let value = nodeDict["value"] as? String
@@ -1852,7 +1852,8 @@ class SnapshotElementFinder {
                 inTabBar: inTabBar,
                 inAlert: inAlert,
                 isEmptyBarHost: node[BarHost.emptyHostKey] as? Bool ?? false,
-                isTabBarHost: BarHost.isMarkedTabBarHost(node)
+                isTabBarHost: BarHost.isMarkedTabBarHost(node),
+                label: label
             ) {
                 return false
             }
@@ -1865,7 +1866,7 @@ class SnapshotElementFinder {
             if let name = selector.name {
                 if !RoleName.matches(
                     elementType: elType, label: label, title: title, placeholder: placeholderValue,
-                    identifier: identifier, name: name, exact: selector.nameExact
+                    identifier: identifier, name: name, exact: selector.nameExact, tabQuery: RoleMapping.normalize(role) == "tab"
                 ) {
                     return false
                 }
@@ -1873,7 +1874,7 @@ class SnapshotElementFinder {
                 // A RegExp tests the whitespace-normalized name (PILOT-520).
                 if !RoleName.matches(
                     elementType: elType, label: label, title: title, placeholder: placeholderValue,
-                    identifier: identifier, regex: nameRegex
+                    identifier: identifier, regex: nameRegex, tabQuery: RoleMapping.normalize(role) == "tab"
                 ) {
                     return false
                 }
