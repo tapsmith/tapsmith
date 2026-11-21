@@ -104,18 +104,39 @@ internal object FindRules {
      * its own (an RN ReactViewGroup wrapping its label) reports its joined
      * [descendantText]; an EditText showing its placeholder reports none
      * (PILOT-133 — UIAutomator surfaces the hint as the text of an empty
-     * field). Each lambda is read only on the branch that needs it.
+     * field). A text field ([isEditText]) with no text of its own reports
+     * none either: its text is its typed value, and an empty Compose
+     * TextField's children are its label and placeholder, not a value
+     * (PILOT-1365). Each lambda is read only on the branch that needs it.
      */
     fun effectiveText(
         rawText: String?,
+        isEditText: Boolean,
         isShowingHint: () -> Boolean,
         descendantText: () -> String,
     ): String? =
         when {
-            rawText.isNullOrEmpty() -> descendantText().ifEmpty { null }
+            rawText.isNullOrEmpty() -> if (isEditText) null else descendantText().ifEmpty { null }
             isShowingHint() -> null
             else -> rawText
         }
+
+    /**
+     * The hint a query reports for an element: its own [nativeHint], or —
+     * for a text field ([isEditText]) with none — its joined
+     * [descendantText]. A Compose TextField publishes no hint; its label and
+     * placeholder are child text nodes, which name the field as a native
+     * TextInputLayout's hint does (PILOT-1365). [descendantText] is read only
+     * for a text field with no hint of its own.
+     */
+    fun fieldHint(
+        nativeHint: String?,
+        isEditText: Boolean,
+        descendantText: () -> String,
+    ): String? {
+        if (!nativeHint.isNullOrEmpty() || !isEditText) return nativeHint
+        return descendantText().ifEmpty { nativeHint }
+    }
 
     /**
      * The text of [node]'s descendants, in tree order: each child gives its

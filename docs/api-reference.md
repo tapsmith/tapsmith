@@ -1660,7 +1660,7 @@ await expect(device.getByText("Loading...", { exact: true })).toBeHidden();
 
 #### `.toBeEmpty(options?): Promise<void>`
 
-Assert that the element has no text content or is an empty input field. The agents normalize text-input fields so a placeholder/hint is not reported as text — `toBeEmpty()` after `clear()` passes even when the placeholder is still drawn.
+Assert that the element has no text content or is an empty input field. The agents normalize text-input fields so a placeholder/hint is not reported as text — `toBeEmpty()` after `clear()` passes even when the placeholder is still drawn. A Jetpack Compose text field, which draws its `label` and `placeholder` as text inside the field, is empty until something is typed into it.
 
 > **Android API < 26 limitation.** The precise placeholder-vs-value distinction uses `AccessibilityNodeInfo.isShowingHintText()` and `getHintText()`, both of which are only available from API 26 (Android 8.0). On API 24–25 we cannot tell whether a textfield is displaying its placeholder or a real typed value, so `toBeEmpty()` after `clear()` may incorrectly report the field as non-empty (it sees the placeholder text). Bump `minSdk` to 26 if your tests rely on this behavior. iOS is unaffected.
 
@@ -1715,7 +1715,7 @@ With an array, the locator may match several elements: each item must match one 
 
 A RegExp is tested afresh on every poll, so a `g` flag can't make it skip a match. Any expected value other than a string, a RegExp or an array of them throws a `TypeError` at once. The string forms compare the text as it is (no whitespace normalization).
 
-When the matched element has no own text (e.g. a wrapping `View` around `<Text>` children, common in React Native), the agents aggregate descendant text/labels so the assertion sees the visible string. On iOS that applies to generic containers and to list rows (a UIKit `UITableViewCell`, whose text is a child label); a row's built-in accessory indicator (its disclosure chevron or checkmark) is not part of its text.
+When the matched element has no own text (e.g. a wrapping `View` around `<Text>` children, common in React Native), the agents aggregate descendant text/labels so the assertion sees the visible string. On iOS that applies to generic containers and to list rows (a UIKit `UITableViewCell`, whose text is a child label); a row's built-in accessory indicator (its disclosure chevron or checkmark) is not part of its text. A text field never takes its children's text: on Android a Jetpack Compose `TextField` draws its label and placeholder as children, which are its hint, not its text ([Jetpack Compose](locators.md#jetpack-compose)).
 
 ```typescript
 await expect(device.getByTestId("status")).toContainText("Success");
@@ -1742,7 +1742,7 @@ await expect(device.getByText("Item", { exact: true })).toHaveAttribute("classNa
 
 #### `.toHaveAccessibleName(name: string | RegExp, options?): Promise<void>`
 
-Assert that the element has the given accessible name: its content description (iOS: accessibility label) if set; otherwise, for a text field, its placeholder (a field's text is its typed value, not its name); otherwise its text. An iOS list row (`XCUIElementTypeCell`) is the exception: its text is joined from what it contains, so with no label of its own it has no name, as `getByRole("listitem", { name })` sees it. An Android switch or checkbox that `getByRole` names by its row ([Settings rows](locators.md#settings-rows)) has no name of its own here: assert it with `toHaveCount(1)` on `getByRole("switch", { name })` instead. A Flutter navigation destination's name here is its whole description, position included (`"Contact\nTab 2 of 3"`): match its label with a RegExp such as `/^Contact\b/`, or assert `toHaveCount(1)` on `getByRole("tab", { name: "Contact", exact: true })`.
+Assert that the element has the given accessible name: its content description (iOS: accessibility label) if set; otherwise, for a text field, its placeholder (a field's text is its typed value, not its name), which for an Android Jetpack Compose field is all the text it draws, joined, as under [`toHaveAccessibleDescription`](#tohaveaccessibledescriptiondescription-string--regexp-options-promisevoid); otherwise its text. An iOS list row (`XCUIElementTypeCell`) is the exception: its text is joined from what it contains, so with no label of its own it has no name, as `getByRole("listitem", { name })` sees it. An Android switch or checkbox that `getByRole` names by its row ([Settings rows](locators.md#settings-rows)) has no name of its own here: assert it with `toHaveCount(1)` on `getByRole("switch", { name })` instead. A Flutter navigation destination's name here is its whole description, position included (`"Contact\nTab 2 of 3"`): match its label with a RegExp such as `/^Contact\b/`, or assert `toHaveCount(1)` on `getByRole("tab", { name: "Contact", exact: true })`.
 
 ```typescript
 await expect(device.getByRole("button")).toHaveAccessibleName("Submit form");
@@ -1751,7 +1751,7 @@ await expect(device.getByRole("image")).toHaveAccessibleName(/Profile/);
 
 #### `.toHaveAccessibleDescription(description: string | RegExp, options?): Promise<void>`
 
-Assert that the element has the given accessible description. On Android, this maps to the `hint` property.
+Assert that the element has the given accessible description. On Android, this maps to the `hint` property. A Jetpack Compose text field publishes no hint, so its hint is the text it draws inside itself, joined with spaces: its `label` and `placeholder`, and also any icon's `contentDescription`, `prefix`, `suffix` and `supportingText` (`"Email Required"` for a field with `supportingText = { Text("Required") }`), the same text `getByRole("textfield", { name, exact: true })` names it by. Match part of it with a RegExp (`toHaveAccessibleDescription(/Email/)`), or find the field with `getByLabel("Email")`, which matches the label alone.
 
 ```typescript
 await expect(device.getByRole("image")).toHaveAccessibleDescription("Profile photo");
