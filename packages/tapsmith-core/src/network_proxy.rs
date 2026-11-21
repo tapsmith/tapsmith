@@ -3573,8 +3573,15 @@ async fn handle_http(
     let mut was_continued = false;
     let mut hostname_owned = host.split(':').next().unwrap_or(&host).to_string();
 
-    // Check handler for route interception before forwarding upstream.
-    let handler = state.lock().await.handler.clone();
+    // Check handler for route interception before forwarding upstream. A
+    // WebSocket handshake skips routes, as on the transparent paths
+    // (`handler_for`, PILOT-246).
+    let upgrade = is_upgrade_request(&req_headers);
+    let handler = if upgrade {
+        None
+    } else {
+        state.lock().await.handler.clone()
+    };
     if let Some(h) = handler.as_ref() {
         let mut parsed_req = ParsedRequest {
             method: effective_method.clone(),
@@ -3704,15 +3711,16 @@ async fn handle_http(
         if lower == "proxy-connection" {
             continue;
         }
-        // Force Connection: close to simplify response reading
-        if lower == "connection" {
+        // Force Connection: close to simplify response reading — except on
+        // a protocol upgrade, whose `Connection: Upgrade` the server needs.
+        if lower == "connection" && !upgrade {
             has_connection = true;
             upstream_request.push_str("Connection: close\r\n");
             continue;
         }
         upstream_request.push_str(&format!("{key}: {value}\r\n"));
     }
-    if !has_connection {
+    if !has_connection && !upgrade {
         upstream_request.push_str("Connection: close\r\n");
     }
     upstream_request.push_str("\r\n");
@@ -3773,6 +3781,41 @@ async fn handle_http(
         return;
     }
     if !request_body.is_empty() && upstream.write_all(&request_body).await.is_err() {
+        return;
+    }
+
+    if upgrade {
+        // After a 101 the connection is no longer HTTP: tunnel it (PILOT-246).
+        let resp = match read_response(&mut upstream, &host).await {
+            ReadOutcome::Ok(r) => r,
+            ReadOutcome::ConnectionClosed | ReadOutcome::Error => return,
+        };
+        if client.write_all(&resp.raw_bytes).await.is_err() {
+            return;
+        }
+        let req = ParsedRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            headers: req_headers,
+            body: request_body,
+            raw_bytes: Vec::new(),
+            override_host: None,
+        };
+        if resp.status_code == 101 {
+            tunnel_upgraded(
+                &mut client,
+                &mut upstream,
+                &state,
+                &req,
+                &resp,
+                &host,
+                false,
+                start,
+            )
+            .await;
+        } else {
+            record_entry(&state, &req, &resp, &host, false, start, "").await;
+        }
         return;
     }
 
@@ -8831,6 +8874,78 @@ Connection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\
         assert!(entries[0].is_https);
         assert_eq!(entries[0].request_size, WS_CLIENT_FRAME.len() as u64);
         assert_eq!(entries[0].response_size, WS_SERVER_FRAME.len() as u64);
+    }
+
+    /// The forward-proxy path (Android's `http_proxy` fallback when iptables
+    /// is unavailable): OkHttp sends a `ws://` handshake through an HTTP proxy
+    /// in absolute form. It must keep its `Connection: Upgrade`, skip routes,
+    /// and become a tunnel after the 101 like the transparent paths.
+    #[tokio::test]
+    async fn websocket_upgrade_is_tunnelled_on_the_forward_proxy_path() {
+        use tokio::io::AsyncWriteExt;
+
+        let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin_port = origin.local_addr().unwrap().port();
+        let origin_task = tokio::spawn(async move {
+            let (mut tcp, _) = origin.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0u8; 1];
+                tcp.read_exact(&mut byte).await.unwrap();
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8(head).unwrap();
+            tcp.write_all(WS_101).await.unwrap();
+            let frame = read_exactly(&mut tcp, WS_CLIENT_FRAME.len(), "origin frame").await;
+            assert_eq!(frame, WS_CLIENT_FRAME);
+            tcp.write_all(WS_SERVER_FRAME).await.unwrap();
+            head
+        });
+
+        let handler = Arc::new(CountingAbortHandler::default());
+        let state = proxy_state_with_handler(handler.clone());
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = proxy_listener.local_addr().unwrap();
+        let target = format!("http://127.0.0.1:{origin_port}/chat");
+        let request = format!(
+            "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{origin_port}\r\n\
+             Upgrade: websocket\r\nConnection: Upgrade\r\nProxy-Connection: keep-alive\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        );
+        let proxy_state = state.clone();
+        let proxy_request = request.clone();
+        let proxy = tokio::spawn(async move {
+            let (tcp, _) = proxy_listener.accept().await.unwrap();
+            handle_http(tcp, "GET", &target, proxy_request.as_bytes(), proxy_state).await;
+        });
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+        assert_eq!(read_exactly(&mut client, WS_101.len(), "101").await, WS_101);
+        client.write_all(WS_CLIENT_FRAME).await.unwrap();
+        assert_eq!(
+            read_exactly(&mut client, WS_SERVER_FRAME.len(), "server frame").await,
+            WS_SERVER_FRAME
+        );
+        let head = origin_task.await.unwrap();
+        assert!(
+            head.contains("Connection: Upgrade\r\n") && !head.contains("Connection: close"),
+            "the handshake must keep its Connection: Upgrade: {head}"
+        );
+        assert!(!head.to_ascii_lowercase().contains("proxy-connection"));
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(5), proxy)
+            .await
+            .expect("the tunnel must end once both sides close")
+            .unwrap();
+
+        let entries = state.lock().await.drain_entries();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].url, format!("ws://127.0.0.1:{origin_port}/chat"));
+        assert_eq!(entries[0].status_code, 101);
+        assert!(!entries[0].in_flight);
+        assert_eq!(entries[0].request_size, WS_CLIENT_FRAME.len() as u64);
+        assert_eq!(entries[0].response_size, WS_SERVER_FRAME.len() as u64);
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

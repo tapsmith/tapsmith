@@ -881,7 +881,7 @@ Because passthrough connections are never decrypted, `device.route()`, `device.w
 
 ### WebSockets
 
-WebSockets keep working while capture is on. The proxy forwards the opening handshake untouched, and once the server answers `101 Switching Protocols` it passes the connection's bytes through in both directions until either side closes. This applies to `ws://` (including ports added with `networkHttpPorts` on Android) and to `wss://` on Android and iOS. Idle sockets are never timed out by the proxy.
+WebSockets keep working while capture is on. The proxy forwards the opening handshake untouched, and once the server answers `101 Switching Protocols` it passes the connection's bytes through in both directions until either side closes. This applies to `ws://` (including ports added with `networkHttpPorts` on Android) and to `wss://` on Android and iOS. Idle sockets are never timed out by the proxy. One case is not covered yet: a client that opens a plain `ws://` socket through an HTTP proxy `CONNECT` tunnel, which a physical iOS device (captured through its Wi-Fi proxy) may do. `wss://` is not affected.
 
 Each WebSocket appears in the Network tab as one `GET` row with a `ws://` or `wss://` URL and status `101`. While the socket is open the row is marked **Streaming** and shows the bytes sent each way so far. Once it closes, its duration covers the whole connection. Frames are not decoded: the row has the handshake's headers but no body.
 
