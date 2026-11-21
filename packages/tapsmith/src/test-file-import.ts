@@ -16,9 +16,9 @@
  * plain CommonJS `.js` file, is cached there by path and a new URL alone does
  * not re-evaluate it. Only the test file itself is re-evaluated; the modules
  * it imports stay cached for the life of the process (UI mode recycles its
- * workers for fresh helper code). So tests a helper registers at its top level
- * register only once: a re-import of an unchanged file that registers fewer
- * tests than before fails the file, saying why, rather than pass without them.
+ * workers for fresh helper code). So tests a helper declares at its top level
+ * register only once: a re-import of an unchanged file that loses them fails
+ * the file, saying why, rather than pass without them.
  */
 
 import * as fs from 'node:fs';
@@ -29,6 +29,8 @@ import { fileURLToPath } from 'node:url';
 interface ImportRecord {
   /** How many tests the file registered the last time it was imported. */
   tests: number
+  /** The modules it imports that declared some of those tests (real paths). */
+  declaringModules: string[]
   /** The file's mtime at that import, when it could be read. */
   mtimeMs: number | undefined
 }
@@ -86,55 +88,74 @@ function forgetCommonJsModule(filePath: string, file: string): void {
 export interface TestFileImport {
   url: string
   /**
-   * Record how many tests the import registered. Throws when the file is
-   * unchanged on disk since this process last loaded it and registered fewer
-   * tests this time: the tests it lost cannot run, and the project would
-   * pass without them.
+   * After the first import of a file in this process registered `tests`: a
+   * fresh URL to import it again from when that was none. Another test file
+   * may have imported this one already — Node then hands back that module,
+   * evaluated under the other file — so an empty result is checked once.
    */
-  registered(tests: number): void
+  reloadUrl(tests: number): string | undefined
+  /**
+   * Record the tests the import registered, by the file that declared each.
+   * Throws when the file is unchanged since this process last loaded it and
+   * tests it registered then cannot register again: a project would pass
+   * without them.
+   */
+  registered(declaredIn: ReadonlyArray<string | undefined>): void
+}
+
+function freshUrl(filePath: string, file: string): string {
+  forgetCommonJsModule(filePath, file);
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return `${filePath}?${TEST_FILE_IMPORT_QUERY}=${lastStamp}`;
 }
 
 /** Start importing a test file (`filePath` is a path or a `file:` URL). */
 export function beginTestFileImport(filePath: string): TestFileImport {
   const file = diskPath(filePath);
   const previous = imports.get(file);
-  let url = filePath;
-  if (previous) {
-    forgetCommonJsModule(filePath, file);
-    lastStamp = Math.max(Date.now(), lastStamp + 1);
-    url = `${filePath}?${TEST_FILE_IMPORT_QUERY}=${lastStamp}`;
-  }
+  const url = previous ? freshUrl(filePath, file) : filePath;
   // Recorded before the import resolves: a file whose import throws is
   // still in Node's cache, and must be re-imported fresh next time too.
   const mtimeMs = mtimeOf(file);
-  imports.set(file, { tests: previous?.tests ?? 0, mtimeMs });
+  imports.set(file, { tests: previous?.tests ?? 0, declaringModules: previous?.declaringModules ?? [], mtimeMs });
   return {
     url,
-    registered(tests: number): void {
-      const lost = previous !== undefined
-        && tests < previous.tests
-        && previous.mtimeMs !== undefined
-        && previous.mtimeMs === mtimeMs;
-      if (!lost) {
-        imports.set(file, { tests, mtimeMs });
-        return;
+    reloadUrl(tests: number): string | undefined {
+      return previous === undefined && tests === 0 ? freshUrl(filePath, file) : undefined;
+    },
+    registered(declaredIn: ReadonlyArray<string | undefined>): void {
+      const tests = declaredIn.length;
+      const declaringModules = [...new Set(declaredIn.flatMap((d) => {
+        const real = d === undefined ? undefined : diskPath(d);
+        return real === undefined || real === file ? [] : [real];
+      }))];
+      const unchanged = previous !== undefined && previous.mtimeMs !== undefined && previous.mtimeMs === mtimeMs;
+      if (unchanged) {
+        // The modules a test file imports load once per process, so tests
+        // they declare at their top level do not register again.
+        const lostModules = previous.declaringModules.filter((m) => !declaringModules.includes(m));
+        // The record keeps the earlier import's, so the next import of the
+        // unchanged file is held to it too, not to this short one.
+        if (lostModules.length > 0) throw new Error(lostModuleTestsMessage(path.basename(file), lostModules));
+        if (tests === 0 && previous.tests > 0) throw new Error(staleImportMessage(path.basename(file), previous.tests));
       }
-      // The record keeps the earlier count, so the next import of the
-      // unchanged file is held to it too, not to this short one.
-      throw new Error(lostTestsMessage(path.basename(file), tests, previous.tests));
+      imports.set(file, { tests, declaringModules, mtimeMs });
     },
   };
 }
 
-function lostTestsMessage(name: string, tests: number, before: number): string {
-  const head = `${name} registered ${tests === 0 ? 'no tests' : `${tests} of its ${before} tests`} on this run, `
-    + `but ${before} when this process loaded it before, and the file has not changed since. `
-    + 'Tapsmith loads a test file again for each project, retry and rerun that runs it in one process, '
-    + `but ${tests === 0 ? 'none' : 'the rest'} of its tests did not register again:`;
-  const helper = 'test() calls at the top level of a module the test file imports register only the first '
-    + 'time that module loads. Move them into the test file, or into a function the test file calls.';
-  if (tests > 0) return `${head} ${helper}`;
-  return `${head}\n  - ${helper}\n  - A custom loader (--import / --loader) or bundler may have returned the `
-    + 'cached copy of the file: check that it loads a module again for a new URL query.\n'
-    + 'Running each project in its own `tapsmith test --project <name>` invocation avoids both.';
+function lostModuleTestsMessage(name: string, modules: string[]): string {
+  const names = modules.map((m) => path.basename(m)).join(', ');
+  return `${name} imports ${names}, which declares tests at its top level. A module loads once per `
+    + `process, so those tests registered only the first time ${name} ran here, and this run `
+    + '(another project, a retry or a rerun of the file) could not register them again. '
+    + `Declare the tests in a function that ${name} calls, or move them into ${name}.`;
+}
+
+function staleImportMessage(name: string, before: number): string {
+  return `${name} registered no tests on this run, but ${before} when this process loaded it before, `
+    + 'and the file has not changed since. The module loader returned the earlier, cached copy of the '
+    + 'file instead of loading it again, so none of its tests could run. If a custom loader '
+    + '(--import / --loader) or a bundler runs your tests, check that it loads a module again for a '
+    + 'new URL query, or run each project in its own `tapsmith test --project <name>` invocation.';
 }

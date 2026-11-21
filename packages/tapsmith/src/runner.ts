@@ -667,6 +667,8 @@ interface TestEntry {
   only: boolean;
   skip: boolean;
   registry?: FixtureRegistry;
+  /** The file whose code declared the test: the test file, or a module it imports. */
+  declaredIn?: string;
 }
 
 interface HookEntry {
@@ -855,9 +857,12 @@ function collectFixtureRegistries(ctx: SuiteContext, registries: Set<FixtureRegi
   }
 }
 
-/** Every test a file registered, in every describe (each already materialized). */
-function countRegisteredTests(ctx: SuiteContext): number {
-  return ctx.tests.length + ctx.suites.reduce((n, suite) => n + countRegisteredTests(materializeSuiteEntry(suite)), 0);
+/** Where each test a file registered was declared, in every describe (each already materialized). */
+function registeredTestFiles(ctx: SuiteContext): Array<string | undefined> {
+  return [
+    ...ctx.tests.map((t) => t.declaredIn),
+    ...ctx.suites.flatMap((suite) => registeredTestFiles(materializeSuiteEntry(suite))),
+  ];
 }
 
 // ─── Public registration API ───
@@ -1030,17 +1035,17 @@ function createTestFn<F extends object = TestFixtures>(registry: FixtureRegistry
   const fn = Object.assign(
     (name: string, testFn: TestCallback) => {
       syncRegistry();
-      currentContext().tests.push({ name, fn: testFn, only: false, skip: false, registry });
+      currentContext().tests.push({ name, fn: testFn, only: false, skip: false, registry, declaredIn: hookLocation()?.file });
     },
     {
       only: (name: string, testFn: TestCallback) => {
         syncRegistry();
-        currentContext().tests.push({ name, fn: testFn, only: true, skip: false, registry });
+        currentContext().tests.push({ name, fn: testFn, only: true, skip: false, registry, declaredIn: hookLocation()?.file });
       },
       skip: (...args: unknown[]) => {
         if (typeof args[0] === 'string' && typeof args[1] === 'function') {
           syncRegistry();
-          currentContext().tests.push({ name: args[0], fn: args[1] as TestCallback, only: false, skip: true, registry });
+          currentContext().tests.push({ name: args[0], fn: args[1] as TestCallback, only: false, skip: true, registry, declaredIn: hookLocation()?.file });
           return;
         }
         applySkipModifier(args);
@@ -4180,17 +4185,31 @@ async function runTestFileOwned(
   // Build a merged registry from all per-test/hook registries in the file.
   // Using getFixtureRegistry() (the mutable global) would only reflect the
   // last syncRegistry() call, missing worker fixtures from earlier extends.
-  const allEntryRegistries = new Set<FixtureRegistry>();
-  asyncDescribeBodies = [];
-  try {
-    await import(fileImport.url);
-    rootCtx = popContext();
+  let allEntryRegistries: Set<FixtureRegistry>;
+  const load = async (url: string): Promise<{ ctx: SuiteContext; registries: Set<FixtureRegistry> }> => {
+    asyncDescribeBodies = [];
+    const registries = new Set<FixtureRegistry>();
+    await import(url);
+    const ctx = popContext();
     // Walking the registries runs every describe() callback, which is where
     // most of a file's registration happens — so a throw there is as much a
     // load error as one at the top level, and is caught here too.
-    collectFixtureRegistries(rootCtx, allEntryRegistries);
+    collectFixtureRegistries(ctx, registries);
     await settleAsyncDescribes();
-    fileImport.registered(countRegisteredTests(rootCtx));
+    return { ctx, registries };
+  };
+  try {
+    let loaded = await load(fileImport.url);
+    const again = fileImport.reloadUrl(registeredTestFiles(loaded.ctx).length);
+    if (again) {
+      setContextStack([]);
+      setActiveFixtureRegistry(new FixtureRegistry());
+      pushContext();
+      loaded = await load(again);
+    }
+    rootCtx = loaded.ctx;
+    allEntryRegistries = loaded.registries;
+    fileImport.registered(registeredTestFiles(rootCtx));
   } catch (err) {
     // A file that cannot load fails on its own; the run carries on with the
     // rest (PILOT-545). Whatever it registered before throwing is discarded —
@@ -4479,13 +4498,24 @@ export async function discoverTestFile(filePath: string): Promise<DiscoveredSuit
   // A re-discovery in a persistent process (UI workers) imports the file
   // fresh, so it picks up edits instead of the cached module (PILOT-953).
   const fileImport = beginTestFileImport(filePath);
-  asyncDescribeBodies = [];
-  await import(fileImport.url);
-
-  const rootCtx = popContext();
-  const discovered = discoverSuiteContext(rootCtx, '', undefined);
-  await settleAsyncDescribes();
-  fileImport.registered(countRegisteredTests(rootCtx));
+  const load = async (url: string): Promise<{ rootCtx: SuiteContext; discovered: DiscoveredSuite; declared: Array<string | undefined> }> => {
+    asyncDescribeBodies = [];
+    await import(url);
+    const rootCtx = popContext();
+    const discovered = discoverSuiteContext(rootCtx, '', undefined);
+    await settleAsyncDescribes();
+    return { rootCtx, discovered, declared: registeredTestFiles(rootCtx) };
+  };
+  let loaded = await load(fileImport.url);
+  const again = fileImport.reloadUrl(loaded.declared.length);
+  if (again) {
+    setContextStack([]);
+    setActiveFixtureRegistry(new FixtureRegistry());
+    pushContext();
+    loaded = await load(again);
+  }
+  fileImport.registered(loaded.declared);
+  const { rootCtx, discovered } = loaded;
   return holdsFocus(rootCtx) ? { ...discovered, focused: true } : discovered;
 }
 

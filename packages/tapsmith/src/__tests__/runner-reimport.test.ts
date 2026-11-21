@@ -152,8 +152,37 @@ describe('runTestFile — the same file run again in one process (PILOT-953)', (
     expect(rest).toEqual([]);
     expect(result).toMatchObject({ status: 'failed', fileLevelFailure: true, project: 'two' });
     expect(result.error?.message).toMatch(
-      /uses-shared\.test\.mjs registered 1 of its 3 tests on this run[\s\S]*top level of a module the test file imports/,
+      /uses-shared\.test\.mjs imports shared-suite\.mjs, which declares tests at its top level/,
     );
+  });
+
+  it('runs a test file that another test file imported first', async () => {
+    const imported = writeTestFile('imported.test.mjs', `
+      import { test } from ${JSON.stringify(runnerUrl)};
+      export const users = ['alice'];
+      test('imported own', async () => {});
+    `);
+    const importer = writeTestFile('importer.test.mjs', `
+      import { test } from ${JSON.stringify(runnerUrl)};
+      import { users } from './imported.test.mjs';
+      test('importer own ' + users.length, async () => {});
+    `);
+    await runTestFile(importer, makeOpts());
+    const suite = await runTestFile(imported, makeOpts());
+    expect(collectResults(suite).map((r) => r.fullName)).toEqual(['imported own']);
+  });
+
+  it('discovers a test file that another test file imported first', async () => {
+    const imported = writeTestFile('imported-d.test.mjs', `
+      import { test } from ${JSON.stringify(runnerUrl)};
+      test('only here', async () => {});
+    `);
+    const importer = writeTestFile('importer-d.test.mjs', `
+      import './imported-d.test.mjs';
+    `);
+    await discoverTestFile(importer);
+    const discovered = await discoverTestFile(imported);
+    expect(discovered.tests.map((t) => t.name)).toEqual(['only here']);
   });
 
   it('reports an emptied file as empty, not as a stale import', async () => {
