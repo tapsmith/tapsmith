@@ -193,15 +193,11 @@ describe('test.skip(condition) in a describe', () => {
       `test.describe('group', () => { test('two', async () => { throw new Error('ran'); }); });`,
     ].join('\n'));
     try {
-      // UI mode's discovery shows them as skipped too. (A copy: both calls
-      // cache-bust the import by timestamp, and within one millisecond the
-      // second would get a cached module that registers nothing.)
-      const copy = path.join(dir, 'skip-copy.test.mjs');
-      fs.copyFileSync(file, copy);
-      const discovered = await discoverTestFile(pathToFileURL(copy).href);
+      // UI mode's discovery shows them as skipped too.
+      const discovered = await discoverTestFile(pathToFileURL(file).href);
       const skips = (s: DiscoveredSuite): boolean[] => [...s.tests.map((t) => t.skip), ...s.suites.flatMap(skips)];
       expect(skips(discovered)).toEqual([true, true]);
-      const result = await runTestFile(pathToFileURL(file).href, makeOpts({ bustImportCache: true }));
+      const result = await runTestFile(pathToFileURL(file).href, makeOpts());
       expect(statuses(result)).toEqual({ one: 'skipped', 'group > two': 'skipped' });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -223,9 +219,9 @@ describe('test.skip(condition) in a describe', () => {
     };
     try {
       const unreachable = write('a.test.mjs', `test.skip(true, 'needs the CI backend');`, `throw new Error('backend unreachable');`);
-      expect(statuses(await runTestFile(unreachable, makeOpts({ bustImportCache: true })))).toEqual({ one: 'skipped' });
+      expect(statuses(await runTestFile(unreachable, makeOpts()))).toEqual({ one: 'skipped' });
       const skipsInFixture = write('b.test.mjs', '', `test.skip(true, 'no backend');`);
-      await expect(runTestFile(skipsInFixture, makeOpts({ bustImportCache: true })))
+      await expect(runTestFile(skipsInFixture, makeOpts()))
         .rejects.toThrow(/test\.skip\(\) isn't supported in a worker-scoped fixture yet/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

@@ -206,10 +206,10 @@ describe('runFilterForFile', () => {
 
 describe('loadErrorForReport', () => {
   it('strips the import cache-bust query tsx puts in a CommonJS require stack, so one error reads the same on every run', () => {
-    const err = errorWithStack("Cannot find module './nope'\nRequire stack:\n- /p/tests/b.test.ts?t=1791152071448");
+    const err = errorWithStack("Cannot find module './nope'\nRequire stack:\n- /p/tests/b.test.ts?tapsmithImport=1791152071448");
     const report = loadErrorForReport(err);
     expect(report.message).toBe("Cannot find module './nope'\nRequire stack:\n- /p/tests/b.test.ts");
-    expect(report.stack).not.toContain('?t=');
+    expect(report.stack).not.toContain('?tapsmithImport=');
   });
 
   it('returns a copy: the loader can re-throw the same error object for another import, which must not change', () => {

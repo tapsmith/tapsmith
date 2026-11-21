@@ -176,6 +176,42 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', { tim
     expect(names(reply.tree)).toContain('login > runs as cjs');
   });
 
+  // PILOT-953: two projects (or a retry, or a UI rerun) run the same file in
+  // one process. A CommonJS module is cached by path in require.cache, where a
+  // fresh import URL alone does not reach, so the second run registered nothing.
+  it('runs a CommonJS test file\'s tests every time one process runs it', () => {
+    linkPackage();
+    const tsx = resolveTsxBin(PKG_DIR);
+    expect(tsx, 'this checkout has no tsx — run `npm ci`').toBeDefined();
+    // Plain JavaScript in a CommonJS package, as an Appium-style suite writes it.
+    fs.writeFileSync(path.join(root, 'tests', 'plain.test.js'),
+      'const { test } = require("tapsmith");\n'
+      + 'test("plain js", async () => {});\n');
+    const script = `const { runTestFile, collectResults } = await import(${JSON.stringify(path.join(DIST_DIR, 'runner.js'))});\n`
+      + 'const config = { timeout: 30000, retries: 0, screenshot: "never", testMatch: [], daemonAddress: "localhost:50051", rootDir: process.cwd(), outputDir: "out", workers: 1, launchEmulators: false };\n'
+      + 'const out = [];\n'
+      + 'for (const projectName of ["one", "two", "three"]) {\n'
+      + '  for (const file of ["tests/login.test.ts", "tests/plain.test.js"]) {\n'
+      + '    const suite = await runTestFile(`${process.cwd()}/${file}`, { config, devices: [], resetCapabilities: {}, runMode: "test", networkApisInRun: false, projectName });\n'
+      + '    for (const r of collectResults(suite)) out.push(`${r.project}: ${r.fullName} ${r.status}`);\n'
+      + '  }\n'
+      + '}\n'
+      + 'process.stdout.write(JSON.stringify(out));\n';
+    fs.writeFileSync(path.join(root, 'run-twice.mjs'), script);
+    // Under tsx, as the CLI re-execs itself for TypeScript test files.
+    const result = spawnSync(tsx!, ['run-twice.mjs'], {
+      cwd: root,
+      encoding: 'utf-8',
+      timeout: 60_000,
+      env: { ...process.env, TAPSMITH_TELEMETRY: '0' },
+    });
+    if (result.status !== 0) throw new Error(`runTestFile failed:\n${result.stderr}`);
+    expect(JSON.parse(result.stdout)).toEqual(['one', 'two', 'three'].flatMap((p) => [
+      `${p}: login > runs as cjs passed`,
+      `${p}: plain js passed`,
+    ]));
+  });
+
   describe('a tapsmith.config.ts that imports tapsmith', () => {
     /** Loads the project's config the way the CLI does: the built loadConfig, in bare Node. */
     function loadConfigInBareNode(): { platform?: string; retries?: number } {
