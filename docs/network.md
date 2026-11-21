@@ -879,6 +879,19 @@ Patterns match against the TLS SNI hostname with the same glob syntax as `networ
 
 Because passthrough connections are never decrypted, `device.route()`, `device.waitForRequest()`, and `device.waitForResponse()` can never match traffic on them. If a mock for a host you've added to `networkPassthroughHosts` never fires, or a Firestore/pinned-host request only appears as `CONNECT passthrough`, this is why.
 
+### HTTP/3 (QUIC)
+
+HTTP/3 runs over UDP, where a MITM proxy cannot follow it. Many servers advertise it in an `alt-svc: h3=":443"` response header (Cloudflare, Google and Fastly-fronted APIs do), and clients built on Chromium's network stack — Android WebView (Capacitor, Ionic, Cordova, React Native WebView) and Cronet — switch their later requests to that host over to HTTP/3. Tapsmith therefore keeps HTTP/3 off while capture is active, so those clients stay on HTTP/1.1 or HTTP/2 over TCP, where requests are captured and `device.route()`, `waitForRequest()` and `waitForResponse()` see them:
+
+| Platform | How HTTP/3 is kept off |
+|---|---|
+| **Android, transparent redirect** | Outbound UDP to port 443 is rejected for every app on the device. The client's HTTP/3 attempt fails at once, so it falls back to TCP straight away, including for a host it learned supports HTTP/3 before the test started. Loopback (`127.0.0.1`) and every other UDP port, plain DNS (port 53) included, are untouched. |
+| **Android, HTTP proxy fallback** | Nothing to block: WebView does not use HTTP/3 for requests it sends through an HTTP proxy. |
+| **iOS simulator** | The Network Extension drops every UDP flow from the simulator's processes except DNS, so HTTP/3-capable clients fall back to TCP. |
+| **iOS physical** | Traffic reaches Tapsmith through the Wi-Fi HTTP proxy; HTTP/3 is not blocked separately. |
+
+Responses keep their `alt-svc` header: Tapsmith does not rewrite it, so what the app receives and what the trace shows is what the server sent. The rule on Android covers port 443 only: a server that advertises HTTP/3 on another port (`alt-svc: h3=":8443"`) is still reached over UDP, around the proxy. It is also IPv4-only, like the TCP redirect.
+
 ### WebSockets
 
 WebSockets keep working while capture is on. The proxy forwards the opening handshake untouched, and once the server answers `101 Switching Protocols` it passes the connection's bytes through in both directions until either side closes. This applies to `ws://` (including ports added with `networkHttpPorts` on Android) and to `wss://` on Android and iOS. Idle sockets are never timed out by the proxy. One case is not covered yet: a client that opens a plain `ws://` socket through an HTTP proxy `CONNECT` tunnel, which a physical iOS device (captured through its Wi-Fi proxy) may do. `wss://` is not affected.
