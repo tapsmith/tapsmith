@@ -20,7 +20,7 @@ func expect(_ name: String, _ ok: Bool) {
 let typesByName: [String: XCUIElement.ElementType] = {
     let types: [XCUIElement.ElementType] = [
         .staticText, .button, .switch, .toggle, .slider, .stepper, .textField, .secureTextField,
-        .textView, .searchField, .other, .alert, .cell, .link, .progressIndicator, .pickerWheel,
+        .textView, .searchField, .other, .alert, .cell, .link, .progressIndicator, .pickerWheel, .image,
     ]
     var map: [String: XCUIElement.ElementType] = [:]
     for type in types { map[RoleMapping.typeName(for: type)] = type }

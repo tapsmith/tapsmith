@@ -6,12 +6,13 @@
 // (trace-viewer/components/text-content.ts) and the strict-mode locator
 // suggestions share them.
 
-/** Controls whose label is their accessible name, not text on screen (getByLabel / getByRole find them). */
+/** Controls and images whose label is their accessible name, not text on screen (getByLabel / getByRole find them). An image's label is its alt text (PILOT-1366). */
 export const IOS_NAME_ONLY_TYPES: ReadonlySet<string> = new Set([
   'XCUIElementTypeSwitch',
   'XCUIElementTypeToggle',
   'XCUIElementTypeSlider',
   'XCUIElementTypeStepper',
+  'XCUIElementTypeImage',
 ]);
 
 /** Element types whose value is the text they show (a picker wheel's selected row is only its value). */
