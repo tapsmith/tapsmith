@@ -206,6 +206,24 @@ export class UIKitTableScreen {
   get selection() { return this.device.getByTestId("uikit-table-selection") }
 }
 
+/**
+ * A UIKit settings screen (`uikitsettings`): grouped rows with a UISwitch,
+ * which UIKit labels with the row's texts joined by ", " ("Wi-Fi, Join
+ * known networks"). Found by the row's title, as on Android.
+ */
+export class UIKitSettingsScreen {
+  constructor(private device: Device) {}
+
+  /** A row's switch by its title, the getByRole name. */
+  switch(title: string, options: { exact?: boolean } = {}) {
+    return this.device.getByRole("switch", { name: title, ...options })
+  }
+  /** A row's switch by its title, the getByLabel label. */
+  labelled(text: string) { return this.device.getByLabel(text) }
+  get switches() { return this.device.getByRole("switch") }
+  get status() { return this.device.getByTestId("uikit-settings-status") }
+}
+
 export class UIKitDialogsScreen {
   constructor(private device: Device) {}
 

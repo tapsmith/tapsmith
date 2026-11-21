@@ -46,9 +46,10 @@ if let data = FileManager.default.contents(atPath: fixturePath),
         }
         let label = c["label"] as? String ?? ""
         let title = c["title"] as? String ?? ""
+        let rowLabel = c["rowLabel"] as? String ?? ""
         let want = c["matches"] as? Bool ?? false
         if let query = c["query"] as? String {
-            let got = LabelMatch.matches(elementType: type, label: label, title: title, query: query)
+            let got = LabelMatch.matches(elementType: type, label: label, title: title, rowLabel: rowLabel, query: query)
             expect("string \(why)", got == want)
         } else if let query = c["query"] as? [String: Any] {
             let source = query["source"] as? String ?? ""
@@ -58,7 +59,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
                 ignoreCase: query["ignoreCase"] as? Bool ?? false,
                 display: "/\(source)/\(flags)"
             )
-            let got = LabelMatch.matches(elementType: type, label: label, title: title, regex: re)
+            let got = LabelMatch.matches(elementType: type, label: label, title: title, rowLabel: rowLabel, regex: re)
             expect("regex /\(source)/\(flags) \(why)", re.error == nil && got == want)
         } else {
             expect("\(why): has a query", false)

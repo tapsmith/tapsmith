@@ -125,17 +125,21 @@ function tryExactRoleNameUpgrade(
 }
 
 /**
- * The node's whole accessible name, as role-name matching reads it first. Not
- * an Android row name (`tapsmith-name`): it ends with the row's summary, which
- * a SwitchPreference changes when it is toggled, so pinning it exactly would
- * break right after a tap. An ambiguous row title is pinned by `getByLabel`
- * (the row's title alone) instead. A Flutter tab's is its label, without the
+ * The node's whole accessible name, as role-name matching reads it first —
+ * for an iOS settings row's switch its row's title (`tapsmith-label`), one
+ * part of its ", "-joined label that an exact name matches, so a pinned
+ * name never holds the row's subtitle. Not an Android row name
+ * (`tapsmith-name`): it ends with the row's summary, which a SwitchPreference
+ * changes when it is toggled, so pinning it exactly would break right after
+ * a tap. An ambiguous Android row title is pinned by `getByLabel` (the row's
+ * title alone) instead. A Flutter tab's is its label, without the
  * "Tab 2 of 3" Flutter appends (`tapsmith-name` with no `tapsmith-label`).
  */
 function fullAccessibleName(node: HierarchyNode): string {
   const tabName = node.attributes.has('tapsmith-label') ? undefined : node.attributes.get('tapsmith-name');
   if (tabName !== undefined) return tabName;
-  return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
+  const iosRowLabel = node.attributes.has('class') ? '' : node.attributes.get('tapsmith-label');
+  return iosRowLabel || node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
 }
 
 /** (b) Ambiguous getByRole without a name → try adding the accessible name. */

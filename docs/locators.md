@@ -162,17 +162,19 @@ Role names are case-insensitive. Any other role throws as soon as the locator is
 
 > **SwiftUI toggles:** iOS exposes a SwiftUI `Toggle` as a switch the size of its row, named by its label, with the switch's knob inside it as a second, unnamed switch. Tapsmith treats the pair as the one control it is: `getByRole("switch")` finds one switch per `Toggle`, named and checked like the row, and `tap()` and `setChecked()` touch the knob, since a `Toggle` in a `Form` ignores a touch on the rest of its row. A UIKit `UISwitch` is a single switch.
 
-#### Settings rows (androidx Preference)
+#### Settings rows
 
-A switch or checkbox with no text or description of its own, inside a clickable row, is named by that row, the way TalkBack reads it ("Full black, off, switch"). That is the shape of androidx's `SwitchPreferenceCompat`, `CheckBoxPreference` and their Material 3 versions: the row holds the title and summary, and the switch in its widget frame is neither clickable nor focusable. So on a settings screen:
+A switch in a settings row, a title with an optional subtitle or summary beside it, is found by the row's title on both platforms, the way VoiceOver and TalkBack read the row:
 
 ```typescript
-await device.getByRole("switch", { name: "Full black" }).tap()   // the row's title
-await expect(device.getByLabel("Full black")).toBeChecked()       // getByLabel: the title
-await expect(device.getByRole("listitem").filter({ hasText: "Full black" })).toHaveCount(1)  // the row
+await device.getByRole("switch", { name: "Wi-Fi" }).tap()   // a part of the name: the row's title
+await expect(device.getByLabel("Wi-Fi")).toBeChecked()       // getByLabel: the row's title
 ```
 
-The name is the row's content description if it has one, otherwise all of its text: the title and then the summary (`"Full black Use full black for the dark theme"`), as a web `<label>` around a checkbox names it with all of its text. The default substring match finds it by the title, and `exact: true` compares the whole name. `getByLabel` matches the row's description or its title alone, not the summary. A control that is clickable or focusable on its own is read on its own by TalkBack, so it gets no name from the row: give it a `contentDescription`, or find it through the row (`getByRole("listitem").filter({ hasText: "Sync now" }).getByRole("switch")`). A list or scroll view is not a row, and neither is another checkable control.
+`getByRole`'s default substring match finds the switch by its title, and `getByLabel` matches the title alone, never the subtitle or summary, which apps often change with the setting. The locator picker and the MCP snapshot suggest such a switch by its row's title. A switch with a label or description of its own is named and labelled by it alone. How each platform names the switch:
+
+- **iOS (UIKit):** UIKit labels a switch in a `UITableViewCell` with its row's texts joined by ", ": a row titled "Wi-Fi" with the subtitle "Join known networks" gives its switch the label `"Wi-Fi, Join known networks"`. That holds for a switch set as the cell's `accessoryView` and for one laid out in its content view. `exact: true` matches one whole part of that label (`{ name: "Wi-Fi", exact: true }`), and `getByLabel` matches the whole label or the row's title.
+- **Android (androidx Preference):** a switch or checkbox with no text or description of its own, inside a clickable row, is named by that row ("Full black, off, switch" in TalkBack). That is the shape of androidx's `SwitchPreferenceCompat`, `CheckBoxPreference` and their Material 3 versions: the row holds the title and summary, and the switch in its widget frame is neither clickable nor focusable. The name is the row's content description if it has one, otherwise all of its text: the title and then the summary (`"Full black Use full black for the dark theme"`), as a web `<label>` around a checkbox names it with all of its text. `exact: true` compares that whole name, and `getByLabel` matches the row's description or its title alone. The row itself is a `listitem` (`device.getByRole("listitem").filter({ hasText: "Full black" })`). A control that is clickable or focusable on its own is read on its own by TalkBack, so it gets no name from the row: give it a `contentDescription`, or find it through the row (`getByRole("listitem").filter({ hasText: "Sync now" }).getByRole("switch")`). A list or scroll view is not a row, and neither is another checkable control.
 
 #### Jetpack Compose
 

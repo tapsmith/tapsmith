@@ -3,9 +3,9 @@ import XCTest
 /// getByLabel's rule (PILOT-666), shared by the snapshot walk and the live
 /// XCUIElement query, and replayed against the SDK's conformance fixture
 /// (`label-conformance.json`) so the locator playground matches the same
-/// elements: an input of one of `inputTypes`, named by its label or title —
-/// a string compared whole and whitespace-normalized, a RegExp tested
-/// against the raw text.
+/// elements: an input of one of `inputTypes`, named by its label or title,
+/// or by its settings row's title (`rowLabel`, RowName) — a string compared
+/// whole and whitespace-normalized, a RegExp tested against the raw text.
 enum LabelMatch {
     /// The input types getByLabel finds: a `switch` role's toggle too, as
     /// Android's getByLabel walks every switch class (PILOT-697).
@@ -17,12 +17,18 @@ enum LabelMatch {
 
     /// An empty `query` matches nothing: SelectorParser drops an empty label,
     /// so it never reaches the finders as a criterion.
-    static func matches(elementType: XCUIElement.ElementType, label: String, title: String, query: String) -> Bool {
+    static func matches(
+        elementType: XCUIElement.ElementType, label: String, title: String, rowLabel: String = "", query: String
+    ) -> Bool {
         !query.isEmpty && inputTypes.contains(elementType)
-            && (TextMatch.equals(label, query) || TextMatch.equals(title, query))
+            && (TextMatch.equals(label, query) || TextMatch.equals(title, query)
+                || (!rowLabel.isEmpty && TextMatch.equals(rowLabel, query)))
     }
 
-    static func matches(elementType: XCUIElement.ElementType, label: String, title: String, regex: TextRegex) -> Bool {
-        inputTypes.contains(elementType) && (regex.matches(label) || regex.matches(title))
+    static func matches(
+        elementType: XCUIElement.ElementType, label: String, title: String, rowLabel: String = "", regex: TextRegex
+    ) -> Bool {
+        inputTypes.contains(elementType)
+            && (regex.matches(label) || regex.matches(title) || (!rowLabel.isEmpty && regex.matches(rowLabel)))
     }
 }

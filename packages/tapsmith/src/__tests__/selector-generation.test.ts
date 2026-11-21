@@ -556,6 +556,50 @@ describe('getByLabel suggestions follow the runtime fields (PILOT-666)', () => {
   });
 });
 
+// ─── A UIKit settings row's switch: named and labelled by the row's title ───
+
+describe("a UIKit settings row's switch is suggested by its row's title", () => {
+  // UIKit labels the switch with the row's texts joined by ", "; the agent
+  // dumps the row's title as tapsmith-label (RowName), as Android's does.
+  const cell = (title: string, subtitle: string, value: string) => {
+    const label = subtitle ? `${title}, ${subtitle}` : title;
+    const texts = [title, subtitle].filter(Boolean).map((t) => makeNode('XCUIElementTypeStaticText', { type: 'XCUIElementTypeStaticText', label: t }));
+    const toggle = makeNode('XCUIElementTypeSwitch', { type: 'XCUIElementTypeSwitch', label, value, 'tapsmith-role': 'switch', 'tapsmith-label': title });
+    return makeNode('XCUIElementTypeCell', { type: 'XCUIElementTypeCell', label: '', value, 'tapsmith-role': 'listitem' }, [...texts, toggle]);
+  };
+  const switchOf = (row: HierarchyNode) => row.children.find((c) => c.attributes.get('type') === 'XCUIElementTypeSwitch')!;
+  const wifi = cell('Wi-Fi', 'Join known networks', '1');
+  const assist = cell('Wi-Fi Assist', 'Use cellular data', '0');
+  const hotspot = cell('Personal Hotspot', 'Off', '0');
+  const roots = [makeNode('XCUIElementTypeTable', { type: 'XCUIElementTypeTable', label: '' }, [wifi, assist, hotspot])];
+
+  it('suggests getByRole and getByLabel by the title, not the subtitle', () => {
+    const codes = generateSelectors(switchOf(hotspot)).map((s) => s.code);
+    expect(codes.slice(0, 2)).toEqual(['device.getByRole("switch", { name: "Personal Hotspot" })', 'device.getByLabel("Personal Hotspot")']);
+  });
+
+  it('every suggestion resolves to its switch alone, and none pins a subtitle', () => {
+    for (const row of [wifi, assist, hotspot]) {
+      const node = switchOf(row);
+      const result = disambiguateSelectors(roots, node, generateSelectors(node));
+      const top = result.filter((s) => !s.mayNotMatch).slice(0, 2);
+      expect(top.length).toBe(2);
+      for (const s of top) {
+        expect(s.code).not.toMatch(/Join known|Use cellular|Off/);
+        expect(findMatchingNodes(roots, parseSelectorString(s.code)!)).toEqual([node]);
+      }
+    }
+  });
+
+  it('getByLabel finds the switch by its title, and not by its subtitle', () => {
+    const count = (code: string) => findMatchingNodes(roots, parseSelectorString(code)!).length;
+    expect(count('device.getByLabel("Wi-Fi")')).toBe(1);
+    expect(count('device.getByLabel("Join known networks")')).toBe(0);
+    expect(count('device.getByRole("switch", { name: "Wi-Fi" })')).toBe(2);
+    expect(count('device.getByRole("switch", { name: "Wi-Fi", exact: true })')).toBe(1);
+  });
+});
+
 // ─── hasGoodSelectors / findBetterDescendant ───
 
 describe('hasGoodSelectors', () => {

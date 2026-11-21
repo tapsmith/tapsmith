@@ -18,6 +18,7 @@ import {
   UIKitDialogsScreen,
   UIKitGesturesScreen,
   UIKitKeyboardScreen,
+  UIKitSettingsScreen,
   UIKitTableScreen,
 } from "./screens/native-screens.js"
 
@@ -41,6 +42,7 @@ type NativeFixtures = {
   uikitDialogs: UIKitDialogsScreen
   uikitKeyboard: UIKitKeyboardScreen
   uikitGestures: UIKitGesturesScreen
+  uikitSettings: UIKitSettingsScreen
 }
 
 export const test = base.extend<NativeFixtures>({
@@ -63,6 +65,7 @@ export const test = base.extend<NativeFixtures>({
   uikitDialogs: async ({ device }, use) => { await use(new UIKitDialogsScreen(device)) },
   uikitKeyboard: async ({ device }, use) => { await use(new UIKitKeyboardScreen(device)) },
   uikitGestures: async ({ device }, use) => { await use(new UIKitGesturesScreen(device)) },
+  uikitSettings: async ({ device }, use) => { await use(new UIKitSettingsScreen(device)) },
 })
 
 export { describe, expect } from "tapsmith"

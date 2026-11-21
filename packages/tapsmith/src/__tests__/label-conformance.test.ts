@@ -38,7 +38,11 @@ interface Case {
   childTexts?: string[]
   /** Android: the name a nameless control takes from its row (`tapsmith-name`, the agent's RowName.name). */
   rowName?: string
-  /** Android: that row's label (`tapsmith-label`, RowName.label): its title. */
+  /**
+   * The row's title (`tapsmith-label`, the agent's RowName): on Android the
+   * label of a control named by its row, on iOS the title of the settings
+   * row whose texts UIKit joins into the control's label.
+   */
   rowLabel?: string
   /** A string query, or a RegExp as source + flags. */
   query: string | { source: string; flags: string }
@@ -85,6 +89,11 @@ const CASES: Case[] = [
   { why: 'RegExp on a button', platform: 'ios', type: 'XCUIElementTypeButton', label: 'Save', query: { source: 'Save', flags: '' }, matches: false },
   { why: 'RegExp substring', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Your email', query: { source: 'email', flags: '' }, matches: true },
   { why: 'RegExp not found', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Your email', query: { source: 'phone', flags: '' }, matches: false },
+  // A UIKit settings row's switch, which UIKit labels with the row's texts joined by ", ", is labelled by the row's title too.
+  { why: "a settings row's title labels its switch", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Wi-Fi, Join known networks', rowLabel: 'Wi-Fi', query: 'Wi-Fi', matches: true },
+  { why: "a settings row switch's whole label still labels it", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Wi-Fi, Join known networks', rowLabel: 'Wi-Fi', query: 'Wi-Fi, Join known networks', matches: true },
+  { why: "a settings row's subtitle is no label", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Wi-Fi, Join known networks', rowLabel: 'Wi-Fi', query: 'Join known networks', matches: false },
+  { why: "RegExp tests a settings row's title", platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Personal Hotspot, Off', rowLabel: 'Personal Hotspot', query: { source: '^personal hotspot$', flags: 'i' }, matches: true },
 
   // Android: the classes of the agent's label roles, named by content-desc.
   { why: 'EditText', platform: 'android', type: 'android.widget.EditText', contentDesc: 'Email', query: 'Email', matches: true },
