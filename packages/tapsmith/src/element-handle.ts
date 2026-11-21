@@ -173,7 +173,7 @@ type PostIndexStep = { readonly nth: number } | { readonly filter: FilterOptions
 interface ElementHandleOptions {
   nthIndex?: number;
   /** A read whose strict-mode error is skipped over, not shown: its `aka`
-   *  locators are left unchecked rather than cost an agent read (PILOT-1366). */
+   *  locators are left unchecked rather than cost an agent read. */
   uncheckedStrictAka?: boolean;
   /** Filters applied to the full match set, BEFORE `nthIndex`. */
   filters?: FilterOptions[];
@@ -698,7 +698,7 @@ function isSameListedElement(match: ElementInfo, el: ElementInfo): boolean {
 
 /**
  * The strict-mode error's `aka` for each listed element, checked by the
- * device agent (PILOT-1366): of each element's candidates, the first that
+ * device agent: of each element's candidates, the first that
  * resolves to exactly that element, in one evaluateSelectors read; none when
  * no candidate does — an `aka` that also matches another element would send
  * the reader straight into the same error. Undefined when the agent can't be
@@ -1751,7 +1751,7 @@ export class ElementHandle {
   /**
    * @internal — The strict-mode error for `elements`, each listed with an
    * `aka` locator the device agent resolves to that element alone
-   * ({@link verifiedStrictSuggestions}, PILOT-1366): asked for no longer than
+   * ({@link verifiedStrictSuggestions}): asked for no longer than
    * the near-miss check may take, unchecked when the agent can't answer.
    */
   async _strictModeViolation(elements: ElementInfo[]): Promise<StrictModeViolationError> {

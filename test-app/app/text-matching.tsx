@@ -30,6 +30,11 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // Reached by deep link only (not on the home list, so the home cards keep
 // their positions).
 
+// A bundled image. CI's typecheck has no image module types (Expo generates
+// them only on `expo start`), so it is required rather than imported.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const cardImage = require("../assets/icon.png")
+
 export default function TextMatchingScreen() {
   const [welcomeTaps, setWelcomeTaps] = useState(0)
   const [saveTaps, setSaveTaps] = useState(0)
@@ -88,7 +93,7 @@ export default function TextMatchingScreen() {
       />
       <View style={styles.card}>
         <Image
-          source={require("../assets/icon.png")}
+          source={cardImage}
           style={styles.cardImage}
           accessible
           accessibilityRole="image"
