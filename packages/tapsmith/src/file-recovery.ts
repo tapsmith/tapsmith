@@ -27,8 +27,7 @@ export interface FileRecoveryRun {
  *
  * Every test of the file is in the suite returned: the retry is the runner's
  * last attempt, so it reports the tests an abort leaves unrun; when the first
- * attempt's results are kept instead, the ones it held back are added to them
- * (PILOT-1383).
+ * attempt's results are kept instead, the ones it held back are added to them.
  */
 export async function runFileWithSessionRecovery(run: FileRecoveryRun): Promise<SuiteResult> {
   let firstAttemptSuite: SuiteResult | undefined;

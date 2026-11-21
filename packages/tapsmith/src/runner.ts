@@ -1416,7 +1416,7 @@ export interface RunOptions {
    * file after an `abortFileOnError` abort. The tests the abort leaves unrun
    * are then reported as failed ("Did not run: …") instead of being left out
    * of the results, and a recoverable error in the file-entry reset fails
-   * every test of the file instead of propagating (PILOT-1383). Without it, a
+   * every test of the file instead of propagating. Without it, a
    * file abort holds those results back for the embedder's retry
    * ({@link takeDeferredNotRunResults}).
    */
@@ -4103,9 +4103,15 @@ class FileAbortState {
   }
 
   abort(fullName: string, error: Error): void {
-    this.notRunError ??= new Error(
-      `Did not run: the file was stopped by an infrastructure error in "${fullName}" that Tapsmith could not recover from: ${error.message}`,
-    );
+    if (!this.notRunError) {
+      const notRun = new Error(
+        `Did not run: the file was stopped by an infrastructure error in "${fullName}" that Tapsmith could not recover from: ${error.message}`,
+      );
+      // Its stack would point at whatever code built it, not at the test:
+      // reporters show the message alone.
+      notRun.stack = `Error: ${notRun.message}`;
+      this.notRunError = notRun;
+    }
     this._controller.abort();
   }
 }

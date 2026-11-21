@@ -107,6 +107,8 @@ describe('runTestFile — tests a file abort leaves unrun (PILOT-1383)', () => {
       expect(r.error?.message).toBe(
         `Did not run: the file was stopped by an infrastructure error in "tab loop 1" that Tapsmith could not recover from: ${INFRA}`,
       );
+      // No stack frames: they would point into the runner, not at the test.
+      expect(r.error?.stack).toBe(`Error: ${r.error?.message}`);
       expect(r.filePath).toBe(results[0].filePath);
       expect(r.durationMs).toBe(0);
     }
