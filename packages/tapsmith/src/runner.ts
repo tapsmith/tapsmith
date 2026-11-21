@@ -509,9 +509,10 @@ interface CapturedAppRequest {
 }
 
 /**
- * The captured requests (not passed through: those carry only a host) that
- * matched one of the test's routes before it was registered, oldest first,
- * each named once against the first route it matches.
+ * The captured requests (not passed through: those carry only a host; not
+ * WebSockets, which routes never see) that matched one of the test's routes
+ * before it was registered, oldest first, each named once against the first
+ * route it matches.
  */
 function earlyRouteRequests(
   requests: CapturedAppRequest[],
@@ -520,6 +521,8 @@ function earlyRouteRequests(
   const early: EarlyRouteRequest[] = [];
   for (const req of [...requests].sort((a, b) => a.startTimeMs - b.startTimeMs)) {
     if (req.routeAction === 'passthrough') continue;
+    // Routes never apply to a WebSocket (PILOT-246), as in Playwright.
+    if (/^wss?:/i.test(req.url)) continue;
     const route = registrations.find((r) => req.startTimeMs < r.registeredAtMs && r.matches(req.url));
     if (route) {
       early.push({ method: req.method, url: req.url, pattern: route.pattern, msBefore: route.registeredAtMs - req.startTimeMs });
