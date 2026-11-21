@@ -593,8 +593,11 @@ class SnapshotElementFinder {
         var failedAttempts = 0
         repeat {
             do {
-                let s = try app.snapshot()
-                if !s.dictionaryRepresentation.isEmpty {
+                let raw = try app.snapshot()
+                if !raw.dictionaryRepresentation.isEmpty {
+                    // On iOS 26+ the tree stops at an in-app browser
+                    // (PILOT-1384): attach what the browser shows.
+                    let s = InAppBrowser.complete(raw, app: app, deadline: commandDeadline)
                     lock.lock()
                     lastSnapshot = s
                     lastSnapshotPredatesTurn = false
