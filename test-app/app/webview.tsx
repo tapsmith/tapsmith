@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from "react-native"
+import { Pressable, StyleSheet, Text, View } from "react-native"
+import * as WebBrowser from "expo-web-browser"
 import { WebView } from "react-native-webview"
 
 const HTML_CONTENT = `
@@ -68,12 +69,24 @@ const HTML_CONTENT = `
 </html>
 `
 
+/** Any page: the browser's own controls are what is tested, not its content. */
+const IN_APP_BROWSER_URL = "https://example.com"
+
 export default function WebViewScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.label} accessibilityRole="header">
         Embedded WebView
       </Text>
+      {/* An in-app browser (SFSafariViewController / Custom Tabs), which
+          another process draws over the app (PILOT-1384). */}
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => void WebBrowser.openBrowserAsync(IN_APP_BROWSER_URL)}
+        style={styles.browserButton}
+      >
+        <Text style={styles.browserButtonText}>Open in-app browser</Text>
+      </Pressable>
       <View style={styles.webviewContainer}>
         <WebView
           source={{ html: HTML_CONTENT }}
@@ -98,6 +111,19 @@ const styles = StyleSheet.create({
     color: "#1a1a1a",
     padding: 16,
     paddingBottom: 8,
+  },
+  browserButton: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingVertical: 8,
+    alignItems: "center",
+    backgroundColor: "#007AFF",
+    borderRadius: 6,
+  },
+  browserButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
   },
   webviewContainer: {
     flex: 1,
