@@ -87,6 +87,13 @@ export default function WebViewScreen() {
       >
         <Text style={styles.browserButtonText}>Open in-app browser</Text>
       </Pressable>
+      {/* Named like the in-app browser's own Done button. Covered by the
+          browser, it is left out of the app's snapshot but not out of
+          XCTest's live queries, so a locator for the browser's Done must not
+          bind this one (PILOT-1384). */}
+      <Pressable accessibilityRole="button" onPress={() => {}} style={styles.doneButton}>
+        <Text style={styles.doneButtonText}>Done</Text>
+      </Pressable>
       <View style={styles.webviewContainer}>
         <WebView
           source={{ html: HTML_CONTENT }}
@@ -124,6 +131,15 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontWeight: "600",
+  },
+  doneButton: {
+    alignSelf: "flex-end",
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  doneButtonText: {
+    color: "#007AFF",
+    fontSize: 15,
   },
   webviewContainer: {
     flex: 1,

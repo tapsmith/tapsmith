@@ -258,6 +258,12 @@ class SnapshotElementFinder {
         // Check once if keyboard is visible (for focus detection).
         // Keyboard = elementType 19 (XCUIElement.ElementType.keyboard).
         let keyboardVisibleInSnapshot = hasKeyboardInTree(snapshotDict)
+        // A tree with an in-app browser attached (PILOT-1384): the app's live
+        // queries also return its covered screen, which the tree leaves out,
+        // so matches are found again from the browser's root, whose
+        // descendants are what the tree's indices count.
+        let queryRoot: XCUIElement = snapshotDict[InAppBrowser.attachedKey] as? Bool == true
+            ? InAppBrowser.root(in: app) : app
 
         // Number the app's descendants in pre-order (XCUIElementQuery order)
         // so a role+name, RegExp or substring-text match can be re-resolved
@@ -470,7 +476,7 @@ class SnapshotElementFinder {
                 // This is deferred — the query object is created but not evaluated until
                 // a property (like .isHittable) is accessed. Pass the snapshot node so the
                 // query can use element type + identifier for more precise matching.
-                cacheQueryElement(elementId: elementId, selector: selector,
+                cacheQueryElement(elementId: elementId, selector: selector, queryRoot: queryRoot,
                     matchIndex: typeQueryIndices?[matchIndex] ?? matchIndex,
                     idIndex: idIndices[matchIndex],
                     treeIdCount: identifier.isEmpty ? 0 : treeIdCounts()[identifier, default: 0],
@@ -2050,6 +2056,7 @@ class SnapshotElementFinder {
     private func cacheQueryElement(
         elementId: String,
         selector: ElementSelector,
+        queryRoot: XCUIElement,
         matchIndex: Int,
         idIndex: Int,
         treeIdCount: Int,
@@ -2125,9 +2132,9 @@ class SnapshotElementFinder {
         // specific (RN buttons surface as `.other`, so fall back to any type).
         func labelQuery(_ predicate: NSPredicate) -> XCUIElementQuery {
             if let elType = nodeElType, elType != .other, elType != .any {
-                return app.descendants(matching: elType).matching(predicate)
+                return queryRoot.descendants(matching: elType).matching(predicate)
             }
-            return app.descendants(matching: .any).matching(predicate)
+            return queryRoot.descendants(matching: .any).matching(predicate)
         }
 
         // The matched node found again by its own label (and identifier), at
@@ -2156,14 +2163,14 @@ class SnapshotElementFinder {
         } else if let testId = selector.testId {
             uniqueInQuery = treeIdCount == 1 && keyboardOffset == 0
             pin = LiveQueryPin(identifier: testId)
-            element = app.descendants(matching: .any)
+            element = queryRoot.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", testId))
                 .excludingHooksMarker()
                 .element(boundBy: matchIndex + keyboardOffset)
         } else if let id = selector.id {
             uniqueInQuery = treeIdCount == 1 && keyboardOffset == 0
             pin = LiveQueryPin(identifier: id)
-            element = app.descendants(matching: .any)
+            element = queryRoot.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", id))
                 .excludingHooksMarker()
                 .element(boundBy: matchIndex + keyboardOffset)
@@ -2264,7 +2271,7 @@ class SnapshotElementFinder {
             ) != nil {
                 // An unlabelled back button, named "Back" (PILOT-1260): no
                 // label query can find it, its identifier ("BackButton") can.
-                element = resolve(app.descendants(matching: type))
+                element = resolve(queryRoot.descendants(matching: type))
             } else {
                 // Matched through its title with an empty label: no label
                 // query can find this node, and a name query would bind some
@@ -2339,10 +2346,10 @@ class SnapshotElementFinder {
                 // the role's types, not looked for among the first type's.
                 // (A trait-matched `.other` is found by its label, above.)
                 if types.count == 1 {
-                    element = resolve(app.descendants(matching: firstType))
+                    element = resolve(queryRoot.descendants(matching: firstType))
                 } else {
                     let rawValues = types.map { NSNumber(value: $0.rawValue) }
-                    let query = app.descendants(matching: .any)
+                    let query = queryRoot.descendants(matching: .any)
                         .matching(NSPredicate(format: "elementType IN %@", rawValues))
                     if nodeIdentifier.isEmpty {
                         let rawTypes = Set(types.map(\.rawValue))
@@ -2370,7 +2377,7 @@ class SnapshotElementFinder {
         )
         var anchoredRows: XCUIElementQuery?
         if plan.throughAnchor, let anchor = tags.anchor, let anchorPredicate = RowAnchor.predicate(forAnchor: anchor) {
-            let rows = app.descendants(matching: .cell).containing(anchorPredicate)
+            let rows = queryRoot.descendants(matching: .cell).containing(anchorPredicate)
             anchoredRows = rows
             let row = rows.element(boundBy: 0)
             if let rowIndex = tags.index {

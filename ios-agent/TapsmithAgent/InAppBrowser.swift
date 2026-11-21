@@ -27,6 +27,12 @@ enum InAppBrowser {
     static let serviceBundleId = "com.apple.SafariViewService"
     /// The start of the identifier of the browser's root node.
     static let rootIdentifierPrefix = "BrowserView"
+    /// Set on the root of a snapshot dictionary that has a browser's content
+    /// attached (`InAppBrowser.attach`). XCTest's live queries from the app
+    /// still return the app's covered screen, which the snapshot leaves out,
+    /// so a match in such a tree is found again by a query from the
+    /// browser's root, where the snapshot's indices hold.
+    static let attachedKey = "tapsmithInAppBrowser"
 
     /// Whether a tree holds nothing to match or show: below the root, only
     /// windows and plain views, none with a label, an identifier or a value.

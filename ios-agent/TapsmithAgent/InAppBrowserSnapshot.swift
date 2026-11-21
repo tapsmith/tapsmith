@@ -38,12 +38,18 @@ extension InAppBrowser {
                   lookCost: AccessibilityTimeout.seconds + 0.5
               )
         else { return snapshot }
-        let root = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH %@", rootIdentifierPrefix))
-            .firstMatch
-        guard let browser = try? root.snapshot() else { return snapshot }
+        guard let browser = try? root(in: app).snapshot() else { return snapshot }
         NSLog("[InAppBrowser] The app's tree stops at an in-app browser; attaching its content")
         return attach(browser, to: snapshot)
+    }
+
+    /// The browser's root element, found by a query from the app (which,
+    /// unlike the app's snapshot, crosses the remote view). Lazy: resolved
+    /// when it is used.
+    static func root(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", rootIdentifierPrefix))
+            .firstMatch
     }
 
     /// `root` with `content` as the last child of its first window (drawn
@@ -56,7 +62,7 @@ extension InAppBrowser {
         } else {
             children.append(content)
         }
-        return AttachedSnapshot(base: root, children: children)
+        return AttachedSnapshot(base: root, children: children, marksBrowser: true)
     }
 }
 
@@ -65,15 +71,20 @@ extension InAppBrowser {
 final class AttachedSnapshot: NSObject, XCUIElementSnapshot {
     private let base: XCUIElementSnapshot
     let children: [XCUIElementSnapshot]
+    /// Whether this is the root of the tree the browser was attached to:
+    /// its dictionary then carries `InAppBrowser.attachedKey`.
+    private let marksBrowser: Bool
 
-    init(base: XCUIElementSnapshot, children: [XCUIElementSnapshot]) {
+    init(base: XCUIElementSnapshot, children: [XCUIElementSnapshot], marksBrowser: Bool = false) {
         self.base = base
         self.children = children
+        self.marksBrowser = marksBrowser
     }
 
     var dictionaryRepresentation: [XCUIElement.AttributeName: Any] {
         var dict = base.dictionaryRepresentation
         dict[XCUIElement.AttributeName(rawValue: "children")] = children.map { $0.dictionaryRepresentation }
+        if marksBrowser { dict[XCUIElement.AttributeName(rawValue: InAppBrowser.attachedKey)] = true }
         return dict
     }
 

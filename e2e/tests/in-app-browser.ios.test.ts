@@ -5,6 +5,9 @@
  * used to be invisible to locators (PILOT-1384). The agent now reads the
  * browser's content into the app's tree.
  *
+ * The screen has a Done button of its own: covered by the browser, it is
+ * still in XCTest's live queries, so the locator must bind the browser's.
+ *
  * iOS only: on Android the browser is a Custom Tab, another app, which the
  * back key closes.
  */
@@ -27,6 +30,5 @@ describe("an in-app browser", () => {
 
     await webviewScreen.inAppBrowserDoneButton.tap()
     await expect(webviewScreen.heading).toBeVisible({ timeout: 10_000 })
-    await expect(webviewScreen.inAppBrowserDoneButton).toBeHidden()
   })
 })
