@@ -1298,6 +1298,91 @@ describe('tap()', () => {
     expect(err.message).toContain('getByRole("menuitem"');
   });
 
+  describe("checks each aka with the agent (PILOT-1366)", () => {
+    const image = makeElementInfo({
+      elementId: 'img', className: 'XCUIElementTypeImage', role: 'image', text: 'The Flower Girl',
+      contentDescription: 'The Flower Girl', bounds: { left: 20, top: 100, right: 380, bottom: 400 },
+    });
+    const caption = makeElementInfo({
+      elementId: 'cap', className: 'XCUIElementTypeStaticText', role: 'text', text: 'The Flower Girl',
+      contentDescription: 'The Flower Girl', bounds: { left: 20, top: 410, right: 380, bottom: 440 },
+    });
+    /** An agent answering each locator from `answers`, by its formatted selector (none: no match). */
+    const agent = (answers: Record<string, ElementInfo[]>) => vi.fn(async (selectors: Selector[]) => ({
+      requestId: '1',
+      errorMessage: '',
+      results: selectors.map((sel) => ({ elements: answers[formatSelector(sel)] ?? [], errorMessage: '' })),
+    }));
+    const strictError = async (overrides: Partial<TapsmithGrpcClient>, selector: Selector, elements: ElementInfo[]) => {
+      const findElements = vi.fn(async () => makeFindElementsResponse(elements));
+      const handle = new ElementHandle(makeMockClient({ ...overrides, findElements }), selector, 5000);
+      return (await handle.tap().then(() => { throw new Error('expected tap to reject'); }, (e: unknown) => e)) as Error;
+    };
+
+    it("lists an aka that resolves to exactly that element", async () => {
+      const evaluateSelectors = agent({
+        'getByRole("image", { name: "The Flower Girl", exact: true })': [image],
+        'getByText("The Flower Girl", { exact: true })': [caption],
+      });
+      const err = await strictError({ evaluateSelectors }, _textContains('Flower'), [image, caption]);
+      expect(err.message).toContain('1) image "The Flower Girl" [20,100][380,400] aka device.getByRole("image", { name: "The Flower Girl", exact: true })');
+      expect(err.message).toContain('2) text "The Flower Girl" [20,410][380,440] aka device.getByText("The Flower Girl", { exact: true })');
+      // One read for every element's candidates.
+      expect(evaluateSelectors).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves out an aka that also matches another element, as an image's label did on iOS", async () => {
+      const err = await strictError({
+        evaluateSelectors: agent({
+          'getByRole("image", { name: "The Flower Girl", exact: true })': [image],
+          'getByText("The Flower Girl", { exact: true })': [image, caption],
+        }),
+      }, _textContains('Flower'), [image, caption]);
+      expect(err.message).toContain('aka device.getByRole("image"');
+      expect(err.message).not.toContain('getByText("The Flower Girl", { exact: true })');
+      expect(err.message).toMatch(/2\) text "The Flower Girl" \[20,410\]\[380,440\]\n/);
+    });
+
+    it("falls back to the next candidate when the first is shared", async () => {
+      const row = (text: string, top: number) => makeElementInfo({
+        role: 'button', text, resourceId: 'row', bounds: { left: 0, top, right: 400, bottom: top + 40 },
+      });
+      const [first, second] = [row('Edit', 0), row('Edit later', 50)];
+      const err = await strictError({
+        evaluateSelectors: agent({
+          'getByTestId("row")': [first, second],
+          'getByRole("button", { name: "Edit", exact: true })': [first],
+          'getByRole("button", { name: "Edit later", exact: true })': [second],
+        }),
+      }, _textContains('Edit'), [first, second]);
+      expect(err.message).not.toContain('getByTestId("row")');
+      expect(err.message).toContain('1) button "Edit" [0,0][400,40] aka device.getByRole("button", { name: "Edit", exact: true })');
+      expect(err.message).toContain('aka device.getByRole("button", { name: "Edit later", exact: true })');
+    });
+
+    it("never lists an aka that finds a different element", async () => {
+      const elsewhere = { ...caption, bounds: { left: 20, top: 600, right: 380, bottom: 630 } };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("The Flower Girl", { exact: true })': [elsewhere] }),
+      }, _textContains('Flower'), [image, caption]);
+      expect(err.message).not.toContain(' aka ');
+    });
+
+    it("lists the first candidate unchecked when the agent can't answer", async () => {
+      const evaluateSelectors = vi.fn(async () => { throw new Error('agent gone'); });
+      const err = await strictError({ evaluateSelectors }, _textContains('Flower'), [image, caption]);
+      expect(evaluateSelectors).toHaveBeenCalled();
+      expect(err.message).toContain('aka device.getByRole("image", { name: "The Flower Girl", exact: true })');
+      expect(err.message).toContain('aka device.getByText("The Flower Girl", { exact: true })');
+    });
+
+    it("suggests an iOS image by its description, never by getByText", () => {
+      const nameless = { ...image, role: '' };
+      const err = buildStrictModeViolationError('getByText("Flower")', [nameless, caption]);
+      expect(err.message).toContain('1) XCUIElementTypeImage "The Flower Girl" [20,100][380,400] aka device.getByDescription("The Flower Girl")');
+    });
+  });
+
   it('.first() disambiguates an ambiguous selector', async () => {
     const elements = [
       makeElementInfo({ text: 'Sign in to continue', resourceId: 'subtitle' }),

@@ -11,6 +11,7 @@ import {
   type RoleLocatorOptions,
   selectorToProto,
   formatSelector,
+  makeSelector,
   withParent,
   _id,
   _text,
@@ -37,7 +38,15 @@ import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
-import { LOCATOR_PICKER_HINT, NEAR_MISS_BUDGET_MS, nearMissHint, SYSTEM_ALERT_BUDGET_MS, systemAlertHint } from './locator-miss-hint.js';
+import {
+  LOCATOR_PICKER_HINT,
+  NEAR_MISS_BUDGET_MS,
+  nearMissHint,
+  type NearMissEvaluator,
+  SYSTEM_ALERT_BUDGET_MS,
+  systemAlertHint,
+  withinBudget,
+} from './locator-miss-hint.js';
 import { elementAccessibleName } from './accessible-name.js';
 import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 
@@ -163,6 +172,9 @@ type PostIndexStep = { readonly nth: number } | { readonly filter: FilterOptions
 
 interface ElementHandleOptions {
   nthIndex?: number;
+  /** A read whose strict-mode error is skipped over, not shown: its `aka`
+   *  locators are left unchecked rather than cost an agent read (PILOT-1366). */
+  uncheckedStrictAka?: boolean;
   /** Filters applied to the full match set, BEFORE `nthIndex`. */
   filters?: FilterOptions[];
   /** Modifiers chained after `nthIndex`, applied in call order — see {@link PostIndexStep}. */
@@ -586,14 +598,30 @@ function escapeRegExpLiteral(text: string): string {
       Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join(''));
 }
 
-/** Best-effort unambiguous locator suggestion for one resolved element. */
-function suggestSelectorFor(el: ElementInfo): string | undefined {
+/**
+ * One locator a strict-mode error may list for an element: its code, and the
+ * selector the agent can check it with. `hasText` is a `.filter({ hasText })`
+ * chained on the selector, applied to the agent's matches.
+ */
+interface StrictCandidate {
+  code: string;
+  selector: Selector;
+  hasText?: RegExp;
+}
+
+/**
+ * The locators that may single out one resolved element, best first. Which of
+ * them really resolves to it alone is for the agent to say
+ * ({@link verifiedStrictSuggestions}); unchecked, the first is listed.
+ */
+function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
+  const candidates: StrictCandidate[] = [];
   // getByTestId matches the whole resource-id — an RN testID. A native
   // package-qualified id ("com.pkg:id/foo") is often shared by every row of a
   // list, so it is the last resort, as locator({ id }) (PILOT-659).
   const nativeId = el.resourceId?.includes(':id/') ? el.resourceId : undefined;
   if (el.resourceId && !nativeId) {
-    return `device.getByTestId("${escapeJsString(el.resourceId)}")`;
+    candidates.push({ code: `device.getByTestId("${escapeJsString(el.resourceId)}")`, selector: _testId(el.resourceId) });
   }
   // A text field's text is its typed value, not its name: an unlabelled
   // field is named by its placeholder (PILOT-834).
@@ -607,7 +635,10 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
     // which the name doesn't contain), still a valid substring locator.
     const exact = name.length <= 60;
     const shown = exact ? name : name.slice(0, 60);
-    return `device.getByRole("${el.role}", { name: "${escapeJsString(shown)}"${exact ? ', exact: true' : ''} })`;
+    candidates.push({
+      code: `device.getByRole("${el.role}", { name: "${escapeJsString(shown)}"${exact ? ', exact: true' : ''} })`,
+      selector: makeSelector({ type: 'role', value: { role: el.role, name: shown, ...(exact ? { exact: true } : {}) } }),
+    });
   }
   // iOS: a table row with no name of its own has the text it contains
   // (PILOT-895), which getByRole's name doesn't read: filter by that text,
@@ -615,26 +646,103 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
   if (el.className === 'XCUIElementTypeCell' && el.role && el.text && unknownRoleMessage(el.role) === null) {
     const whole = el.text.length <= 60;
     const pattern = escapeRegExpLiteral(whole ? el.text : el.text.slice(0, 60));
-    return `device.getByRole("${el.role}").filter({ hasText: /^${pattern}${whole ? '$' : ''}/ })`;
+    candidates.push({
+      code: `device.getByRole("${el.role}").filter({ hasText: /^${pattern}${whole ? '$' : ''}/ })`,
+      selector: makeSelector({ type: 'role', value: { role: el.role, name: '' } }),
+      hasText: new RegExp(`^${pattern}${whole ? '$' : ''}`),
+    });
   }
-  // iOS: a control's name is a getByLabel field's name, never getByText's
-  // text; the value of anything but text is not text either (PILOT-794).
+  // iOS: a control's or an image's name is never getByText's text, and the
+  // value of anything but text is not text either (PILOT-794, PILOT-1366). A
+  // control's name is a getByLabel field's name; an image's, its description.
   const isIos = el.className.startsWith('XCUIElementType');
   if (isIos && IOS_NAME_ONLY_TYPES.has(el.className)) {
-    return el.contentDescription ? `device.getByLabel("${escapeJsString(el.contentDescription)}")` : undefined;
+    if (el.contentDescription) {
+      const desc = escapeJsString(el.contentDescription);
+      if (el.className !== 'XCUIElementTypeImage') {
+        candidates.push({ code: `device.getByLabel("${desc}")`, selector: _label(el.contentDescription) });
+      }
+      candidates.push({ code: `device.getByDescription("${desc}")`, selector: _contentDesc(el.contentDescription) });
+    }
+  } else {
+    const text = isIos && !IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription
+      ? el.contentDescription
+      : el.text;
+    if (text) {
+      // Like the role name above: an exact match needs the whole text, so a
+      // long one is suggested as its leading part, matched as a substring.
+      const exact = text.length <= 60;
+      const shown = exact ? text : text.slice(0, 60);
+      candidates.push({
+        code: `device.getByText("${escapeJsString(shown)}"${exact ? ', { exact: true }' : ''})`,
+        selector: exact ? _text(shown) : _textContains(shown),
+      });
+    }
   }
-  const text = isIos && !IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription
-    ? el.contentDescription
-    : el.text;
-  if (text) {
-    // Like the role name above: an exact match needs the whole text, so a
-    // long one is suggested as its leading part, matched as a substring.
-    const exact = text.length <= 60;
-    const shown = exact ? text : text.slice(0, 60);
-    return `device.getByText("${escapeJsString(shown)}"${exact ? ', { exact: true }' : ''})`;
+  if (nativeId) candidates.push({ code: `device.locator({ id: "${escapeJsString(nativeId)}" })`, selector: _id(nativeId) });
+  return candidates;
+}
+
+/** Best-effort unambiguous locator suggestion for one resolved element, unchecked. */
+function suggestSelectorFor(el: ElementInfo): string | undefined {
+  return strictCandidatesFor(el)[0]?.code;
+}
+
+/** Whether `match`, from a second read of the screen, is the element `el` listed. */
+function isSameListedElement(match: ElementInfo, el: ElementInfo): boolean {
+  if (hasUsableGeometry(el) && hasUsableGeometry(match)) return sameTargetKey(match) === sameTargetKey(el);
+  if (hasUsableGeometry(el) !== hasUsableGeometry(match)) return false;
+  return match.className === el.className && match.text === el.text
+    && match.contentDescription === el.contentDescription && match.resourceId === el.resourceId;
+}
+
+/**
+ * The strict-mode error's `aka` for each listed element, checked by the
+ * device agent (PILOT-1366): of each element's candidates, the first that
+ * resolves to exactly that element, in one evaluateSelectors read; none when
+ * no candidate does — an `aka` that also matches another element would send
+ * the reader straight into the same error. Undefined when the agent can't be
+ * asked, fails, or doesn't answer within `budgetMs`: the caller then lists
+ * each element's first candidate unchecked, as before. Never throws.
+ *
+ * @internal
+ */
+export async function verifiedStrictSuggestions(
+  client: NearMissEvaluator,
+  elements: ElementInfo[],
+  signal?: AbortSignal,
+  budgetMs = NEAR_MISS_BUDGET_MS,
+): Promise<((el: ElementInfo) => string | undefined) | undefined> {
+  if (typeof client.evaluateSelectors !== 'function' || budgetMs <= 0) return undefined;
+  const shown = elements.slice(0, STRICT_ERROR_MAX_ELEMENTS);
+  const perElement = new Map(shown.map((el) => [el, strictCandidatesFor(el)]));
+  const codes: string[] = [];
+  const selectorOf = new Map<string, Selector>();
+  for (const candidates of perElement.values()) {
+    for (const c of candidates) {
+      if (selectorOf.has(c.code)) continue;
+      selectorOf.set(c.code, c.selector);
+      codes.push(c.code);
+    }
   }
-  if (nativeId) return `device.locator({ id: "${escapeJsString(nativeId)}" })`;
-  return undefined;
+  if (codes.length === 0) return () => undefined;
+  const evaluate = client.evaluateSelectors.bind(client);
+  const response = await withinBudget(() => evaluate(codes.map((code) => selectorOf.get(code)!)), signal, budgetMs);
+  if (!response || response.errorMessage || response.results?.length !== codes.length) return undefined;
+  const matchesOf = new Map<string, ElementInfo[] | undefined>();
+  codes.forEach((code, i) => {
+    const result = response.results[i];
+    matchesOf.set(code, result.errorMessage ? undefined : collapseSameTargetDuplicates(result.elements ?? []));
+  });
+  return (el) => {
+    for (const c of perElement.get(el) ?? strictCandidatesFor(el)) {
+      let matches = matchesOf.get(c.code);
+      if (!matches) continue;
+      if (c.hasText) matches = matches.filter((m) => c.hasText!.test(m.text));
+      if (matches.length === 1 && isSameListedElement(matches[0], el)) return c.code;
+    }
+    return undefined;
+  };
 }
 
 /** @internal — Build the Playwright-style strict mode violation error.
@@ -1508,7 +1616,7 @@ export class ElementHandle {
       throw new Error(`Element not found: ${this._describe()}`);
     }
     if (elements.length > 1) {
-      throw buildStrictModeViolationError(this._describe(), elements);
+      throw await this._strictModeViolation(elements);
     }
     return elements[0];
   }
@@ -1641,6 +1749,19 @@ export class ElementHandle {
   }
 
   /**
+   * @internal — The strict-mode error for `elements`, each listed with an
+   * `aka` locator the device agent resolves to that element alone
+   * ({@link verifiedStrictSuggestions}, PILOT-1366): asked for no longer than
+   * the near-miss check may take, unchecked when the agent can't answer.
+   */
+  async _strictModeViolation(elements: ElementInfo[]): Promise<StrictModeViolationError> {
+    const suggest = this._options.uncheckedStrictAka
+      ? undefined
+      : await verifiedStrictSuggestions(this._client, elements, this._client._getAbortSignal?.());
+    return buildStrictModeViolationError(this._describe(), elements, suggest ? { suggest } : undefined);
+  }
+
+  /**
    * @internal — Everything a not-found message says after its first
    * sentence, as ". …" to append to it: the locators that do
    * match the same words on screen now (asked of the device agent, for an
@@ -1750,14 +1871,14 @@ export class ElementHandle {
    * undefined when there is none yet.
    */
   private async _findOneStrict(timeoutMs: number): Promise<ElementInfo | undefined> {
-    return this._oneStrict(await this._client.findElements(this._selector, timeoutMs), 'findElements');
+    return await this._oneStrict(await this._client.findElements(this._selector, timeoutMs), 'findElements');
   }
 
   /** The one match of an unmodified handle's read, strictly (see {@link _findOneStrict}). */
-  private _oneStrict(
+  private async _oneStrict(
     res: { elements: ElementInfo[]; errorMessage: string },
     call: 'findElements' | 'scrollStep',
-  ): ElementInfo | undefined {
+  ): Promise<ElementInfo | undefined> {
     if (res.errorMessage) {
       // Daemon-level failure (agent dead, command error) — not "no match".
       // Must not look like a pollable not-found, so the real cause surfaces.
@@ -1765,7 +1886,7 @@ export class ElementHandle {
     }
     const elements = collapseSameTargetDuplicates(res.elements ?? []);
     if (elements.length > 1) {
-      throw buildStrictModeViolationError(this._describe(), elements);
+      throw await this._strictModeViolation(elements);
     }
     return elements[0];
   }
@@ -1874,11 +1995,16 @@ export class ElementHandle {
    * Fatal errors — strict violations, user aborts, transport failures — are
    * rethrown for the caller to propagate.
    */
-  private async _resolveTick(budgetMs: number): Promise<ResolveTick> {
+  private async _resolveTick(budgetMs: number, options?: { strictErrorSkipped?: boolean }): Promise<ResolveTick> {
+    // A caller that skips an ambiguous read rather than report it has no use
+    // for checked `aka` locators in its error (_strictModeViolation).
+    const h = options?.strictErrorSkipped
+      ? new ElementHandle(this._client, this._selector, this._timeoutMs, { ...this._options, uncheckedStrictAka: true })
+      : this;
     try {
-      const element = this._hasModifiers()
-        ? await this._resolveOneWithin(budgetMs)
-        : await this._findOneStrict(budgetMs);
+      const element = h._hasModifiers()
+        ? await h._resolveOneWithin(budgetMs)
+        : await h._findOneStrict(budgetMs);
       return element ? { kind: 'found', element } : { kind: 'miss' };
     } catch (err) {
       return ElementHandle._classifyTickError(err);
@@ -2019,7 +2145,7 @@ export class ElementHandle {
 
     if (this._options.nthIndex !== undefined) return timed._select(elements);
     if (strict && elements.length > 1) {
-      throw buildStrictModeViolationError(this._describe(), elements);
+      throw await this._strictModeViolation(elements);
     }
     return elements;
   }
@@ -2594,7 +2720,7 @@ export class ElementHandle {
         // Strict mode (PILOT-226): waiting for presence on an ambiguous
         // selector is an error. Absence states ('hidden'/'detached') are
         // exempt — they evaluate over the full match set.
-        throw buildStrictModeViolationError(this._describe(), elements);
+        throw await this._strictModeViolation(elements);
       }
 
       const attached = elements.length > 0;
@@ -4158,7 +4284,7 @@ export class ElementHandle {
         }
         let tick: ResolveTick;
         try {
-          const el = this._oneStrict(res, 'scrollStep');
+          const el = await this._oneStrict(res, 'scrollStep');
           tick = el ? { kind: 'found', element: el } : { kind: 'miss' };
         } catch (err) {
           tick = ElementHandle._classifyTickError(err);
@@ -4205,7 +4331,7 @@ export class ElementHandle {
           const readStart = Date.now();
           let seen: Probe;
           try {
-            seen = await probe();
+            seen = toProbe(await this._resolveTick(TICK_READ_BUDGET_MS, { strictErrorSkipped: true }));
           } catch (err) {
             if (!isStrictModeViolation(err)) throw err;
             continue;
@@ -4338,7 +4464,7 @@ export class ElementHandle {
               //   next tap. Bounded by the tick cap above.
               let stabilityTick: ResolveTick;
               try {
-                stabilityTick = await this._resolveTick(TICK_READ_BUDGET_MS);
+                stabilityTick = await this._resolveTick(TICK_READ_BUDGET_MS, { strictErrorSkipped: true });
               } catch (err) {
                 if (!isStrictModeViolation(err)) throw err;
                 // An ambiguous read is an unreadable tick like any other.
