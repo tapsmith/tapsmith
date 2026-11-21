@@ -67,6 +67,18 @@ describe('localBuildStamp', () => {
     expect(await localBuildStamp(app)).not.toBe(second);
   });
 
+  it('changes when a rebuild keeps every size and mtime (a tool that normalises timestamps)', async () => {
+    const app = path.join(ROOT, 'Normalised.app');
+    makeBundle(app);
+    const fixed = new Date('2000-01-01T00:00:00Z');
+    for (const f of ['Info.plist', 'main.jsbundle', 'Frameworks/lib.dylib']) fs.utimesSync(path.join(app, f), fixed, fixed);
+    const first = await localBuildStamp(app);
+    // Same length, same mtime, different bytes, written in place.
+    fs.writeFileSync(path.join(app, 'main.jsbundle'), 'bundle v9');
+    fs.utimesSync(path.join(app, 'main.jsbundle'), fixed, fixed);
+    expect(await localBuildStamp(app)).not.toBe(first);
+  });
+
   it('is undefined for a build that is not there', async () => {
     expect(await localBuildStamp(path.join(ROOT, 'gone.apk'))).toBeUndefined();
   });

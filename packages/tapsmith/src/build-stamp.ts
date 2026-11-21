@@ -21,12 +21,17 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 /**
- * A stamp of every entry under a directory: relative path, kind, size and
- * modification time, hashed. Symlinks are not followed (their targets are in
- * the stamp); the root itself is, as `appBundlesMatch` does.
+ * A stamp of every entry under a directory: relative path, kind, size,
+ * modification time, inode and change time, hashed, with the root's real
+ * path. The inode and change time catch a rebuild whose tool normalises
+ * mtimes (a reproducible archive extracted over the old build, a Nix store
+ * path): writing a file always moves its ctime. Symlinks are not followed
+ * (their targets are in the stamp); the root itself is, as `appBundlesMatch`
+ * does.
  */
 async function treeStamp(root: string): Promise<string> {
   const hash = createHash('sha1');
+  hash.update(`root ${await fs.promises.realpath(root)}\n`);
   const pending = [''];
   while (pending.length > 0) {
     const relDir = pending.pop()!;
@@ -42,7 +47,7 @@ async function treeStamp(root: string): Promise<string> {
         hash.update(`d ${rel}\n`);
         pending.push(rel);
       } else {
-        hash.update(`f ${rel} ${st.size} ${st.mtimeMs}\n`);
+        hash.update(`f ${rel} ${st.size} ${st.mtimeMs} ${st.ino} ${st.ctimeMs}\n`);
       }
     }
   }
