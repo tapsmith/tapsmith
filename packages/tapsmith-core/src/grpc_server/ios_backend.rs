@@ -2228,9 +2228,11 @@ impl DeviceBackend for IosBackend<'_> {
         #[cfg(target_os = "macos")]
         if route != proto::NetworkCaptureRoute::IosDeviceProxy {
             let udid = serial.clone();
+            let dev_ports = ios::loopback_watch::DevServerPorts::default();
             proxy.watch_loopback(ios::loopback_watch::SAMPLE_INTERVAL, move || {
                 let udid = udid.clone();
-                async move { ios::loopback_watch::sample(&udid, host_port).await }
+                let dev_ports = std::sync::Arc::clone(&dev_ports);
+                async move { ios::loopback_watch::sample(&udid, host_port, &dev_ports).await }
             });
         }
         Ok(CaptureRoute {

@@ -20,11 +20,13 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use tokio::process::Command;
 use tracing::debug;
 
+use crate::ios::agent_launch::port_listener_commands;
 use crate::network_proxy::join_host_port;
 
 /// How often a running simulator capture samples the app's sockets. As often
@@ -35,7 +37,10 @@ pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 /// Remote ports never reported: the React Native and Expo dev tooling an app
 /// talks to over loopback in a development build (Metro's bundler and
 /// inspector on 8081, React DevTools on 8097, the legacy Expo CLI on
-/// 19000–19002). That traffic is not the app's, and nobody wants it captured.
+/// 19000–19002) on their default ports, known without looking the listener
+/// up. On any other port they are recognised by their listener's command line
+/// ([`is_dev_server_command`]). That traffic is not the app's, and nobody
+/// wants it captured.
 const DEV_TOOL_PORTS: &[u16] = &[8081, 8097, 19000, 19001, 19002];
 
 /// Processes of the simulator runtime that make requests on an app's behalf
@@ -178,11 +183,43 @@ pub(crate) fn loopback_destinations(lsof_stdout: &str, excluded_ports: &[u16]) -
     destinations.into_iter().collect()
 }
 
+/// Whether `command` (a listening process's command line) is a React Native
+/// or Expo development server or debugging tool: Metro, started by the Expo or
+/// React Native CLI on whatever port it picked (Expo moves off 8081 when it is
+/// taken), or the Reactotron or Flipper desktop app. An app's connections to
+/// those are the dev build's own, not requests a test would mock.
+pub(crate) fn is_dev_server_command(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    if words
+        .iter()
+        .any(|w| w.contains("/Reactotron.app/") || w.contains("/Flipper.app/"))
+    {
+        return true;
+    }
+    if words.iter().any(|w| w.contains("/node_modules/metro/")) {
+        return true;
+    }
+    let cli = |w: &&str| {
+        w.ends_with("/.bin/expo")
+            || w.ends_with("/.bin/react-native")
+            || w.contains("/node_modules/@expo/cli/")
+            || w.contains("/node_modules/expo/bin/")
+            || w.contains("/node_modules/@react-native-community/cli/")
+            || w.contains("/node_modules/react-native/cli")
+    };
+    words.contains(&"start") && words.iter().any(cli)
+}
+
+/// Per-port verdicts of [`is_dev_server_command`] for the servers a watch has
+/// looked up, so each port's listener is looked up once.
+pub type DevServerPorts = Arc<StdMutex<HashMap<u16, bool>>>;
+
 /// One sample: the loopback servers the app processes of `udid`'s simulator
 /// are connected to right now, minus `proxy_port` (on the system-proxy route
 /// the app reaches Tapsmith's proxy over loopback). Empty when `ps` or `lsof`
-/// cannot be run.
-pub async fn sample(udid: &str, proxy_port: u16) -> Vec<String> {
+/// cannot be run. Servers whose listener is a development server
+/// ([`is_dev_server_command`]) are left out; `dev_ports` caches that verdict.
+pub async fn sample(udid: &str, proxy_port: u16, dev_ports: &DevServerPorts) -> Vec<String> {
     let ps = match Command::new("ps")
         .args(["-axo", "pid,ppid,command"])
         .output()
@@ -205,7 +242,7 @@ pub async fn sample(udid: &str, proxy_port: u16) -> Vec<String> {
         .join(",");
     // `-a` ANDs the PID and TCP selections. lsof exits 1 when nothing matches,
     // so the exit status says nothing; the output is all that counts.
-    match Command::new("lsof")
+    let destinations = match Command::new("lsof")
         .args(["-nP", "-a", "-p", &pid_list, "-iTCP", "-F", "pnT"])
         .output()
         .await
@@ -213,9 +250,36 @@ pub async fn sample(udid: &str, proxy_port: u16) -> Vec<String> {
         Ok(out) => loopback_destinations(&String::from_utf8_lossy(&out.stdout), &[proxy_port]),
         Err(e) => {
             debug!(error = %e, "loopback watch: lsof failed");
-            Vec::new()
+            return Vec::new();
+        }
+    };
+    let mut kept = Vec::with_capacity(destinations.len());
+    for destination in destinations {
+        let Some(port) = split_endpoint(&destination).map(|(_, port)| port) else {
+            continue;
+        };
+        let known = dev_ports
+            .lock()
+            .ok()
+            .and_then(|ports| ports.get(&port).copied());
+        let dev_server = match known {
+            Some(verdict) => verdict,
+            None => {
+                let verdict = port_listener_commands(port)
+                    .await
+                    .iter()
+                    .any(|command| is_dev_server_command(command));
+                if let Ok(mut ports) = dev_ports.lock() {
+                    ports.insert(port, verdict);
+                }
+                verdict
+            }
+        };
+        if !dev_server {
+            kept.push(destination);
         }
     }
+    kept
 }
 
 #[cfg(test)]
@@ -326,6 +390,31 @@ TST=CLOSE_WAIT
             loopback_destinations(lsof, &[]),
             vec!["127.0.0.1:4610".to_string(), "127.0.0.1:4611".to_string()]
         );
+    }
+
+    #[test]
+    fn recognises_dev_servers_by_their_command_line() {
+        for dev in [
+            "node /Users/me/app/node_modules/.bin/expo start --port 8082",
+            "node /Users/me/app/node_modules/@expo/cli/build/bin/cli start",
+            "node /Users/me/app/node_modules/expo/bin/cli start --dev-client",
+            "node /Users/me/app/node_modules/.bin/react-native start --port 8088",
+            "node /Users/me/app/node_modules/@react-native-community/cli/build/bin.js start",
+            "node /Users/me/app/node_modules/metro/src/cli.js serve",
+            "/Applications/Reactotron.app/Contents/MacOS/Reactotron",
+            "/Applications/Flipper.app/Contents/MacOS/Flipper",
+        ] {
+            assert!(is_dev_server_command(dev), "{dev}");
+        }
+        for app in [
+            "node server/index.mjs",
+            "node /Users/me/metronome-api/server.js",
+            "node /Users/me/app/node_modules/.bin/tsx server/start.ts",
+            "python3 -m http.server 4610",
+            "node /Users/me/expo-chat/server.js start",
+        ] {
+            assert!(!is_dev_server_command(app), "{app}");
+        }
     }
 
     #[test]

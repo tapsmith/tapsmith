@@ -158,13 +158,13 @@ Check the daemon logs — run `tapsmith test` with `RUST_LOG=tapsmith_core=debug
 
 A simulator shares the Mac's network stack, so an app that calls `http://localhost:4610` (or `127.0.0.1`) reaches a server running on the Mac: your dev API server, a mock backend, or a server the test itself starts. That request works, but **no capture route sees it**. macOS never hands connections to the loopback interface to the Network Extension, and the [system-proxy fallback](#when-the-network-extension-is-unavailable) bypasses `localhost` and `127.0.0.1`. Those requests are missing from the trace (a trace with no other traffic has no `network.json`), and `device.route()`, `device.waitForRequest()` and `device.waitForResponse()` never see them. Tapsmith cannot change this: the extension is mitmproxy's signed redirector, and loopback traffic never reaches it.
 
-Tapsmith notices these connections while capture is running and says so, once per run for each server, as a warning on the test result and in each affected trace's console:
+Tapsmith notices these connections while capture is running and says so, once per test file for each server, as a warning on the test result and in each affected trace's console:
 
 ```
 ⚠ Network capture warning: the app connected to a server on this Mac's loopback interface (127.0.0.1:4610), and an iOS simulator's network capture cannot see requests to localhost: …
 ```
 
-A failed test whose routes never fired lists the same server first among the possible reasons. Tapsmith checks the app's open connections every two seconds, so a connection that opens and closes between two checks can go unnoticed; HTTP clients usually keep a connection open for several seconds after a request, so it is normally caught. Connections to the React Native and Expo development servers (ports 8081, 8097 and 19000–19002) are never reported.
+A failed test whose routes never fired lists the same server first among the possible reasons. Tapsmith checks the app's open connections every two seconds, so a connection that opens and closes between two checks can go unnoticed; HTTP clients usually keep a connection open for several seconds after a request, so it is normally caught. Connections to development tools are not reported: Metro started by the Expo or React Native CLI (on 8081 or whichever port it picked), React DevTools on 8097, the legacy Expo CLI on 19000–19002, and the Reactotron and Flipper desktop apps. To silence a local helper you know about, add its address to `trace.networkIgnoreHosts` (`127.0.0.1`, or `[::1]` for IPv6); that also silences every other server on that address.
 
 **The fix: address the Mac by its LAN address instead of `localhost`.** A request to the Mac's own Wi-Fi or Ethernet address leaves the app on a real interface, so the Network Extension captures it like any other request, and routes see it. The server must listen on that interface too (`0.0.0.0`, or the address itself), not on `127.0.0.1` only. `ipconfig getifaddr en0` prints the address of the Mac's first network interface (try `en1` if it prints nothing); a VPN address (Tailscale's `100.x.y.z`, say) works too while the VPN is up.
 

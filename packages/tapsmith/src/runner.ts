@@ -206,8 +206,12 @@ function resettableDevices(opts: RunOptions): Array<RunDevice & { sessionContext
 const _printedCaptureWarnings = new Set<string>();
 /** Rejected-certificate hosts already reported on the terminal this run (PILOT-712). */
 const _tlsRejectWarnings = new TlsRejectWarnings();
-/** Loopback servers already warned about this run, per device (PILOT-320). */
-const _loopbackWarnings = new TlsRejectWarnings();
+/**
+ * Loopback servers already warned about in this test file's run, per device
+ * (PILOT-320). Reset as each file starts: a UI-mode worker runs file after
+ * file in one process, and each run must show the warning again.
+ */
+let _loopbackWarnings = new TlsRejectWarnings();
 
 type RawNetworkEntries = Awaited<ReturnType<Device['_stopNetworkCapture']>>['entries'];
 type DeviceNetworkEntries = Array<{ deviceId?: string; entries: RawNetworkEntries }>;
@@ -2363,7 +2367,10 @@ async function runSuiteContext(
   const defaultTestTimeoutMs = opts.config.timeout * 3;
   const testTimeoutMs = scopeTimeout ? Math.max(defaultTestTimeoutMs, scopeTimeout) : defaultTestTimeoutMs;
   const isRoot = parentPrefix === '';
-  if (isRoot) _fileRunStartedAtMs = Date.now();
+  if (isRoot) {
+    _fileRunStartedAtMs = Date.now();
+    _loopbackWarnings = new TlsRejectWarnings();
+  }
   // A serial scope inside another serial group stays part of that group.
   const serialGroup = inherited.serialGroup ?? (ctx.mode === 'serial' ? { failed: false } : undefined);
   const canReset = !!opts.config.package && resettableDevices(opts).length > 0;
@@ -2874,6 +2881,14 @@ async function runSuiteContext(
       // Loopback servers each device's app connected to, which its capture
       // cannot see (PILOT-320: an iOS simulator app calling localhost).
       const loopbackDestinations = new Map<Device, Set<string>>();
+      // The reported servers, minus the hosts the trace's host filters
+      // scope out — so `trace.networkIgnoreHosts: ['127.0.0.1']` silences
+      // a local helper the user knows about, as it does TLS rejects.
+      const scopedLoopback = (res: { loopbackDestinations?: string[] }): string[] =>
+        filterEntriesByHosts(
+          (res.loopbackDestinations ?? []).map((dest) => ({ dest, url: `http://${dest}/` })),
+          { allow: traceConfig.networkHosts, deny: traceConfig.networkIgnoreHosts },
+        ).map((e) => e.dest);
       const attemptStartedAtMs = Date.now();
       const noteCapture = (
         d: Device,
@@ -2883,9 +2898,10 @@ async function runSuiteContext(
           loopbackDestinations?: string[];
         },
       ): void => {
-        if (res.loopbackDestinations?.length) {
+        const loopback = scopedLoopback(res);
+        if (loopback.length > 0) {
           const dests = loopbackDestinations.get(d) ?? new Set<string>();
-          for (const dest of res.loopbackDestinations) dests.add(dest);
+          for (const dest of loopback) dests.add(dest);
           loopbackDestinations.set(d, dests);
         }
         const seen = capturedAppRequests.get(d) ?? [];
@@ -3537,10 +3553,11 @@ async function runSuiteContext(
                 }
                 snapshotsFor(d).update(res.entries);
                 noteCapture(d, res);
-                if (res.loopbackDestinations?.length) {
+                const loopback = scopedLoopback(res);
+                if (loopback.length > 0) {
                   traceCollector.addDaemonLogEntry(
                     'warn',
-                    `Network capture warning: ${loopbackCaptureWarning(res.loopbackDestinations)}`,
+                    `Network capture warning: ${loopbackCaptureWarning(loopback)}`,
                     d._traceDeviceId,
                   );
                 }

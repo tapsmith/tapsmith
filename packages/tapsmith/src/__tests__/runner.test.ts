@@ -1308,6 +1308,39 @@ describe('runner execution', () => {
         ]);
       });
 
+      // A UI-mode worker runs file after file in one process: each run of a
+      // file must warn again, not only the session's first.
+      it('warns again in the next file run of the same process', async () => {
+        const runs = [];
+        for (let i = 0; i < 2; i++) {
+          const device = makeOnDemandDevice({ handled: 1, loopbackDestinations: ['127.0.0.1:43203'] });
+          runs.push(await runBody(`rerun ${i}`, () => device.route(), [{ name: 'device-1', device }]));
+        }
+        expect(runs.map((r) => (r.tests[0].warnings ?? []).length)).toEqual([1, 1]);
+      });
+
+      it('leaves out loopback servers the trace host filters scope out', async () => {
+        const device = makeOnDemandDevice({ handled: 0, loopbackDestinations: ['127.0.0.1:43204', '[::1]:43205'] });
+        pushContext();
+        tapsmithTest('ignores a known helper', failAfter(() => device.route()));
+        const ctx = popContext();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+            config: makeConfig({ trace: { mode: 'off', networkIgnoreHosts: ['127.0.0.1'] } }),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+            devices: [{ name: 'device-1', device: device as any }],
+          }));
+          const warnings = result.tests[0].warnings ?? [];
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('[::1]:43205');
+          expect(warnings[0]).not.toContain('43204');
+          expect(routeWarnings(warn).join('\n')).not.toContain('43204');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
       // PILOT-1196: an app that fetches as it launches sent the request
       // before the test registered its route.
       it('names a request the app sent before the route matching it was registered', async () => {
