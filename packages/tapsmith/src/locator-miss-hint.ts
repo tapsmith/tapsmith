@@ -207,8 +207,8 @@ export async function systemAlertHint(
     + 'until it is closed: close it on the device, or tap one of its buttons with device.tapXY().';
 }
 
-/** `call`'s result, or undefined when it rejects, `budgetMs` passes first, or `signal` aborts. */
-async function withinBudget<T>(
+/** `call`'s result, or undefined when it rejects, `budgetMs` passes first, or `signal` aborts. @internal */
+export async function withinBudget<T>(
   call: () => Promise<T>,
   signal: AbortSignal | undefined,
   budgetMs: number,

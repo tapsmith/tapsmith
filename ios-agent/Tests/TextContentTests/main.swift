@@ -20,7 +20,7 @@ func expect(_ name: String, _ ok: Bool) {
 let typesByName: [String: XCUIElement.ElementType] = {
     let types: [XCUIElement.ElementType] = [
         .staticText, .button, .switch, .toggle, .slider, .stepper, .textField, .secureTextField,
-        .textView, .searchField, .other, .alert, .cell, .link, .progressIndicator, .pickerWheel,
+        .textView, .searchField, .other, .alert, .cell, .link, .progressIndicator, .pickerWheel, .image,
     ]
     var map: [String: XCUIElement.ElementType] = [:]
     for type in types { map[RoleMapping.typeName(for: type)] = type }
@@ -31,6 +31,31 @@ expect("a toggle has a dump type name", RoleMapping.typeName(for: .toggle) == "X
 expect("a picker wheel has a dump type name", RoleMapping.typeName(for: .pickerWheel) == "XCUIElementTypePickerWheel")
 expect("a progress indicator has a dump type name",
        RoleMapping.typeName(for: .progressIndicator) == "XCUIElementTypeProgressIndicator")
+
+// A generic wrapper copying a name-only descendant's label onto its own
+// bounds (React Native's <Image accessibilityLabel>: an Other over the
+// Image) is that descendant's name, not text (PILOT-1366).
+expect("an Other echoing a same-target image's label is its name",
+       TextContent.echoesName(wrapperType: .other, wrapperLabel: "The Flower Girl",
+                              nodeType: .image, nodeLabel: "The Flower Girl", sameTarget: true))
+expect("an Other echoing a same-target switch's label is its name",
+       TextContent.echoesName(wrapperType: .other, wrapperLabel: "Wi-Fi",
+                              nodeType: .switch, nodeLabel: "Wi-Fi", sameTarget: true))
+expect("an Other with other bounds is a container, not an echo",
+       !TextContent.echoesName(wrapperType: .other, wrapperLabel: "The Flower Girl",
+                               nodeType: .image, nodeLabel: "The Flower Girl", sameTarget: false))
+expect("an Other with another label is not an echo",
+       !TextContent.echoesName(wrapperType: .other, wrapperLabel: "Gallery, The Flower Girl",
+                               nodeType: .image, nodeLabel: "The Flower Girl", sameTarget: true))
+expect("a button over a same-target image keeps its label as text",
+       !TextContent.echoesName(wrapperType: .button, wrapperLabel: "Share",
+                               nodeType: .image, nodeLabel: "Share", sameTarget: true))
+expect("an Other over a same-target static text is no name echo",
+       !TextContent.echoesName(wrapperType: .other, wrapperLabel: "Hello",
+                               nodeType: .staticText, nodeLabel: "Hello", sameTarget: true))
+expect("an unlabelled wrapper is not an echo",
+       !TextContent.echoesName(wrapperType: .other, wrapperLabel: "",
+                               nodeType: .image, nodeLabel: "", sameTarget: true))
 
 let fixturePath = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]

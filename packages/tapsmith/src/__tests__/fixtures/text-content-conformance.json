@@ -137,6 +137,60 @@
       "matches": false
     },
     {
+      "why": "an image is not text by its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeImage",
+      "label": "The Flower Girl",
+      "query": {
+        "exact": "The Flower Girl"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor by substring",
+      "platform": "ios",
+      "type": "XCUIElementTypeImage",
+      "label": "The Flower Girl",
+      "query": {
+        "substring": "flower"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor by RegExp",
+      "platform": "ios",
+      "type": "XCUIElementTypeImage",
+      "label": "The Flower Girl",
+      "query": {
+        "source": "Flower",
+        "flags": "",
+        "pattern": "Flower",
+        "ignoreCase": false
+      },
+      "matches": false
+    },
+    {
+      "why": "nor an image by its title",
+      "platform": "ios",
+      "type": "XCUIElementTypeImage",
+      "label": "",
+      "title": "The Flower Girl",
+      "query": {
+        "exact": "The Flower Girl"
+      },
+      "matches": false
+    },
+    {
+      "why": "an icon button by its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "label": "Close",
+      "query": {
+        "exact": "Close"
+      },
+      "matches": true
+    },
+    {
       "why": "a switch's value is not text",
       "platform": "ios",
       "type": "XCUIElementTypeSwitch",

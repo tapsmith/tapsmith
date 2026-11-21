@@ -63,6 +63,7 @@ const T = {
   cell: 'XCUIElementTypeCell',
   link: 'XCUIElementTypeLink',
   progress: 'XCUIElementTypeProgressIndicator',
+  image: 'XCUIElementTypeImage',
   wheel: 'XCUIElementTypePickerWheel',
 } as const;
 
@@ -90,6 +91,17 @@ const CASES: Case[] = [
   { why: 'nor by substring', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
   { why: 'nor by RegExp', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { source: '^Quantity: \\d+$', flags: '' }, matches: false },
   { why: 'nor a control by its title', platform: 'ios', type: T.switch, label: '', title: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
+  // An image's label is its alt text, a name (getByRole('image', { name }),
+  // getByLabel), never getByText's text: Playwright matches an <img alt> with
+  // getByAltText, and Android a content description with getByText not at all
+  // (PILOT-1366). A caption under a labelled image is one match.
+  { why: 'an image is not text by its label', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { exact: 'The Flower Girl' }, matches: false },
+  { why: 'nor by substring', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { substring: 'flower' }, matches: false },
+  { why: 'nor by RegExp', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { source: 'Flower', flags: '' }, matches: false },
+  { why: 'nor an image by its title', platform: 'ios', type: T.image, label: '', title: 'The Flower Girl', query: { exact: 'The Flower Girl' }, matches: false },
+  // A button's label is the only text it has, drawn or not: an icon button
+  // can't be told from a text button, so both stay text.
+  { why: 'an icon button by its label', platform: 'ios', type: T.button, label: 'Close', query: { exact: 'Close' }, matches: true },
   // Values are text content only where they are the text on screen.
   { why: "a switch's value is not text", platform: 'ios', type: T.switch, label: '', value: '1', query: { exact: '1' }, matches: false },
   { why: "a stepper's value is not text", platform: 'ios', type: T.stepper, label: 'Quantity: 1', value: '1', query: { exact: '1' }, matches: false },
@@ -331,6 +343,35 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
     // A container with other bounds still gives way.
     const row = node(T.button, 'Test Screens', [node(T.text, 'Test Screens', [], bounds)], { bounds: '[0,90][400,150]' });
     expect(matchTypes(row, 'device.getByText("Test Screens", { exact: true })')).toEqual([`${T.text}:Test Screens`]);
+  });
+
+  it("a generic wrapper echoing an image's or a switch's name gives way to it (PILOT-1366)", () => {
+    // React Native's <Image accessibilityLabel>: an Other over the Image, same label and bounds.
+    const bounds = { bounds: '[16,518][64,566]' };
+    const card = node(T.other, '', [
+      node(T.other, 'The Flower Girl', [node(T.image, 'The Flower Girl', [], bounds)], bounds),
+      node(T.text, 'The Flower Girl', [], { bounds: '[16,570][125,589]' }),
+    ]);
+    expect(matchTypes(card, 'device.getByText("The Flower Girl", { exact: true })')).toEqual([`${T.text}:The Flower Girl`]);
+    expect(matchTypes(card, 'device.getByText("flower")')).toEqual([`${T.text}:The Flower Girl`]);
+    expect(matchTypes(card, 'device.getByText(/^The Flower Girl$/)')).toEqual([`${T.text}:The Flower Girl`]);
+    const sw = node(T.other, 'Wi-Fi', [node(T.switch, 'Wi-Fi', [], { ...bounds, value: '1' })], bounds);
+    expect(matchTypes(sw, 'device.getByText("Wi-Fi", { exact: true })')).toEqual([]);
+    // Other bounds: a container, still text.
+    const container = node(T.other, 'The Flower Girl', [node(T.image, 'The Flower Girl', [], bounds)], { bounds: '[0,500][400,600]' });
+    expect(matchTypes(container, 'device.getByText("The Flower Girl", { exact: true })')).toEqual([`${T.other}:The Flower Girl`]);
+    // A labelled container around the echoing wrapper keeps its match: the
+    // echo is no match, so it never takes the container's place.
+    const echo = () => node(T.other, 'Avatar', [node(T.image, 'Avatar', [], bounds)], bounds);
+    const padded = { bounds: '[0,500][400,600]' };
+    expect(matchTypes(node(T.button, 'Avatar', [echo()], padded), 'device.getByText("Avatar", { exact: true })')).toEqual([`${T.button}:Avatar`]);
+    expect(matchTypes(node(T.other, 'Avatar', [echo()], padded), 'device.getByText("Avatar", { exact: true })')).toEqual([`${T.other}:Avatar`]);
+    expect(matchTypes(node(T.other, 'Gallery, Avatar', [echo()], padded), 'device.getByText("Avatar")')).toEqual([`${T.other}:Gallery, Avatar`]);
+    // A button over its icon keeps its label as text.
+    const button = node(T.button, 'Share', [node(T.image, 'Share', [], bounds)], bounds);
+    expect(matchTypes(button, 'device.getByText("Share", { exact: true })')).toEqual([`${T.button}:Share`]);
+    // getByRole still finds the image.
+    expect(matchTypes(card, 'device.getByRole("image", { name: "The Flower Girl" })')).toEqual([`${T.image}:The Flower Girl`]);
   });
 
   it('siblings are both kept', () => {

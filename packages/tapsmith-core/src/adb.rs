@@ -1795,6 +1795,9 @@ const IPTABLES_CHAIN: &str = "TAPSMITH_REDIRECT";
 /// Sub-chain that sends OS-service UIDs' traffic to the proxy's OS-service
 /// listener (PILOT-782). Jumped to from [`IPTABLES_CHAIN`] by owner match.
 const IPTABLES_OS_SERVICE_CHAIN: &str = "TAPSMITH_OS_SERVICE";
+/// Filter-table chain that refuses outbound QUIC (UDP 443) while capture is
+/// active (PILOT-1393). See [`iptables_redirect_commands`].
+const IPTABLES_NO_QUIC_CHAIN: &str = "TAPSMITH_NO_QUIC";
 
 /// Where OS-service traffic goes in the transparent redirect (PILOT-782): the
 /// device port `adb reverse` maps to the proxy's OS-service listener, and the
@@ -1915,7 +1918,7 @@ pub async fn setup_iptables_redirect(
         }
         warn!(
             %serial,
-            "iptables owner-match rules unavailable; OS-service traffic will not be told apart from the app's"
+            "iptables redirect with owner-match rules failed; retrying without them, so OS-service traffic will not be told apart from the app's"
         );
     }
     setup_iptables_redirect_with(serial, proxy_port, http_ports, None).await
@@ -2007,7 +2010,45 @@ fn iptables_redirect_commands(
         commands.push(format!("iptables -t nat -A {IPTABLES_CHAIN} -p tcp --dport {port} -j REDIRECT --to-port {proxy_port}"));
     }
     commands.push(format!("iptables -t nat -I OUTPUT -j {IPTABLES_CHAIN}"));
+    // HTTP/3 (PILOT-1393). The rules above only redirect TCP, so once a
+    // response advertises `alt-svc: h3`, Chromium clients (WebView, Cronet)
+    // send later requests as QUIC over UDP 443 straight to the server, past
+    // the proxy: routes never fire, waits time out, the trace misses them.
+    // Refuse that UDP so they fall back to TCP, as iOS capture does by
+    // dropping non-DNS UDP. A locally generated packet refused here makes the
+    // client's send fail at once (EPERM), and REJECT also answers with an ICMP
+    // port-unreachable, so Chromium marks the alternative broken and uses TCP
+    // instead of waiting out a handshake timeout. The filter table, unlike nat, sees every packet, so a QUIC
+    // connection already open when capture starts is cut off too. Only port
+    // 443: unlike iOS's per-process redirect this rule is device-wide, and
+    // refusing all UDP would break NTP, WebRTC media and the like for every
+    // app. Loopback is exempt so a local HTTP/3 server stays reachable.
+    commands.extend([
+        format!("iptables -N {IPTABLES_NO_QUIC_CHAIN}"),
+        format!("iptables -A {IPTABLES_NO_QUIC_CHAIN} -d 127.0.0.0/8 -j RETURN"),
+        format!("iptables -A {IPTABLES_NO_QUIC_CHAIN} -p udp --dport 443 -j REJECT"),
+        format!("iptables -I OUTPUT -j {IPTABLES_NO_QUIC_CHAIN}"),
+    ]);
     commands
+}
+
+/// The shell calls [`cleanup_iptables_redirect`] makes, one per chain
+/// [`iptables_redirect_commands`] creates: unhook it from `OUTPUT`, then flush
+/// and delete it. Any step may fail because there is nothing to remove, which
+/// is fine; `;` lets the later steps run anyway.
+fn iptables_cleanup_commands() -> Vec<String> {
+    vec![
+        format!(
+            "iptables -t nat -D OUTPUT -j {IPTABLES_CHAIN}; iptables -t nat -F {IPTABLES_CHAIN}; iptables -t nat -X {IPTABLES_CHAIN}"
+        ),
+        // The OS-service sub-chain, once nothing jumps to it (PILOT-782).
+        format!(
+            "iptables -t nat -F {IPTABLES_OS_SERVICE_CHAIN}; iptables -t nat -X {IPTABLES_OS_SERVICE_CHAIN}"
+        ),
+        format!(
+            "iptables -D OUTPUT -j {IPTABLES_NO_QUIC_CHAIN}; iptables -F {IPTABLES_NO_QUIC_CHAIN}; iptables -X {IPTABLES_NO_QUIC_CHAIN}"
+        ),
+    ]
 }
 
 async fn apply_iptables_commands(serial: &str, commands: &[String]) -> bool {
@@ -2021,19 +2062,25 @@ async fn apply_iptables_commands(serial: &str, commands: &[String]) -> bool {
     true
 }
 
-/// Verify the iptables chain is active in the OUTPUT path. Retries up to 3
+/// Verify the iptables chains are active in the OUTPUT path. Retries up to 3
 /// times with 200ms sleeps to handle kernel module loading races on slow
 /// CI emulators.
 async fn verify_iptables_chain(serial: &str) -> bool {
     for attempt in 1..=3 {
+        // Both the nat redirect and the filter-table QUIC block must be
+        // hooked into OUTPUT.
         match shell(
             serial,
-            &format!("iptables -t nat -L OUTPUT -n | grep {IPTABLES_CHAIN}"),
+            &format!(
+                "iptables -t nat -L OUTPUT -n | grep {IPTABLES_CHAIN}; iptables -L OUTPUT -n | grep {IPTABLES_NO_QUIC_CHAIN}"
+            ),
         )
         .await
         {
-            Ok(output) if output.contains(IPTABLES_CHAIN) => {
-                debug!(%serial, attempt, "iptables chain verified in OUTPUT");
+            Ok(output)
+                if output.contains(IPTABLES_CHAIN) && output.contains(IPTABLES_NO_QUIC_CHAIN) =>
+            {
+                debug!(%serial, attempt, "iptables chains verified in OUTPUT");
                 return true;
             }
             _ => {
@@ -2047,38 +2094,12 @@ async fn verify_iptables_chain(serial: &str) -> bool {
     false
 }
 
-/// Remove the `TAPSMITH_REDIRECT` iptables chain and its reference from OUTPUT.
-/// Safe to call even if the chain doesn't exist.
+/// Remove the iptables chains [`setup_iptables_redirect`] installs and their
+/// references from OUTPUT. Safe to call even if they don't exist.
 pub async fn cleanup_iptables_redirect(serial: &str) {
-    // Remove the jump rule from OUTPUT (may fail if not present — that's fine)
-    let _ = shell_with_timeout(
-        serial,
-        &format!("iptables -t nat -D OUTPUT -j {IPTABLES_CHAIN}"),
-        CLEANUP_TIMEOUT,
-    )
-    .await;
-    // Flush and delete the chain
-    let _ = shell_with_timeout(
-        serial,
-        &format!("iptables -t nat -F {IPTABLES_CHAIN}"),
-        CLEANUP_TIMEOUT,
-    )
-    .await;
-    let _ = shell_with_timeout(
-        serial,
-        &format!("iptables -t nat -X {IPTABLES_CHAIN}"),
-        CLEANUP_TIMEOUT,
-    )
-    .await;
-    // The OS-service sub-chain, once nothing jumps to it (PILOT-782).
-    let _ = shell_with_timeout(
-        serial,
-        &format!(
-            "iptables -t nat -F {IPTABLES_OS_SERVICE_CHAIN}; iptables -t nat -X {IPTABLES_OS_SERVICE_CHAIN}"
-        ),
-        CLEANUP_TIMEOUT,
-    )
-    .await;
+    for cmd in iptables_cleanup_commands() {
+        let _ = shell_with_timeout(serial, &cmd, CLEANUP_TIMEOUT).await;
+    }
 }
 
 #[cfg(test)]
@@ -2162,14 +2183,97 @@ mod tests {
             assert_eq!(
                 commands
                     .iter()
-                    .filter(|c| c.contains(&format!("--dport {port} ")))
+                    .filter(|c| c.contains(&format!("-p tcp --dport {port} ")))
                     .count(),
                 1
             );
         }
-        assert!(commands.last().unwrap().contains("-I OUTPUT"));
-        assert_eq!(commands.len(), 7);
+        assert!(commands
+            .iter()
+            .any(|c| c == "iptables -t nat -I OUTPUT -j TAPSMITH_REDIRECT"));
         assert!(!commands.iter().any(|c| c.contains("owner")));
+    }
+
+    // PILOT-1393: HTTP/3 runs over UDP, which the nat REDIRECT rules never
+    // see. While capture is active, QUIC on :443 is refused in the filter
+    // table so WebView/Cronet fall back to TCP, where the proxy sees it —
+    // except loopback, so a local HTTP/3 server stays reachable.
+    #[test]
+    fn quic_is_rejected_so_clients_fall_back_to_tcp() {
+        let commands = super::iptables_redirect_commands(45678, &[], None);
+        let pos = |needle: &str| {
+            commands
+                .iter()
+                .position(|c| c == needle)
+                .unwrap_or_else(|| panic!("no command {needle:?}: {commands:#?}"))
+        };
+        let create = pos("iptables -N TAPSMITH_NO_QUIC");
+        let loopback = pos("iptables -A TAPSMITH_NO_QUIC -d 127.0.0.0/8 -j RETURN");
+        let reject = pos("iptables -A TAPSMITH_NO_QUIC -p udp --dport 443 -j REJECT");
+        let jump = pos("iptables -I OUTPUT -j TAPSMITH_NO_QUIC");
+        assert!(create < loopback && loopback < reject && reject < jump);
+        // Only UDP 443 is refused: DNS and every other UDP flow keep working.
+        let quic_rules: Vec<_> = commands
+            .iter()
+            .filter(|c| c.starts_with("iptables -A TAPSMITH_NO_QUIC"))
+            .collect();
+        assert_eq!(quic_rules.len(), 2, "{quic_rules:#?}");
+        // The filter-table rules are installed whether or not OS services get
+        // their own listener.
+        let os = super::OsServiceRedirect {
+            device_port: 45679,
+            uid_ranges: vec![(0, 9999)],
+        };
+        assert!(super::iptables_redirect_commands(45678, &[], Some(&os))
+            .iter()
+            .any(|c| c == "iptables -I OUTPUT -j TAPSMITH_NO_QUIC"));
+    }
+
+    #[test]
+    fn cleanup_removes_the_quic_block_with_the_redirect() {
+        // One shell call may run several commands; check the order of all of them.
+        let cleanup: Vec<String> = super::iptables_cleanup_commands()
+            .iter()
+            .flat_map(|c| c.split("; ").map(str::to_string).collect::<Vec<_>>())
+            .collect();
+        let pos = |needle: &str| {
+            cleanup
+                .iter()
+                .position(|c| c.contains(needle))
+                .unwrap_or_else(|| panic!("no cleanup command {needle:?}: {cleanup:#?}"))
+        };
+        // Each chain is unhooked from OUTPUT before it is flushed and deleted.
+        assert!(
+            pos("iptables -D OUTPUT -j TAPSMITH_NO_QUIC") < pos("iptables -F TAPSMITH_NO_QUIC")
+        );
+        assert!(pos("iptables -F TAPSMITH_NO_QUIC") < pos("iptables -X TAPSMITH_NO_QUIC"));
+        assert!(
+            pos("iptables -t nat -D OUTPUT -j TAPSMITH_REDIRECT")
+                < pos("iptables -t nat -F TAPSMITH_REDIRECT")
+        );
+        assert!(pos("iptables -t nat -X TAPSMITH_REDIRECT") < pos("-X TAPSMITH_OS_SERVICE"));
+        // Every chain setup creates is removed again.
+        for created in super::iptables_redirect_commands(
+            1,
+            &[],
+            Some(&super::OsServiceRedirect {
+                device_port: 2,
+                uid_ranges: vec![(0, 9999)],
+            }),
+        )
+        .iter()
+        .filter_map(|c| {
+            c.split_once(" -N ")
+                .map(|(table, chain)| (table.to_string(), chain.to_string()))
+        }) {
+            let (table, chain) = created;
+            assert!(
+                cleanup
+                    .iter()
+                    .any(|c| c.contains(&format!("{table} -X {chain}"))),
+                "{table} {chain} is never deleted: {cleanup:#?}"
+            );
+        }
     }
 
     // PILOT-782: OS-service UIDs jump to a sub-chain that redirects every
@@ -2202,10 +2306,12 @@ mod tests {
             pos("--uid-owner 10171")
                 < pos("-A TAPSMITH_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port 45678")
         );
-        assert!(commands
-            .last()
-            .unwrap()
-            .contains("-I OUTPUT -j TAPSMITH_REDIRECT"));
+        // The chain is hooked into OUTPUT only once every nat rule is in it.
+        let last_nat_rule = commands
+            .iter()
+            .rposition(|c| c.starts_with("iptables -t nat -A"))
+            .unwrap();
+        assert!(pos("iptables -t nat -I OUTPUT -j TAPSMITH_REDIRECT") > last_nat_rule);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
+import { Image, Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 
 // Text whose whitespace is not a plain ASCII space (PILOT-510). Locators
@@ -22,9 +22,18 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Nickname", uppercased, above a field with no accessibility label: once
 //   text is typed into it, getByText finds the field only through that
 //   value (PILOT-522).
+// - "The Flower Girl" is a gallery card: an image whose accessibility label
+//   is its caption's text, above that caption. getByText finds the caption
+//   alone on both platforms (PILOT-1366): an image's label is its name, for
+//   getByRole("image", { name }), as Android's content description is.
 //
 // Reached by deep link only (not on the home list, so the home cards keep
 // their positions).
+
+// A bundled image. CI's typecheck has no image module types (Expo generates
+// them only on `expo start`), so it is required rather than imported.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const cardImage = require("../assets/icon.png")
 
 export default function TextMatchingScreen() {
   const [welcomeTaps, setWelcomeTaps] = useState(0)
@@ -82,6 +91,16 @@ export default function TextMatchingScreen() {
         autoCapitalize="none"
         autoCorrect={false}
       />
+      <View style={styles.card}>
+        <Image
+          source={cardImage}
+          style={styles.cardImage}
+          accessible
+          accessibilityRole="image"
+          accessibilityLabel="The Flower Girl"
+        />
+        <Text style={styles.body}>The Flower Girl</Text>
+      </View>
       <Text testID="text-matching-counts">{`welcome=${welcomeTaps} save=${saveTaps}`}</Text>
       <Text testID="text-matching-started">{`started=${startedTaps}`}</Text>
     </View>
@@ -120,6 +139,14 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
+  },
+  card: {
+    alignItems: "flex-start",
+    gap: 4,
+  },
+  cardImage: {
+    width: 48,
+    height: 48,
   },
   input: {
     backgroundColor: "#fff",

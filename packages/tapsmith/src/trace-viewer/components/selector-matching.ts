@@ -2,6 +2,7 @@ import type { HierarchyNode } from './hierarchy-utils.js';
 import { androidResourceIdMatches } from './resource-id.js';
 import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
+import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
 import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES, iosBackButtonName } from '../../accessible-name.js';
@@ -887,6 +888,24 @@ function isSameTargetDuplicate(outer: HierarchyNode, inner: HierarchyNode): bool
 }
 
 /**
+ * Whether a generic wrapper's label is only a name-only child's name on the
+ * same bounds — React Native's `<Image accessibilityLabel>`, an Other over the
+ * Image — so the wrapper is no getByText match either, and leaves any labelled
+ * container around it matched (TextContent.echoesName in the iOS agent,
+ * PILOT-1366).
+ */
+function echoesNameOnlyChild(wrapper: HierarchyNode): boolean {
+  const label = normalizeWhitespace(wrapper.attributes.get('label') ?? '');
+  const bounds = wrapper.attributes.get('bounds');
+  if ((wrapper.attributes.get('type') ?? wrapper.tagName) !== 'XCUIElementTypeOther' || label === '' || bounds === undefined) {
+    return false;
+  }
+  return wrapper.children.some((child) => IOS_NAME_ONLY_TYPES.has(child.attributes.get('type') ?? child.tagName)
+    && normalizeWhitespace(child.attributes.get('label') ?? '') === label
+    && child.attributes.get('bounds') === bounds);
+}
+
+/**
  * Resolve a positional chain (.first()/.last()/.nth(n), negative n counting
  * from the end) to a concrete index. May be out of range — callers decide
  * whether that means "empty result" or an error.
@@ -994,7 +1013,7 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     const appNode = !isNonAppNode(node);
     const type = node.attributes.get('type') ?? node.tagName;
     const matches = appNode && (iosText && isIos
-      ? iosNodeMatchesText(node, selector, containerLabel)
+      ? iosNodeMatchesText(node, selector, containerLabel) && !echoesNameOnlyChild(node)
       : !(isIos && iosInsideNativeAlert(role, type, inAlert)) && nodeMatchesSelector(node, selector, parentClass));
     let pushed = false;
     if (matches) {

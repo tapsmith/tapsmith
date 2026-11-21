@@ -167,18 +167,25 @@ class ElementFinder {
             return results
         }
 
+        // getByText: a control's or an image's label is its name, not text
+        // (TextContent.nameOnlyTypes, PILOT-1366), as the snapshot walk reads it.
+        let nameOnlyRaw = TextContent.nameOnlyTypes.map { NSNumber(value: $0.rawValue) }
+        func textQuery(_ predicate: NSPredicate) -> XCUIElementQuery {
+            let notNameOnly = NSPredicate(format: "NOT (elementType IN %@)", nameOnlyRaw)
+            return root.descendants(matching: .any)
+                .matching(NSCompoundPredicate(andPredicateWithSubpredicates: [notNameOnly, predicate]))
+        }
+
         // Text selector — search across all element types
         if let text = selector.text {
             let predicate = NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern(text))
-            let query = root.descendants(matching: .any).matching(predicate)
-            return allElements(from: query)
+            return allElements(from: textQuery(predicate))
         }
 
         // TextContains selector
         if let textContains = selector.textContains {
             let predicate = NSPredicate(format: "label MATCHES %@", TextMatch.containsPattern(textContains))
-            let query = root.descendants(matching: .any).matching(predicate)
-            return allElements(from: query)
+            return allElements(from: textQuery(predicate))
         }
 
         // getByText(RegExp) (PILOT-520): the raw label, title or value, as the
@@ -189,8 +196,7 @@ class ElementFinder {
                 format: "label MATCHES %@ OR title MATCHES %@ OR value MATCHES %@",
                 pattern, pattern, pattern
             )
-            let query = root.descendants(matching: .any).matching(predicate)
-            return allElements(from: query)
+            return allElements(from: textQuery(predicate))
         }
 
         // ContentDesc selector (maps to accessibilityLabel on iOS)

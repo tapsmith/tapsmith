@@ -772,6 +772,16 @@ describe('parseSelectorString getByText semantics', () => {
     expect(generateSelectors(text).map((s) => s.code)).toContain('device.getByText("Dark Mode")');
   });
 
+  it("suggests no getByText for an iOS image, whose label is its alt text (PILOT-1366)", () => {
+    const image = makeNode('XCUIElementTypeImage', { type: 'XCUIElementTypeImage', label: 'The Flower Girl', 'tapsmith-role': 'image' });
+    const codes = generateSelectors(image).map((s) => s.code);
+    expect(codes.filter((c) => c.startsWith('device.getByText('))).toEqual([]);
+    expect(codes).toContain('device.getByRole("image", { name: "The Flower Girl" })');
+    const caption = makeNode('XCUIElementTypeStaticText', { type: 'XCUIElementTypeStaticText', label: 'The Flower Girl' });
+    const card = makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther' }, [image, caption]);
+    expect(findMatchingNodes([card], parseSelectorString('device.getByText("The Flower Girl", { exact: true })')!)).toEqual([caption]);
+  });
+
   it("text matching reads an iOS text field's value, not a control's (PILOT-794)", () => {
     const field = makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', label: '', value: 'nick' });
     expect(findMatchingNodes([field], parseSelectorString('device.getByText("nick", { exact: true })')!)).toHaveLength(1);
