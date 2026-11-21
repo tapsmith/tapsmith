@@ -1157,6 +1157,7 @@ describe('runner execution', () => {
         registrations?: Array<{ pattern: string; registeredAtMs: number; matches: (url: string) => boolean }>
         tlsRejectedHosts?: string[]
         osServiceTlsRejectedHosts?: string[]
+        loopbackDestinations?: string[]
         name?: string
       }) => {
         const base = makeRoutedDevice({ proxyRunning: false, registered: 0, name: opts.name });
@@ -1184,6 +1185,7 @@ describe('runner execution', () => {
             success: true, entries, errorMessage: '',
             tlsRejectedHosts: opts.tlsRejectedHosts ?? [],
             osServiceTlsRejectedHosts: opts.osServiceTlsRejectedHosts ?? [],
+            loopbackDestinations: opts.loopbackDestinations ?? [],
           };
         }) as unknown as typeof device._stopNetworkCapture;
         return device;
@@ -1261,6 +1263,79 @@ describe('runner execution', () => {
           expect(warnings[0]).toContain('Google Play emulator image');
           // PILOT-1183: an iOS simulator whose CA install failed tunnels too.
           expect(warnings[0]).toContain('on an iOS simulator, installing the CA failed');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      // PILOT-320: an iOS simulator app calling localhost goes around every
+      // capture route; the daemon noticed the connection.
+      it('names a loopback server the app talked to when routes never fire, and warns on the result', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({ handled: 0, loopbackDestinations: ['127.0.0.1:43201'] });
+        try {
+          const result = await runBody('mocks a localhost api', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain(
+            "Possible reasons: (1) the app connected to a server on this Mac's loopback interface (127.0.0.1:43201)",
+          );
+          expect(warnings[0]).toContain("Mac's LAN address");
+          const resultWarnings = result.tests[0].warnings ?? [];
+          expect(resultWarnings).toHaveLength(1);
+          expect(resultWarnings[0]).toMatch(/^Network capture warning: the app connected to a server on this Mac's loopback interface \(127\.0\.0\.1:43201\)/);
+          expect(resultWarnings[0]).toContain('ipconfig getifaddr en0');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('labels the loopback warning with the device in a group, once per run per server', async () => {
+        const alice = makeOnDemandDevice({ handled: 1, name: 'alice', loopbackDestinations: ['[::1]:43202'] });
+        const bob = makeOnDemandDevice({ handled: 1, name: 'bob' });
+        pushContext();
+        tapsmithTest('first', async () => { await alice.route(); await bob.route(); });
+        tapsmithTest('second', async () => { await alice.route(); await bob.route(); });
+        const ctx = popContext();
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+          config: makeConfig(),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+          devices: [{ name: 'alice', device: alice as any }, { name: 'bob', device: bob as any }],
+        }));
+        expect(result.tests.map((t) => t.warnings ?? [])).toEqual([
+          [expect.stringMatching(/^Network capture warning: \[alice\] the app connected .*\[::1\]:43202/)],
+          [],
+        ]);
+      });
+
+      // A UI-mode worker runs file after file in one process: each run of a
+      // file must warn again, not only the session's first.
+      it('warns again in the next file run of the same process', async () => {
+        const runs = [];
+        for (let i = 0; i < 2; i++) {
+          const device = makeOnDemandDevice({ handled: 1, loopbackDestinations: ['127.0.0.1:43203'] });
+          runs.push(await runBody(`rerun ${i}`, () => device.route(), [{ name: 'device-1', device }]));
+        }
+        expect(runs.map((r) => (r.tests[0].warnings ?? []).length)).toEqual([1, 1]);
+      });
+
+      it('leaves out loopback servers the trace host filters scope out', async () => {
+        const device = makeOnDemandDevice({ handled: 0, loopbackDestinations: ['127.0.0.1:43204', '[::1]:43205'] });
+        pushContext();
+        tapsmithTest('ignores a known helper', failAfter(() => device.route()));
+        const ctx = popContext();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+            config: makeConfig({ trace: { mode: 'off', networkIgnoreHosts: ['127.0.0.1'] } }),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+            devices: [{ name: 'device-1', device: device as any }],
+          }));
+          const warnings = result.tests[0].warnings ?? [];
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('[::1]:43205');
+          expect(warnings[0]).not.toContain('43204');
+          expect(routeWarnings(warn).join('\n')).not.toContain('43204');
         } finally {
           warn.mockRestore();
         }
@@ -1740,6 +1815,57 @@ describe('runner execution', () => {
       expect(traceWarnings[2][0].message).toContain('pilot712-b.example.com');
     } finally {
       warn.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  // PILOT-320: requests to localhost from an iOS simulator app never reach
+  // capture, so a trace with no network.json has to say why.
+  it('records loopback servers the app talked to in each trace, and warns on the first result', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-loopback-'));
+    const drains = [['127.0.0.1:43210'], [], ['127.0.0.1:43210']];
+    const mockDevice = {
+      tracing: new Tracing(async () => undefined, async () => undefined),
+      waitForIdle: vi.fn(async () => {}),
+      _startNetworkCapture: vi.fn(async () => ({ success: true, proxyPort: 12345, errorMessage: '' })),
+      _stopNetworkCapture: vi.fn(async () => ({
+        success: true, entries: [], errorMessage: '', loopbackDestinations: drains.shift() ?? [],
+      })),
+      _stopDeviceLogStream: vi.fn(),
+      _startDaemonLogStream: vi.fn(),
+      _stopDaemonLogStream: vi.fn(),
+      _disposeRouteManager: vi.fn(async () => {}),
+      _disposeWebViewManager: vi.fn(async () => {}),
+      _resetWebViewContext: vi.fn(),
+    };
+    try {
+      pushContext();
+      tapsmithTest('loopback one', async () => {});
+      tapsmithTest('loopback two', async () => {});
+      tapsmithTest('loopback three', async () => {});
+      const ctx = popContext();
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+        config: makeConfig({
+          rootDir: tempRoot,
+          outputDir: 'out',
+          trace: { mode: 'on', network: true, screenshots: false, snapshots: false, sources: false, deviceLogs: false },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mock
+        devices: [{ name: 'device-1', device: mockDevice as any }],
+      }));
+
+      expect(result.tests.map((t) => (t.warnings ?? []).length)).toEqual([1, 0, 0]);
+      expect(result.tests[0].warnings![0]).toContain('127.0.0.1:43210');
+
+      const traceWarnings = result.tests.map((t) => {
+        const files = unzipSync(new Uint8Array(fs.readFileSync(t.tracePath!)));
+        return Buffer.from(files['trace.json']).toString('utf8').trim().split('\n').filter(Boolean)
+          .map((line) => JSON.parse(line) as { type: string; source?: string; level?: string; message?: string })
+          .filter((e) => e.type === 'console' && e.message?.includes('loopback interface'));
+      });
+      expect(traceWarnings.map((w) => w.length)).toEqual([1, 0, 1]);
+      expect(traceWarnings[0][0]).toMatchObject({ source: 'daemon', level: 'warn' });
+    } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
