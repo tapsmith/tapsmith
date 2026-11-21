@@ -1003,7 +1003,7 @@ export interface UIWorkerInitMessage {
   networkApisInRun: boolean
   /**
    * The parent's `knownInstalledBuilds()`: the build each device was last
-   * proven to hold (PILOT-1397). Required, so a recycled or respawned worker
+   * proven to hold. Required, so a recycled or respawned worker
    * starts with it instead of comparing the builds in full again.
    */
   installedBuilds: Record<string, string>
@@ -1110,7 +1110,7 @@ export interface UIWorkerCapabilitiesMessage {
 
 /**
  * UI worker → server: before a run (or while adopting the device), the worker
- * found that the configured build changed and reinstalled it (PILOT-1397).
+ * found that the configured build changed and reinstalled it.
  * The server shows it in Device activity and the terminal.
  */
 export interface UIWorkerAppReinstalledMessage {
@@ -1223,7 +1223,7 @@ export interface UIWorkerFileDoneMessage {
   suite: import('../worker-protocol.js').SerializedSuiteResult
   /**
    * The file never ran because the check before it failed: the configured
-   * build is missing, or would not install or launch (PILOT-1397). The
+   * build is missing, or would not install or launch. The
    * parent fails the file's tests with this message; the worker stays.
    */
   setupError?: string

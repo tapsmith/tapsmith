@@ -1,5 +1,5 @@
 /**
- * The build each device was last proven to hold (PILOT-1397), by serial:
+ * The build each device was last proven to hold, by serial:
  * the configured artifact's path and the stamps (`build-stamp.ts`) of the
  * build on disk and of the copy on the device when the full install check
  * last passed, or installed it. Per process. A parent that forks a child per

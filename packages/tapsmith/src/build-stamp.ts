@@ -1,5 +1,5 @@
 /**
- * Cheap "has this build changed?" stamps (PILOT-1397).
+ * Cheap "has this build changed?" stamps.
  *
  * The install check that proves a device holds the configured build reads
  * both builds in full (an md5 of the APK on each side, a byte comparison of

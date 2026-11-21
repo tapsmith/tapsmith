@@ -119,7 +119,7 @@ export interface WatchRunMessage {
   /**
    * The parent's record of the build each device was last proven to hold
    * (`knownInstalledBuilds`). The child re-checks the build before it runs
-   * and reinstalls a rebuilt app (PILOT-1397); with this record the check is
+   * and reinstalls a rebuilt app; with this record the check is
    * a stat and one device query unless something changed. Required: a parent
    * that dropped it would pay for the full comparison on every run.
    */
