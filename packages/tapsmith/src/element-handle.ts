@@ -27,7 +27,7 @@ import {
 import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
 import type { SwipeDirection } from './input-names.js';
 import { onScreenSignature } from './screen-signature.js';
-import { hasScrollableContent, pickScrollRegion, type Rect } from './scroll-container.js';
+import { hasScrollableContent, outsideRegion, pickScrollRegion, visibleRegionOf, type Rect } from './scroll-container.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -3006,10 +3006,11 @@ export class ElementHandle {
       errorType: NOT_HITTABLE_ERROR_TYPE,
       errorMessage:
         `Element ${this._describe()} was still not hittable by the end of the ${this._timeoutMs}ms timeout: ` +
-        'it may be clipped by its list (for example behind a header). ' +
-        // scrollIntoView() would not help: a clipped row counts as visible, so
-        // it returns at once. The list itself has to move.
-        scrollFirstAdvice(action, 'scroll("up") on the list that holds it (scroll("down") if it is clipped at the bottom)'),
+        'it may be clipped by its list or covered (for example behind a header or a tab bar). ' +
+        // scrollIntoView() scrolls in an element on screen but outside the
+        // part of its list where content shows (PILOT-1370); scroll() is the
+        // way for a cover it cannot see.
+        scrollFirstAdvice(action, 'await locator.scrollIntoView() (or scroll() the list that holds it)'),
     });
     let res = await dispatch(first);
     for (;;) {
@@ -4555,6 +4556,34 @@ export class ElementHandle {
                 stableTicks = 0;
                 lastFrame = curFrame;
               }
+            }
+          }
+          // On screen is not in view (PILOT-1370): before any swipe, the
+          // element must also lie inside the part of its scroll container
+          // where content shows. iOS frames are not clipped, so a row just
+          // below its list, behind a tab bar, is "visible"; and a bar the app
+          // lays over the list hides the rows under it on both platforms.
+          // Either way the tap would not reach it: scroll it in, gently, as a
+          // nudge (a nudge that moves nothing met the end of the content).
+          // Not with no budget: `maxScrolls: 0` asks for a check only, and
+          // a cut element is in view once the budget is spent, as below.
+          if (swipes === 0 && maxScrolls > 0) {
+            const frame = usableFrame(el);
+            const read = frame ? await readScreen() : undefined;
+            const view = frame && read ? visibleRegionOf(read.xml, frame) : undefined;
+            const toward = frame && view ? outsideRegion(frame, view) : undefined;
+            if (toward) {
+              region = view;
+              regionHolds = true;
+              direction = toward;
+              positioned = true;
+              if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
+              nudgedFrom = frameKey(el);
+              lastNudge = toward;
+              gentle = true;
+              screenBeforeSwipe = undefined;
+              await swipe();
+              continue;
             }
           }
           // Where the list stopped (PILOT-935). Gone from the screen: the

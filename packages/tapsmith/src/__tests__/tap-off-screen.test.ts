@@ -192,8 +192,8 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     expect(err.elapsedMs).toBeGreaterThanOrEqual(3000);
     expect(err.message).toBe(
       'Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 3000ms timeout: it may be clipped ' +
-        'by its list (for example behind a header). tap() does not scroll, so scroll it into view first with ' +
-        'scroll("up") on the list that holds it (scroll("down") if it is clipped at the bottom), then tap() it.',
+        'by its list or covered (for example behind a header or a tab bar). tap() does not scroll, so scroll it into view ' +
+        'first with await locator.scrollIntoView() (or scroll() the list that holds it), then tap() it.',
     );
   });
 

@@ -6886,10 +6886,11 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
     await handle(client).scrollIntoView();
 
     expect(stepArgs(scrollStep)).toEqual([{ direction: 'up', distance: 0.8, findFirst: true }]);
-    // No probe, no idle wait, no screen read, no swipe: the step did all of it.
+    // No probe, no idle wait, no swipe: the step did all of it. One screen
+    // read checks the element is not under a bar over its list (PILOT-1370).
     expect(findElements).not.toHaveBeenCalled();
     expect(waitForIdle).not.toHaveBeenCalled();
-    expect(getUiHierarchy).not.toHaveBeenCalled();
+    expect(getUiHierarchy).toHaveBeenCalledTimes(1);
     expect(swipe).not.toHaveBeenCalled();
   });
 
@@ -7563,6 +7564,109 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 1 });
 
     expect(swipe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('scrollIntoView() scrolls in an element on screen but out of its list\'s view (PILOT-1370)', () => {
+  // A React Native screen on an iPad: the list ends at 1307, above a bottom
+  // tab bar. iOS frames are not clipped, so the "+" button just below the
+  // list, behind the tab bar, is "visible". Full-screen wrappers and an
+  // empty toolbar host are drawn after the list, as React Native's are.
+  const screen = (plus: string, overBar = '') =>
+    `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][1032,1376]">` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,0][1032,1307]">` +
+    `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,70][1032,1307]">` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" identifier="counter plus button" bounds="${plus}"/>` +
+    `</XCUIElementTypeScrollView>` +
+    `<XCUIElementTypeToolbar type="XCUIElementTypeToolbar" label="Toolbar" tapsmith-empty-bar-host="true" bounds="[0,0][1032,1307]"/>` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,0][1032,1376]"/>` +
+    overBar +
+    `</XCUIElementTypeOther>` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,1307][1032,1376]">` +
+    `<XCUIElementTypeButton type="XCUIElementTypeButton" label="Catalog, tab, 1 of 3" bounds="[0,1307][344,1356]"/>` +
+    `</XCUIElementTypeOther></XCUIElementTypeApplication></hierarchy>`;
+  const plusAt = (top: number) =>
+    makeElementInfo({ resourceId: 'counter plus button', visible: true, bounds: { left: 100, top, right: 140, bottom: top + 40 } });
+  const frame = (top: number) => `[100,${top}][140,${top + 40}]`;
+  /** findElements answers from `script` in order, repeating the last entry. */
+  function scripted(script: ElementInfo[]) {
+    let i = 0;
+    return vi.fn(async () => makeFindElementsResponse([script[Math.min(i++, script.length - 1)]]));
+  }
+  const swipeCalls = (swipe: ReturnType<typeof vi.fn>) =>
+    swipe.mock.calls.map((c) => {
+      const o = (c as unknown[])[1] as { distance: number; region?: unknown };
+      return [c[0], o.distance, o.region];
+    });
+  const list = { left: 0, top: 70, right: 1032, bottom: 1307 };
+
+  it('scrolls down, gently, for an element just below its list, behind a tab bar', async () => {
+    const findElements = scripted([plusAt(1307), plusAt(936)]);
+    const swipe = vi.fn(async () => successResponse());
+    const getUiHierarchy = vi.fn(hierarchySequence([screen(frame(1307)), screen(frame(936))]));
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([['up', 0.3, list]]);
+  });
+
+  it('scrolls up for an element above its list, under a header', async () => {
+    const findElements = scripted([plusAt(30), plusAt(400)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(30))])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([['down', 0.3, list]]);
+  });
+
+  it('scrolls in an element inside its list that a bar laid over the list covers', async () => {
+    const bar = '<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,1247][1032,1307]">' +
+      '<XCUIElementTypeButton type="XCUIElementTypeButton" label="Add to cart" bounds="[0,1247][1032,1307]"/></XCUIElementTypeOther>';
+    const findElements = scripted([plusAt(1255), plusAt(900)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(1255), bar)])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([['up', 0.3, { ...list, bottom: 1247 }]]);
+  });
+
+  it('does not swipe for an element inside its list, with nothing over it', async () => {
+    const findElements = scripted([plusAt(600)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(600))])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('stops after one swipe when the list cannot move it further (the end of the content)', async () => {
+    const findElements = scripted([plusAt(1307)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(1307))])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('only checks with maxScrolls 0, and returns as before when the screen cannot be read', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const getUiHierarchy = vi.fn(hierarchySequence([screen(frame(1307))]));
+    const client = makeMockClient({ findElements: scripted([plusAt(1307)]), swipe, getUiHierarchy });
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView({ maxScrolls: 0 });
+    expect(swipe).not.toHaveBeenCalled();
+
+    const failing = makeMockClient({
+      findElements: scripted([plusAt(1307)]),
+      swipe,
+      getUiHierarchy: vi.fn(async (): Promise<UiHierarchyResponse> => ({ requestId: '1', hierarchyXml: '', errorMessage: 'dump failed' })),
+    });
+    await new ElementHandle(failing, _testId('counter plus button'), 5000).scrollIntoView();
+    expect(swipe).not.toHaveBeenCalled();
   });
 });
 

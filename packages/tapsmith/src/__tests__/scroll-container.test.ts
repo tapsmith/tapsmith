@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasScrollableContent, pickScrollRegion, scrollRegion } from '../scroll-container.js';
+import { hasScrollableContent, outsideRegion, pickScrollRegion, scrollRegion, visibleRegionOf } from '../scroll-container.js';
 
 // PILOT-934: scrollIntoView() swipes inside the scroll container that holds
 // its element, so a swipe cannot start outside a dialog (dismissing it) or on
@@ -330,5 +330,89 @@ describe('hasScrollableContent', () => {
 
   it('is false for a dump with no bounds at all', () => {
     expect(hasScrollableContent('<hierarchy/>', full, 'vertical')).toBe(false);
+  });
+});
+
+// PILOT-1370: an element can be "visible" (on screen) and still out of its
+// list's view: iOS frames are not clipped, so a row just below a list, behind
+// a bottom tab bar, reaches past the list's edge; and a bar the app lays over
+// the list hides the rows under it on both platforms.
+describe('visibleRegionOf', () => {
+  /** An iPad-like React Native screen: a list above a tab bar, full-screen wrappers drawn after it. */
+  const tabScreen = (rowFrame: string, extra = '') => ios(
+    el('Other', '[0,0][402,874]', '',
+      el('Other', '[0,0][402,800]', '',
+        el('ScrollView', '[0,70][402,800]', '',
+          el('Other', '[0,70][402,1400]', '', el('Other', rowFrame, 'identifier="counter plus button"'))) +
+        // An empty toolbar host and a wrapper over the whole screen: not bars.
+        el('Toolbar', '[0,0][402,800]', 'label="Toolbar" identifier="Toolbar" tapsmith-empty-bar-host="true"') +
+        el('Other', '[0,0][402,874]', 'identifier=""'),
+      ) +
+      el('Other', '[0,800][402,874]', '',
+        el('Button', '[0,800][201,874]', 'label="Catalog, tab, 1 of 2"') + el('Button', '[201,800][402,874]', 'label="Cart"')) +
+      extra,
+    ),
+  );
+  const list = { left: 0, top: 70, right: 402, bottom: 800 };
+
+  it('is the list holding the element when nothing is drawn over it', () => {
+    const frame = { left: 100, top: 800, right: 140, bottom: 840 };
+    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), frame)).toEqual(list);
+  });
+
+  it('leaves out a bar the app draws over the bottom of the list', () => {
+    const bar = el('Other', '[0,740][402,800]', '', el('Button', '[0,740][402,800]', 'label="Add to cart"'));
+    const frame = { left: 100, top: 750, right: 140, bottom: 790 };
+    expect(visibleRegionOf(tabScreen('[100,750][140,790]', bar), frame)).toEqual({ ...list, bottom: 740 });
+  });
+
+  it('leaves out a header drawn over the top of the list', () => {
+    const header = el('NavigationBar', '[0,70][402,130]', 'label="Catalog"');
+    const frame = { left: 100, top: 80, right: 140, bottom: 120 };
+    expect(visibleRegionOf(tabScreen('[100,80][140,120]', header), frame)).toEqual({ ...list, top: 130 });
+  });
+
+  it('ignores an unnamed overlay, a narrow button and a tall sheet drawn over the list', () => {
+    const overlays =
+      el('Other', '[0,740][402,800]', '') + // nothing named in it: a background view
+      el('Button', '[330,720][390,780]', 'label="Add"') + // a floating button, not across the list
+      el('Other', '[0,300][402,800]', '', el('StaticText', '[0,300][402,340]', 'label="Sheet"')); // too tall for a bar
+    const frame = { left: 100, top: 750, right: 140, bottom: 790 };
+    expect(visibleRegionOf(tabScreen('[100,750][140,790]', overlays), frame)).toEqual(list);
+  });
+
+  it('is undefined when the element matches nothing in the dump, or no scrollable holds it', () => {
+    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 1, top: 2, right: 3, bottom: 4 })).toBeUndefined();
+    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 0, top: 800, right: 201, bottom: 874 })).toBeUndefined();
+  });
+
+  it('on Android, leaves out a bottom bar laid over the list', () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+        node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable,
+          node('android.widget.TextView', '[0,2250][1080,2350]', 'text="Row 9"')) +
+        node('android.view.View', '[0,2200][1080,2400]', '', node('android.widget.Button', '[0,2200][540,2400]', 'text="Home"'))),
+      statusBar,
+    );
+    expect(visibleRegionOf(xml, { left: 0, top: 2250, right: 1080, bottom: 2350 }))
+      .toEqual({ left: 0, top: 200, right: 1080, bottom: 2200 });
+  });
+});
+
+describe('outsideRegion', () => {
+  const region = { left: 0, top: 70, right: 402, bottom: 800 };
+
+  it('says which way to scroll an element below, above, or beside the region', () => {
+    expect(outsideRegion({ left: 100, top: 800, right: 140, bottom: 840 }, region)).toBe('down');
+    expect(outsideRegion({ left: 100, top: 780, right: 140, bottom: 820 }, region)).toBe('down');
+    expect(outsideRegion({ left: 100, top: 20, right: 140, bottom: 60 }, region)).toBe('up');
+    expect(outsideRegion({ left: 380, top: 100, right: 450, bottom: 140 }, region)).toBe('right');
+    expect(outsideRegion({ left: -40, top: 100, right: 20, bottom: 140 }, region)).toBe('left');
+  });
+
+  it('is undefined inside the region (within rounding), or for a frame spanning it', () => {
+    expect(outsideRegion({ left: 0, top: 70, right: 402, bottom: 120 }, region)).toBeUndefined();
+    expect(outsideRegion({ left: 0, top: 760, right: 402, bottom: 803 }, region)).toBeUndefined();
+    expect(outsideRegion({ left: 0, top: 0, right: 402, bottom: 900 }, region)).toBeUndefined();
   });
 });

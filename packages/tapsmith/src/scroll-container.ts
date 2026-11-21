@@ -108,6 +108,84 @@ export function pickScrollRegion(xml: string, target?: Rect, previous?: Rect): S
   return { region: largest, source: 'largest' };
 }
 
+/**
+ * The part of the scroll container holding `target` where its content shows
+ * (PILOT-1370): the container's region (as {@link pickScrollRegion} picks it
+ * for `target`) less a bar drawn over one of its edges — a tab bar, toolbar
+ * or header the app lays over the list, that content scrolls under.
+ * `undefined` when `target` matches nothing in the dump or no scrollable
+ * holds it.
+ *
+ * A bar is an app element drawn after the container, outside it, that lies
+ * across its top or bottom edge: at least half its width, at most a third of
+ * its height, and with something named in it (a label, an id, text). That
+ * leaves out what is drawn over the whole screen without hiding anything: a
+ * React Native wrapper view, an empty toolbar host, a pointer-events-none
+ * marker.
+ */
+export function visibleRegionOf(xml: string, target: Rect): Rect | undefined {
+  const scan = scanScrollables(xml);
+  if (!scan) return undefined;
+  const { entries, region } = scan;
+  const self = entries.filter((e) => !e.nonApp && e.bounds && sameFrame(e.bounds, target)).at(-1);
+  let holder: Entry | undefined;
+  let r: Rect | undefined;
+  for (let a = self?.parent; a && !r; a = a.parent) {
+    r = region(a);
+    if (r) holder = a;
+  }
+  if (!holder || !r || !self) return undefined;
+  const height = r.bottom - r.top;
+  const width = r.right - r.left;
+  for (const c of entries) {
+    const b = c.bounds;
+    if (!b || c.nonApp || c.order <= holder.order || isAncestor(holder, c) || isAncestor(c, holder) || isAncestor(c, self)) {
+      continue;
+    }
+    const across = intersect(b, r);
+    if (!across || across.right - across.left < width / 2) continue;
+    const h = b.bottom - b.top;
+    if (h > height / 3 || !named(c, entries)) continue;
+    if (b.top > r.top + height / 2 && b.bottom >= r.bottom - h) {
+      if (b.top - r.top >= MIN_REGION) r = { ...r, bottom: Math.min(r.bottom, b.top) };
+    } else if (b.bottom < r.top + height / 2 && b.top <= r.top + h) {
+      if (r.bottom - b.bottom >= MIN_REGION) r = { ...r, top: Math.max(r.top, b.bottom) };
+    }
+  }
+  return r;
+}
+
+/** Attributes that name an element, on either platform. */
+const NAME_ATTRIBUTES = ['label', 'identifier', 'text', 'content-desc', 'resource-id'] as const;
+
+/** Whether `e` or something in it is named: an element worth drawing, not an empty wrapper. */
+function named(e: Entry, entries: readonly Entry[]): boolean {
+  const has = (x: Entry) => NAME_ATTRIBUTES.some((a) => (x.node.attributes.get(a) ?? '') !== '');
+  if (e.node.attributes.get('tapsmith-empty-bar-host') === 'true') return false;
+  return has(e) || entries.some((d) => !d.nonApp && isAncestor(e, d) && has(d));
+}
+
+/**
+ * The way to scroll to bring `frame` inside `region`, when it reaches past
+ * one of its edges (PILOT-1370): `"down"` for one below it, `"up"` above,
+ * then `"right"` and `"left"` likewise. `undefined` when it is inside, or
+ * reaches past both edges of an axis (it cannot fit any better). iOS frames
+ * are not clipped, so an element below its list, behind a tab bar, reaches
+ * past the list's bottom edge; Android clips them to the list.
+ */
+export function outsideRegion(frame: Rect, region: Rect): 'up' | 'down' | 'left' | 'right' | undefined {
+  const past = (start: number, end: number, regionStart: number, regionEnd: number, back: 'up' | 'left', on: 'down' | 'right') => {
+    const before = start < regionStart - EDGE_SLACK;
+    const after = end > regionEnd + EDGE_SLACK;
+    return before === after ? undefined : before ? back : on;
+  };
+  return past(frame.top, frame.bottom, region.top, region.bottom, 'up', 'down') ??
+    past(frame.left, frame.right, region.left, region.right, 'left', 'right');
+}
+
+/** How far past a region's edge a frame may reach and still count as inside it: rounding, and an iOS bounce settling. */
+const EDGE_SLACK = 4;
+
 interface ScrollScan {
   entries: Entry[];
   /** The union of the windows. */
