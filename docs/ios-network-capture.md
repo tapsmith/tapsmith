@@ -154,6 +154,42 @@ Check the daemon logs — run `tapsmith test` with `RUST_LOG=tapsmith_core=debug
 - **`upstream TLS handshake failed for <host>: UnknownIssuer`** — the upstream server uses a certificate chain not in Tapsmith's webpki roots. This affects some Apple-internal services; it does not affect standard public HTTPS endpoints.
 - **`simulator_processes returned 0 PIDs`** — the simulator isn't booted, or `ps` parsing couldn't find it. Check `xcrun simctl list devices booted`.
 
+### Requests to localhost are not captured
+
+A simulator shares the Mac's network stack, so an app that calls `http://localhost:4610` (or `127.0.0.1`) reaches a server running on the Mac: your dev API server, a mock backend, or a server the test itself starts. That request works, but **no capture route sees it**. macOS never hands connections to the loopback interface to the Network Extension, and the [system-proxy fallback](#when-the-network-extension-is-unavailable) bypasses `localhost` and `127.0.0.1`. Those requests are missing from the trace (a trace with no other traffic has no `network.json`), and `device.route()`, `device.waitForRequest()` and `device.waitForResponse()` never see them. Tapsmith cannot change this: the extension is mitmproxy's signed redirector, and loopback traffic never reaches it.
+
+Tapsmith notices these connections while capture is running and says so, once per run for each server, as a warning on the test result and in each affected trace's console:
+
+```
+⚠ Network capture warning: the app connected to a server on this Mac's loopback interface (127.0.0.1:4610), and an iOS simulator's network capture cannot see requests to localhost: …
+```
+
+A failed test whose routes never fired lists the same server first among the possible reasons. Tapsmith checks the app's open connections every two seconds, so a connection that opens and closes between two checks can go unnoticed; HTTP clients usually keep a connection open for several seconds after a request, so it is normally caught. Connections to the React Native and Expo development servers (ports 8081, 8097 and 19000–19002) are never reported.
+
+**The fix: address the Mac by its LAN address instead of `localhost`.** A request to the Mac's own Wi-Fi or Ethernet address leaves the app on a real interface, so the Network Extension captures it like any other request, and routes see it. The server must listen on that interface too (`0.0.0.0`, or the address itself), not on `127.0.0.1` only. `ipconfig getifaddr en0` prints the address of the Mac's first network interface (try `en1` if it prints nothing); a VPN address (Tailscale's `100.x.y.z`, say) works too while the VPN is up.
+
+- **An app that reads its server address at build time** (an Expo app's `EXPO_PUBLIC_API_HOST`, a React Native config file): build the app for tests with the Mac's address, for example `EXPO_PUBLIC_API_HOST=$(ipconfig getifaddr en0) npx expo run:ios --configuration Release`. On CI, run the same command on the macOS runner that runs the tests, so the build points at that runner.
+- **A server the test starts**: listen on every interface and hand the app the Mac's address, by deep link or a field the test fills in. The helper below picks the first non-internal IPv4 address, preferring `en*` interfaces:
+
+```typescript
+import { networkInterfaces } from "node:os"
+
+// How an iOS simulator reaches a server this test process hosts, so that
+// network capture sees its requests. (An Android emulator uses 10.0.2.2.)
+export function hostLanAddress(): string {
+  const candidates = Object.entries(networkInterfaces()).flatMap(([name, addrs]) =>
+    (addrs ?? []).filter((a) => a.family === "IPv4" && !a.internal).map((a) => ({ name, address: a.address })),
+  )
+  const pick = candidates.find((c) => /^en\d+$/.test(c.name)) ?? candidates[0]
+  if (!pick) throw new Error("This Mac has no non-loopback IPv4 address")
+  return pick.address
+}
+```
+
+Then `server.listen(port, "0.0.0.0")` and `` device.openDeepLink(`myapp://chat?server=http://${hostLanAddress()}:${port}`) ``.
+
+The same applies on Android, where the emulator reaches the Mac as `10.0.2.2` rather than `localhost`: that traffic is captured, though a cleartext port other than 80 needs [`networkHttpPorts`](network.md#local-firebase-emulators-and-custom-http-ports).
+
 ### When the CA certificate can't be installed
 
 `xcrun simctl keychain add-root-cert` goes through CoreSimulator, which can stall on a loaded machine (most often a CI runner booting several simulators). Tapsmith tries the install up to three times, for at most about 40 seconds in all. When every attempt fails, it checks the simulator's trust store on disk, since an earlier run (or an attempt that timed out) may already have installed the CA. If the CA is there, capture carries on as usual.
@@ -196,7 +232,7 @@ Verify the fix is in place: run with debug logs and look for `tapsmith_core::ios
 
 ### When the Network Extension is unavailable
 
-If the redirector cannot be started (the extension is not approved, or its control channel does not connect within 10 s), the daemon can fall back to setting the **macOS system HTTP/HTTPS proxy** on the active network service. This is what CI runners use, where a System Extension cannot be approved. It is host-wide: the trace records whatever any process on the Mac sends (browser preconnects, `trustd` OCSP checks, other apps), and `localhost` and `127.0.0.1` are on the bypass list, so requests to a server the test hosts are *not* captured.
+If the redirector cannot be started (the extension is not approved, or its control channel does not connect within 10 s), the daemon can fall back to setting the **macOS system HTTP/HTTPS proxy** on the active network service. This is what CI runners use, where a System Extension cannot be approved. It is host-wide: the trace records whatever any process on the Mac sends (browser preconnects, `trustd` OCSP checks, other apps), and `localhost` and `127.0.0.1` are on the bypass list, so requests to a server on the Mac's loopback interface are *not* captured, as they are not through the Network Extension either (see [Requests to localhost are not captured](#requests-to-localhost-are-not-captured)).
 
 **The fallback is used on CI only.** When the `CI` environment variable is set (as it is on GitHub Actions, GitLab, CircleCI, Buildkite and most other CI systems), the daemon falls back and prints, once per device:
 
