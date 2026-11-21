@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -120,9 +120,15 @@ class FakeDaemon extends EventEmitter {
   unref(): void {}
 }
 
+// The builds the configs name exist, as the install path requires (PILOT-1381).
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-mcp-root-'));
+fs.mkdirSync(path.join(ROOT, 'build', 'ShopNotes.app'), { recursive: true });
+fs.writeFileSync(path.join(ROOT, 'build', 'app.apk'), 'apk');
+afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
+
 const iosConfig: Partial<TapsmithConfig> = {
   platform: 'ios', package: 'com.example.ShopNotes', app: 'build/ShopNotes.app',
-  timeout: 1000, retries: 0, screenshot: 'never', testMatch: [], rootDir: '/p', outputDir: 'out',
+  timeout: 1000, retries: 0, screenshot: 'never', testMatch: [], rootDir: ROOT, outputDir: 'out',
   workers: 1, launchEmulators: false, daemonAddress: 'localhost:1',
 };
 const sim: Device = { serial: 'SIM-1', state: 'Active', platform: 'ios' };
@@ -204,6 +210,13 @@ describe('the app under test, on a headless session\'s device', () => {
     devices = [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }];
     await target({ ...iosConfig, platform: 'android', app: undefined, apk: 'build/app.apk', package: 'com.x' });
     expect(calls).toEqual(['installApk app.apk', 'startAgent', 'getUiHierarchy']);
+  });
+
+  it('that is missing fails the target before the install check, naming the config key, and no agent is started', async () => {
+    simApp = 'matching';
+    await expect(target({ ...iosConfig, app: 'build/Gone.app' }))
+      .rejects.toThrow(`iOS app not found at ${path.join(ROOT, 'build', 'Gone.app')} (from config \`app\`: "build/Gone.app"`);
+    expect(calls).toEqual([]);
   });
 
   it('that fails to install fails the target with the reason, and no agent is started', async () => {
