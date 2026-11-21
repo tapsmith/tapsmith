@@ -8,7 +8,12 @@ import XCTest
 /// - A label or title is text content, except on a control whose label is
 ///   only its accessible name (`nameOnlyTypes`): SwiftUI draws a Toggle's or
 ///   a Stepper's label as a separate static text, and a Slider's label isn't
-///   drawn at all. getByLabel and getByRole's name find those controls.
+///   drawn at all. getByLabel and getByRole's name find those controls. An
+///   image's label is its alt text, a name too (PILOT-1366): Playwright finds
+///   an `<img alt>` with getByAltText or getByRole("img"), never getByText,
+///   and Android's getByText never reads a content description, so a caption
+///   under a labelled image is one match. A button's label stays text: an
+///   icon button's can't be told from a text button's.
 /// - A value is text content only where it is the text on screen
 ///   (`valueTextTypes`): static text, the typed text of a text input, a
 ///   picker wheel's selected row. A
@@ -27,9 +32,9 @@ import XCTest
 /// conformance fixture (`text-content-conformance.json`), which the host
 /// tests replay (ios-agent/Tests/TextContentTests).
 enum TextContent {
-    /// Controls whose label is their accessible name, not text on screen.
+    /// Controls and images whose label is their accessible name, not text on screen.
     static let nameOnlyTypes: Set<XCUIElement.ElementType> = [
-        .switch, .toggle, .slider, .stepper,
+        .switch, .toggle, .slider, .stepper, .image,
     ]
 
     /// Element types whose value is the text they show: a picker wheel's

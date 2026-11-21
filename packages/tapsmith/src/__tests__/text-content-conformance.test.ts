@@ -63,6 +63,7 @@ const T = {
   cell: 'XCUIElementTypeCell',
   link: 'XCUIElementTypeLink',
   progress: 'XCUIElementTypeProgressIndicator',
+  image: 'XCUIElementTypeImage',
   wheel: 'XCUIElementTypePickerWheel',
 } as const;
 
@@ -90,6 +91,17 @@ const CASES: Case[] = [
   { why: 'nor by substring', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
   { why: 'nor by RegExp', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { source: '^Quantity: \\d+$', flags: '' }, matches: false },
   { why: 'nor a control by its title', platform: 'ios', type: T.switch, label: '', title: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
+  // An image's label is its alt text, a name (getByRole('image', { name }),
+  // getByLabel), never getByText's text: Playwright matches an <img alt> with
+  // getByAltText, and Android a content description with getByText not at all
+  // (PILOT-1366). A caption under a labelled image is one match.
+  { why: 'an image is not text by its label', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { exact: 'The Flower Girl' }, matches: false },
+  { why: 'nor by substring', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { substring: 'flower' }, matches: false },
+  { why: 'nor by RegExp', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { source: 'Flower', flags: '' }, matches: false },
+  { why: 'nor an image by its title', platform: 'ios', type: T.image, label: '', title: 'The Flower Girl', query: { exact: 'The Flower Girl' }, matches: false },
+  // A button's label is the only text it has, drawn or not: an icon button
+  // can't be told from a text button, so both stay text.
+  { why: 'an icon button by its label', platform: 'ios', type: T.button, label: 'Close', query: { exact: 'Close' }, matches: true },
   // Values are text content only where they are the text on screen.
   { why: "a switch's value is not text", platform: 'ios', type: T.switch, label: '', value: '1', query: { exact: '1' }, matches: false },
   { why: "a stepper's value is not text", platform: 'ios', type: T.stepper, label: 'Quantity: 1', value: '1', query: { exact: '1' }, matches: false },

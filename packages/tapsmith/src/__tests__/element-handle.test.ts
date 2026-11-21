@@ -1298,6 +1298,156 @@ describe('tap()', () => {
     expect(err.message).toContain('getByRole("menuitem"');
   });
 
+  describe("checks each aka with the agent (PILOT-1366)", () => {
+    const image = makeElementInfo({
+      elementId: 'img', className: 'XCUIElementTypeImage', role: 'image', text: 'The Flower Girl',
+      contentDescription: 'The Flower Girl', bounds: { left: 20, top: 100, right: 380, bottom: 400 },
+    });
+    const caption = makeElementInfo({
+      elementId: 'cap', className: 'XCUIElementTypeStaticText', role: 'text', text: 'The Flower Girl',
+      contentDescription: 'The Flower Girl', bounds: { left: 20, top: 410, right: 380, bottom: 440 },
+    });
+    /** An agent answering each locator from `answers`, by its formatted selector (none: no match). */
+    const agent = (answers: Record<string, ElementInfo[]>) => vi.fn(async (selectors: Selector[]) => ({
+      requestId: '1',
+      errorMessage: '',
+      results: selectors.map((sel) => ({ elements: answers[formatSelector(sel)] ?? [], errorMessage: '' })),
+    }));
+    const strictError = async (overrides: Partial<TapsmithGrpcClient>, selector: Selector, elements: ElementInfo[]) => {
+      const findElements = vi.fn(async () => makeFindElementsResponse(elements));
+      const handle = new ElementHandle(makeMockClient({ ...overrides, findElements }), selector, 5000);
+      return (await handle.tap().then(() => { throw new Error('expected tap to reject'); }, (e: unknown) => e)) as Error;
+    };
+
+    it("lists an aka that resolves to exactly that element", async () => {
+      const evaluateSelectors = agent({
+        'getByRole("image", { name: "The Flower Girl", exact: true })': [image],
+        'getByText("The Flower Girl", { exact: true })': [caption],
+      });
+      const err = await strictError({ evaluateSelectors }, _textContains('Flower'), [image, caption]);
+      expect(err.message).toContain('1) image "The Flower Girl" [20,100][380,400] aka device.getByRole("image", { name: "The Flower Girl", exact: true })');
+      expect(err.message).toContain('2) text "The Flower Girl" [20,410][380,440] aka device.getByText("The Flower Girl", { exact: true })');
+      // One read for every element's candidates.
+      expect(evaluateSelectors).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves out an aka that also matches another element, as an image's label did on iOS", async () => {
+      const err = await strictError({
+        evaluateSelectors: agent({
+          'getByRole("image", { name: "The Flower Girl", exact: true })': [image],
+          'getByText("The Flower Girl", { exact: true })': [image, caption],
+        }),
+      }, _textContains('Flower'), [image, caption]);
+      expect(err.message).toContain('aka device.getByRole("image"');
+      expect(err.message).not.toContain('getByText("The Flower Girl", { exact: true })');
+      expect(err.message).toMatch(/2\) text "The Flower Girl" \[20,410\]\[380,440\]\n/);
+    });
+
+    it("falls back to the next candidate when the first is shared", async () => {
+      const row = (text: string, top: number) => makeElementInfo({
+        role: 'button', text, resourceId: 'row', bounds: { left: 0, top, right: 400, bottom: top + 40 },
+      });
+      const [first, second] = [row('Edit', 0), row('Edit later', 50)];
+      const err = await strictError({
+        evaluateSelectors: agent({
+          'getByTestId("row")': [first, second],
+          'getByRole("button", { name: "Edit", exact: true })': [first],
+          'getByRole("button", { name: "Edit later", exact: true })': [second],
+        }),
+      }, _textContains('Edit'), [first, second]);
+      expect(err.message).not.toContain('getByTestId("row")');
+      expect(err.message).toContain('1) button "Edit" [0,0][400,40] aka device.getByRole("button", { name: "Edit", exact: true })');
+      expect(err.message).toContain('aka device.getByRole("button", { name: "Edit later", exact: true })');
+    });
+
+    it("never lists an aka that finds a different element", async () => {
+      const elsewhere = { ...caption, bounds: { left: 20, top: 600, right: 380, bottom: 630 } };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("The Flower Girl", { exact: true })': [elsewhere] }),
+      }, _textContains('Flower'), [image, caption]);
+      expect(err.message).not.toContain(' aka ');
+    });
+
+    it("matches an element with no usable bounds by what it is, not where", async () => {
+      // Android reports a row scrolled out of view at 0,0,0,0.
+      const offScreen = { ...caption, elementId: 'a', bounds: { left: 0, top: 0, right: 0, bottom: 0 } };
+      const other = makeElementInfo({ elementId: 'b', className: 'XCUIElementTypeStaticText', role: 'text', text: 'The Flower Girl, 1890' });
+      const again = { ...offScreen, elementId: 'a2' };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("The Flower Girl", { exact: true })': [again] }),
+      }, _textContains('Flower'), [offScreen, other]);
+      expect(err.message).toContain('1) text "The Flower Girl" [0,0][0,0] aka device.getByText("The Flower Girl", { exact: true })');
+      expect(err.message).toMatch(/2\) text "The Flower Girl, 1890"\n/);
+    });
+
+    it("lists the first candidate unchecked when the agent can't answer", async () => {
+      const evaluateSelectors = vi.fn(async () => { throw new Error('agent gone'); });
+      const err = await strictError({ evaluateSelectors }, _textContains('Flower'), [image, caption]);
+      expect(evaluateSelectors).toHaveBeenCalled();
+      expect(err.message).toContain('aka device.getByRole("image", { name: "The Flower Girl", exact: true })');
+      expect(err.message).toContain('aka device.getByText("The Flower Girl", { exact: true })');
+    });
+
+    it("never names the failing locator itself as an aka, even unchecked", async () => {
+      // UIKit's edit-mode "Remove …" button matched the same exact text (PILOT-1374).
+      const row = makeElementInfo({
+        className: 'XCUIElementTypeStaticText', role: 'text', text: 'GitHub Enterprise',
+        bounds: { left: 60, top: 100, right: 300, bottom: 140 },
+      });
+      const remove = makeElementInfo({
+        className: 'XCUIElementTypeButton', role: 'button', text: 'Remove GitHub Enterprise', resourceId: 'remove',
+        bounds: { left: 10, top: 100, right: 50, bottom: 140 },
+      });
+      const evaluateSelectors = vi.fn(async () => { throw new Error('agent gone'); });
+      const err = await strictError({ evaluateSelectors }, _text('GitHub Enterprise'), [row, remove]);
+      expect(err.message).not.toContain('aka device.getByText("GitHub Enterprise", { exact: true })');
+      expect(err.message).toMatch(/1\) text "GitHub Enterprise" \[60,100\]\[300,140\]\n/);
+    });
+
+    it("doesn't hint { exact: true } to a locator that already has it", async () => {
+      const evaluateSelectors = agent({});
+      const text = await strictError({ evaluateSelectors }, _text('The Flower Girl'), [image, caption]);
+      expect(text.message).toMatch(/\nHint: use getByRole\(role, \{ name, exact: true \}\), getByTestId\(\), or \.first\(\)\/\.nth\(\)\/\.last\(\) to target a single element\.$/);
+      const role = await strictError({ evaluateSelectors }, _role('image', { name: 'The Flower Girl', exact: true }), [image, caption]);
+      expect(role.message).toMatch(/\nHint: use getByTestId\(\) or \.first\(\)\/\.nth\(\)\/\.last\(\) to target a single element\.$/);
+      // A substring role name can still be made exact.
+      const loose = await strictError({ evaluateSelectors }, _role('image', { name: 'Flower' }), [image, caption]);
+      expect(loose.message).toContain('Hint: use { exact: true }, getByRole(role, { name, exact: true }), getByTestId()');
+    });
+
+    it("stops with the run when the user stops it while the akas are checked", async () => {
+      const stop = new AbortController();
+      const evaluateSelectors = vi.fn(() => {
+        stop.abort();
+        return new Promise<never>(() => {});
+      });
+      const err = await strictError(
+        { evaluateSelectors, _getAbortSignal: () => stop.signal } as Partial<TapsmithGrpcClient>,
+        _textContains('Flower'), [image, caption],
+      );
+      expect(isAbortError(err)).toBe(true);
+    });
+
+    it("doesn't take a different kind of element in the same place for the listed one", async () => {
+      const button = makeElementInfo({
+        elementId: 'b1', className: 'android.widget.Button', role: 'button', text: 'Edit',
+        bounds: { left: 300, top: 40, right: 380, bottom: 80 },
+      });
+      const label = makeElementInfo({ elementId: 'l1', className: 'android.widget.TextView', role: 'text', text: 'Edit mode' });
+      const replaced = { ...button, elementId: 'b2', className: 'android.widget.TextView', role: 'text' };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("Edit", { exact: true })': [replaced] }),
+      }, _textContains('Edit'), [button, label]);
+      expect(err.message).toMatch(/1\) button "Edit" \[300,40\]\[380,80\]\n/);
+    });
+
+    it("suggests an iOS image by its description, never by getByText", () => {
+      const nameless = { ...image, role: '' };
+      const err = buildStrictModeViolationError('getByText("Flower")', [nameless, caption]);
+      expect(err.message).toContain('1) XCUIElementTypeImage "The Flower Girl" [20,100][380,400] aka device.getByDescription("The Flower Girl")');
+    });
+  });
+
   it('.first() disambiguates an ambiguous selector', async () => {
     const elements = [
       makeElementInfo({ text: 'Sign in to continue', resourceId: 'subtitle' }),
