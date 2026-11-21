@@ -25,6 +25,7 @@ Without `exact`, a string `getByText` also ignores case, as `getByRole`'s `name`
 On iOS, `getByText` returns the innermost element holding the text, as Playwright does: an element whose descendant also matches is left out, so `getByText("Dark Mode")` finds the label of a SwiftUI `Toggle` row, not the row and its label, and a list row or an alert gives way to the text inside it. Since an iOS element has an accessibility label and value rather than text content, `getByText` reads:
 
 - **the label (and title)**, except on a switch, slider or stepper, whose label is only its accessible name: find those with `getByLabel()` or `getByRole("switch", { name })`. SwiftUI draws a `Toggle`'s or `Stepper`'s label as separate text, which `getByText` finds.
+- **not an image's label**: it is the image's alt text, as Android's content description is, so a caption under an image labelled with the same words is one match. Find the image with `getByRole("image", { name })` or `getByDescription()`. A container's text (`filter({ hasText })`, `toHaveText()`) still includes it, as on Android. A button's label stays text, even an icon button's, since iOS can't tell the two apart.
 - **the value only of text and text inputs** (a field's typed text). A switch's `0`/`1`, a slider's or stepper's value, a button's value and React Native's `accessibilityValue` are not text, so `getByText("1")` doesn't match a switch that is on.
 - **a label without the part it repeats from its container**: a SwiftUI `Stepper`'s buttons are labelled `"Quantity: 1, Increment"`, and `getByText("Quantity: 1", { exact: true })` finds only the stepper's text.
 - **text, not a label that resembles it**: a React Native touchable with `accessibilityLabel="Forgot password"` hides the `"Forgot password?"` text inside it, so iOS shows only the label and `getByText("Forgot password?")` finds nothing there, with or without `exact` ([child text inside labeled containers](locators.md#child-text-inside-labeled-containers)). Find it with `getByDescription("Forgot password")`. Every character of the query is literal: `?`, `*`, `\` and `[` match only themselves.
@@ -157,7 +158,7 @@ device.locator({ xpath: "//android.widget.Button[@text='OK']" })
 
 ### Strict mode
 
-Like Playwright, Tapsmith locators are **strict**: a locator used for an action, single-element query, or assertion must resolve to exactly one element. When it resolves to more than one, the operation throws a `StrictModeViolationError` immediately (it does not keep auto-waiting) listing every match with a suggested unambiguous locator:
+Like Playwright, Tapsmith locators are **strict**: a locator used for an action, single-element query, or assertion must resolve to exactly one element. When it resolves to more than one, the operation throws a `StrictModeViolationError` immediately (it does not keep auto-waiting) listing every match with a suggested unambiguous locator. The device agent checks each suggestion before it is listed: a match is listed with the first one that resolves to that element alone, or with none when nothing does (if the agent doesn't answer within two seconds, the suggestions are listed unchecked):
 
 ```
 strict mode violation: getByText("Sign in") resolved to 2 elements:
