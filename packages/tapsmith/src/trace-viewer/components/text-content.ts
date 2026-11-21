@@ -63,7 +63,7 @@ function containsChildText(label: string, query: string): boolean {
 /**
  * getByText(string, { exact: true }) on iOS: literal, like the substring form.
  * A ", "-joined part of the label or title matches, except one the node's
- * table row shows as a static text of its own (`rowShowsQuery`, PILOT-1374):
+ * table row shows as a static text of its own (`rowShowsQuery`):
  * UIKit labels a row's edit-mode Remove and Reorder controls with the row's
  * texts joined after a verb, a name for the row, not their text.
  */
