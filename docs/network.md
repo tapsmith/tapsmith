@@ -73,6 +73,8 @@ HTTP/2 traffic is intercepted when the client accepts Tapsmith's MITM CA — inc
 
 Register a route handler that intercepts requests matching a URL pattern. The handler receives a `Route` object and must call one of `route.fulfill()`, `route.continue()`, `route.abort()`, or `route.fetch()` to resolve the request.
 
+Routes never intercept WebSocket connections; see [WebSockets](#websockets).
+
 **Parameters:**
 
 | Parameter | Type | Description |
@@ -876,6 +878,14 @@ export default defineConfig({
 Patterns match against the TLS SNI hostname with the same glob syntax as `networkHosts`.
 
 Because passthrough connections are never decrypted, `device.route()`, `device.waitForRequest()`, and `device.waitForResponse()` can never match traffic on them. If a mock for a host you've added to `networkPassthroughHosts` never fires, or a Firestore/pinned-host request only appears as `CONNECT passthrough`, this is why.
+
+### WebSockets
+
+WebSockets keep working while capture is on. The proxy forwards the opening handshake untouched, and once the server answers `101 Switching Protocols` it passes the connection's bytes through in both directions until either side closes. This applies to `ws://` (including ports added with `networkHttpPorts` on Android) and to `wss://` on Android and iOS. Idle sockets are never timed out by the proxy.
+
+Each WebSocket appears in the Network tab as one `GET` row with a `ws://` or `wss://` URL and status `101`. While the socket is open the row is marked **Streaming** and shows the bytes sent each way so far. Once it closes, its duration covers the whole connection. Frames are not decoded: the row has the handshake's headers but no body.
+
+As in Playwright, where `page.route()` and the request events never see WebSockets, `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` and `device.on('request')` / `device.on('response')` do not apply to WebSocket handshakes, whatever their URL patterns match. Tapsmith does not yet have an equivalent of Playwright's `page.routeWebSocket()` for mocking or inspecting frames.
 
 ### Viewing network data in traces
 
