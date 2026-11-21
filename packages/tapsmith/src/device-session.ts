@@ -611,8 +611,18 @@ export async function installConfiguredApp(
 async function installedBuildStamp(config: TapsmithConfig, serial: string): Promise<string | undefined> {
   if (!config.package) return undefined;
   return config.platform === 'ios'
-    ? installedSimulatorAppStamp(serial, config.package)
+    // Where the last proof found the bundle: a watch or MCP child is a fresh
+    // process, and asking simctl again costs most of a second per run.
+    ? installedSimulatorAppStamp(serial, config.package, simulatorContainerOf(verifiedBuilds.get(serial)))
     : installedApkStamp(serial, config.package);
+}
+
+/** The simulator container path a verified-build token holds (`…\napp:<container>:<hash>`), if any. */
+function simulatorContainerOf(token: string | undefined): string | undefined {
+  const installed = token?.split('\n')[2];
+  if (!installed?.startsWith('app:')) return undefined;
+  const end = installed.lastIndexOf(':');
+  return end > 4 ? installed.slice(4, end) : undefined;
 }
 
 /**
@@ -694,8 +704,10 @@ export async function reinstallChangedBuild(
   const { config, serial } = session;
   if (!config.package) return { reinstalled: false };
   if (config.platform === 'ios') {
-    const { isPhysicalDevice } = await import('./ios-devicectl.js');
-    if (isPhysicalDevice(serial)) return { reinstalled: false };
+    // By the UDID's shape, not devicectl: a listing takes seconds, and this
+    // runs before every file.
+    const { isSimulatorUdid } = await import('./ios-devicectl.js');
+    if (!isSimulatorUdid(serial)) return { reinstalled: false };
   }
   // Refuses a build that has gone (a `gradle clean`), as the startup check does.
   const artifact = resolveAppArtifact(config);

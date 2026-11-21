@@ -111,9 +111,14 @@ const simulatorContainers = new Map<string, string>();
  * a reinstall changes the stamp. `undefined` when it is not installed or the
  * lookup fails.
  */
-export async function installedSimulatorAppStamp(udid: string, bundleId: string): Promise<string | undefined> {
+export async function installedSimulatorAppStamp(
+  udid: string,
+  bundleId: string,
+  /** Where an earlier process found it, used like this process's own memo. */
+  knownContainer?: string,
+): Promise<string | undefined> {
   const key = `${udid}\n${bundleId}`;
-  let container = simulatorContainers.get(key);
+  let container = simulatorContainers.get(key) ?? knownContainer;
   if (container && !(await fs.promises.stat(container).then((st) => st.isDirectory(), () => false))) container = undefined;
   if (!container) {
     container = (await run('xcrun', ['simctl', 'get_app_container', udid, bundleId, 'app'], 10_000))?.trim();

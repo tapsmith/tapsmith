@@ -122,6 +122,7 @@ vi.mock('../ios-simulator.js', () => ({
 
 vi.mock('../ios-devicectl.js', () => ({
   isPhysicalDevice: vi.fn((serial: string) => serial.startsWith('PHYS')),
+  isSimulatorUdid: vi.fn((serial: string) => !serial.startsWith('PHYS')),
   installAppOnDevice: vi.fn(async () => {}),
   isAppInstalledOnDevice: vi.fn(async () => true),
   describeUnreachablePhysicalDevice: vi.fn(async (serial: string) =>
@@ -1458,16 +1459,30 @@ describe('a rebuilt app in a long-lived session', () => {
     expect(session.context.notices[0]?.message).toBe('Reinstalled App.app (build changed since the last run).');
   });
 
-  it('leaves a physical iPhone alone, whose startup check is presence only', async () => {
-    const { isAppInstalledOnDevice, installAppOnDevice } = await import('../ios-devicectl.js');
+  it('leaves a physical iPhone alone, whose startup check is presence only, without asking devicectl', async () => {
+    const { isAppInstalledOnDevice, installAppOnDevice, isPhysicalDevice } = await import('../ios-devicectl.js');
     vi.mocked(isAppInstalledOnDevice).mockClear();
-    await openDeviceSession(
+    const session = await openDeviceSession(
       { name: 'device-1', serial: 'PHYS-1', daemonAddress: 'localhost:50051' },
       makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' }),
       { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false },
     );
     expect(isAppInstalledOnDevice).not.toHaveBeenCalled();
     expect(installAppOnDevice).not.toHaveBeenCalled();
+    // The check before each file: a devicectl listing there would cost seconds.
+    vi.mocked(isPhysicalDevice).mockClear();
+    await reinstallChangedBuild(session);
+    expect(isPhysicalDevice).not.toHaveBeenCalled();
+  });
+
+  it('hands a fresh process the simulator container the last proof found', async () => {
+    const { installedSimulatorAppStamp } = await import('../build-stamp.js');
+    const sim = { name: 'device-1', serial: 'SIM-7', daemonAddress: 'localhost:50051' };
+    const ios = makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app', simulator: 'iPhone 16' });
+    rememberInstalledBuilds({ 'SIM-7': `${path.join(ROOT, 'Build', 'App.app')}\nlocal\napp:/sims/X/Bundle/UUID-A/App.app:abc123` });
+    vi.mocked(installedSimulatorAppStamp).mockClear();
+    await openDeviceSession(sim, ios, { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false });
+    expect(installedSimulatorAppStamp).toHaveBeenCalledWith('SIM-7', 'com.example.app', '/sims/X/Bundle/UUID-A/App.app');
   });
 
   it('hands what it proved to a forked child and takes back what the child proved', async () => {

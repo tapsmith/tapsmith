@@ -124,6 +124,18 @@ describe('installedSimulatorAppStamp', () => {
     expect(await installedSimulatorAppStamp('SIM-2', 'com.example')).toBeUndefined();
   });
 
+  it('takes a container an earlier process found, while it exists', async () => {
+    const known = path.join(ROOT, 'Containers', 'UUID-K', 'App.app');
+    makeBundle(known);
+    mocks.answer = () => ({ err: new Error('should not be asked') });
+    expect(await installedSimulatorAppStamp('SIM-4', 'com.example', known)).toContain(`app:${known}:`);
+    expect(mocks.calls).toEqual([]);
+    // Gone: simctl is asked after all.
+    mocks.answer = () => ({ err: new Error('not installed') });
+    expect(await installedSimulatorAppStamp('SIM-5', 'com.example', path.join(ROOT, 'gone.app'))).toBeUndefined();
+    expect(mocks.calls).toHaveLength(1);
+  });
+
   it('asks simctl once, and again only when the bundle it named has gone', async () => {
     const first = path.join(ROOT, 'Containers', 'UUID-A', 'App.app');
     makeBundle(first);
