@@ -547,7 +547,18 @@ pub struct NetworkProxy {
     /// on `stop()`, or when the proxy is dropped.
     shutdown_tx: tokio::sync::watch::Sender<()>,
     capture_session: String,
+    /// Loopback servers (`addr:port`) the device's app was seen connected to
+    /// since the last [`NetworkProxy::take_loopback_destinations`] — traffic
+    /// this capture cannot see (PILOT-320). Filled by
+    /// [`NetworkProxy::watch_loopback`]; bounded by
+    /// [`MAX_LOOPBACK_DESTINATIONS`].
+    loopback_destinations: Arc<StdMutex<BTreeSet<String>>>,
 }
+
+/// Cap on [`NetworkProxy::loopback_destinations`] between takes: an app talks
+/// to a handful of local servers, and a sampler gone wrong must not grow it
+/// without bound.
+const MAX_LOOPBACK_DESTINATIONS: usize = 32;
 
 impl NetworkProxy {
     /// Start the proxy on an ephemeral loopback port (the default for
@@ -637,6 +648,7 @@ impl NetworkProxy {
             mitm_ca,
             shutdown_tx,
             capture_session: uuid::Uuid::new_v4().to_string(),
+            loopback_destinations: Arc::default(),
         })
     }
 
@@ -864,6 +876,60 @@ impl NetworkProxy {
     /// The warning explaining why this proxy tunnels all TLS, if it does.
     pub async fn tunnel_all_tls_warning(&self) -> Option<String> {
         self.state.lock().await.tunnel_all_tls.clone()
+    }
+
+    /// Every `interval` until the proxy stops, run `sample` and record the
+    /// loopback servers it reports as connected to by the device's app
+    /// (PILOT-320: an iOS simulator app's requests to `localhost`, which no
+    /// capture route sees). The first sample runs one `interval` in.
+    // Only iOS simulators (macOS hosts) are watched.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn watch_loopback<F, Fut>(&self, interval: Duration, mut sample: F)
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Vec<String>> + Send + 'static,
+    {
+        let seen = Arc::clone(&self.loopback_destinations);
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(interval);
+            // A slow sample under load delays the next one rather than
+            // bunching them up.
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticks.tick().await;
+            loop {
+                tokio::select! {
+                    _ = ticks.tick() => {}
+                    // A stop sends on the channel; a dropped proxy closes it.
+                    _ = shutdown_rx.changed() => break,
+                }
+                let found = tokio::select! {
+                    found = sample() => found,
+                    _ = shutdown_rx.changed() => break,
+                };
+                if found.is_empty() {
+                    continue;
+                }
+                let Ok(mut seen) = seen.lock() else { break };
+                for destination in found {
+                    if seen.len() >= MAX_LOOPBACK_DESTINATIONS {
+                        break;
+                    }
+                    if seen.insert(destination.clone()) {
+                        debug!(%destination, "app connected to a loopback server capture cannot see");
+                    }
+                }
+            }
+        });
+    }
+
+    /// Return (sorted) and clear the loopback servers recorded by
+    /// [`NetworkProxy::watch_loopback`] since the last call.
+    pub fn take_loopback_destinations(&self) -> Vec<String> {
+        self.loopback_destinations
+            .lock()
+            .map(|mut seen| std::mem::take(&mut *seen).into_iter().collect())
+            .unwrap_or_default()
     }
 
     /// Stop the proxy and return all captured entries.
@@ -5987,6 +6053,50 @@ mod tests {
         assert_eq!(entries[0].route_action, "aborted");
     }
 
+    /// PILOT-320: the loopback watch records what each sample reports,
+    /// deduplicated and bounded, hands it out once per take, and stops
+    /// sampling when the proxy stops.
+    #[tokio::test(start_paused = true)]
+    async fn loopback_watch_accumulates_until_taken_and_ends_with_the_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let proxy = NetworkProxy::start(ca).await.unwrap();
+        let samples = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&samples);
+        proxy.watch_loopback(Duration::from_secs(2), move || {
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            async move {
+                // Every sample sees 4610; later ones a flood of distinct ports.
+                let mut seen = vec!["127.0.0.1:4610".to_string()];
+                if n >= 2 {
+                    seen.extend((0..100).map(|p| format!("127.0.0.1:{}", 20000 + n * 100 + p)));
+                }
+                seen
+            }
+        });
+
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(proxy.take_loopback_destinations(), vec!["127.0.0.1:4610"]);
+        assert!(proxy.take_loopback_destinations().is_empty(), "taken once");
+
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        let flooded = proxy.take_loopback_destinations();
+        assert_eq!(flooded.len(), MAX_LOOPBACK_DESTINATIONS, "bounded");
+        assert!(flooded.contains(&"127.0.0.1:4610".to_string()));
+
+        proxy.stop().await;
+        let after_stop = samples.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert_eq!(
+            samples.load(Ordering::SeqCst),
+            after_stop,
+            "no sampling after stop"
+        );
+    }
+
     #[tokio::test]
     async fn drain_entries_returns_and_clears_without_stopping_proxy() {
         let dir = tempfile::tempdir().unwrap();
@@ -6433,6 +6543,7 @@ mod tests {
             mitm_ca: Arc::new(ca),
             shutdown_tx: tokio::sync::watch::channel(()).0,
             capture_session: uuid::Uuid::new_v4().to_string(),
+            loopback_destinations: Arc::default(),
         }
     }
 

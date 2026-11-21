@@ -5572,6 +5572,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 tls_rejected_hosts: tls_rejects.hosts,
                 os_service_tls_rejected_hosts: tls_rejects.os_service_hosts,
                 entries_before_start,
+                loopback_destinations: proxy.take_loopback_destinations(),
             }));
         }
 
@@ -5627,6 +5628,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         let capture_session = proxy.capture_session().to_string();
         let tls_rejects = proxy.take_tls_rejects().await;
+        let loopback_destinations = proxy.take_loopback_destinations();
         let entries_before_start =
             captured_entries_to_proto(proxy.take_entries_before_start().await, &capture_session);
         let captured = proxy.stop().await;
@@ -5640,6 +5642,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             tls_rejected_hosts: tls_rejects.hosts,
             os_service_tls_rejected_hosts: tls_rejects.os_service_hosts,
             entries_before_start,
+            loopback_destinations,
         }))
     }
 

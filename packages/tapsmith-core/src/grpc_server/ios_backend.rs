@@ -2223,6 +2223,16 @@ impl DeviceBackend for IosBackend<'_> {
                 "Physical iOS proxy listening for device HTTP_PROXY traffic"
             );
         }
+        // Neither simulator route sees the app's requests to a server on the
+        // Mac's loopback interface (PILOT-320), so at least notice them.
+        #[cfg(target_os = "macos")]
+        if route != proto::NetworkCaptureRoute::IosDeviceProxy {
+            let udid = serial.clone();
+            proxy.watch_loopback(ios::loopback_watch::SAMPLE_INTERVAL, move || {
+                let udid = udid.clone();
+                async move { ios::loopback_watch::sample(&udid, host_port).await }
+            });
+        }
         Ok(CaptureRoute {
             route,
             #[cfg(target_os = "macos")]
