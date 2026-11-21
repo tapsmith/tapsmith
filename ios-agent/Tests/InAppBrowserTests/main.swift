@@ -61,6 +61,27 @@ check("content deep in a chain counts", InAppBrowser.isBlank(app([node(.other, [
 check("a second window's content counts",
       InAppBrowser.isBlank(node(.application, label: "x", [node(.window), node(.window, [node(.keyboard)])])), false)
 
+// ─── A browser over the whole app ───
+
+let browser = node(.other, identifier: "BrowserView?IsPageLoaded=true&WebViewProcessID=1",
+                   [node(.other, identifier: "TopBrowserBar", [node(.button, label: "Done", identifier: "Close")])])
+// iOS 26+: attached as the window's last child after the blank chain.
+check("iOS 26's tree with the browser attached is covered",
+      InAppBrowser.coversApp(app([node(.other, [node(.other), emptyChain(11)]), browser])), true)
+// iOS 18.5 reads the browser in itself, beside empty windows and an
+// unlabelled backdrop image.
+check("iOS 18's tree with the browser read in is covered",
+      InAppBrowser.coversApp(node(.application, label: "Tapsmith Test App", [
+          node(.window, [node(.other, [node(.image), node(.other, [browser])])]),
+          node(.window), node(.window), node(.window),
+      ])), true)
+check("a browser beside the app's own screen (a sheet) is not over the whole app",
+      InAppBrowser.coversApp(app([node(.other, [node(.staticText, label: "Embedded WebView")]), browser])), false)
+check("the app's covered Done outside the browser counts as the app's",
+      InAppBrowser.coversApp(app([node(.button, label: "Done"), browser])), false)
+check("a blank tree with no browser is not covered", InAppBrowser.coversApp(ios26), false)
+check("an ordinary screen is not covered", InAppBrowser.coversApp(screen), false)
+
 // ─── When to look ───
 
 let now = Date(timeIntervalSince1970: 1_000)

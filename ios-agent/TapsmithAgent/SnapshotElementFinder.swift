@@ -258,12 +258,11 @@ class SnapshotElementFinder {
         // Check once if keyboard is visible (for focus detection).
         // Keyboard = elementType 19 (XCUIElement.ElementType.keyboard).
         let keyboardVisibleInSnapshot = hasKeyboardInTree(snapshotDict)
-        // A tree with an in-app browser attached (PILOT-1384): the app's live
+        // An in-app browser over the whole app (PILOT-1384): the app's live
         // queries also return its covered screen, which the tree leaves out,
         // so matches are found again from the browser's root, whose
         // descendants are what the tree's indices count.
-        let queryRoot: XCUIElement = snapshotDict[InAppBrowser.attachedKey] as? Bool == true
-            ? InAppBrowser.root(in: app) : app
+        let queryRoot: XCUIElement = InAppBrowser.coversApp(snapshotDict) ? InAppBrowser.root(in: app) : app
 
         // Number the app's descendants in pre-order (XCUIElementQuery order)
         // so a role+name, RegExp or substring-text match can be re-resolved

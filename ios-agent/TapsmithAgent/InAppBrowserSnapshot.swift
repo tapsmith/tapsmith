@@ -62,7 +62,7 @@ extension InAppBrowser {
         } else {
             children.append(content)
         }
-        return AttachedSnapshot(base: root, children: children, marksBrowser: true)
+        return AttachedSnapshot(base: root, children: children)
     }
 }
 
@@ -71,20 +71,15 @@ extension InAppBrowser {
 final class AttachedSnapshot: NSObject, XCUIElementSnapshot {
     private let base: XCUIElementSnapshot
     let children: [XCUIElementSnapshot]
-    /// Whether this is the root of the tree the browser was attached to:
-    /// its dictionary then carries `InAppBrowser.attachedKey`.
-    private let marksBrowser: Bool
 
-    init(base: XCUIElementSnapshot, children: [XCUIElementSnapshot], marksBrowser: Bool = false) {
+    init(base: XCUIElementSnapshot, children: [XCUIElementSnapshot]) {
         self.base = base
         self.children = children
-        self.marksBrowser = marksBrowser
     }
 
     var dictionaryRepresentation: [XCUIElement.AttributeName: Any] {
         var dict = base.dictionaryRepresentation
         dict[XCUIElement.AttributeName(rawValue: "children")] = children.map { $0.dictionaryRepresentation }
-        if marksBrowser { dict[XCUIElement.AttributeName(rawValue: InAppBrowser.attachedKey)] = true }
         return dict
     }
 
