@@ -8,6 +8,10 @@ export class WebViewShadowScreen {
   get saveDraftButton() { return this.webview.getByRole("button", { name: "Save draft" }) }
   /** The <input> inside x-field's shadow root, labelled by a <label for> there. */
   get displayNameField() { return this.webview.getByRole("textfield", { name: "Display name" }) }
+  /** The same <input>, by the label in its shadow root, as Playwright's getByLabel reads it. */
+  get displayNameByLabel() { return this.webview.getByLabel("Display name") }
+  /** The same <input>, by its ARIA role. */
+  get displayNameTextbox() { return this.webview.getByRole("textbox", { name: "display name" }) }
   get displayNameByPlaceholder() { return this.webview.getByPlaceholder("Your display name") }
   get displayNameByTestId() { return this.webview.getByTestId("display-name-input") }
   /** x-icon-button moves its host aria-label onto the inner button, as Ionic does. */

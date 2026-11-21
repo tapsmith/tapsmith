@@ -1,4 +1,4 @@
-import { Device } from "tapsmith"
+import type { Device, WebViewHandle } from "tapsmith"
 
 export class WebViewScreen {
   constructor(private device: Device) {}
@@ -8,4 +8,15 @@ export class WebViewScreen {
   get pageHeading() { return this.device.getByText("WebView Test Page", { exact: true }) }
   /** The page's Login button, through the native accessibility tree. */
   get nativeLoginButton() { return this.device.getByRole("button", { name: "Login" }) }
+}
+
+/** The test app's /webview page, inside the WebView. */
+export class WebViewPage {
+  constructor(private webview: WebViewHandle) {}
+
+  /** The email <input>, by its <label for="email">. */
+  get emailByLabel() { return this.webview.getByLabel("Email") }
+  /** The same <input>, by Playwright's ARIA role and its label as its name. */
+  get emailTextbox() { return this.webview.getByRole("textbox", { name: "Email", exact: true }) }
+  get passwordByLabel() { return this.webview.getByLabel("Password") }
 }

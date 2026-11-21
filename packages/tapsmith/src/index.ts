@@ -89,7 +89,7 @@ export { TapsmithGrpcClient } from './grpc-client.js';
 export { Tracing, type TracingStartOptions, type TracingStopOptions } from './trace/tracing.js';
 
 // WebView testing
-export { WebViewHandle } from './webview-handle.js';
+export { WebViewHandle, type WebViewRoleOptions, type WebViewLabelOptions } from './webview-handle.js';
 export { WebViewLocator } from './webview-locator.js';
 
 // ESLint plugin

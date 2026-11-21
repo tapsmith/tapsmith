@@ -217,7 +217,7 @@ export function formatSelector(sel: Selector): string {
  * parameters are typed, but tests run through tsx are not type-checked, and
  * anything else would reach the agent as garbage and silently match nothing.
  */
-function assertTextArg(value: unknown, what: string): asserts value is string | RegExp {
+export function assertTextArg(value: unknown, what: string): asserts value is string | RegExp {
   if (typeof value === 'string' || value instanceof RegExp) return;
   const got = value === null ? 'null' : `a ${typeof value}`;
   throw new TypeError(`${what} expects a string or a RegExp, got ${got}.`);
