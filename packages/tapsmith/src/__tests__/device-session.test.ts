@@ -1482,6 +1482,34 @@ describe('a rebuilt app in a long-lived session', () => {
     expect(installedApkMatches).not.toHaveBeenCalled();
   });
 
+  it('takes the startup check as the proof, so the session\'s first check is the cheap one', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    // The CLI's own open: the full comparison, which matches.
+    await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(knownInstalledBuilds()['emulator-5554']).toContain(`local-${stampSeq}`));
+    // The UI worker or watch child that adopts it next compares nothing.
+    await adopt();
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    for (const d of mocks.devices) expect(d.installApk).not.toHaveBeenCalled();
+  });
+
+  it('does not reinstall twice where the build cannot be compared: once at startup, then the record stands', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValue(undefined);
+    try {
+      await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+      expect(mocks.devices[0].installApk).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(knownInstalledBuilds()['emulator-5554']).toContain(`local-${stampSeq}`));
+      const session = await adopt();
+      expect(mocks.devices[1].installApk).not.toHaveBeenCalled();
+      expect(session.context.notices).toEqual([]);
+    } finally {
+      vi.mocked(installedApkMatches).mockReturnValue(true);
+    }
+  });
+
   it('forgets the proof when the reinstall fails, so the next run checks in full', async () => {
     const { installedApkMatches } = await import('../emulator.js');
     vi.mocked(installedApkMatches).mockReturnValue(false);

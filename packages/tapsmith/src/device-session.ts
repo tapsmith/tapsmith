@@ -601,7 +601,7 @@ export async function installConfiguredApp(
   opts: { onProgress?: (m: string) => void } = {},
 ): Promise<void> {
   const device = new Device(client, config);
-  const install = await installAppUnderTest(config, device, serial, { onProgress: opts.onProgress });
+  const install = await checkInstallAndRemember(config, device, serial, { onProgress: opts.onProgress });
   if (install.pending) await install.pending;
 }
 
@@ -613,6 +613,40 @@ async function installedBuildStamp(config: TapsmithConfig, serial: string): Prom
   return config.platform === 'ios'
     ? installedSimulatorAppStamp(serial, config.package)
     : installedApkStamp(serial, config.package);
+}
+
+/**
+ * The startup install check, recording a passing result (a matching build, or
+ * one it installed) as the device's verified build, so the first check of a
+ * long-lived session that follows is the cheap one. The build is stamped
+ * before the check; the device's copy once the check (and any install) is
+ * done, in the background so the session start does not wait for it.
+ */
+async function checkInstallAndRemember(
+  config: TapsmithConfig,
+  device: Device,
+  serial: string,
+  opts: Parameters<typeof installAppUnderTest>[3],
+): Promise<InstallOutcome> {
+  let artifact: string | undefined;
+  try {
+    artifact = config.package ? resolveAppArtifact(config) : undefined;
+  } catch {
+    // installAppUnderTest refuses it, with the phases the CLI shows.
+  }
+  const local = artifact ? localBuildStamp(artifact) : undefined;
+  local?.catch(() => {});
+  const install = await installAppUnderTest(config, device, serial, opts);
+  if (artifact && local) {
+    // A physical iPhone has no simulator container, so it stamps as
+    // `undefined` and nothing is recorded — its later checks never run.
+    const record = async (): Promise<void> => {
+      const [built, installed] = await Promise.all([local, installedBuildStamp(config, serial)]);
+      if (built && installed) verifiedBuilds.set(serial, `${artifact}\n${built}\n${installed}`);
+    };
+    void (install.pending ?? Promise.resolve()).then(record).catch(() => {});
+  }
+  return install;
 }
 
 /** What {@link reinstallChangedBuild} did. */
@@ -891,7 +925,7 @@ export async function openDeviceSession(
       return session;
     }
 
-    const install = await installAppUnderTest(config, device, spec.serial, {
+    const install = await checkInstallAndRemember(config, device, spec.serial, {
       freshDevice: opts.freshDevice,
       forceInstall: opts.forceInstall,
       appInstalledFresh: opts.appInstalledFresh,
