@@ -1510,6 +1510,38 @@ describe('a rebuilt app in a long-lived session', () => {
     }
   });
 
+  it('records the startup check\'s copy as stamped before the comparison, not a build another tool installed during it', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    const before = mocks.deviceStamp;
+    vi.mocked(installedApkMatches).mockImplementationOnce(() => { mocks.deviceStamp = 'foreign-install'; return true; });
+    await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+    await vi.waitFor(() => expect(knownInstalledBuilds()['emulator-5554']).toContain(`local-${stampSeq}`));
+    expect(knownInstalledBuilds()['emulator-5554']).toContain(String(before));
+    // So the session's first check sees a different copy and compares it.
+    vi.mocked(installedApkMatches).mockClear();
+    await adopt();
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the device\'s copy as it was before the comparison, never one installed meanwhile', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    const session = await adopt();
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    // The build is rebuilt and reinstalled by this check; another tool may
+    // install over it before the copy could be stamped, so it is not taken
+    // as proof: the next check compares in full once.
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    mocks.localStamp = 'rebuilt';
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).toHaveBeenCalledTimes(2);
+    mocks.deviceStamp = 'after-install';
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).toHaveBeenCalledTimes(3);
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).toHaveBeenCalledTimes(3);
+  });
+
   it('forgets the proof when the reinstall fails, so the next run checks in full', async () => {
     const { installedApkMatches } = await import('../emulator.js');
     vi.mocked(installedApkMatches).mockReturnValue(false);

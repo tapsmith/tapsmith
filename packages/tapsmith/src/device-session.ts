@@ -616,11 +616,14 @@ async function installedBuildStamp(config: TapsmithConfig, serial: string): Prom
 }
 
 /**
- * The startup install check, recording a passing result (a matching build, or
- * one it installed) as the device's verified build, so the first check of a
- * long-lived session that follows is the cheap one. The build is stamped
- * before the check; the device's copy once the check (and any install) is
- * done, in the background so the session start does not wait for it.
+ * The startup install check, recording a matching build as the device's
+ * verified one, so the first check of a long-lived session that follows is
+ * the cheap one. Both stamps are taken as the check starts (the device's in
+ * the background, alongside it), so a build another tool installs while the
+ * check runs never gets recorded. A build this check installs is not
+ * recorded: nothing ties the copy found after the install to the install,
+ * so the session's first check compares it in full once (unless the copy
+ * cannot be compared at all, see below).
  */
 async function checkInstallAndRemember(
   config: TapsmithConfig,
@@ -634,17 +637,24 @@ async function checkInstallAndRemember(
   } catch {
     // installAppUnderTest refuses it, with the phases the CLI shows.
   }
-  const local = artifact ? localBuildStamp(artifact) : undefined;
-  local?.catch(() => {});
+  // A physical iPhone has no simulator container: it stamps as `undefined`,
+  // and nothing is recorded (its later checks never run).
+  const stamps = artifact
+    ? Promise.all([localBuildStamp(artifact), installedBuildStamp(config, serial)])
+    : undefined;
+  stamps?.catch(() => {});
   const install = await installAppUnderTest(config, device, serial, opts);
-  if (artifact && local) {
-    // A physical iPhone has no simulator container, so it stamps as
-    // `undefined` and nothing is recorded — its later checks never run.
-    const record = async (): Promise<void> => {
-      const [built, installed] = await Promise.all([local, installedBuildStamp(config, serial)]);
+  if (stamps && !install.installed) {
+    void stamps.then(([built, installed]) => {
       if (built && installed) verifiedBuilds.set(serial, `${artifact}\n${built}\n${installed}`);
-    };
-    void (install.pending ?? Promise.resolve()).then(record).catch(() => {});
+    }).catch(() => {});
+  } else if (stamps && install.uncompared) {
+    // A device whose copy cannot be compared reinstalls on every full check:
+    // the copy found after this install is the best evidence there is.
+    void stamps.then(async ([built]) => {
+      const installed = await installedBuildStamp(config, serial);
+      if (built && installed) verifiedBuilds.set(serial, `${artifact}\n${built}\n${installed}`);
+    }).catch(() => {});
   }
   return install;
 }
@@ -703,10 +713,21 @@ export async function reinstallChangedBuild(
   const started = Date.now();
   const install = await installAppUnderTest(config, session.device, serial, { onProgress: opts.onProgress });
   if (install.pending) await install.pending;
-  const after = install.installed ? await installedBuildStamp(config, serial) : before;
-  const verified = token(after);
-  if (verified !== undefined) verifiedBuilds.set(serial, verified);
-  if (!install.installed) return { reinstalled: false };
+  // Only a match is recorded, with the stamps taken before the comparison:
+  // a copy stamped after an install might be another tool's install that
+  // landed since, so the next check compares the reinstalled build in full.
+  if (!install.installed) {
+    const verified = token(before);
+    if (verified !== undefined) verifiedBuilds.set(serial, verified);
+    return { reinstalled: false };
+  }
+  // The exception is a device whose copy cannot be compared at all: every
+  // full check would reinstall, so the copy found after this install is
+  // recorded as the best evidence there is.
+  if (install.uncompared) {
+    const verified = token(await installedBuildStamp(config, serial));
+    if (verified !== undefined) verifiedBuilds.set(serial, verified);
+  }
 
   const name = path.basename(artifact);
   const message = install.freshInstall ? `Installed ${name} (the app was no longer on the device)`

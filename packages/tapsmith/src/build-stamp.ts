@@ -91,17 +91,37 @@ export async function installedApkStamp(serial: string, packageName: string): Pr
 }
 
 /**
+ * Where each simulator app was last found, by `udid` and bundle id. Asking
+ * `simctl` costs most of a second, several on a busy host, so a session asks
+ * once and reuses the answer while that bundle directory still exists. A
+ * reinstall that writes the bundle elsewhere, or an uninstall, removes it,
+ * and the next stamp asks again; one that writes it in place changes the
+ * tree's stamp.
+ */
+const simulatorContainers = new Map<string, string>();
+
+/**
  * The stamp of the `.app` installed on a simulator for `bundleId`: its
  * container path and whole tree. `simctl install` writes the bundle anew, so
  * a reinstall changes the stamp. `undefined` when it is not installed or the
  * lookup fails.
  */
 export async function installedSimulatorAppStamp(udid: string, bundleId: string): Promise<string | undefined> {
-  const container = (await run('xcrun', ['simctl', 'get_app_container', udid, bundleId, 'app'], 10_000))?.trim();
-  if (!container) return undefined;
+  const key = `${udid}\n${bundleId}`;
+  let container = simulatorContainers.get(key);
+  if (container && !(await fs.promises.stat(container).then((st) => st.isDirectory(), () => false))) container = undefined;
+  if (!container) {
+    container = (await run('xcrun', ['simctl', 'get_app_container', udid, bundleId, 'app'], 10_000))?.trim();
+    if (!container) {
+      simulatorContainers.delete(key);
+      return undefined;
+    }
+    simulatorContainers.set(key, container);
+  }
   try {
     return `app:${container}:${await treeStamp(container)}`;
   } catch {
+    simulatorContainers.delete(key);
     return undefined;
   }
 }

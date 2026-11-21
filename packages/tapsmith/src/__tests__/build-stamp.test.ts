@@ -107,8 +107,25 @@ describe('installedSimulatorAppStamp', () => {
 
   it('is undefined when the app is not installed or its container cannot be read', async () => {
     mocks.answer = () => ({ err: new Error('No such file or directory') });
-    expect(await installedSimulatorAppStamp('SIM-1', 'com.example')).toBeUndefined();
+    expect(await installedSimulatorAppStamp('SIM-2', 'com.example')).toBeUndefined();
     mocks.answer = () => ({ stdout: path.join(ROOT, 'nowhere.app') });
-    expect(await installedSimulatorAppStamp('SIM-1', 'com.example')).toBeUndefined();
+    expect(await installedSimulatorAppStamp('SIM-2', 'com.example')).toBeUndefined();
+  });
+
+  it('asks simctl once, and again only when the bundle it named has gone', async () => {
+    const first = path.join(ROOT, 'Containers', 'UUID-A', 'App.app');
+    makeBundle(first);
+    mocks.answer = () => ({ stdout: `${first}\n` });
+    const stamp = await installedSimulatorAppStamp('SIM-3', 'com.example');
+    expect(await installedSimulatorAppStamp('SIM-3', 'com.example')).toBe(stamp);
+    expect(mocks.calls).toHaveLength(1);
+    // A reinstall wrote the bundle to a new container and removed the old one.
+    const second = path.join(ROOT, 'Containers', 'UUID-B', 'App.app');
+    makeBundle(second);
+    fs.rmSync(path.dirname(first), { recursive: true });
+    mocks.answer = () => ({ stdout: `${second}\n` });
+    const after = await installedSimulatorAppStamp('SIM-3', 'com.example');
+    expect(after).toContain(`app:${second}:`);
+    expect(mocks.calls).toHaveLength(2);
   });
 });
