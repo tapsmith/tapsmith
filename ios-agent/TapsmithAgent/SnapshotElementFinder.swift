@@ -1738,6 +1738,20 @@ class SnapshotElementFinder {
             }
         }
 
+        // A name-only node (an image, a switch) that a generic wrapper's
+        // getByText match only echoes takes the wrapper with it, though it
+        // matches nothing itself (TextContent.echoesName, PILOT-1366).
+        if isAppNode, selector.matchesInnermostOnly, TextContent.nameOnlyTypes.contains(nodeType) {
+            let myFrame = parseFrame(nodeDict)
+            let myLabel = nodeDict["label"] as? String ?? ""
+            for anc in matchedAncestors where TextContent.echoesName(
+                wrapperType: anc.elementType, wrapperLabel: anc.label,
+                nodeType: nodeType, nodeLabel: myLabel, sameTarget: Self.sameTarget(anc.frame, myFrame)
+            ) {
+                suppressed.insert(anc.resultIndex)
+            }
+        }
+
         if let children = nodeDict["children"] as? [[String: Any]] {
             // A keyboard's top edge only applies within its own window.
             let outerKeyboardTop = keyboardTop

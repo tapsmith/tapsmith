@@ -67,6 +67,23 @@ enum TextContent {
         )
     }
 
+    /// Whether a generic wrapper's label is only its name-only descendant's
+    /// name, copied onto the same bounds: React Native exposes an
+    /// `<Image accessibilityLabel>` as an Other over the Image, both labelled
+    /// (PILOT-1366). getByText drops the wrapper, as it drops a wrapper that
+    /// gives way to a matching descendant, though the descendant is no match
+    /// of its own. A button's label stays text, as the button's own is.
+    static func echoesName(
+        wrapperType: XCUIElement.ElementType,
+        wrapperLabel: String,
+        nodeType: XCUIElement.ElementType,
+        nodeLabel: String,
+        sameTarget: Bool
+    ) -> Bool {
+        wrapperType == .other && sameTarget && nameOnlyTypes.contains(nodeType)
+            && !TextMatch.normalize(wrapperLabel).isEmpty && TextMatch.equals(wrapperLabel, nodeLabel)
+    }
+
     /// `label` without the ", "-joined prefix it repeats from its container.
     static func ownLabel(_ label: String, containerLabel: String) -> String {
         let container = TextMatch.normalize(containerLabel)

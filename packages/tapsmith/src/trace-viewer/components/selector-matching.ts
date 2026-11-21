@@ -2,6 +2,7 @@ import type { HierarchyNode } from './hierarchy-utils.js';
 import { androidResourceIdMatches } from './resource-id.js';
 import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
+import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
 import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES, iosBackButtonName } from '../../accessible-name.js';
@@ -887,6 +888,20 @@ function isSameTargetDuplicate(outer: HierarchyNode, inner: HierarchyNode): bool
 }
 
 /**
+ * Whether a generic wrapper's label is only its name-only descendant's name on
+ * the same bounds — React Native's `<Image accessibilityLabel>`, an Other over
+ * the Image (TextContent.echoesName in the iOS agent, PILOT-1366).
+ */
+function echoesName(wrapper: HierarchyNode, inner: HierarchyNode): boolean {
+  const label = normalizeWhitespace(wrapper.attributes.get('label') ?? '');
+  return (wrapper.attributes.get('type') ?? wrapper.tagName) === 'XCUIElementTypeOther'
+    && label !== ''
+    && label === normalizeWhitespace(inner.attributes.get('label') ?? '')
+    && wrapper.attributes.get('bounds') !== undefined
+    && wrapper.attributes.get('bounds') === inner.attributes.get('bounds');
+}
+
+/**
  * Resolve a positional chain (.first()/.last()/.nth(n), negative n counting
  * from the end) to a concrete index. May be out of range — callers decide
  * whether that means "empty result" or an error.
@@ -1009,6 +1024,12 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
         pushed = true;
       }
       raw.push(node);
+    } else if (iosText && isIos && appNode && IOS_NAME_ONLY_TYPES.has(type)) {
+      // A generic wrapper that only echoes this image's or control's name on
+      // its bounds gives way to it, though it is no match (PILOT-1366).
+      for (const index of matchedAncestors) {
+        if (echoesName(raw[index], node)) suppressed.add(index);
+      }
     }
     const label = node.attributes.get('label') ?? '';
     const childContainer = isIos && appNode && label !== '' ? label : containerLabel;

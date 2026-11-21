@@ -345,6 +345,28 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
     expect(matchTypes(row, 'device.getByText("Test Screens", { exact: true })')).toEqual([`${T.text}:Test Screens`]);
   });
 
+  it("a generic wrapper echoing an image's or a switch's name gives way to it (PILOT-1366)", () => {
+    // React Native's <Image accessibilityLabel>: an Other over the Image, same label and bounds.
+    const bounds = { bounds: '[16,518][64,566]' };
+    const card = node(T.other, '', [
+      node(T.other, 'The Flower Girl', [node(T.image, 'The Flower Girl', [], bounds)], bounds),
+      node(T.text, 'The Flower Girl', [], { bounds: '[16,570][125,589]' }),
+    ]);
+    expect(matchTypes(card, 'device.getByText("The Flower Girl", { exact: true })')).toEqual([`${T.text}:The Flower Girl`]);
+    expect(matchTypes(card, 'device.getByText("flower")')).toEqual([`${T.text}:The Flower Girl`]);
+    expect(matchTypes(card, 'device.getByText(/^The Flower Girl$/)')).toEqual([`${T.text}:The Flower Girl`]);
+    const sw = node(T.other, 'Wi-Fi', [node(T.switch, 'Wi-Fi', [], { ...bounds, value: '1' })], bounds);
+    expect(matchTypes(sw, 'device.getByText("Wi-Fi", { exact: true })')).toEqual([]);
+    // Other bounds: a container, still text.
+    const container = node(T.other, 'The Flower Girl', [node(T.image, 'The Flower Girl', [], bounds)], { bounds: '[0,500][400,600]' });
+    expect(matchTypes(container, 'device.getByText("The Flower Girl", { exact: true })')).toEqual([`${T.other}:The Flower Girl`]);
+    // A button over its icon keeps its label as text.
+    const button = node(T.button, 'Share', [node(T.image, 'Share', [], bounds)], bounds);
+    expect(matchTypes(button, 'device.getByText("Share", { exact: true })')).toEqual([`${T.button}:Share`]);
+    // getByRole still finds the image.
+    expect(matchTypes(card, 'device.getByRole("image", { name: "The Flower Girl" })')).toEqual([`${T.image}:The Flower Girl`]);
+  });
+
   it('siblings are both kept', () => {
     const siblings = node(T.other, '', [node(T.text, 'Save'), node(T.button, 'Save')]);
     expect(matchTypes(siblings, 'device.getByText("Save", { exact: true })')).toEqual([`${T.text}:Save`, `${T.button}:Save`]);
