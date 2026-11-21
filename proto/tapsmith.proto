@@ -602,6 +602,12 @@ message StartAgentRequest {
   // device, a failed wipe) the data is untouched or partly wiped, and the
   // caller must clear and relaunch the app itself.
   bool clear_app_data_first = 8;
+  // Android: the activity of target_package to launch (the config's
+  // `activity`, as `.MainActivity` or a full class name). Every launch of
+  // target_package for the rest of the session starts it — resets, restarts,
+  // recovery relaunches and LaunchApp without an activity — instead of the
+  // resolved launcher activity. Empty: resolve the launcher activity.
+  string launch_activity = 9;
 }
 
 message PingRequest {}

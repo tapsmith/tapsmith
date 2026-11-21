@@ -267,6 +267,13 @@ pub struct TapsmithServiceImpl {
     /// Every launch then starts the component directly instead of running
     /// `monkey` (PILOT-976). Cleared on device/agent change.
     android_launcher_activity: Arc<RwLock<std::collections::HashMap<String, String>>>,
+    /// The `(package, activity)` the session's config names for its app
+    /// (`StartAgentRequest.launch_activity`, PILOT-1402). It outranks the
+    /// resolved launcher activity on every launch of that package. Set by
+    /// every StartAgent (a reused agent's too), so it is never stale for
+    /// longer than one session, and not cleared on a device change: it is
+    /// the app's, not the device's.
+    android_configured_activity: Arc<RwLock<Option<(String, String)>>>,
     /// Counters behind the warm/cold decision for declared app resets
     /// (`ResetApp`). Reset whenever the active device or agent session changes.
     reset_policy: Arc<RwLock<app_reset::ResetPolicyState>>,
@@ -526,6 +533,7 @@ impl TapsmithServiceImpl {
             ios_agent_config: Arc::new(RwLock::new(None)),
             started_agent_config: Arc::new(RwLock::new(None)),
             android_launcher_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            android_configured_activity: Arc::new(RwLock::new(None)),
             reset_policy: Arc::new(RwLock::new(app_reset::ResetPolicyState::default())),
             last_hooks_marker: Arc::new(RwLock::new(None)),
             nav_probe_found_no_marker: Arc::new(RwLock::new(false)),
@@ -2257,6 +2265,29 @@ impl TapsmithServiceImpl {
         }
     }
 
+    /// The activity the session's config names for `package_name`, if any.
+    async fn configured_launch_activity(&self, package_name: &str) -> Option<String> {
+        self.android_configured_activity
+            .read()
+            .await
+            .as_ref()
+            .filter(|(pkg, _)| pkg == package_name)
+            .map(|(_, activity)| activity.clone())
+    }
+
+    /// Record the config's activity for its app from a StartAgent request
+    /// (empty fields clear it).
+    async fn set_configured_launch_activity(&self, req: &proto::StartAgentRequest) {
+        let configured = (!req.target_package.is_empty() && !req.launch_activity.trim().is_empty())
+            .then(|| {
+                (
+                    req.target_package.clone(),
+                    req.launch_activity.trim().to_string(),
+                )
+            });
+        *self.android_configured_activity.write().await = configured;
+    }
+
     /// The cached launcher activity of `package_name`, if any.
     async fn cached_launcher_activity(&self, package_name: &str) -> Option<String> {
         self.android_launcher_activity
@@ -2269,6 +2300,9 @@ impl TapsmithServiceImpl {
     /// The launcher activity of `package_name`: cached, or resolved now and
     /// cached. `None` when it cannot be resolved.
     async fn launcher_activity(&self, serial: &str, package_name: &str) -> Option<String> {
+        if let Some(activity) = self.configured_launch_activity(package_name).await {
+            return Some(activity);
+        }
         if let Some(activity) = self.cached_launcher_activity(package_name).await {
             return Some(activity);
         }
@@ -2289,8 +2323,17 @@ impl TapsmithServiceImpl {
         serial: &str,
         package_name: &str,
     ) -> Result<Option<String>, Status> {
+        // Every MAIN/LAUNCHER activity of the package first: with two (a
+        // debug build's LeakCanary), `resolve-activity` answers the system
+        // chooser instead of either (PILOT-1402). The resolve commands stay
+        // for Android versions without `query-activities`.
         let commands = [
-            format!("cmd package resolve-activity --brief {package_name}"),
+            format!(
+                "cmd package query-activities --brief {ANDROID_LAUNCHER_INTENT_ARGS} {package_name}"
+            ),
+            format!(
+                "cmd package resolve-activity --brief {ANDROID_LAUNCHER_INTENT_ARGS} {package_name}"
+            ),
             format!("pm resolve-activity --brief {package_name}"),
         ];
 
@@ -2299,7 +2342,11 @@ impl TapsmithServiceImpl {
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
 
-            if let Some(activity) = parse_resolved_activity(&output, package_name) {
+            let activities = parse_launcher_activities(&output, package_name);
+            if let Some(activity) = pick_launcher_activity(&activities) {
+                if activities.len() > 1 {
+                    debug!(package = %package_name, ?activities, %activity, "several launcher activities; picked the app's own");
+                }
                 return Ok(Some(activity));
             }
         }
@@ -2347,10 +2394,7 @@ impl TapsmithServiceImpl {
             }
         }
 
-        let monkey_cmd = format!(
-            "monkey -p {} -c android.intent.category.LAUNCHER 1",
-            package_name
-        );
+        let monkey_cmd = android_monkey_launch_cmd(package_name);
 
         match adb::shell(serial, &monkey_cmd).await {
             Ok(_) => {
@@ -2360,12 +2404,17 @@ impl TapsmithServiceImpl {
             Err(monkey_err) => {
                 let Some(activity) = self.resolve_launcher_activity(serial, package_name).await?
                 else {
+                    let installed = android_package_installed(serial, package_name).await;
                     let screenshot = self.error_screenshot().await;
                     return Ok(Response::new(proto::ActionResponse {
                         request_id,
                         success: false,
                         error_type: "LAUNCH_FAILED".to_string(),
-                        error_message: format!("Failed to launch app: {monkey_err}"),
+                        error_message: unresolved_launcher_message(
+                            package_name,
+                            installed,
+                            &monkey_err.to_string(),
+                        ),
                         screenshot,
                         app_launched_fresh: false,
                     }));
@@ -4165,6 +4214,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         // SetDevice is the primary setter, but StartAgent is called in the
         // same RPC sequence and may be invoked by future clients directly.
         *self.network_tracing_enabled.write().await = req.network_tracing_enabled;
+        // Before the reuse check: a reused agent's session still launches
+        // the app the way this request's config says.
+        if platform == Platform::Android {
+            self.set_configured_launch_activity(&req).await;
+        }
 
         if self.can_reuse_started_agent(&desired_agent_config).await {
             backend.reuse_agent(&serial, &req).await;
@@ -7111,13 +7165,94 @@ fn android_hierarchy_has_rendered_content(xml: &str, package_name: &str) -> bool
     false
 }
 
-fn parse_resolved_activity(output: &str, package_name: &str) -> Option<String> {
-    let (pkg, activity) = parse_component_name(output)?;
-    if pkg == package_name {
-        Some(activity)
-    } else {
-        None
+/// Whether `package_name` is installed, as `pm path` reports it. Unknown
+/// (adb failed) counts as installed, so the error does not claim otherwise.
+async fn android_package_installed(serial: &str, package_name: &str) -> bool {
+    match adb::shell_lenient(serial, &format!("pm path {package_name}")).await {
+        Ok(out) => out
+            .lines()
+            .any(|line| line.trim_start().starts_with("package:")),
+        Err(_) => true,
     }
+}
+
+/// The intent arguments of a launcher tap, for `cmd package` queries.
+const ANDROID_LAUNCHER_INTENT_ARGS: &str =
+    "-a android.intent.action.MAIN -c android.intent.category.LAUNCHER";
+
+/// Every `package_name/<activity>` component in `cmd package
+/// query-activities --brief` (or `resolve-activity --brief`) output, in the
+/// order PackageManager listed them. Components of other packages — the
+/// system chooser (`android/…ResolverActivity`) that `resolve-activity`
+/// answers when a package has two launcher activities — are left out
+/// (PILOT-1402).
+fn parse_launcher_activities(output: &str, package_name: &str) -> Vec<String> {
+    let mut activities: Vec<String> = Vec::new();
+    for line in output.lines() {
+        if let Some((pkg, activity)) = parse_component_name(line) {
+            if pkg == package_name && !activities.contains(&activity) {
+                activities.push(activity);
+            }
+        }
+    }
+    activities
+}
+
+/// Activities debug-only libraries add to an app's launcher: LeakCanary 2's
+/// `LeakLauncherActivity` alias and LeakCanary 1's `DisplayLeakActivity`.
+const DEBUG_TOOL_LAUNCHER_PREFIXES: &[&str] = &["leakcanary.", "com.squareup.leakcanary."];
+
+/// The launcher activity to start out of a package's MAIN/LAUNCHER
+/// activities: the first that is not a debug tool's, in PackageManager's
+/// order (the merged manifest's, where library activities follow the
+/// app's), or the first of all when every one is a debug tool's.
+fn pick_launcher_activity(activities: &[String]) -> Option<String> {
+    activities
+        .iter()
+        .find(|activity| {
+            !DEBUG_TOOL_LAUNCHER_PREFIXES
+                .iter()
+                .any(|prefix| activity.starts_with(prefix))
+        })
+        .or_else(|| activities.first())
+        .cloned()
+}
+
+/// `monkey` sending one launcher intent to `package_name`: the last resort
+/// when no launcher activity resolves. Without `--pct-syskeys 0`, monkey
+/// refuses to run (exit 251, "SYS_KEYS has no physical keys") on emulators
+/// that have no physical system keys.
+fn android_monkey_launch_cmd(package_name: &str) -> String {
+    format!("monkey --pct-syskeys 0 -p {package_name} -c android.intent.category.LAUNCHER 1")
+}
+
+/// The error for a package none of whose launcher activities resolved and
+/// that `monkey` could not start either: what went wrong and what to do,
+/// with monkey's own reason (its last line) rather than its argument dump.
+fn unresolved_launcher_message(package_name: &str, installed: bool, monkey_err: &str) -> String {
+    if !installed {
+        return format!(
+            "Failed to launch app: {package_name} is not installed on the device. \
+             Install it first, or set `apk` in tapsmith.config.ts to its APK so Tapsmith installs it."
+        );
+    }
+    let reason = monkey_err
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(|line| line.trim_start_matches('*').trim())
+        .unwrap_or("");
+    let reason = if reason.is_empty() {
+        String::new()
+    } else {
+        format!(" (monkey: {reason})")
+    };
+    format!(
+        "Failed to launch app: couldn't resolve the launcher activity of {package_name}: \
+         no activity of it handles the MAIN/LAUNCHER intent, and the monkey fallback could \
+         not start it either{reason}. Set `activity` in tapsmith.config.ts to the activity \
+         to launch, e.g. activity: '.MainActivity'."
+    )
 }
 
 fn android_reverse_port_candidates(host_port: u16) -> Vec<u16> {
@@ -8079,6 +8214,7 @@ mod tests {
             ios_app_path: String::new(),
             network_tracing_enabled: true,
             clear_app_data_first: false,
+            launch_activity: String::new(),
         };
         let first = StartedAgentConfig::from_start_agent_request("device-1", Platform::Ios, &req);
 
@@ -8100,6 +8236,7 @@ mod tests {
             ios_app_path: "Example.app".to_string(),
             network_tracing_enabled: false,
             clear_app_data_first: false,
+            launch_activity: String::new(),
         };
 
         let base =
@@ -9813,6 +9950,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_configured_activity_outranks_the_resolved_one_for_its_package_only() {
+        // PILOT-1402: the config's `activity` reaches every launch path
+        // (reset, restartApp, recovery, LaunchApp without an activity)
+        // through `launcher_activity`, which answers it before any cache or
+        // device query — so no adb runs for it (the serial is bogus).
+        let svc = test_service();
+        svc.android_launcher_activity.write().await.insert(
+            "org.wikipedia.dev".to_string(),
+            "leakcanary.internal.activity.LeakLauncherActivity".to_string(),
+        );
+        let req = |pkg: &str, activity: &str| proto::StartAgentRequest {
+            target_package: pkg.to_string(),
+            launch_activity: activity.to_string(),
+            ..Default::default()
+        };
+        svc.set_configured_launch_activity(&req(
+            "org.wikipedia.dev",
+            " org.wikipedia.main.MainActivity ",
+        ))
+        .await;
+        assert_eq!(
+            svc.launcher_activity("no-such-serial", "org.wikipedia.dev")
+                .await
+                .as_deref(),
+            Some("org.wikipedia.main.MainActivity")
+        );
+        // Another package is not the config's app.
+        assert_eq!(svc.configured_launch_activity("com.other").await, None);
+        // A later StartAgent without one clears it.
+        svc.set_configured_launch_activity(&req("org.wikipedia.dev", ""))
+            .await;
+        assert_eq!(
+            svc.configured_launch_activity("org.wikipedia.dev").await,
+            None
+        );
+        svc.set_configured_launch_activity(&req("", ".Main")).await;
+        assert_eq!(svc.configured_launch_activity("").await, None);
+    }
+
+    #[tokio::test]
     async fn launcher_activity_cache_is_per_package() {
         let svc = test_service();
         svc.android_launcher_activity
@@ -9858,21 +10035,156 @@ mod tests {
     #[test]
     fn parse_resolved_activity_brief_output() {
         let output = "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\ncom.example.app/.MainActivity";
-        let activity = parse_resolved_activity(output, "com.example.app").unwrap();
-        assert_eq!(activity, ".MainActivity");
+        assert_eq!(
+            parse_launcher_activities(output, "com.example.app"),
+            vec![".MainActivity".to_string()]
+        );
     }
 
     #[test]
     fn parse_resolved_activity_full_name() {
         let output = "com.example.app/com.example.app.settings.ProfileActivity";
-        let activity = parse_resolved_activity(output, "com.example.app").unwrap();
-        assert_eq!(activity, "com.example.app.settings.ProfileActivity");
+        assert_eq!(
+            parse_launcher_activities(output, "com.example.app"),
+            vec!["com.example.app.settings.ProfileActivity".to_string()]
+        );
     }
 
     #[test]
     fn parse_resolved_activity_rejects_other_package() {
         let output = "com.other.app/.MainActivity";
-        assert!(parse_resolved_activity(output, "com.example.app").is_none());
+        assert!(parse_launcher_activities(output, "com.example.app").is_empty());
+    }
+
+    // PILOT-1402: a debug build with LeakCanary has two MAIN/LAUNCHER
+    // activities. `resolve-activity` then answers the system chooser, and
+    // `query-activities` lists both, the app's own first.
+    const WIKIPEDIA_DEV_QUERY: &str = "2 activities found:
+  Activity #0:
+    priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false
+    org.wikipedia.dev/org.wikipedia.main.MainActivity
+  Activity #1:
+    priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false
+    org.wikipedia.dev/leakcanary.internal.activity.LeakLauncherActivity
+";
+
+    #[test]
+    fn two_launcher_activities_resolve_to_the_chooser_not_the_app() {
+        let chooser = "priority=0 preferredOrder=0 match=0x0 specificIndex=-1 isDefault=false\nandroid/com.android.internal.app.ResolverActivity";
+        assert_eq!(
+            parse_launcher_activities(chooser, "org.wikipedia.dev"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            pick_launcher_activity(&parse_launcher_activities(chooser, "org.wikipedia.dev")),
+            None
+        );
+    }
+
+    #[test]
+    fn query_activities_lists_every_launcher_activity_of_the_package() {
+        assert_eq!(
+            parse_launcher_activities(WIKIPEDIA_DEV_QUERY, "org.wikipedia.dev"),
+            vec![
+                "org.wikipedia.main.MainActivity".to_string(),
+                "leakcanary.internal.activity.LeakLauncherActivity".to_string(),
+            ]
+        );
+        // Another package's launcher activities are not this one's.
+        assert!(parse_launcher_activities(WIKIPEDIA_DEV_QUERY, "org.wikipedia").is_empty());
+    }
+
+    #[test]
+    fn the_apps_own_launcher_activity_beats_leakcanarys_whatever_the_order() {
+        let pick = |list: &[&str]| {
+            pick_launcher_activity(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            pick(&[
+                "org.wikipedia.main.MainActivity",
+                "leakcanary.internal.activity.LeakLauncherActivity"
+            ])
+            .as_deref(),
+            Some("org.wikipedia.main.MainActivity")
+        );
+        assert_eq!(
+            pick(&[
+                "leakcanary.internal.activity.LeakLauncherActivity",
+                ".MainActivity"
+            ])
+            .as_deref(),
+            Some(".MainActivity")
+        );
+        // LeakCanary 1.x.
+        assert_eq!(
+            pick(&[
+                "com.squareup.leakcanary.internal.DisplayLeakActivity",
+                "com.example.app.Main"
+            ])
+            .as_deref(),
+            Some("com.example.app.Main")
+        );
+        // Two of the app's own: PackageManager's order (the manifest's).
+        assert_eq!(pick(&[".First", ".Second"]).as_deref(), Some(".First"));
+        // Only a debug tool's: still launchable, better than nothing.
+        assert_eq!(
+            pick(&["leakcanary.internal.activity.LeakLauncherActivity"]).as_deref(),
+            Some("leakcanary.internal.activity.LeakLauncherActivity")
+        );
+        assert_eq!(pick(&[]), None);
+    }
+
+    #[test]
+    fn one_launcher_activity_resolves_as_before() {
+        let single = "1 activities found:\n  Activity #0:\n    priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n    com.android.settings/.Settings\n";
+        assert_eq!(
+            pick_launcher_activity(&parse_launcher_activities(single, "com.android.settings"))
+                .as_deref(),
+            Some(".Settings")
+        );
+        // The old resolve-activity answer still parses.
+        assert_eq!(
+            parse_launcher_activities("com.example.app/.MainActivity", "com.example.app"),
+            vec![".MainActivity".to_string()]
+        );
+        assert!(parse_launcher_activities("No activity found", "com.example.app").is_empty());
+    }
+
+    #[test]
+    fn monkey_fallback_injects_no_system_keys() {
+        // `monkey` exits 251 ("SYS_KEYS has no physical keys") on emulators
+        // without them unless system-key events are switched off.
+        assert_eq!(
+            android_monkey_launch_cmd("com.example.app"),
+            "monkey --pct-syskeys 0 -p com.example.app -c android.intent.category.LAUNCHER 1"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_launcher_activity_says_so_and_points_at_the_config() {
+        let monkey_err = "adb command failed (exit exit status: 251): args: [-p, org.wikipedia.dev, -c, android.intent.category.LAUNCHER, 1]\n arg: \"-p\"\ndata=\"org.wikipedia.dev\"\n** SYS_KEYS has no physical keys but with factor 2.0%.\n";
+        let msg = unresolved_launcher_message("org.wikipedia.dev", true, monkey_err);
+        assert!(msg.contains("org.wikipedia.dev"), "{msg}");
+        assert!(
+            msg.contains("couldn't resolve the launcher activity"),
+            "{msg}"
+        );
+        assert!(msg.contains("`activity`"), "{msg}");
+        assert!(msg.contains("tapsmith.config"), "{msg}");
+        // The reason, not the dump.
+        assert!(msg.contains("SYS_KEYS has no physical keys"), "{msg}");
+        assert!(!msg.contains("args:"), "{msg}");
+        assert!(!msg.contains("arg: "), "{msg}");
+
+        let missing = unresolved_launcher_message(
+            "com.example.gone",
+            false,
+            "adb command failed (exit exit status: 1): ** No activities found to run, monkey aborted.",
+        );
+        assert!(
+            missing.contains("com.example.gone is not installed"),
+            "{missing}"
+        );
     }
     #[test]
     fn capture_ports_require_an_applied_redirect_even_when_values_match() {

@@ -563,8 +563,8 @@ impl DeviceBackend for AndroidBackend<'_> {
             // the Bundle even after pm clear wiped AsyncStorage.
             // --activity-clear-task ensures a fresh task stack.
             let cmd = format!(
-                "am start -S --activity-clear-task -n {}/{}",
-                req.package_name, req.activity,
+                "am start -S --activity-clear-task -n {}",
+                android_component_arg(&req.package_name, &req.activity),
             );
             self.svc
                 .launch_and_idle(
@@ -1226,7 +1226,15 @@ impl DeviceBackend for AndroidBackend<'_> {
         // load. `pm clear` wipes app data but NOT the ActivityManager
         // task record, so a relaunch that can't clear the task brings
         // back the old route and scroll position.
-        if !target_package.is_empty() {
+        // A configured activity (StartAgentRequest.launch_activity) needs no
+        // resolving: `launcher_activity` answers it first.
+        if !target_package.is_empty()
+            && self
+                .svc
+                .configured_launch_activity(target_package)
+                .await
+                .is_none()
+        {
             if let Ok(serial) = self.svc.active_serial().await {
                 let activity = self
                     .svc
