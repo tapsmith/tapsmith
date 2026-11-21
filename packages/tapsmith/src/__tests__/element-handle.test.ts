@@ -1368,6 +1368,18 @@ describe('tap()', () => {
       expect(err.message).not.toContain(' aka ');
     });
 
+    it("matches an element with no usable bounds by what it is, not where", async () => {
+      // Android reports a row scrolled out of view at 0,0,0,0.
+      const offScreen = { ...caption, elementId: 'a', bounds: { left: 0, top: 0, right: 0, bottom: 0 } };
+      const other = makeElementInfo({ elementId: 'b', className: 'XCUIElementTypeStaticText', role: 'text', text: 'The Flower Girl, 1890' });
+      const again = { ...offScreen, elementId: 'a2' };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("The Flower Girl", { exact: true })': [again] }),
+      }, _textContains('Flower'), [offScreen, other]);
+      expect(err.message).toContain('1) text "The Flower Girl" [0,0][0,0] aka device.getByText("The Flower Girl", { exact: true })');
+      expect(err.message).toMatch(/2\) text "The Flower Girl, 1890"\n/);
+    });
+
     it("lists the first candidate unchecked when the agent can't answer", async () => {
       const evaluateSelectors = vi.fn(async () => { throw new Error('agent gone'); });
       const err = await strictError({ evaluateSelectors }, _textContains('Flower'), [image, caption]);
