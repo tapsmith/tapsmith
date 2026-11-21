@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
+import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from '../ios-text-content.js';
 import { escapeJsString } from '../js-string-escape.js';
@@ -37,6 +37,8 @@ interface Case {
   value?: string
   /** The nearest labelled ancestor's label. */
   container?: string
+  /** iOS: the node is in a table row (a cell) beside static texts with these labels. */
+  row?: string[]
   /** Android: the node's text (an empty EditText reports its hint here). */
   text?: string
   contentDesc?: string
@@ -132,6 +134,19 @@ const CASES: Case[] = [
   { why: 'a joined middle child', platform: 'ios', type: T.other, label: 'A, B, C', query: { exact: 'B' }, matches: true },
   { why: 'a joined last child', platform: 'ios', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: true },
   { why: 'part of a child is no exact match', platform: 'ios', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Login' }, matches: false },
+  // UIKit labels a row's edit-mode Remove and Reorder controls with the row's
+  // texts joined after a verb: a part the row shows as a text of its own is
+  // the row's text, not the control's (PILOT-1374).
+  { why: "an edit-mode Remove button by its row's text", platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: 'Alpha (a@example.com)' }, matches: false },
+  { why: "an edit-mode Remove button by its row's middle text", platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: '981 195' }, matches: false },
+  { why: "an edit-mode Reorder button by its row's text", platform: 'ios', type: T.button, label: 'Reorder A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: 'Alpha (a@example.com)' }, matches: false },
+  { why: 'a part the row shows compares whitespace-normalized', platform: 'ios', type: T.button, label: 'Remove A, Alpha (a@example.com)', row: ['A', 'Alpha\u00a0(a@example.com)'], query: { exact: 'Alpha (a@example.com)' }, matches: false },
+  { why: "a title's part the row shows", platform: 'ios', type: T.button, label: '', title: 'Remove A, Alpha', row: ['A', 'Alpha'], query: { exact: 'Alpha' }, matches: false },
+  { why: "an edit-mode button's own words still match", platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: 'Remove A' }, matches: true },
+  { why: 'a part its row does not show matches', platform: 'ios', type: T.other, label: 'Intro, Welcome to Expo', row: ['Intro'], query: { exact: 'Welcome to Expo' }, matches: true },
+  { why: 'outside a row, every joined part matches', platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', query: { exact: 'Alpha (a@example.com)' }, matches: true },
+  { why: 'a whole label matches in a row that shows it', platform: 'ios', type: T.button, label: 'Buy', row: ['Buy'], query: { exact: 'Buy' }, matches: true },
+  { why: 'by substring, an edit-mode button still matches', platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { substring: 'alpha' }, matches: true },
   // A label that lacks the text's trailing punctuation is not that text
   // (PILOT-880): a React Native touchable's accessibilityLabel hides the text
   // it wraps, and an alert's "Log out" button is not its "Log out?" title.
@@ -216,14 +231,31 @@ function nodeFor(c: Case): HierarchyNode {
   return { tagName: c.type, attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
 }
 
-/** The node inside a container labelled `c.container`, when it has one. */
+/**
+ * The node in a table row beside `c.row`'s static texts, when it has them,
+ * inside a container labelled `c.container`, when it has one.
+ */
 function treeFor(c: Case): HierarchyNode {
-  const node = nodeFor(c);
-  if (c.container === undefined) return node;
+  let tree = nodeFor(c);
+  if (c.row !== undefined) {
+    const texts = c.row.map((label): HierarchyNode => ({
+      tagName: T.text,
+      attributes: new Map(Object.entries({ type: T.text, label, identifier: '', value: '' })),
+      children: [],
+      depth: 0,
+    }));
+    tree = {
+      tagName: T.cell,
+      attributes: new Map(Object.entries({ type: T.cell, label: '', identifier: '', value: '' })),
+      children: [tree, ...texts],
+      depth: 0,
+    };
+  }
+  if (c.container === undefined) return tree;
   return {
     tagName: T.other,
     attributes: new Map(Object.entries({ type: T.other, label: c.container, identifier: '', value: '' })),
-    children: [{ ...node, depth: 1 }],
+    children: [tree],
     depth: 0,
   };
 }
@@ -240,7 +272,7 @@ function buildFixture() {
   return {
     comment:
       'Generated by packages/tapsmith/src/__tests__/text-content-conformance.test.ts (PILOT-794, PILOT-707). One node ' +
-      '(on iOS with its container\'s label) and one getByText query per case, with the agent\'s answer; a RegExp query ' +
+      '(on iOS with its container\'s label and the static texts beside it in its table row) and one getByText query per case, with the agent\'s answer; a RegExp query ' +
       'carries the SDK translation the agents compile. Replayed by the TypeScript playground matcher, the iOS agent\'s ' +
       'TextContentTests and the Android agent\'s LocatorConformanceTest.',
     cases: CASES.map((c) => ({
@@ -386,6 +418,51 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
   it("the application's name is no container label", () => {
     const app = node('XCUIElementTypeApplication', 'Notes', [node(T.button, 'Notes, Add')]);
     expect(matchTypes(app, 'device.getByText("Notes", { exact: true })')).toEqual([`${T.button}:Notes, Add`]);
+  });
+});
+
+describe("iOS getByText of a table row's text in edit mode (PILOT-1374)", () => {
+  // A recorded UIKit table in edit mode: each row's Remove and Reorder
+  // controls are labelled with the row's texts ("Remove A, 981 195, Alpha
+  // (a@example.com)"), the same dump the agent's host tests replay.
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const table = parseHierarchyXml(readFileSync(
+    path.join(repoRoot, 'ios-agent/Tests/Fixtures/iphone-se-18.2/edit-mode-table.xml'), 'utf8',
+  ));
+  const matchesIn = (code: string) => findMatchingNodes(table, parseSelectorString(code)!)
+    .map((n) => `${n.attributes.get('type')}:${n.attributes.get('label')}`);
+
+  it("finds the row's static text, not the controls named by it", () => {
+    expect(matchesIn('device.getByText("Alpha (a@example.com)", { exact: true })')).toEqual([`${T.text}:Alpha (a@example.com)`]);
+    expect(matchesIn('device.getByText("981 195", { exact: true })')).toEqual(Array(3).fill(`${T.text}:981 195`));
+    expect(matchesIn('device.getByText("A", { exact: true })')).toEqual([`${T.text}:A`]);
+  });
+
+  it('getByRole still finds the controls by their names', () => {
+    expect(matchesIn('device.getByRole("button", { name: "Alpha (a@example.com)", exact: true })'))
+      .toEqual([`${T.button}:Remove A, 981 195, Alpha (a@example.com)`, `${T.button}:Reorder A, 981 195, Alpha (a@example.com)`]);
+  });
+
+  it("a row's control holding the texts it joins gives way to them, as before", () => {
+    const row = node(T.cell, '', [node(T.button, 'Alpha, Beta', [node(T.text, 'Alpha'), node(T.text, 'Beta')])]);
+    expect(matchTypes(row, 'device.getByText("Alpha", { exact: true })')).toEqual([`${T.text}:Alpha`]);
+    // Its own text inside it is no row text outside it.
+    const merged = node(T.cell, '', [node(T.other, 'Alpha, Beta', [node(T.text, 'Alpha')])]);
+    expect(matchTypes(merged, 'device.getByText("Beta", { exact: true })')).toEqual([`${T.other}:Alpha, Beta`]);
+  });
+
+  it('the nearest row decides', () => {
+    // An outer row's text is not the inner row's.
+    const nested = node(T.cell, '', [node(T.text, 'Alpha'), node(T.cell, '', [node(T.button, 'Remove Alpha, Alpha')])]);
+    expect(matchTypes(nested, 'device.getByText("Alpha", { exact: true })'))
+      .toEqual([`${T.text}:Alpha`, `${T.button}:Remove Alpha, Alpha`]);
+    const inner = node(T.cell, '', [node(T.cell, '', [node(T.text, 'Alpha'), node(T.button, 'Remove Alpha, Alpha')])]);
+    expect(matchTypes(inner, 'device.getByText("Alpha", { exact: true })')).toEqual([`${T.text}:Alpha`]);
+  });
+
+  it('outside a table row, a joined part still matches (React Native)', () => {
+    const screen = node(T.other, '', [node(T.text, 'Welcome'), node(T.other, 'Intro, Welcome')]);
+    expect(matchTypes(screen, 'device.getByText("Welcome", { exact: true })')).toEqual([`${T.text}:Welcome`, `${T.other}:Intro, Welcome`]);
   });
 });
 
