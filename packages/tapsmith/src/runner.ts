@@ -55,6 +55,7 @@ import { telemetry, runEventFromResults, type RunMode } from './telemetry.js';
 import { isRecoverableInfrastructureError } from './worker-protocol.js';
 import { filterEntriesByHosts } from './trace/filter-hosts.js';
 import { TlsRejectWarnings, osServiceTlsRejectNote, tlsRejectWarning } from './tls-reject-warning.js';
+import { loopbackCaptureWarning, loopbackUnfiredRouteReason } from './loopback-capture-warning.js';
 import { defineStandIns, notSupportedYet } from './not-supported.js';
 
 // ─── Trace Device Info ───
@@ -205,6 +206,8 @@ function resettableDevices(opts: RunOptions): Array<RunDevice & { sessionContext
 const _printedCaptureWarnings = new Set<string>();
 /** Rejected-certificate hosts already reported on the terminal this run (PILOT-712). */
 const _tlsRejectWarnings = new TlsRejectWarnings();
+/** Loopback servers already warned about this run, per device (PILOT-320). */
+const _loopbackWarnings = new TlsRejectWarnings();
 
 type RawNetworkEntries = Awaited<ReturnType<Device['_stopNetworkCapture']>>['entries'];
 type DeviceNetworkEntries = Array<{ deviceId?: string; entries: RawNetworkEntries }>;
@@ -422,9 +425,14 @@ function _warnUnfiredRoutes(
     earlyRequests: EarlyRouteRequest[];
     /** Whether the proxy saw any request from the app; undefined when this test drained no capture. */
     appTrafficSeen: boolean | undefined;
+    /** Loopback servers the app connected to, which capture cannot see (PILOT-320). */
+    loopbackDestinations: string[];
   },
 ): void {
   const possible: string[] = [];
+  if (reasons.loopbackDestinations.length > 0) {
+    possible.push(loopbackUnfiredRouteReason(reasons.loopbackDestinations));
+  }
   if (reasons.earlyRequests.length > 0) {
     const shown = reasons.earlyRequests.slice(0, 3).map((r) =>
       `${r.method ? `${r.method} ` : ''}${r.url} ${formatLeadTime(r.msBefore)} before the route for ${r.pattern} was registered`,
@@ -2863,11 +2871,23 @@ async function runSuiteContext(
       // or gRPC stream opened at launch) with its original start time.
       const capturedAppRequests = new Map<Device, CapturedAppRequest[]>();
       const appTrafficInTest = new Map<Device, boolean>();
+      // Loopback servers each device's app connected to, which its capture
+      // cannot see (PILOT-320: an iOS simulator app calling localhost).
+      const loopbackDestinations = new Map<Device, Set<string>>();
       const attemptStartedAtMs = Date.now();
       const noteCapture = (
         d: Device,
-        res: { entries: RawNetworkEntries; entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }> },
+        res: {
+          entries: RawNetworkEntries;
+          entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }>;
+          loopbackDestinations?: string[];
+        },
       ): void => {
+        if (res.loopbackDestinations?.length) {
+          const dests = loopbackDestinations.get(d) ?? new Set<string>();
+          for (const dest of res.loopbackDestinations) dests.add(dest);
+          loopbackDestinations.set(d, dests);
+        }
         const seen = capturedAppRequests.get(d) ?? [];
         const since = _fileRunStartedAtMs ?? 0;
         let inTest = appTrafficInTest.get(d) ?? false;
@@ -3517,6 +3537,13 @@ async function runSuiteContext(
                 }
                 snapshotsFor(d).update(res.entries);
                 noteCapture(d, res);
+                if (res.loopbackDestinations?.length) {
+                  traceCollector.addDaemonLogEntry(
+                    'warn',
+                    `Network capture warning: ${loopbackCaptureWarning(res.loopbackDestinations)}`,
+                    d._traceDeviceId,
+                  );
+                }
               } else {
                 console.warn(`[tapsmith] Network capture stopped with error: ${res.errorMessage}`);
               }
@@ -3647,6 +3674,17 @@ async function runSuiteContext(
         }
       }
 
+      // The app talked to a server on the Mac's loopback interface, which
+      // its capture cannot see (PILOT-320): a test-result warning, once per
+      // run per device and server, so every run path shows it.
+      for (const [d, dests] of loopbackDestinations) {
+        const fresh = _loopbackWarnings.takeNew(d._traceDeviceId ?? '', [...dests].sort());
+        if (fresh.length === 0) continue;
+        const who = devices.length > 1 && d._traceDeviceId ? `[${d._traceDeviceId}] ` : '';
+        const pending = (opts._preflightWarnings ??= []);
+        pending.push(`Network capture warning: ${who}${loopbackCaptureWarning(fresh)}`);
+      }
+
       // A failed test whose routes were live on a running proxy and still
       // never fired: say why when the capture shows a likely reason
       // (PILOT-775). A passing test's unfired route is just a mock the app
@@ -3660,6 +3698,7 @@ async function runSuiteContext(
           earlyRequests,
           // An early request already explains an empty test capture.
           appTrafficSeen: captured ? earlyRequests.length > 0 || appTrafficInTest.get(d) === true : undefined,
+          loopbackDestinations: [...(loopbackDestinations.get(d) ?? [])].sort(),
         });
       }
 

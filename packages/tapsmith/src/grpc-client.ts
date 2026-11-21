@@ -1347,6 +1347,12 @@ export class TapsmithGrpcClient {
       routeAction: string;
       osService?: boolean;
     }>;
+    /**
+     * Servers on the host's loopback interface (`127.0.0.1:4610`) the app was
+     * seen connected to since the previous stop, which capture cannot see
+     * (PILOT-320). Only iOS simulators fill it; absent from older daemons.
+     */
+    loopbackDestinations?: string[];
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon
     // even when the run was stopped, or the proxy keeps capturing into a
