@@ -1002,6 +1002,12 @@ export interface UIWorkerInitMessage {
   /** See `InitMessage.networkApisInRun`. */
   networkApisInRun: boolean
   /**
+   * The parent's `knownInstalledBuilds()`: the build each device was last
+   * proven to hold (PILOT-1397). Required, so a recycled or respawned worker
+   * starts with it instead of comparing the builds in full again.
+   */
+  installedBuilds: Record<string, string>
+  /**
    * The rest of the device group (`devices[1..]`) for a `use.devices`
    * project, each on a daemon the server spawned for it. Omitted for
    * single-device workers.
@@ -1086,6 +1092,8 @@ export interface UIWorkerReadyMessage {
   policy?: import('../app-reset.js').AppResetPolicy
   /** Runtime reset capabilities probed after launch (in-app hooks detected?). */
   capabilities?: import('../app-reset.js').ResetCapabilities
+  /** The worker's `knownInstalledBuilds()` after its start, for the parent. */
+  installedBuilds: Record<string, string>
 }
 
 /**
@@ -1213,6 +1221,14 @@ export interface UIWorkerFileDoneMessage {
   filePath: string
   results: import('../worker-protocol.js').SerializedTestResult[]
   suite: import('../worker-protocol.js').SerializedSuiteResult
+  /**
+   * The file never ran because the check before it failed: the configured
+   * build is missing, or would not install or launch (PILOT-1397). The
+   * parent fails the file's tests with this message; the worker stays.
+   */
+  setupError?: string
+  /** The worker's `knownInstalledBuilds()`, for the parent's next worker. */
+  installedBuilds: Record<string, string>
 }
 
 /** UI worker → server: error. */

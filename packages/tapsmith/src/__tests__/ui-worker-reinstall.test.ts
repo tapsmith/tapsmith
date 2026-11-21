@@ -76,12 +76,13 @@ function fakeSession(name: string): DeviceSession {
   } as unknown as DeviceSession;
 }
 
-async function init(sessions: DeviceSession[]): Promise<void> {
+async function init(sessions: DeviceSession[], installedBuilds: Record<string, string> = {}): Promise<void> {
   mocks.sessions = sessions;
   const readyBefore = sent.filter((m) => m.type === 'ready').length;
   deliver({
     type: 'init', workerId: 0, deviceSerial: sessions[0].serial, deviceName: sessions[0].name, daemonPort: 50051,
     config: {} as never, adoptPrimary: true, adoptPrepared: true, forceInstall: false, networkApisInRun: false,
+    installedBuilds,
   });
   await vi.waitFor(() => expect(sent.filter((m) => m.type === 'ready').length).toBe(readyBefore + 1));
 }
@@ -131,12 +132,30 @@ describe('ui-worker build check before each run', () => {
     });
   });
 
-  it('fails the file with the check\'s error, without running it', async () => {
+  it('fails the file with the check\'s error, without running it, and keeps the worker', async () => {
     const s = fakeSession('emulator-5554');
     await init([s]);
     mocks.reinstallChangedBuild.mockRejectedValueOnce(new Error('App APK not found at /proj/app.apk'));
     await runFile();
     expect(mocks.runTestFile).not.toHaveBeenCalled();
-    expect(sent.find((m) => m.type === 'error')).toMatchObject({ error: { message: expect.stringContaining('App APK not found') } });
+    // Not an `error`: that would retire the worker over a build the user is
+    // about to fix (a clean build in progress).
+    expect(sent.some((m) => m.type === 'error')).toBe(false);
+    expect(sent.find((m) => m.type === 'file-done')).toMatchObject({
+      filePath: '/proj/tests/todos.test.ts', results: [], setupError: 'App APK not found at /proj/app.apk',
+    });
+    // The next run checks again and runs.
+    await runFile();
+    expect(mocks.runTestFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts from the parent\'s record of the builds and hands its own back', async () => {
+    const { knownInstalledBuilds } = await import('../installed-builds.js');
+    const s = fakeSession('emulator-5554');
+    await init([s], { 'emulator-5554': 'app.apk\nlocal\ndevice' });
+    expect(knownInstalledBuilds()['emulator-5554']).toBe('app.apk\nlocal\ndevice');
+    expect(sent.find((m) => m.type === 'ready')).toMatchObject({ installedBuilds: { 'emulator-5554': 'app.apk\nlocal\ndevice' } });
+    await runFile();
+    expect(sent.find((m) => m.type === 'file-done')).toMatchObject({ installedBuilds: { 'emulator-5554': 'app.apk\nlocal\ndevice' } });
   });
 });

@@ -35,6 +35,7 @@ import {
   type DeviceSession,
 } from '../device-session.js';
 import { currentSession } from '../device-claims.js';
+import { knownInstalledBuilds, rememberInstalledBuilds } from '../installed-builds.js';
 import { createActionProgressMessenger } from '../action-progress-renderer.js';
 import { isAbortError } from '../abort.js';
 import type { AnyTraceEvent } from '../trace/types.js';
@@ -167,6 +168,9 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
 
   config = configFromSerialized(msg.config, daemonAddress);
   config.device = msg.deviceSerial;
+  // What the parent already proved about the builds on these devices, so a
+  // recycled or respawned worker does not compare the builds in full again.
+  rememberInstalledBuilds(msg.installedBuilds);
 
   // Force trace on for UI mode
   if (!config.trace || config.trace === 'off') {
@@ -230,7 +234,7 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
 function finishInit(): void {
   sendProgress('ready');
   publishedCapabilities = { ...sharedCapabilities() };
-  send({ type: 'ready', workerId, policy: groupPreparedPolicy(), capabilities: { ...sharedCapabilities() } });
+  send({ type: 'ready', workerId, policy: groupPreparedPolicy(), capabilities: { ...sharedCapabilities() }, installedBuilds: knownInstalledBuilds() });
 
   // From here on, stream slow-device-action progress (between-file preflight,
   // test.use({appState}) restore, recovery) so the UI can show "Restoring app
@@ -278,6 +282,7 @@ async function handleRunFile(
   currentAbortController = abortController;
   for (const s of group) s.client._setAbortSignal(abortController.signal);
 
+  let checkingBuild = false;
   try {
     // Ensure the devices are awake — the screen may have auto-locked while
     // watch mode was idle waiting for file changes. The between-file app
@@ -290,6 +295,7 @@ async function handleRunFile(
     // A rebuilt app is reinstalled before the run, as `tapsmith test` would
     // at its start; this worker outlives many runs (PILOT-1397). Cheap when
     // nothing changed: a stat of the build and one device query.
+    checkingBuild = true;
     for (const s of sessionsForRun(group, config!, projectUseOptions)) {
       const build = await reinstallChangedBuild(s, { onProgress: sendProgress });
       if (build.reinstalled) {
@@ -297,12 +303,22 @@ async function handleRunFile(
         sendProgress('');
       }
     }
+    checkingBuild = false;
   } catch (err) {
     // Whether aborted or a genuine preflight failure, this run is over —
     // don't leave a stale controller for a later idle-state abort IPC.
     currentAbortController = undefined;
     if (abortController.signal.aborted || isAbortError(err)) {
       sendEmptyFileDone(filePath);
+      return;
+    }
+    if (checkingBuild) {
+      // The build is missing (a clean build in progress), or would not
+      // install or launch: this file fails with why, and the worker stays —
+      // the next run checks again. Retiring it would take the device out of
+      // the session over a build the user is about to fix.
+      sendProgress('');
+      sendEmptyFileDone(filePath, err instanceof Error ? err.message : String(err));
       return;
     }
     throw err;
@@ -368,12 +384,14 @@ async function handleRunFile(
     filePath,
     results: results.map((r) => serializeTestResult(r, workerId)),
     suite: serializeSuiteResult(suiteResult, workerId),
+    installedBuilds: knownInstalledBuilds(),
   });
 }
 
 /** Report a file as done with no results — used when a user stop lands
- * before the file's tests ever started (e.g. during the preflight reset). */
-function sendEmptyFileDone(filePath: string): void {
+ * before the file's tests ever started (e.g. during the preflight reset), or
+ * with `setupError` when the build check before it failed. */
+function sendEmptyFileDone(filePath: string, setupError?: string): void {
   const emptySuite: import('../runner.js').SuiteResult = { name: '', tests: [], suites: [], durationMs: 0 };
   send({
     type: 'file-done',
@@ -381,6 +399,8 @@ function sendEmptyFileDone(filePath: string): void {
     filePath,
     results: [],
     suite: serializeSuiteResult(emptySuite, workerId),
+    installedBuilds: knownInstalledBuilds(),
+    ...(setupError === undefined ? {} : { setupError }),
   });
 }
 

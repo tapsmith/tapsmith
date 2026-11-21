@@ -81,6 +81,7 @@ import { DeviceReadiness, holdReason, McpCallsInFlight, mcpToolWorkers, MUTATING
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
+import { knownInstalledBuilds, rememberInstalledBuilds } from '../installed-builds.js';
 import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
 import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, PickGenerations, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
 import { nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
@@ -666,9 +667,8 @@ export async function startUIServer(
       case 'capabilities':
         upgradeWorkerCapabilities(worker, msg.capabilities);
         break;
-      case 'app-reinstalled':
-        reportAppReinstalled(worker, msg);
-        break;
+      // Not 'app-reinstalled': a worker sends it only while it starts or runs
+      // a file, and those listeners report it (once).
       case 'prepared': {
         const started = worker.readiness?.state;
         readinessEvent(worker, { type: 'prepared', prepareId: msg.prepareId, policy: msg.policy, startedAt: msg.startedAt, durationMs: msg.durationMs, satisfiedBy: msg.satisfiedBy });
@@ -2454,6 +2454,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
         const onMessage = (msg: UIWorkerChildMessage) => {
           if (msg.type === 'ready' && msg.workerId === id) {
+            rememberInstalledBuilds(msg.installedBuilds);
             worker.initialPolicy = msg.policy;
             worker.capabilities = msg.capabilities;
             events?.onReady?.();
@@ -2493,6 +2494,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           adoptPrepared: !!adopt && adoptPrepared,
           forceInstall,
           networkApisInRun: ctx.networkApisInRun,
+          installedBuilds: knownInstalledBuilds(),
           ...(members.length > 0 ? {
             groupMembers: members.map((m) => ({
               name: m.name,
@@ -3203,8 +3205,19 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               break;
             }
             case 'file-done': {
+              rememberInstalledBuilds(msg.installedBuilds);
               const results = msg.results.map(deserializeTestResult);
               const suite = deserializeSuiteResult(msg.suite);
+              // The build check before the file failed (PILOT-1397): its
+              // tests fail with why, and the worker stays for the next run.
+              if (msg.setupError !== undefined && worker.currentFile) {
+                const n = failUnservableFile(worker.currentFile, msg.setupError);
+                failed += n;
+                if (n > 0) {
+                  anyFailed = true;
+                  if (worker.currentFile.projectName) failedProjectsInDispatch.add(worker.currentFile.projectName);
+                }
+              }
 
               // A test the user stopped mid-flight is interrupted, not failed
               // — keeps graceful-abort accounting consistent with the

@@ -299,6 +299,8 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     busy: boolean
     retired?: boolean
     bucketSignature?: string
+    /** The project of the file the worker is running, for a result it fails on its behalf. */
+    currentProject?: string
   }
 
   // Grows when a target that could not start comes up on a retry (PILOT-415).
@@ -551,6 +553,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
       const onMessage = (msg: UIWorkerChildMessage) => {
         if (msg.type === 'ready' && msg.workerId === id) {
+          rememberInstalledBuilds(msg.installedBuilds);
           clearTimeout(timeout);
           child.removeListener('message', onMessage);
           child.removeListener('exit', onExit);
@@ -589,6 +592,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         // Once per device: not again on every retry of a target that keeps failing.
         forceInstall,
         networkApisInRun: ctx.networkApisInRun,
+        installedBuilds: knownInstalledBuilds(),
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({ name: groupNames[i + 1].name, deviceSerial: m.serial, daemonPort: m.daemonPort })),
         } : {}),
@@ -670,6 +674,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
             return;
           }
           worker.busy = true;
+          worker.currentProject = next.projectName;
           reporter.onTestFileStart?.(next.filePath);
           worker.process.send({
             type: 'run-file',
@@ -709,8 +714,15 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
                 break;
               }
               case 'file-done': {
-                const results = msg.results.map(deserializeTestResult);
-                const suite = deserializeSuiteResult(msg.suite);
+                rememberInstalledBuilds(msg.installedBuilds);
+                // The build check before the file failed (PILOT-1397): the
+                // file fails with why, and the worker stays for the next run.
+                const failure = msg.setupError === undefined
+                  ? undefined
+                  : makeErrorResult(msg.filePath, new Error(msg.setupError), worker.currentProject);
+                if (failure) reporter.onTestEnd?.(failure.result);
+                const results = failure ? [failure.result] : msg.results.map(deserializeTestResult);
+                const suite = failure ? failure.suite : deserializeSuiteResult(msg.suite);
                 allResults.push(...results);
                 allSuites.push(suite);
                 if (results.some((r) => r.status === 'failed')) {

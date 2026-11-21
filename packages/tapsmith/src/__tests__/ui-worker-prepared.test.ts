@@ -83,6 +83,7 @@ async function init(sessions: DeviceSession[]): Promise<void> {
     adoptPrepared: true,
     forceInstall: false,
     networkApisInRun: false,
+    installedBuilds: {},
   });
   await vi.waitFor(() => expect(sent.filter((m) => m.type === 'ready').length).toBe(readyBefore + 1));
 }
