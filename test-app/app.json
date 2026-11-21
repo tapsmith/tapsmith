@@ -49,6 +49,7 @@
       "./plugins/with-webview-debugging",
       "./plugins/with-scene-lifecycle",
       "./plugins/with-native-settings-screen",
+      "./plugins/with-leakcanary-launcher",
       "expo-secure-store"
     ],
     "experiments": {
