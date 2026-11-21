@@ -136,12 +136,19 @@ export function beginTestFileImport(filePath: string): TestFileImport {
         const lostModules = previous.declaringModules.filter((m) => !declaringModules.includes(m));
         // The record keeps the earlier import's, so the next import of the
         // unchanged file is held to it too, not to this short one.
-        if (lostModules.length > 0) throw new Error(lostModuleTestsMessage(path.basename(file), lostModules));
-        if (tests === 0 && previous.tests > 0) throw new Error(staleImportMessage(path.basename(file), previous.tests));
+        if (lostModules.length > 0) throw withoutFrames(lostModuleTestsMessage(path.basename(file), lostModules));
+        if (tests === 0 && previous.tests > 0) throw withoutFrames(staleImportMessage(path.basename(file), previous.tests));
       }
       imports.set(file, { tests, declaringModules, mtimeMs });
     },
   };
+}
+
+/** An error about the file as a whole: Tapsmith's own frames would be all its stack shows. */
+function withoutFrames(message: string): Error {
+  const err = new Error(message);
+  err.stack = `Error: ${message}`;
+  return err;
 }
 
 function lostModuleTestsMessage(name: string, modules: string[]): string {

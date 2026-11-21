@@ -154,6 +154,8 @@ describe('runTestFile — the same file run again in one process (PILOT-953)', (
     expect(result.error?.message).toMatch(
       /uses-shared\.test\.mjs imports shared-suite\.mjs, which declares tests at its top level/,
     );
+    // About the file, not a line in it: no Tapsmith-internal frames to print.
+    expect(result.error?.stack).not.toMatch(/\n\s+at /);
   });
 
   it('runs a test file that another test file imported first', async () => {
