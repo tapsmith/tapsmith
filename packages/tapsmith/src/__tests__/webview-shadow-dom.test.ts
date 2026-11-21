@@ -653,6 +653,21 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
       expect(best!.code).toBe('webview.getByRole("button", { name: "Sign in", exact: true })');
     });
 
+    it('tests a getByLabel RegExp against the raw label text, as the page does', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><label for="e">\n  Email\n</label><input id="e"></body>', distinctBoxes);
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      for (const [code, locator] of [
+        ['webview.getByLabel(/^Email$/)', handle.getByLabel(/^Email$/)],
+        ['webview.getByLabel(/^\\s+Email/)', handle.getByLabel(/^\s+Email/)],
+        ['webview.getByLabel("Email", { exact: true })', handle.getByLabel('Email', { exact: true })],
+      ] as const) {
+        expect(count(roots, code), code).toBe(await locator.count());
+      }
+      expect(await handle.getByLabel(/^\s+Email/).count()).toBe(1);
+      const input = flatten(roots).find((n) => n.attributes.get('webview-id') === 'e')!;
+      expect(generateSelectors(input).map((g) => g.code)).toContain('webview.getByLabel("Email")');
+    });
+
     it('reads a dump from before PILOT-1361', () => {
       const roots = parseHierarchyXml('<webview.input bounds="[0,0][10,10]" class="webview.input" webview-tag="input"'
         + ' content-desc="Email" webview-aria-label="" webview="true" />');

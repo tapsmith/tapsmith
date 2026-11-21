@@ -284,7 +284,8 @@ export function webViewAccessibleName(node: HierarchyNode): string {
 
 /**
  * The label texts webview.getByLabel matches a WebView node by
- * (`webview-labels`: aria-labelledby, aria-label, `<label>`). A dump that
+ * (`webview-labels`: aria-labelledby, aria-label, `<label>`), raw: a RegExp
+ * tests them as they are, a string match normalises whitespace. A dump that
  * predates the attribute has only the aria-label.
  */
 export function webViewLabels(node: HierarchyNode): string[] {

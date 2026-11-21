@@ -192,10 +192,10 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
 
   // 3. Label — Testing Library getByLabelText: aria-labelledby, aria-label
   // or a <label>, as webview.getByLabel matches it.
-  const label = webViewLabels(node).find((l) => l.trim());
+  const label = webViewLabels(node).map((l) => l.trim().replace(/\s+/g, ' ')).find(Boolean);
   if (label) {
     selectors.push({
-      code: `webview.getByLabel("${escapeJsString(label.trim())}")`,
+      code: `webview.getByLabel("${escapeJsString(label)}")`,
       label: 'Label',
       priority: 3,
     });

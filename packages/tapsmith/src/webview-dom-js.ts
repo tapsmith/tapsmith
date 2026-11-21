@@ -103,9 +103,10 @@ const HELPERS_JS = `(() => {
   }
   // ─── Roles, accessible names and labels, as Playwright computes them ───
   // Ported from Playwright's injected roleUtils.ts and selectorUtils.ts
-  // (Apache-2.0), so webview.getByRole and webview.getByLabel find what
-  // page.getByRole and page.getByLabel find. Left out: CSS ::before/::after
-  // content, aria-owns, and aria-describedby (no description matching).
+  // (Copyright (c) Microsoft Corporation, Apache License 2.0), so
+  // webview.getByRole and webview.getByLabel find what page.getByRole and
+  // page.getByLabel find. Left out: CSS ::before/::after content, aria-owns,
+  // and aria-describedby (no description matching).
   const tagOf = (el) => (el.localName || '').toUpperCase();
   const parentOrHost = (el) => el.parentElement || (el.parentNode && el.parentNode.nodeType === 11 ? el.parentNode.host : null);
   function closestCrossShadow(el, css) {

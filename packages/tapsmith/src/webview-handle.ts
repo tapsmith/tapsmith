@@ -1024,7 +1024,8 @@ export class WebViewHandle {
             // label texts getByLabel matches (Playwright's rules, PILOT-1361).
             ariaRole: __ts.role(el) || '',
             ariaLabel: __ts.name(el).slice(0, 200),
-            labels: __ts.labelTexts(el).map((t) => t.trim().replace(/\\s+/g, ' ').slice(0, 200)),
+            // Raw, as a getByLabel RegExp tests them; a string match normalises.
+            labels: __ts.labelTexts(el).map((t) => t.slice(0, 200)),
             // The attribute alone: what webview.getByLabel matches (PILOT-666).
             ariaLabelAttr: el.getAttribute('aria-label') || '',
             testId: el.getAttribute('data-testid') || '',
