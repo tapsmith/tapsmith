@@ -1,6 +1,6 @@
 /**
  * Warning for an iOS simulator app talking to a server on the Mac's loopback
- * interface (PILOT-320). A simulator shares the Mac's network stack, so
+ * interface. A simulator shares the Mac's network stack, so
  * `localhost` in the app is the Mac — and no capture route sees that
  * traffic: macOS never offers loopback connections to the Network Extension,
  * and the system-proxy fallback bypasses `localhost`. The daemon notices the

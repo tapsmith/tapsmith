@@ -1349,8 +1349,8 @@ export class TapsmithGrpcClient {
     }>;
     /**
      * Servers on the host's loopback interface (`127.0.0.1:4610`) the app was
-     * seen connected to since the previous stop, which capture cannot see
-     * (PILOT-320). Only iOS simulators fill it; absent from older daemons.
+     * seen connected to since the previous stop, which capture cannot see.
+     * Only iOS simulators fill it; absent from older daemons.
      */
     loopbackDestinations?: string[];
   }> {
