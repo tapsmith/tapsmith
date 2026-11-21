@@ -270,9 +270,10 @@ pub struct TapsmithServiceImpl {
     /// The `(package, activity)` the session's config names for its app
     /// (`StartAgentRequest.launch_activity`, PILOT-1402). It outranks the
     /// resolved launcher activity on every launch of that package. Set by
-    /// every StartAgent (a reused agent's too), so it is never stale for
-    /// longer than one session, and not cleared on a device change: it is
-    /// the app's, not the device's.
+    /// every StartAgent (a reused agent's too) and not cleared on a device
+    /// change: it is the app's, not the device's. A client that adopts a
+    /// daemon with a connected agent and sends no StartAgent keeps the
+    /// previous session's value until its first StartAgent.
     android_configured_activity: Arc<RwLock<Option<(String, String)>>>,
     /// Counters behind the warm/cold decision for declared app resets
     /// (`ResetApp`). Reset whenever the active device or agent session changes.
