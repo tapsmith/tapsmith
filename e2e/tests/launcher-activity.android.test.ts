@@ -14,16 +14,12 @@ async function expectOwnLauncherActivity(device: Device) {
 }
 
 describe("An app with a second, LeakCanary-style launcher activity (PILOT-1402)", () => {
-  test.use({ appResetScope: "test" })
-
   test("the file's launch starts the app's own activity", async ({ device }) => {
     await expectOwnLauncherActivity(device)
   })
 
-  test("a per-test reset starts it again", async ({ device }) => {
-    await expectOwnLauncherActivity(device)
-  })
-
+  // restartApp() force-stops and starts the launcher activity with the
+  // launcher intent.
   test("restartApp() starts it", async ({ device }) => {
     await device.restartApp()
     await expectOwnLauncherActivity(device)
@@ -35,3 +31,20 @@ describe("An app with a second, LeakCanary-style launcher activity (PILOT-1402)"
     await expectOwnLauncherActivity(device)
   })
 })
+
+// A hooks build resets warm, by deep link, which never asks which launcher
+// activity to start. Restart and clear resets relaunch the app from a clean
+// task with its launcher activity, as failure recovery does.
+for (const appReset of ["restart", "clear"] as const) {
+  describe(`An app with a second launcher activity, after an appReset: "${appReset}" reset (PILOT-1402)`, () => {
+    test.use({ appReset, appResetScope: "test" })
+
+    test("the first test's reset starts the app's own activity", async ({ device }) => {
+      await expectOwnLauncherActivity(device)
+    })
+
+    test("the next test's reset starts it again", async ({ device }) => {
+      await expectOwnLauncherActivity(device)
+    })
+  })
+}
