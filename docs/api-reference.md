@@ -1660,7 +1660,7 @@ await expect(device.getByText("Loading...", { exact: true })).toBeHidden();
 
 #### `.toBeEmpty(options?): Promise<void>`
 
-Assert that the element has no text content or is an empty input field. The agents normalize text-input fields so a placeholder/hint is not reported as text — `toBeEmpty()` after `clear()` passes even when the placeholder is still drawn.
+Assert that the element has no text content or is an empty input field. The agents normalize text-input fields so a placeholder/hint is not reported as text — `toBeEmpty()` after `clear()` passes even when the placeholder is still drawn. A Jetpack Compose text field, which draws its `label` and `placeholder` as text inside the field, is empty until something is typed into it.
 
 > **Android API < 26 limitation.** The precise placeholder-vs-value distinction uses `AccessibilityNodeInfo.isShowingHintText()` and `getHintText()`, both of which are only available from API 26 (Android 8.0). On API 24–25 we cannot tell whether a textfield is displaying its placeholder or a real typed value, so `toBeEmpty()` after `clear()` may incorrectly report the field as non-empty (it sees the placeholder text). Bump `minSdk` to 26 if your tests rely on this behavior. iOS is unaffected.
 
@@ -1751,7 +1751,7 @@ await expect(device.getByRole("image")).toHaveAccessibleName(/Profile/);
 
 #### `.toHaveAccessibleDescription(description: string | RegExp, options?): Promise<void>`
 
-Assert that the element has the given accessible description. On Android, this maps to the `hint` property.
+Assert that the element has the given accessible description. On Android, this maps to the `hint` property. A Jetpack Compose text field publishes no hint, so its `label` and `placeholder` text are its hint.
 
 ```typescript
 await expect(device.getByRole("image")).toHaveAccessibleDescription("Profile photo");

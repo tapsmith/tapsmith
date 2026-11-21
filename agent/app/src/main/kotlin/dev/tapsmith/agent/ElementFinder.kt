@@ -1699,13 +1699,18 @@ class ElementFinder(
         // mis-reported as empty. An element with no text of its own
         // aggregates its descendants' text so wrapping containers (RN
         // ReactViewGroup, plain ViewGroup, ConstraintLayout, etc.) expose
-        // their visible label.
+        // their visible label — except a text field: an empty Compose
+        // TextField's children are its label and placeholder, which it
+        // reports as its hint instead (PILOT-1365).
+        val isEditText = EDIT_TEXT_HINT_CLASS_PATTERN.matcher(className).matches()
         val effectiveText =
             FindRules.effectiveText(
                 rawText,
+                isEditText,
                 isShowingHint = { isShowingHintText(node) },
                 descendantText = { collectDescendantText(node, fresh) },
             )
+        val hint = FindRules.fieldHint(extractHint(node), isEditText) { collectDescendantText(node, fresh) }
 
         // Prefer the framework-set RoleDescription (React Native's
         // accessibilityRole) over the className-based mapping when present;
@@ -1722,7 +1727,7 @@ class ElementFinder(
                 text = effectiveText,
                 contentDescription = contentDescription,
                 resourceId = resourceId,
-                hint = extractHint(node),
+                hint = hint,
                 bounds = bounds,
                 isEnabled = node.isEnabled,
                 isChecked = node.isChecked,

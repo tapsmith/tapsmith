@@ -166,22 +166,66 @@ class FindRulesTest {
 
     @Test
     fun `own text is the value unless the field is showing its hint`() {
-        assertEquals("typed", FindRules.effectiveText("typed", { false }, { "child" }))
-        assertNull(FindRules.effectiveText("Email", { true }, { "child" }))
+        assertEquals("typed", FindRules.effectiveText("typed", false, { false }, { "child" }))
+        assertNull(FindRules.effectiveText("Email", true, { true }, { "child" }))
     }
 
     @Test
     fun `empty own text falls back to descendant text, and never reads the hint flag`() {
         val noHintRead = { throw AssertionError("hint flag read for an element with no own text") }
-        assertEquals("Welcome to Expo", FindRules.effectiveText(null, noHintRead, { "Welcome to Expo" }))
-        assertEquals("joined", FindRules.effectiveText("", noHintRead, { "joined" }))
-        assertNull(FindRules.effectiveText(null, noHintRead, { "" }))
+        assertEquals("Welcome to Expo", FindRules.effectiveText(null, false, noHintRead, { "Welcome to Expo" }))
+        assertEquals("joined", FindRules.effectiveText("", false, noHintRead, { "joined" }))
+        assertNull(FindRules.effectiveText(null, false, noHintRead, { "" }))
     }
 
     @Test
     fun `descendant text is only read when own text is empty`() {
         val noDescendants = { throw AssertionError("descendant text read for an element with own text") }
-        assertEquals("own", FindRules.effectiveText("own", { false }, noDescendants))
+        assertEquals("own", FindRules.effectiveText("own", false, { false }, noDescendants))
+    }
+
+    @Test
+    fun `an empty Compose text field's label is not its value (PILOT-1365)`() {
+        // Compose publishes an empty field as an EditText with text "" and
+        // no hint, its label (and placeholder) as child text nodes.
+        val noHintRead = { throw AssertionError("hint flag read for an element with no own text") }
+        val noDescendants = { throw AssertionError("descendant text read as a text field's value") }
+        assertNull(FindRules.effectiveText("", true, noHintRead, noDescendants))
+        assertNull(FindRules.effectiveText(null, true, noHintRead, noDescendants))
+    }
+
+    @Test
+    fun `a Compose text field's typed value is its value, even when it equals the label`() {
+        assertEquals("Search", FindRules.effectiveText("Search", true, { false }, { "Search" }))
+        assertEquals("abc", FindRules.effectiveText("abc", true, { false }, { "Search" }))
+    }
+
+    // ─── Field hint ───
+
+    @Test
+    fun `a text field with no hint of its own is hinted by its descendants' text (PILOT-1365)`() {
+        assertEquals("Search", FindRules.fieldHint(null, true, { "Search" }))
+        assertEquals("Search", FindRules.fieldHint("", true, { "Search" }))
+        assertEquals("Search Type a query", FindRules.fieldHint("", true, { "Search Type a query" }))
+    }
+
+    @Test
+    fun `a text field's own hint wins, and is read alone`() {
+        val noDescendants = { throw AssertionError("descendant text read for a field with its own hint") }
+        assertEquals("Email", FindRules.fieldHint("Email", true, noDescendants))
+    }
+
+    @Test
+    fun `a text field with no hint and no descendant text keeps its own hint`() {
+        assertEquals("", FindRules.fieldHint("", true, { "" }))
+        assertNull(FindRules.fieldHint(null, true, { "" }))
+    }
+
+    @Test
+    fun `only a text field takes its descendants' text as its hint`() {
+        val noDescendants = { throw AssertionError("descendant text read for a non-field") }
+        assertNull(FindRules.fieldHint(null, false, noDescendants))
+        assertEquals("", FindRules.fieldHint("", false, noDescendants))
     }
 
     // ─── Descendant text ───
