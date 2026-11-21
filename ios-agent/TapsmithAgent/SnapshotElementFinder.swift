@@ -2114,6 +2114,11 @@ class SnapshotElementFinder {
         // (LiveQueryPin, PILOT-1065): set wherever it matches an exact label
         // or identifier.
         var pin = LiveQueryPin.none
+        // Positions count the whole tree, and a query from an in-app
+        // browser's root (PILOT-1384) leaves out what is outside it (iOS 18's
+        // backdrop image): bind no live element by position there, so a
+        // touch goes to the frame it was found at.
+        let positionalBindingHolds = queryRoot === app
         func resolve(_ query: XCUIElementQuery) -> XCUIElement? {
             let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
@@ -2125,6 +2130,7 @@ class SnapshotElementFinder {
                 return base.matching(NSPredicate(format: "identifier == %@", nodeIdentifier))
                     .element(boundBy: idIndex)
             }
+            guard positionalBindingHolds else { return nil }
             return base.element(boundBy: matchIndex + keyboardOffsetInScope)
         }
         // A label predicate scoped to the snapshot element's type when it is
@@ -2353,7 +2359,8 @@ class SnapshotElementFinder {
                     if nodeIdentifier.isEmpty {
                         let rawTypes = Set(types.map(\.rawValue))
                         let offset = keyboardTypes.filter { rawTypes.contains($0) }.count
-                        element = query.excludingHooksMarker().element(boundBy: matchIndex + offset)
+                        element = positionalBindingHolds
+                            ? query.excludingHooksMarker().element(boundBy: matchIndex + offset) : nil
                     } else {
                         element = resolve(query)
                     }
