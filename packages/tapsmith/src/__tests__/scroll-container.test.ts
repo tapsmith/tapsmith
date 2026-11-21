@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickScrollRegion, scrollRegion } from '../scroll-container.js';
+import { hasScrollableContent, pickScrollRegion, scrollRegion } from '../scroll-container.js';
 
 // PILOT-934: scrollIntoView() swipes inside the scroll container that holds
 // its element, so a swipe cannot start outside a dialog (dismissing it) or on
@@ -221,5 +221,114 @@ describe('scrollRegion — iOS (the element\'s frame is known)', () => {
 
     expect(scrollRegion(xml, { left: 0, top: 3000, right: 402, bottom: 3044 })).toEqual({ left: 0, top: 120, right: 402, bottom: 874 });
     expect(scrollRegion(xml)).toEqual({ left: 0, top: 120, right: 402, bottom: 874 });
+  });
+});
+
+// PILOT-1324: scrollIntoView() takes a screen that a swipe did not change for
+// the end of the content only when the scrollable it swiped in has content to
+// scroll along the swipe; a screen still loading its list (a spinner, an empty
+// table, a chip bar beside it) is waited for.
+describe('hasScrollableContent', () => {
+  const full = { left: 0, top: 0, right: 1080, bottom: 2400 };
+  const listAt = { left: 0, top: 200, right: 1080, bottom: 2400 };
+
+  it('is false for a screen with nothing scrollable on it (a spinner while a list loads)', () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+        node('android.widget.ProgressBar', '[480,1140][600,1260]')),
+      statusBar,
+    );
+    expect(hasScrollableContent(xml, undefined, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, full, 'vertical')).toBe(false);
+  });
+
+  it('is true for the Android view swiped in, marked scrollable, which it is only while its content overflows it', () => {
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable, node('android.widget.TextView', '[0,200][1080,400]', 'text="Row 1"') + node('android.widget.TextView', '[0,400][1080,600]', 'text="Row 2"'))));
+    expect(hasScrollableContent(xml, listAt, 'vertical')).toBe(true);
+  });
+
+  it('finds the scrollable under the centre of a region its agent trimmed differently', () => {
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '', node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable, node('android.widget.TextView', '[0,200][1080,400]', 'text="Row 1"') + node('android.widget.TextView', '[0,400][1080,600]', 'text="Row 2"'))));
+    expect(hasScrollableContent(xml, { left: 0, top: 200, right: 1080, bottom: 2274 }, 'vertical')).toBe(true);
+  });
+
+  it('is false for a chip bar beside a list still loading: a vertical swipe in a horizontal list moves nothing', () => {
+    const chip = (l: number) => node('android.widget.Button', `[${l},220][${l + 300},330]`, 'text="Chip"');
+    const chipBar = { left: 0, top: 200, right: 1080, bottom: 350 };
+    const xml = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,350]', scrollable, chip(20) + chip(340) + chip(660)) +
+      node('android.widget.ProgressBar', '[480,1140][600,1260]')));
+    expect(hasScrollableContent(xml, chipBar, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, chipBar, 'horizontal')).toBe(true);
+    // A HorizontalScrollView says so by its class, whatever its one child.
+    const hsv = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('android.widget.HorizontalScrollView', '[0,200][1080,350]', scrollable, node('android.widget.LinearLayout', '[0,200][2400,350]'))));
+    expect(hasScrollableContent(hsv, chipBar, 'vertical')).toBe(false);
+  });
+
+  it('is false up and down for a pager showing its one page, which it tells by its class', () => {
+    const page = node('android.view.ViewGroup', '[0,350][1080,2400]', '', node('android.widget.ProgressBar', '[480,1140][600,1260]'));
+    const pager = { left: 0, top: 350, right: 1080, bottom: 2400 };
+    const vp2 = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('androidx.viewpager2.widget.ViewPager2', '[0,350][1080,2400]', '',
+        node('androidx.recyclerview.widget.RecyclerView', '[0,350][1080,2400]', scrollable, page))));
+    expect(hasScrollableContent(vp2, pager, 'vertical')).toBe(false);
+    expect(hasScrollableContent(vp2, pager, 'horizontal')).toBe(true);
+    const vp = android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+      node('androidx.viewpager.widget.ViewPager', '[0,350][1080,2400]', scrollable, page)));
+    expect(hasScrollableContent(vp, pager, 'vertical')).toBe(false);
+  });
+
+  // A scrollable is the end of its content unless it is seen to lie across
+  // the swipe, so a list at its end fails promptly (PILOT-929) whatever its rows.
+  const listEnd = (children: string) => android(node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+    node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable, children)));
+  const cell = (b: string) => node('android.widget.TextView', b, 'text="Cell"');
+  it.each([
+    ['a two-column grid', cell('[0,200][540,700]') + cell('[540,200][1080,700]') + cell('[0,700][540,1200]') + cell('[540,700][1080,1200]') + cell('[0,1200][540,1700]')],
+    ['a chat with bubbles at both edges', cell('[20,220][700,320]') + cell('[380,340][1060,440]') + cell('[20,460][700,560]')],
+    ['a list with an inset header', cell('[40,200][1040,280]') + cell('[0,280][1080,480]') + cell('[0,480][1080,680]')],
+    ['one tall card', cell('[0,200][1080,2400]')],
+    ['rows its class does not name, under a Compose list', cell('[0,200][1080,400]') + cell('[0,400][1080,600]')],
+  ])('is true up and down at the end of %s', (_name, children) => {
+    expect(hasScrollableContent(listEnd(children), listAt, 'vertical')).toBe(true);
+  });
+
+  it('is false for a scrollable inside the system UI', () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,0][1080,2400]'),
+      '<node class="android.widget.ScrollView" package="com.android.systemui" bounds="[0,0][1080,600]" scrollable="true" tapsmith-non-app="true"/>',
+    );
+    expect(hasScrollableContent(xml, { left: 0, top: 0, right: 1080, bottom: 600 }, 'vertical')).toBe(false);
+  });
+
+  const table = { left: 0, top: 100, right: 402, bottom: 874 };
+
+  it('is false for an empty iOS table, or a scroll view whose content fits inside it', () => {
+    expect(hasScrollableContent(ios(el('Table', '[0,100][402,874]')), table, 'vertical')).toBe(false);
+    expect(hasScrollableContent(ios(el('ScrollView', '[0,100][402,874]', '',
+      el('Other', '[0,100][402,874]', '', el('ActivityIndicator', '[180,400][222,442]', 'label="In progress"')))), table, 'vertical')).toBe(false);
+  });
+
+  it('is true for an iOS scrollable whose content reaches past its frame along the swipe, either way', () => {
+    expect(hasScrollableContent(ios(el('Table', '[0,100][402,874]', '',
+      el('Cell', '[0,100][402,144]') + el('Cell', '[0,860][402,904]'))), table, 'vertical')).toBe(true);
+    // At the end of a list: the rows it went past are above it.
+    expect(hasScrollableContent(ios(el('ScrollView', '[0,100][402,874]', '',
+      el('Other', '[0,-2400][402,874]'))), table, 'vertical')).toBe(true);
+  });
+
+  it('is false for an empty iOS table beside a carousel that does overflow, and for the carousel swiped up and down', () => {
+    const xml = ios(
+      el('CollectionView', '[0,100][402,300]', '', el('Cell', '[0,100][300,300]') + el('Cell', '[310,100][610,300]')),
+      el('Table', '[0,300][402,874]'),
+    );
+    expect(hasScrollableContent(xml, { left: 0, top: 300, right: 402, bottom: 874 }, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 }, 'vertical')).toBe(false);
+    expect(hasScrollableContent(xml, { left: 0, top: 100, right: 402, bottom: 300 }, 'horizontal')).toBe(true);
+  });
+
+  it('is false for a dump with no bounds at all', () => {
+    expect(hasScrollableContent('<hierarchy/>', full, 'vertical')).toBe(false);
   });
 });

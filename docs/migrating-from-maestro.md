@@ -27,7 +27,7 @@ This guide is for teams with a Maestro suite who want to move it to Tapsmith. It
 | `extendedWaitUntil` | `expect(locator).toBeVisible({ timeout: 60_000 })`, or [`locator.waitFor()`](api-reference.md#elementhandlewaitforoptions-promisevoid) |
 | `assertTrue` | [`expect(value)`](api-reference.md#expectvalue-unknown-genericassertions) with any generic matcher, or [`expect.poll()`](api-reference.md#expectpollfn---unknown--promiseunknown-options-polloptions-genericassertions) for a value that changes |
 | `scroll` / `swipe` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-swipedirection-options-promisevoid) on a scroll view |
-| `scrollUntilVisible` | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid) |
+| `scrollUntilVisible` | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number-timeout-number--promisevoid) |
 | `hideKeyboard` | [`device.hideKeyboard()`](api-reference.md#devicehidekeyboard-promisevoid) |
 | `back` / `pressKey` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid) / [`device.pressKey(key)`](api-reference.md#devicepresskeykey-devicekey-promisevoid) |
 | `openLink` | [`device.openDeepLink(url)`](api-reference.md#deviceopendeeplinkuri-string-options-opendeeplinkoptions-promisevoid) |

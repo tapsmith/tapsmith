@@ -10,7 +10,7 @@
  */
 
 import * as net from 'node:net';
-import { execSync } from 'node:child_process';
+import { execFile, execSync } from 'node:child_process';
 import * as bplistParser from 'bplist-parser';
 import bplistCreator from 'bplist-creator';
 
@@ -569,4 +569,49 @@ export function findSimulatorInspectorSocket(udidOrName: string, budgetMs = 25_0
   } catch {
     return null;
   }
+}
+
+/**
+ * Parse `launchctl list` (run inside a simulator) for the running processes
+ * of `bundleId`. Each app runs as a `UIKitApplication:<bundleId>[<hex>]…`
+ * job; a `-` PID is a job that is not running.
+ */
+export function parseSimulatorLaunchctlPids(output: string, bundleId: string): number[] {
+  const pids: number[] = [];
+  const prefix = `UIKitApplication:${bundleId}[`;
+  for (const line of output.split('\n')) {
+    const cols = line.trim().split(/\s+/);
+    if (cols.length < 3 || !cols[2].startsWith(prefix)) continue;
+    const pid = Number(cols[0]);
+    if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+  }
+  return pids;
+}
+
+/**
+ * The process ids `bundleId` runs under on a booted simulator, or `[]` when
+ * it is not running or they cannot be read within `budgetMs`.
+ *
+ * Simulator apps are host processes, so these are the same ids webinspectord
+ * reports (`PID:<n>`). They identify an app the inspector lists without a
+ * bundle identifier, as it lists one built with `CODE_SIGNING_ALLOWED=NO`.
+ */
+export async function findSimulatorAppPids(udidOrName: string, bundleId: string, budgetMs: number): Promise<number[]> {
+  const deadline = Date.now() + budgetMs;
+  let udid = udidOrName;
+  if (udid && !/^[A-F0-9-]{36}$/i.test(udid)) {
+    udid = resolveBootedSimulatorByName(udid, Math.max(1, Math.min(5_000, deadline - Date.now()))) ?? '';
+  }
+  // Without a UDID, `simctl spawn booted` could read another simulator's apps.
+  if (!udid || !bundleId) return [];
+  const timeout = deadline - Date.now();
+  if (timeout <= 0) return [];
+  return new Promise((resolve) => {
+    execFile(
+      'xcrun',
+      ['simctl', 'spawn', udid, 'launchctl', 'list'],
+      { encoding: 'utf-8', timeout, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout) => resolve(err ? [] : parseSimulatorLaunchctlPids(stdout, bundleId)),
+    );
+  });
 }
