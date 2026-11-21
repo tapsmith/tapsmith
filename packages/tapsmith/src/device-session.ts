@@ -38,6 +38,7 @@ import {
 import { satisfies, type AppResetPolicy, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { timingLog } from './timing-log.js';
+import { resolveAppArtifact } from './app-artifact.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed, type DaemonStartOutcome } from './daemon-start.js';
 import { DaemonClaimedError, claimDeviceOrThrow, daemonDriverElsewhere, releaseDeviceClaim, type SessionIdentity } from './device-claims.js';
 
@@ -439,19 +440,39 @@ async function installAppUnderTest(
     timingLog(`kind=boot name=app_install dur_ms=${Date.now() - started} result=${result}${check} platform=${config.platform}`);
   };
 
+  // Before anything looks at the device: with the build missing, an app
+  // already installed would otherwise stand in for it (PILOT-1381).
+  let artifact: string | undefined;
+  try {
+    artifact = resolveAppArtifact(config);
+  } catch (err) {
+    // Started first, as every other install failure is: a step that fails
+    // without starting leaves the device step open, and the sequential CLI
+    // would report the healthy device as failing to set up.
+    const configured = (config.platform === 'ios' ? config.app : config.apk) ?? '';
+    phase('install', 'start', `checking ${path.basename(configured)}`);
+    phase('install', 'fail', err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+
   if (config.platform !== 'ios') {
-    if (!config.apk) {
+    if (!artifact) {
       progress('app install skipped');
       phase('install', 'skip', 'no Android APK configured');
       return { freshInstall: false };
     }
-    const resolvedApk = path.resolve(config.rootDir, config.apk);
+    const resolvedApk = artifact;
     phase('install', 'start', `checking ${path.basename(resolvedApk)}`);
     const wasInstalled = !!config.package && isPackageInstalled(serial, config.package);
     // A rebuilt APK must replace the installed one; a freshly-launched AVD
     // snapshot may hold a stale build *with* data, so it is always reinstalled.
-    const buildDiffers = wasInstalled && !!config.package
-      && installedApkMatches(serial, config.package, resolvedApk) === false;
+    // Only a definite match skips the install: a comparison that could not be
+    // made (an adb timeout, an unreadable APK) reinstalls, as the simulator's
+    // does — a false "matches" would test stale code.
+    const comparison = wasInstalled && !!config.package
+      ? installedApkMatches(serial, config.package, resolvedApk)
+      : undefined;
+    const buildDiffers = wasInstalled && comparison !== true;
     const upToDate = !opts.freshDevice && wasInstalled && !buildDiffers;
     checked();
     if (upToDate && !opts.forceInstall) {
@@ -460,7 +481,9 @@ async function installAppUnderTest(
       timing('matching');
       return { freshInstall: false };
     }
-    const why = buildDiffers ? ' (installed build differs)' : '';
+    const why = !buildDiffers ? ''
+      : comparison === false ? ' (installed build differs)'
+        : ' (could not compare it with the installed build)';
     progress(`${wasInstalled ? 'reinstalling' : 'installing'} app APK ${path.basename(resolvedApk)}${why}`);
     try {
       await device.installApk(resolvedApk);
@@ -476,12 +499,12 @@ async function installAppUnderTest(
     return { freshInstall: !wasInstalled };
   }
 
-  if (!config.app) {
+  if (!artifact) {
     progress('app install skipped');
     phase('install', 'skip', 'no iOS app configured');
     return { freshInstall: false };
   }
-  const resolvedApp = path.resolve(config.rootDir, config.app);
+  const resolvedApp = artifact;
   phase('install', 'start', `checking ${path.basename(resolvedApp)}`);
   const { isPhysicalDevice, installAppOnDevice, isAppInstalledOnDevice } = await import('./ios-devicectl.js');
   if (isPhysicalDevice(serial)) {

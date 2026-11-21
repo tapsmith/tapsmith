@@ -580,6 +580,18 @@ describe('installAppIfAbsent (PILOT-496)', () => {
     expect(lines[2]).toMatch(/ result=unknown /);
   });
 
+  it('leaves a missing build to the session, which refuses it by its config key (PILOT-1381)', () => {
+    const simctl: string[] = [];
+    mockedExecFileSync.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === 'xcrun' && args?.[0] === 'simctl') simctl.push(args[1]);
+      if (args?.[1] === 'get_app_container') throw exited(2);
+      return '' as unknown as Buffer;
+    });
+    mockedExistsSync.mockImplementation((p) => p !== '/gone.app');
+    expect(installAppIfAbsent('A', '/gone.app', 'com.example.app')).toEqual({ installed: false, outcome: 'app not found' });
+    expect(simctl).toEqual([]);
+  });
+
   it('leaves an installed app to the session, which checks the build', () => {
     const simctl: string[] = [];
     mockedExecFileSync.mockImplementation((cmd: string, args: string[]) => {

@@ -325,6 +325,12 @@ export function installAppIfAbsent(
   const timing = (result: string): void => {
     timingLog(`kind=boot name=app_install dur_ms=${Date.now() - started} result=${result} check_ms=${checkMs} platform=ios stage=boot`);
   };
+  // A missing build is the session's to refuse, with the config key that
+  // named it (PILOT-1381); simctl would only fail with its own wording.
+  if (!fs.existsSync(appPath)) {
+    timing('missing');
+    return { installed: false, outcome: 'app not found' };
+  }
   // Only a definite "not installed" counts: simctl's ENOENT exit. A lookup
   // that timed out or failed some other way on a busy simulator says nothing,
   // and installing over an app that is there keeps its data — calling that

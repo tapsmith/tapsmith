@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { isRecoverableInfrastructureError, type MainToWorkerMessage, type SerializedConfig, type WorkerToMainMessage } from '../worker-protocol.js';
 import { TestAbortedError } from '../abort.js';
 import type { RunOptions, SuiteResult, TestResult } from '../runner.js';
@@ -66,12 +69,17 @@ vi.mock('../ios-simulator.js', () => ({
 
 vi.mock('../session-preflight.js', () => sessionPreflightMocks);
 
+// The APK the init configs name exists, as the install path requires (PILOT-1381).
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-worker-root-'));
+fs.writeFileSync(path.join(ROOT, 'app.apk'), 'apk');
+afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
+
 function makeSerializedConfig(overrides: Partial<SerializedConfig> = {}): SerializedConfig {
   return {
     timeout: 30_000,
     retries: 0,
     screenshot: 'never',
-    rootDir: '/tmp',
+    rootDir: ROOT,
     outputDir: 'out',
     ...overrides,
   };
@@ -306,7 +314,7 @@ describe('worker-runner init', () => {
 
   it('reinstalls a matching build when told to force the install', async () => {
     const installApk = await initWorker(true);
-    expect(installApk).toHaveBeenCalledWith('/tmp/app.apk');
+    expect(installApk).toHaveBeenCalledWith(path.join(ROOT, 'app.apk'));
   });
 
   it('keeps a matching build otherwise', async () => {

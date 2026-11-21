@@ -168,6 +168,12 @@ afterAll(() => {
   fs.rmSync(claimsDir, { recursive: true, force: true });
 });
 
+// The app builds the configs name exist, as the install path requires (PILOT-1381).
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-session-root-'));
+fs.writeFileSync(path.join(ROOT, 'app.apk'), 'apk');
+fs.mkdirSync(path.join(ROOT, 'Build', 'App.app'), { recursive: true });
+afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
+
 /** This test process's session. No start token, so liveness never shells out to `ps`. */
 const SESSION = {
   id: 'this-session', pid: process.pid, command: 'tapsmith test', project: '/proj', startedAt: new Date().toISOString(),
@@ -178,7 +184,7 @@ const OTHER = { ...SESSION, id: 'other-session', command: 'tapsmith test --ui', 
 function makeConfig(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
   return {
     timeout: 30_000, retries: 0, screenshot: 'never', testMatch: [], daemonAddress: 'localhost:50051',
-    rootDir: '/proj', outputDir: 'out', workers: 1, launchEmulators: false,
+    rootDir: ROOT, outputDir: 'out', workers: 1, launchEmulators: false,
     platform: 'android', package: 'com.example.app', apk: './app.apk',
     ...overrides,
   };
@@ -247,7 +253,7 @@ describe('openDeviceSession', () => {
       makeConfig(),
       { claimSession: SESSION, startNetworkProxy: false, label: 'Worker 0' },
     );
-    expect(mocks.devices[0].installApk).toHaveBeenCalledWith('/proj/app.apk');
+    expect(mocks.devices[0].installApk).toHaveBeenCalledWith(path.join(ROOT, 'app.apk'));
     expect(mocks.preflight.startAndroidLaunchEarly).toHaveBeenCalledWith(expect.anything(), { freshInstall: true });
     expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: true, appLaunched: true });
   });
@@ -589,7 +595,7 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     // A reinstall keeps the data container, so the agent is asked to wipe it.
     expect(device._startAgent).toHaveBeenCalledWith({
       targetPackage: 'com.example.app', agentApkPath: '/agents/agent.apk', agentTestApkPath: '/agents/agent-test.apk',
-      iosXctestrunPath: '/derived/TapsmithAgent.xctestrun', iosAppPath: '/proj/Build/App.app', networkTracingEnabled: false,
+      iosXctestrunPath: '/derived/TapsmithAgent.xctestrun', iosAppPath: path.join(ROOT, 'Build', 'App.app'), networkTracingEnabled: false,
       clearAppDataFirst: true,
     });
   });
@@ -858,7 +864,7 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
 
     it('refuses `iosXctestrun`, naming the path resolved against rootDir', async () => {
       await expect(openDeviceSession(physical, iosConfig({ iosXctestrun: 'gone/Agent.xctestrun' }), { claimSession: SESSION, startNetworkProxy: false, label: 'Device' }))
-        .rejects.toThrow(/The xctestrun set by `iosXctestrun` does not exist: \/proj\/gone\/Agent\.xctestrun/);
+        .rejects.toThrow(`The xctestrun set by \`iosXctestrun\` does not exist: ${path.join(ROOT, 'gone', 'Agent.xctestrun')}`);
       expect(mocks.devices[0]._startAgent).not.toHaveBeenCalled();
     });
 
@@ -1237,5 +1243,92 @@ describe('device claims (PILOT-381)', () => {
       makeConfig(),
       { claimSession: SESSION, startNetworkProxy: false, label: 'Device', client: client as never },
     )).resolves.toBeDefined();
+  });
+});
+
+// PILOT-1381: a configured build that is not there must stop the session
+// before the install check — an app already on the device would otherwise
+// stand in for it — and an Android build comparison that cannot be made
+// reinstalls instead of skipping.
+describe('the app build the config names', () => {
+  const emulator = { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' };
+  const open = (spec: typeof emulator, config: TapsmithConfig, extra: Partial<Parameters<typeof openDeviceSession>[2]> = {}) =>
+    openDeviceSession(spec, config, { claimSession: SESSION, startNetworkProxy: false, label: 'Device', ...extra });
+
+  it('refuses a missing `apk` before checking what the device holds, naming the config key and the resolved path', async () => {
+    const { isPackageInstalled, installedApkMatches } = await import('../emulator.js');
+    vi.mocked(isPackageInstalled).mockClear();
+    vi.mocked(installedApkMatches).mockClear();
+    const seen: Array<[string, string, string]> = [];
+    await expect(open(emulator, makeConfig({ apk: './app-releasee.apk' }), { onPhase: (p, s, d) => seen.push([p, s, d]) }))
+      .rejects.toThrow(`App APK not found at ${path.join(ROOT, 'app-releasee.apk')} (from config \`apk\`: "./app-releasee.apk", relative to ${ROOT})`);
+    expect(isPackageInstalled).not.toHaveBeenCalled();
+    expect(installedApkMatches).not.toHaveBeenCalled();
+    expect(mocks.devices[0].installApk).not.toHaveBeenCalled();
+    expect(mocks.devices[0]._startAgent).not.toHaveBeenCalled();
+    // Started, then failed: a failure with no start would leave the CLI's
+    // device step open, and the CLI would blame the device.
+    expect(seen).toEqual([
+      ['install', 'start', 'checking app-releasee.apk'],
+      ['install', 'fail', expect.stringContaining('App APK not found at')],
+    ]);
+  });
+
+  it('refuses a missing `apk` whether or not the app is installed, and with --force-install', async () => {
+    mocks.installed = false;
+    await expect(open(emulator, makeConfig({ apk: './missing.apk' }))).rejects.toThrow(/App APK not found at/);
+    mocks.installed = true;
+    await expect(open(emulator, makeConfig({ apk: './missing.apk' }), { forceInstall: true })).rejects.toThrow(/App APK not found at/);
+    for (const d of mocks.devices) expect(d.installApk).not.toHaveBeenCalled();
+  });
+
+  it('names an absolute path without the rootDir it was not resolved against', async () => {
+    const gone = path.join(ROOT, 'gone', 'app.apk');
+    await expect(open(emulator, makeConfig({ apk: gone })))
+      .rejects.toThrow(`App APK not found at ${gone} (from config \`apk\`). `);
+  });
+
+  it('refuses a missing iOS `app` on a simulator before installing or comparing', async () => {
+    const { installAppAsync, installedAppMatches } = await import('../ios-simulator.js');
+    vi.mocked(installAppAsync).mockClear();
+    vi.mocked(installedAppMatches).mockClear();
+    await expect(open(
+      { name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50052' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/Gone.app', simulator: 'iPhone 16' }),
+    )).rejects.toThrow(`iOS app not found at ${path.join(ROOT, 'Build', 'Gone.app')} (from config \`app\`: "./Build/Gone.app"`);
+    expect(installAppAsync).not.toHaveBeenCalled();
+    expect(installedAppMatches).not.toHaveBeenCalled();
+    expect(mocks.devices[0]._startAgent).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing iOS `app` on a physical device, whose install check is presence only', async () => {
+    const { installAppOnDevice, isAppInstalledOnDevice } = await import('../ios-devicectl.js');
+    vi.mocked(installAppOnDevice).mockClear();
+    vi.mocked(isAppInstalledOnDevice).mockClear();
+    await expect(open(
+      { name: 'device-1', serial: 'PHYS-1', daemonAddress: 'localhost:50052' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/Gone.app' }),
+    )).rejects.toThrow(/iOS app not found at .*Gone\.app/);
+    expect(isAppInstalledOnDevice).not.toHaveBeenCalled();
+    expect(installAppOnDevice).not.toHaveBeenCalled();
+  });
+
+  it('reinstalls when the installed APK cannot be compared with the build', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValueOnce(undefined);
+    const messages: string[] = [];
+    await open(emulator, makeConfig(), { onProgress: (m) => messages.push(m) });
+    expect(mocks.devices[0].installApk).toHaveBeenCalledWith(path.join(ROOT, 'app.apk'));
+    expect(messages).toContain('reinstalling app APK app.apk (could not compare it with the installed build)');
+  });
+
+  it('reinstalls a build that differs, and skips only a definite match', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    const messages: string[] = [];
+    await open(emulator, makeConfig(), { onProgress: (m) => messages.push(m) });
+    expect(messages).toContain('reinstalling app APK app.apk (installed build differs)');
+    await open({ ...emulator, daemonAddress: 'localhost:50053' }, makeConfig());
+    expect(mocks.devices.at(-1)!.installApk).not.toHaveBeenCalled();
   });
 });
