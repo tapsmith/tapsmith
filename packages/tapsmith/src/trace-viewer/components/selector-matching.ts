@@ -888,17 +888,21 @@ function isSameTargetDuplicate(outer: HierarchyNode, inner: HierarchyNode): bool
 }
 
 /**
- * Whether a generic wrapper's label is only its name-only descendant's name on
- * the same bounds — React Native's `<Image accessibilityLabel>`, an Other over
- * the Image (TextContent.echoesName in the iOS agent, PILOT-1366).
+ * Whether a generic wrapper's label is only a name-only child's name on the
+ * same bounds — React Native's `<Image accessibilityLabel>`, an Other over the
+ * Image — so the wrapper is no getByText match either, and leaves any labelled
+ * container around it matched (TextContent.echoesName in the iOS agent,
+ * PILOT-1366).
  */
-function echoesName(wrapper: HierarchyNode, inner: HierarchyNode): boolean {
+function echoesNameOnlyChild(wrapper: HierarchyNode): boolean {
   const label = normalizeWhitespace(wrapper.attributes.get('label') ?? '');
-  return (wrapper.attributes.get('type') ?? wrapper.tagName) === 'XCUIElementTypeOther'
-    && label !== ''
-    && label === normalizeWhitespace(inner.attributes.get('label') ?? '')
-    && wrapper.attributes.get('bounds') !== undefined
-    && wrapper.attributes.get('bounds') === inner.attributes.get('bounds');
+  const bounds = wrapper.attributes.get('bounds');
+  if ((wrapper.attributes.get('type') ?? wrapper.tagName) !== 'XCUIElementTypeOther' || label === '' || bounds === undefined) {
+    return false;
+  }
+  return wrapper.children.some((child) => IOS_NAME_ONLY_TYPES.has(child.attributes.get('type') ?? child.tagName)
+    && normalizeWhitespace(child.attributes.get('label') ?? '') === label
+    && child.attributes.get('bounds') === bounds);
 }
 
 /**
@@ -1009,7 +1013,7 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     const appNode = !isNonAppNode(node);
     const type = node.attributes.get('type') ?? node.tagName;
     const matches = appNode && (iosText && isIos
-      ? iosNodeMatchesText(node, selector, containerLabel)
+      ? iosNodeMatchesText(node, selector, containerLabel) && !echoesNameOnlyChild(node)
       : !(isIos && iosInsideNativeAlert(role, type, inAlert)) && nodeMatchesSelector(node, selector, parentClass));
     let pushed = false;
     if (matches) {
@@ -1024,12 +1028,6 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
         pushed = true;
       }
       raw.push(node);
-    } else if (iosText && isIos && appNode && IOS_NAME_ONLY_TYPES.has(type)) {
-      // A generic wrapper that only echoes this image's or control's name on
-      // its bounds gives way to it, though it is no match (PILOT-1366).
-      for (const index of matchedAncestors) {
-        if (echoesName(raw[index], node)) suppressed.add(index);
-      }
     }
     const label = node.attributes.get('label') ?? '';
     const childContainer = isIos && appNode && label !== '' ? label : containerLabel;

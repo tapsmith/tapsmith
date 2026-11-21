@@ -70,9 +70,9 @@ enum TextContent {
     /// Whether a generic wrapper's label is only its name-only descendant's
     /// name, copied onto the same bounds: React Native exposes an
     /// `<Image accessibilityLabel>` as an Other over the Image, both labelled
-    /// (PILOT-1366). getByText drops the wrapper, as it drops a wrapper that
-    /// gives way to a matching descendant, though the descendant is no match
-    /// of its own. A button's label stays text, as the button's own is.
+    /// (PILOT-1366). getByText doesn't match the wrapper either, so a
+    /// labelled container around it keeps its match. A button's label stays
+    /// text, as the button's own is.
     static func echoesName(
         wrapperType: XCUIElement.ElementType,
         wrapperLabel: String,

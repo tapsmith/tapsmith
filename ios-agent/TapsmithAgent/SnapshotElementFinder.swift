@@ -1643,7 +1643,8 @@ class SnapshotElementFinder {
         // found again by its own label (cacheQueryElement).
         let isSwitchPart = NonAppElements.isSwitchPart(elementType: nodeType, insideSwitch: insideSwitch)
         var pushedAncestor = false
-        if isAppNode, !isSwitchPart, matchesSelector(
+        if isAppNode, !isSwitchPart, !(selector.matchesInnermostOnly && echoesNameOnlyChild(nodeDict)),
+           matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
             inAlert: inAlert,
@@ -1735,20 +1736,6 @@ class SnapshotElementFinder {
                     )
                 )
                 pushedAncestor = true
-            }
-        }
-
-        // A name-only node (an image, a switch) that a generic wrapper's
-        // getByText match only echoes takes the wrapper with it, though it
-        // matches nothing itself (TextContent.echoesName, PILOT-1366).
-        if isAppNode, selector.matchesInnermostOnly, TextContent.nameOnlyTypes.contains(nodeType) {
-            let myFrame = parseFrame(nodeDict)
-            let myLabel = nodeDict["label"] as? String ?? ""
-            for anc in matchedAncestors where TextContent.echoesName(
-                wrapperType: anc.elementType, wrapperLabel: anc.label,
-                nodeType: nodeType, nodeLabel: myLabel, sameTarget: Self.sameTarget(anc.frame, myFrame)
-            ) {
-                suppressed.insert(anc.resultIndex)
             }
         }
 
@@ -1973,6 +1960,25 @@ class SnapshotElementFinder {
 
     /// Whether two frames are one target as the SDK's same-target collapse
     /// keys it: equal once truncated to whole points, like ElementBounds.
+    /// Whether a generic wrapper's label is only a name-only child's name on
+    /// the same bounds (React Native's `<Image accessibilityLabel>`, an Other
+    /// over the Image): getByText doesn't match it either, so a labelled
+    /// container around it keeps its match (TextContent.echoesName, PILOT-1366).
+    private func echoesNameOnlyChild(_ node: [String: Any]) -> Bool {
+        let type = XCUIElement.ElementType(rawValue: parseUInt(node["elementType"]) ?? 0) ?? .other
+        guard type == .other, let children = node["children"] as? [[String: Any]] else { return false }
+        let label = node["label"] as? String ?? ""
+        let frame = parseFrame(node)
+        return children.contains { child in
+            TextContent.echoesName(
+                wrapperType: type, wrapperLabel: label,
+                nodeType: XCUIElement.ElementType(rawValue: parseUInt(child["elementType"]) ?? 0) ?? .other,
+                nodeLabel: child["label"] as? String ?? "",
+                sameTarget: Self.sameTarget(frame, parseFrame(child))
+            )
+        }
+    }
+
     static func sameTarget(_ a: CGRect, _ b: CGRect) -> Bool {
         func bounds(_ r: CGRect) -> [Int] {
             [Int(r.origin.x), Int(r.origin.y), Int(r.origin.x + r.width), Int(r.origin.y + r.height)]

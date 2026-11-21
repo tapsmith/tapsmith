@@ -360,6 +360,13 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
     // Other bounds: a container, still text.
     const container = node(T.other, 'The Flower Girl', [node(T.image, 'The Flower Girl', [], bounds)], { bounds: '[0,500][400,600]' });
     expect(matchTypes(container, 'device.getByText("The Flower Girl", { exact: true })')).toEqual([`${T.other}:The Flower Girl`]);
+    // A labelled container around the echoing wrapper keeps its match: the
+    // echo is no match, so it never takes the container's place.
+    const echo = () => node(T.other, 'Avatar', [node(T.image, 'Avatar', [], bounds)], bounds);
+    const padded = { bounds: '[0,500][400,600]' };
+    expect(matchTypes(node(T.button, 'Avatar', [echo()], padded), 'device.getByText("Avatar", { exact: true })')).toEqual([`${T.button}:Avatar`]);
+    expect(matchTypes(node(T.other, 'Avatar', [echo()], padded), 'device.getByText("Avatar", { exact: true })')).toEqual([`${T.other}:Avatar`]);
+    expect(matchTypes(node(T.other, 'Gallery, Avatar', [echo()], padded), 'device.getByText("Avatar")')).toEqual([`${T.other}:Gallery, Avatar`]);
     // A button over its icon keeps its label as text.
     const button = node(T.button, 'Share', [node(T.image, 'Share', [], bounds)], bounds);
     expect(matchTypes(button, 'device.getByText("Share", { exact: true })')).toEqual([`${T.button}:Share`]);
