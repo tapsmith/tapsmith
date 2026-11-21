@@ -1715,7 +1715,7 @@ With an array, the locator may match several elements: each item must match one 
 
 A RegExp is tested afresh on every poll, so a `g` flag can't make it skip a match. Any expected value other than a string, a RegExp or an array of them throws a `TypeError` at once. The string forms compare the text as it is (no whitespace normalization).
 
-When the matched element has no own text (e.g. a wrapping `View` around `<Text>` children, common in React Native), the agents aggregate descendant text/labels so the assertion sees the visible string. On iOS that applies to generic containers and to list rows (a UIKit `UITableViewCell`, whose text is a child label); a row's built-in accessory indicator (its disclosure chevron or checkmark) is not part of its text.
+When the matched element has no own text (e.g. a wrapping `View` around `<Text>` children, common in React Native), the agents aggregate descendant text/labels so the assertion sees the visible string. On iOS that applies to generic containers and to list rows (a UIKit `UITableViewCell`, whose text is a child label); a row's built-in accessory indicator (its disclosure chevron or checkmark) is not part of its text. A text field never takes its children's text: on Android a Jetpack Compose `TextField` draws its label and placeholder as children, which are its hint, not its text ([Jetpack Compose](locators.md#jetpack-compose)).
 
 ```typescript
 await expect(device.getByTestId("status")).toContainText("Success");
