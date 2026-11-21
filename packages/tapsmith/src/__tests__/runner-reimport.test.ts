@@ -131,6 +131,31 @@ describe('runTestFile — the same file run again in one process (PILOT-953)', (
     expect(collectResults(suite).map((r) => r.fullName)).toEqual(['only one now']);
   });
 
+  it('fails the file, naming the cause, when tests an imported module registered do not register again', async () => {
+    // Tests registered at the top level of a helper register only when the
+    // helper first loads: the second project would silently lose them.
+    writeTestFile('shared-suite.mjs', `
+      import { test } from ${JSON.stringify(runnerUrl)};
+      test('shared a', async () => {});
+      test('shared b', async () => {});
+    `);
+    const filePath = writeTestFile('uses-shared.test.mjs', `
+      import { test } from ${JSON.stringify(runnerUrl)};
+      import './shared-suite.mjs';
+      test('own', async () => {});
+    `);
+    const one = await runTestFile(filePath, makeOpts({ projectName: 'one' }));
+    expect(collectResults(one).map((r) => r.fullName)).toEqual(['shared a', 'shared b', 'own']);
+
+    const two = await runTestFile(filePath, makeOpts({ projectName: 'two' }));
+    const [result, ...rest] = collectResults(two);
+    expect(rest).toEqual([]);
+    expect(result).toMatchObject({ status: 'failed', fileLevelFailure: true, project: 'two' });
+    expect(result.error?.message).toMatch(
+      /uses-shared\.test\.mjs registered 1 of its 3 tests on this run[\s\S]*top level of a module the test file imports/,
+    );
+  });
+
   it('reports an emptied file as empty, not as a stale import', async () => {
     const filePath = writeTestFile('emptied.test.mjs', TWO_TESTS);
     await runTestFile(filePath, makeOpts());

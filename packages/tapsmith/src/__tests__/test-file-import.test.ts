@@ -50,8 +50,35 @@ describe('beginTestFileImport', () => {
       beginTestFileImport(file).registered(3);
       const again = beginTestFileImport(file);
       expect(() => again.registered(0)).toThrow(
-        /e\.test\.mjs registered no tests on this run, but registered 3 when this process loaded it before, and the file has not changed since/,
+        /e\.test\.mjs registered no tests on this run, but 3 when this process loaded it before, and the file has not changed since/,
       );
+    });
+
+    it('keeps failing every later import of the unchanged file, not only the first', () => {
+      const file = writeFile('e2.test.mjs', '');
+      beginTestFileImport(file).registered(3);
+      expect(() => beginTestFileImport(file).registered(0)).toThrow(/registered no tests/);
+      expect(() => beginTestFileImport(file).registered(0)).toThrow(/registered no tests/);
+      expect(() => beginTestFileImport(file).registered(1)).toThrow(/registered 1 of its 3 tests/);
+      expect(() => beginTestFileImport(file).registered(3)).not.toThrow();
+    });
+
+    it('fails when the unchanged file registers some of its tests but not all', () => {
+      const file = writeFile('e3.test.mjs', '');
+      beginTestFileImport(file).registered(3);
+      expect(() => beginTestFileImport(file).registered(1)).toThrow(
+        /e3\.test\.mjs registered 1 of its 3 tests on this run[\s\S]*Move them into the test file/,
+      );
+    });
+
+    it('is held to the same record through a symlinked spelling of the file', () => {
+      const file = writeFile('e4.test.mjs', '');
+      const link = path.join(path.dirname(file), 'linked');
+      fs.symlinkSync(path.dirname(file), link, 'dir');
+      beginTestFileImport(file).registered(2);
+      const viaLink = beginTestFileImport(path.join(link, 'e4.test.mjs'));
+      expect(viaLink.url).toMatch(/\?tapsmithImport=\d+$/);
+      expect(() => viaLink.registered(0)).toThrow(/registered no tests/);
     });
 
     it('is believed when the file changed in between (its tests were deleted)', () => {
