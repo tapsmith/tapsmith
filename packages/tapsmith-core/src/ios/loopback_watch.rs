@@ -207,7 +207,12 @@ pub(crate) fn is_dev_server_command(command: &str) -> bool {
             || w.contains("/node_modules/@react-native-community/cli/")
             || w.contains("/node_modules/react-native/cli")
     };
-    words.contains(&"start") && words.iter().any(cli)
+    // `start` runs the bundler; Expo's `run:ios` / `run:android` run it in
+    // the same process.
+    let bundles = words
+        .iter()
+        .any(|w| matches!(*w, "start" | "run:ios" | "run:android"));
+    bundles && words.iter().any(cli)
 }
 
 /// Per-port verdicts of [`is_dev_server_command`] for the servers a watch has
@@ -398,6 +403,7 @@ TST=CLOSE_WAIT
             "node /Users/me/app/node_modules/.bin/expo start --port 8082",
             "node /Users/me/app/node_modules/@expo/cli/build/bin/cli start",
             "node /Users/me/app/node_modules/expo/bin/cli start --dev-client",
+            "node /Users/me/app/node_modules/.bin/expo run:ios --port 8082",
             "node /Users/me/app/node_modules/.bin/react-native start --port 8088",
             "node /Users/me/app/node_modules/@react-native-community/cli/build/bin.js start",
             "node /Users/me/app/node_modules/metro/src/cli.js serve",

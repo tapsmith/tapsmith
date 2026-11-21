@@ -3692,8 +3692,8 @@ async function runSuiteContext(
       }
 
       // The app talked to a server on the Mac's loopback interface, which
-      // its capture cannot see (PILOT-320): a test-result warning, once per
-      // run per device and server, so every run path shows it.
+      // its capture cannot see (PILOT-320): a test-result warning, once per test
+      // file per device and server, so every run path shows it.
       for (const [d, dests] of loopbackDestinations) {
         const fresh = _loopbackWarnings.takeNew(d._traceDeviceId ?? '', [...dests].sort());
         if (fresh.length === 0) continue;
