@@ -883,7 +883,7 @@ HTTP/3 runs over UDP, where a MITM proxy cannot follow it. Many servers advertis
 
 | Platform | How HTTP/3 is kept off |
 |---|---|
-| **Android, transparent redirect** | Outbound UDP to port 443 is rejected for every app on the device. The client's HTTP/3 attempt fails at once, so it falls back to TCP straight away, including for a host it learned supports HTTP/3 before the test started, or a QUIC connection already open when capture starts. Loopback (`127.0.0.1`) and every other UDP port, DNS included, are untouched. |
+| **Android, transparent redirect** | Outbound UDP to port 443 is rejected for every app on the device. The client's HTTP/3 attempt fails at once, so it falls back to TCP straight away, including for a host it learned supports HTTP/3 before the test started. Loopback (`127.0.0.1`) and every other UDP port, plain DNS (port 53) included, are untouched. |
 | **Android, HTTP proxy fallback** | Nothing to block: WebView does not use HTTP/3 for requests it sends through an HTTP proxy. |
 | **iOS simulator** | The Network Extension drops every UDP flow from the simulator's processes except DNS, so HTTP/3-capable clients fall back to TCP. |
 | **iOS physical** | Traffic reaches Tapsmith through the Wi-Fi HTTP proxy; HTTP/3 is not blocked separately. |
