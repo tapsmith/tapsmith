@@ -528,7 +528,8 @@ export async function waitForPackageIndexed(
  * Whether the APK installed on the device is byte-identical to `apkPath`.
  * `pm` keeps the installed base.apk as-is, so an md5 comparison tells a
  * rebuilt app from the one already on the device. `undefined` when either
- * side cannot be hashed (then callers fall back to "installed is fine").
+ * side cannot be hashed; callers treat that as a mismatch and reinstall,
+ * since a false "matches" would test stale code.
  */
 export function installedApkMatches(serial: string, packageName: string, apkPath: string): boolean | undefined {
   try {

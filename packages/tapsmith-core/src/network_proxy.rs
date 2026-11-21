@@ -1361,7 +1361,7 @@ async fn handle_mitm_https_lazy_upstream<C>(
         // for it: a keep-alive connection can sit idle across a NetworkRoute
         // stream change (the next watch/MCP run), and the request must reach
         // the routes registered now (PILOT-534).
-        let handler = state.lock().await.handler.clone();
+        let handler = handler_for(&state, &req).await;
 
         if let Some(h) = handler.as_ref() {
             h.notify_request(&req, hostname, true).await;
@@ -1471,6 +1471,23 @@ async fn handle_mitm_https_lazy_upstream<C>(
         }
 
         if client_stream.write_all(&resp.raw_bytes).await.is_err() {
+            return;
+        }
+
+        if resp.status_code == 101 && req.override_host.is_none() {
+            if let Some(upstream) = upstream_stream.as_mut() {
+                tunnel_upgraded(
+                    &mut client_stream,
+                    upstream,
+                    &state,
+                    &req,
+                    &resp,
+                    hostname,
+                    true,
+                    start,
+                )
+                .await;
+            }
             return;
         }
 
@@ -2403,6 +2420,18 @@ fn has_connection_close(headers: &[(String, String)]) -> bool {
         .any(|token| token.trim().eq_ignore_ascii_case("close"))
 }
 
+/// Whether a request asks to switch protocols (RFC 9110 §7.8): a `Connection`
+/// header carrying the `upgrade` token plus an `Upgrade` header — the
+/// WebSocket opening handshake (RFC 6455 §4.1), or the rare `h2c` upgrade.
+fn is_upgrade_request(headers: &[(String, String)]) -> bool {
+    let connection_upgrade = headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("connection"))
+        .flat_map(|(_, v)| v.split(','))
+        .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
+    connection_upgrade && get_header(headers, "upgrade").is_some()
+}
+
 /// Read a full HTTP/1.x request (headers + body) from a client stream,
 /// returning structured request data plus the raw bytes for forwarding.
 ///
@@ -3099,6 +3128,164 @@ async fn record_entry_sized(
     });
 }
 
+/// The route handler for `req`, read when the request has arrived. `None`
+/// for a protocol upgrade (a WebSocket handshake): as in Playwright, where
+/// `page.route()` and the `request`/`response` events never see WebSockets,
+/// routes do not apply to it, and it is forwarded untouched (PILOT-246).
+async fn handler_for(
+    state: &Arc<Mutex<ProxyState>>,
+    req: &ParsedRequest,
+) -> Option<Arc<dyn NetworkHandler>> {
+    if is_upgrade_request(&req.headers) {
+        return None;
+    }
+    state.lock().await.handler.clone()
+}
+
+/// A stream that counts the bytes read from it into one of an [`InFlight`]
+/// capture's size counters, so an open tunnel's row shows live totals.
+struct CountingStream<'a, S> {
+    inner: &'a mut S,
+    counter: &'a AtomicU64,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for CountingStream<'_, S> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let poll = std::pin::Pin::new(&mut *this.inner).poll_read(cx, buf);
+        let read = buf.filled().len() - before;
+        if read > 0 {
+            this.counter.fetch_add(read as u64, Ordering::Relaxed);
+        }
+        poll
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for CountingStream<'_, S> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut *self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut *self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut *self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+/// After a `101 Switching Protocols` (already written to the client), the
+/// connection no longer speaks HTTP/1.1: splice the two streams byte for
+/// byte until both sides close (PILOT-246). Parsing on as HTTP would swallow
+/// every WebSocket frame and drop the connection at the next read timeout.
+///
+/// The connection is recorded as one row: in flight while open (live byte
+/// counts, as an HTTP/2 stream is), completed with the connection's lifetime
+/// and the bytes tunnelled each way when it closes. Frames are not decoded,
+/// so no body is stored. Bytes that arrived with the handshake (a client that
+/// sent a frame right behind its request, a server whose first frame shared
+/// the 101's packet) were forwarded with it and count toward the sizes. No
+/// idle timeout: WebSockets idle legitimately, like the passthrough tunnel.
+#[allow(clippy::too_many_arguments)]
+async fn tunnel_upgraded<C, U>(
+    client: &mut C,
+    upstream: &mut U,
+    state: &Arc<Mutex<ProxyState>>,
+    req: &ParsedRequest,
+    resp: &ParsedResponse,
+    hostname: &str,
+    is_https: bool,
+    start_ms: u64,
+) where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    let websocket = get_header(&req.headers, "upgrade")
+        .or_else(|| get_header(&resp.headers, "upgrade"))
+        .is_some_and(|p| {
+            p.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("websocket"))
+        });
+    let scheme = match (websocket, is_https) {
+        (true, true) => "wss",
+        (true, false) => "ws",
+        (false, true) => "https",
+        (false, false) => "http",
+    };
+    let capture = Arc::new(InFlight::new(CapturedEntry {
+        method: req.method.clone(),
+        url: format!("{scheme}://{hostname}{}", req.path),
+        status_code: resp.status_code,
+        content_type: String::new(),
+        request_size: 0,
+        response_size: 0,
+        start_time_ms: start_ms,
+        duration_ms: 0,
+        request_headers: req.headers.clone(),
+        response_headers: resp.headers.clone(),
+        request_body: Vec::new(),
+        response_body: Vec::new(),
+        is_https,
+        route_action: String::new(),
+        in_flight: true,
+        capture_id: 0,
+        os_service: connection_origin() == TrafficOrigin::OsService,
+    }));
+    capture
+        .request_size
+        .store(req.body.len() as u64, Ordering::Relaxed);
+    capture
+        .response_size
+        .store(resp.body.len() as u64, Ordering::Relaxed);
+    let key = {
+        let mut state = state.lock().await;
+        state
+            .in_flight
+            .retain(|_, capture| capture.strong_count() > 0);
+        let key = state.next_stream_key;
+        state.next_stream_key += 1;
+        capture.entry.lock().unwrap().capture_id = key;
+        state.in_flight.insert(key, Arc::downgrade(&capture));
+        key
+    };
+
+    let mut client = CountingStream {
+        inner: client,
+        counter: &capture.request_size,
+    };
+    let mut upstream = CountingStream {
+        inner: upstream,
+        counter: &capture.response_size,
+    };
+    match tokio::io::copy_bidirectional(&mut client, &mut upstream).await {
+        Ok((tx, rx)) => debug!(%hostname, tx, rx, "upgraded connection closed"),
+        Err(e) => debug!(%hostname, "upgraded connection ended: {e}"),
+    }
+
+    // One transition under the lock: a drain sees the open row or the
+    // completed one, never both.
+    let entry = capture.snapshot(false);
+    let mut state = state.lock().await;
+    state.in_flight.remove(&key);
+    state.entries.push(entry);
+}
+
 /// Proxy decrypted HTTP traffic between client and upstream streams,
 /// capturing each request/response pair. Handles HTTP/1.1 keep-alive by
 /// looping until the connection closes.
@@ -3131,7 +3318,7 @@ async fn handle_mitm_http<C, U>(
         // idle across a NetworkRoute stream change (the next watch/MCP run) —
         // must apply to it (PILOT-534). The lock + Arc::clone is cheap
         // compared to the network I/O per request.
-        let handler = state.lock().await.handler.clone();
+        let handler = handler_for(&state, &req).await;
 
         // Fire a request event to any SDK subscribers BEFORE interception
         // runs — mirrors Playwright's `page.on('request')` timing and means
@@ -3227,6 +3414,21 @@ async fn handle_mitm_http<C, U>(
         }
 
         if client_stream.write_all(&resp.raw_bytes).await.is_err() {
+            return;
+        }
+
+        if resp.status_code == 101 && req.override_host.is_none() {
+            tunnel_upgraded(
+                &mut client_stream,
+                &mut upstream_stream,
+                &state,
+                &req,
+                &resp,
+                hostname,
+                is_https,
+                start,
+            )
+            .await;
             return;
         }
 
@@ -3371,8 +3573,15 @@ async fn handle_http(
     let mut was_continued = false;
     let mut hostname_owned = host.split(':').next().unwrap_or(&host).to_string();
 
-    // Check handler for route interception before forwarding upstream.
-    let handler = state.lock().await.handler.clone();
+    // Check handler for route interception before forwarding upstream. A
+    // WebSocket handshake skips routes, as on the transparent paths
+    // (`handler_for`, PILOT-246).
+    let upgrade = is_upgrade_request(&req_headers);
+    let handler = if upgrade {
+        None
+    } else {
+        state.lock().await.handler.clone()
+    };
     if let Some(h) = handler.as_ref() {
         let mut parsed_req = ParsedRequest {
             method: effective_method.clone(),
@@ -3502,15 +3711,16 @@ async fn handle_http(
         if lower == "proxy-connection" {
             continue;
         }
-        // Force Connection: close to simplify response reading
-        if lower == "connection" {
+        // Force Connection: close to simplify response reading — except on
+        // a protocol upgrade, whose `Connection: Upgrade` the server needs.
+        if lower == "connection" && !upgrade {
             has_connection = true;
             upstream_request.push_str("Connection: close\r\n");
             continue;
         }
         upstream_request.push_str(&format!("{key}: {value}\r\n"));
     }
-    if !has_connection {
+    if !has_connection && !upgrade {
         upstream_request.push_str("Connection: close\r\n");
     }
     upstream_request.push_str("\r\n");
@@ -3571,6 +3781,41 @@ async fn handle_http(
         return;
     }
     if !request_body.is_empty() && upstream.write_all(&request_body).await.is_err() {
+        return;
+    }
+
+    if upgrade {
+        // After a 101 the connection is no longer HTTP: tunnel it (PILOT-246).
+        let resp = match read_response(&mut upstream, &host).await {
+            ReadOutcome::Ok(r) => r,
+            ReadOutcome::ConnectionClosed | ReadOutcome::Error => return,
+        };
+        if client.write_all(&resp.raw_bytes).await.is_err() {
+            return;
+        }
+        let req = ParsedRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            headers: req_headers,
+            body: request_body,
+            raw_bytes: Vec::new(),
+            override_host: None,
+        };
+        if resp.status_code == 101 {
+            tunnel_upgraded(
+                &mut client,
+                &mut upstream,
+                &state,
+                &req,
+                &resp,
+                &host,
+                false,
+                start,
+            )
+            .await;
+        } else {
+            record_entry(&state, &req, &resp, &host, false, start, "").await;
+        }
         return;
     }
 
@@ -8304,5 +8549,422 @@ mod tests {
                 .sum::<usize>(),
             transferred
         );
+    }
+
+    // ─── PILOT-246: HTTP/1.1 Upgrade (WebSocket) tunnelling ───
+
+    /// Handler that counts every hook it sees and aborts whatever reaches
+    /// `on_request`, so a test can prove the WebSocket handshake bypasses
+    /// routing entirely (Playwright: `page.route()` never sees WebSockets).
+    #[derive(Default)]
+    struct CountingAbortHandler {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl NetworkHandler for CountingAbortHandler {
+        async fn matches(&self, _url: &str) -> bool {
+            true
+        }
+        async fn notify_request(&self, _req: &ParsedRequest, _hostname: &str, _is_https: bool) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn on_request(
+            &self,
+            _req: &mut ParsedRequest,
+            _hostname: &str,
+            _is_https: bool,
+        ) -> RequestOutcome {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            RequestOutcome::Synthesized(ParsedResponse {
+                status_code: 0,
+                headers: Vec::new(),
+                body: Vec::new(),
+                raw_bytes: Vec::new(),
+            })
+        }
+        async fn on_response(
+            &self,
+            _req: &ParsedRequest,
+            _hostname: &str,
+            _is_https: bool,
+            _resp: &mut ParsedResponse,
+        ) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn notify_response(
+            &self,
+            _req: &ParsedRequest,
+            _resp: &ParsedResponse,
+            _hostname: &str,
+            _is_https: bool,
+            _route_action: &str,
+        ) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    const WS_UPGRADE_REQUEST: &[u8] = b"GET /chat HTTP/1.1\r\nHost: example.test\r\n\
+Upgrade: websocket\r\nConnection: Upgrade\r\n\
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    const WS_101: &[u8] = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\
+Connection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
+    /// Unmasked server text frame "hi".
+    const WS_SERVER_FRAME: &[u8] = &[0x81, 0x02, b'h', b'i'];
+    /// Masked client text frame "yo".
+    const WS_CLIENT_FRAME: &[u8] = &[0x81, 0x82, 1, 2, 3, 4, b'y' ^ 1, b'o' ^ 2];
+
+    async fn read_exactly<R: AsyncRead + Unpin>(r: &mut R, n: usize, what: &str) -> Vec<u8> {
+        let mut buf = vec![0u8; n];
+        tokio::time::timeout(std::time::Duration::from_secs(5), r.read_exact(&mut buf))
+            .await
+            .unwrap_or_else(|_| panic!("timed out reading {what}"))
+            .unwrap_or_else(|e| panic!("reading {what}: {e}"));
+        buf
+    }
+
+    /// The WebSocket handshake is forwarded untouched, and after the 101 the
+    /// proxy is a byte tunnel in both directions — including a frame the
+    /// server sent in the same packet as the 101, and frames sent long after
+    /// the 30 s HTTP read timeouts (the persona's `close 1006` after 30 s).
+    /// While open the connection is one in-flight `ws://` row; when it closes
+    /// the row completes with the bytes tunnelled each way.
+    #[tokio::test(start_paused = true)]
+    async fn websocket_upgrade_is_tunnelled_and_recorded_on_the_plain_path() {
+        use tokio::io::AsyncWriteExt;
+
+        let handler = Arc::new(CountingAbortHandler::default());
+        let state = proxy_state_with_handler(handler.clone());
+        let (mut client, client_proxy_side) = tokio::io::duplex(65536);
+        let (upstream_proxy_side, mut upstream) = tokio::io::duplex(65536);
+        let server_state = state.clone();
+        let proxy = tokio::spawn(async move {
+            handle_mitm_http(
+                client_proxy_side,
+                upstream_proxy_side,
+                "example.test",
+                server_state,
+                false,
+            )
+            .await;
+        });
+
+        client.write_all(WS_UPGRADE_REQUEST).await.unwrap();
+        let forwarded = read_exactly(&mut upstream, WS_UPGRADE_REQUEST.len(), "handshake").await;
+        assert_eq!(
+            forwarded, WS_UPGRADE_REQUEST,
+            "handshake must reach the server untouched"
+        );
+        // 101 and the server's first frame in one write.
+        upstream
+            .write_all(&[WS_101, WS_SERVER_FRAME].concat())
+            .await
+            .unwrap();
+        let got = read_exactly(&mut client, WS_101.len() + WS_SERVER_FRAME.len(), "101").await;
+        assert_eq!(got, [WS_101, WS_SERVER_FRAME].concat());
+
+        // Idle well past every HTTP read timeout, then talk both ways.
+        tokio::time::sleep(std::time::Duration::from_secs(95)).await;
+        client.write_all(WS_CLIENT_FRAME).await.unwrap();
+        assert_eq!(
+            read_exactly(&mut upstream, WS_CLIENT_FRAME.len(), "client frame").await,
+            WS_CLIENT_FRAME
+        );
+        upstream.write_all(WS_SERVER_FRAME).await.unwrap();
+        assert_eq!(
+            read_exactly(&mut client, WS_SERVER_FRAME.len(), "server frame").await,
+            WS_SERVER_FRAME
+        );
+
+        let open = state.lock().await.snapshot_entries();
+        assert_eq!(open.len(), 1, "one row for the open WebSocket: {open:?}");
+        assert!(open[0].in_flight);
+        assert_eq!(open[0].url, "ws://example.test/chat");
+        assert_eq!(open[0].status_code, 101);
+        assert_eq!(open[0].request_size, WS_CLIENT_FRAME.len() as u64);
+        assert_eq!(open[0].response_size, 2 * WS_SERVER_FRAME.len() as u64);
+
+        // The server closes; the tunnel ends and the row completes.
+        drop(upstream);
+        let mut rest = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut rest),
+        )
+        .await
+        .expect("client side must see EOF once the server closes")
+        .unwrap();
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(5), proxy)
+            .await
+            .expect("the tunnel must end when both sides close")
+            .unwrap();
+
+        let entries = state.lock().await.drain_entries();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        let row = &entries[0];
+        assert!(!row.in_flight);
+        assert_eq!(row.method, "GET");
+        assert_eq!(row.url, "ws://example.test/chat");
+        assert_eq!(row.status_code, 101);
+        assert_eq!(row.route_action, "");
+        // (duration_ms is wall-clock — `now_ms` — so paused time says nothing about it.)
+        assert_eq!(row.request_size, WS_CLIENT_FRAME.len() as u64);
+        assert_eq!(row.response_size, 2 * WS_SERVER_FRAME.len() as u64);
+        assert!(row.request_body.is_empty() && row.response_body.is_empty());
+        assert!(get_header(&row.request_headers, "sec-websocket-key").is_some());
+        assert!(get_header(&row.response_headers, "sec-websocket-accept").is_some());
+        assert!(state.lock().await.in_flight.is_empty());
+        assert_eq!(
+            handler.calls.load(Ordering::SeqCst),
+            0,
+            "routes and request/response events never see a WebSocket handshake"
+        );
+    }
+
+    /// A refused upgrade (no 101) is an ordinary response: recorded, and the
+    /// keep-alive connection carries on parsing HTTP.
+    #[tokio::test]
+    async fn refused_websocket_upgrade_stays_an_http_exchange() {
+        use tokio::io::AsyncWriteExt;
+
+        let state = empty_proxy_state(Vec::new());
+        let (mut client, client_proxy_side) = tokio::io::duplex(65536);
+        let (upstream_proxy_side, mut upstream) = tokio::io::duplex(65536);
+        let server_state = state.clone();
+        let proxy = tokio::spawn(async move {
+            handle_mitm_http(
+                client_proxy_side,
+                upstream_proxy_side,
+                "example.test",
+                server_state,
+                false,
+            )
+            .await;
+        });
+
+        const REFUSED: &[u8] = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\nno";
+        const NEXT: &[u8] = b"GET /next HTTP/1.1\r\nHost: example.test\r\n\r\n";
+        const OK: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        client.write_all(WS_UPGRADE_REQUEST).await.unwrap();
+        read_exactly(&mut upstream, WS_UPGRADE_REQUEST.len(), "handshake").await;
+        upstream.write_all(REFUSED).await.unwrap();
+        assert_eq!(
+            read_exactly(&mut client, REFUSED.len(), "403").await,
+            REFUSED
+        );
+        client.write_all(NEXT).await.unwrap();
+        assert_eq!(
+            read_exactly(&mut upstream, NEXT.len(), "next request").await,
+            NEXT
+        );
+        upstream.write_all(OK).await.unwrap();
+        assert_eq!(read_exactly(&mut client, OK.len(), "200").await, OK);
+        tokio::time::timeout(std::time::Duration::from_secs(5), proxy)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let entries = state.lock().await.drain_entries();
+        let summary: Vec<_> = entries
+            .iter()
+            .map(|e| (e.url.as_str(), e.status_code, e.in_flight))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("http://example.test/chat", 403, false),
+                ("http://example.test/next", 200, false)
+            ]
+        );
+    }
+
+    /// `wss://` — the TLS MITM path with a lazily dialled upstream (Android
+    /// HTTPS, iOS Network Extension, CONNECT) tunnels after the 101 too.
+    #[tokio::test]
+    async fn secure_websocket_upgrade_is_tunnelled_on_the_tls_path() {
+        use tokio::io::AsyncWriteExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let (origin_config, origin_cert) = origin_server_config("example.test", &[b"http/1.1"]);
+        let state = proxy_state_trusting(&origin_cert, None);
+
+        // A WebSocket origin: answers the handshake with 101, echoes one
+        // frame back, sends one more, then closes.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin_port = listener.local_addr().unwrap().port();
+        let origin = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut tls = tokio_rustls::TlsAcceptor::from(origin_config)
+                .accept(tcp)
+                .await
+                .unwrap();
+            let request =
+                read_exactly(&mut tls, WS_UPGRADE_REQUEST.len(), "origin handshake").await;
+            assert_eq!(request, WS_UPGRADE_REQUEST);
+            tls.write_all(WS_101).await.unwrap();
+            let frame = read_exactly(&mut tls, WS_CLIENT_FRAME.len(), "origin frame").await;
+            assert_eq!(frame, WS_CLIENT_FRAME);
+            tls.write_all(WS_SERVER_FRAME).await.unwrap();
+            tls.shutdown().await.ok();
+        });
+
+        let (client_side, server_side) = tokio::io::duplex(65536);
+        let proxy_state = state.clone();
+        let server_ca = ca.clone();
+        let proxy = tokio::spawn(async move {
+            let server_config = server_ca
+                .server_config_for_host("example.test")
+                .await
+                .unwrap();
+            let client_tls = tokio_rustls::LazyConfigAcceptor::new(
+                rustls::server::Acceptor::default(),
+                server_side,
+            )
+            .await
+            .unwrap()
+            .into_stream(server_config)
+            .await
+            .unwrap();
+            handle_mitm_https_lazy_upstream(
+                client_tls,
+                "example.test",
+                "127.0.0.1",
+                origin_port,
+                proxy_state,
+            )
+            .await;
+        });
+
+        let server_name =
+            rustls::pki_types::ServerName::try_from("example.test".to_string()).unwrap();
+        let mut client = TlsConnector::from(client_config_trusting_ca(&ca, &[b"http/1.1"]))
+            .connect(server_name, client_side)
+            .await
+            .unwrap();
+        client.write_all(WS_UPGRADE_REQUEST).await.unwrap();
+        assert_eq!(read_exactly(&mut client, WS_101.len(), "101").await, WS_101);
+        client.write_all(WS_CLIENT_FRAME).await.unwrap();
+        assert_eq!(
+            read_exactly(&mut client, WS_SERVER_FRAME.len(), "server frame").await,
+            WS_SERVER_FRAME
+        );
+        origin.await.unwrap();
+        let mut rest = Vec::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut rest),
+        )
+        .await;
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(5), proxy)
+            .await
+            .expect("the tunnel must end once the origin closes")
+            .unwrap();
+
+        let entries = state.lock().await.drain_entries();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].url, "wss://example.test/chat");
+        assert_eq!(entries[0].status_code, 101);
+        assert!(!entries[0].in_flight);
+        assert!(entries[0].is_https);
+        assert_eq!(entries[0].request_size, WS_CLIENT_FRAME.len() as u64);
+        assert_eq!(entries[0].response_size, WS_SERVER_FRAME.len() as u64);
+    }
+
+    /// The forward-proxy path (Android's `http_proxy` fallback when iptables
+    /// is unavailable): OkHttp sends a `ws://` handshake through an HTTP proxy
+    /// in absolute form. It must keep its `Connection: Upgrade`, skip routes,
+    /// and become a tunnel after the 101 like the transparent paths.
+    #[tokio::test]
+    async fn websocket_upgrade_is_tunnelled_on_the_forward_proxy_path() {
+        use tokio::io::AsyncWriteExt;
+
+        let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin_port = origin.local_addr().unwrap().port();
+        let origin_task = tokio::spawn(async move {
+            let (mut tcp, _) = origin.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0u8; 1];
+                tcp.read_exact(&mut byte).await.unwrap();
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8(head).unwrap();
+            tcp.write_all(WS_101).await.unwrap();
+            let frame = read_exactly(&mut tcp, WS_CLIENT_FRAME.len(), "origin frame").await;
+            assert_eq!(frame, WS_CLIENT_FRAME);
+            tcp.write_all(WS_SERVER_FRAME).await.unwrap();
+            head
+        });
+
+        let handler = Arc::new(CountingAbortHandler::default());
+        let state = proxy_state_with_handler(handler.clone());
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = proxy_listener.local_addr().unwrap();
+        let target = format!("http://127.0.0.1:{origin_port}/chat");
+        let request = format!(
+            "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{origin_port}\r\n\
+             Upgrade: websocket\r\nConnection: Upgrade\r\nProxy-Connection: keep-alive\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        );
+        let proxy_state = state.clone();
+        let proxy_request = request.clone();
+        let proxy = tokio::spawn(async move {
+            let (tcp, _) = proxy_listener.accept().await.unwrap();
+            handle_http(tcp, "GET", &target, proxy_request.as_bytes(), proxy_state).await;
+        });
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+        assert_eq!(read_exactly(&mut client, WS_101.len(), "101").await, WS_101);
+        client.write_all(WS_CLIENT_FRAME).await.unwrap();
+        assert_eq!(
+            read_exactly(&mut client, WS_SERVER_FRAME.len(), "server frame").await,
+            WS_SERVER_FRAME
+        );
+        let head = origin_task.await.unwrap();
+        assert!(
+            head.contains("Connection: Upgrade\r\n") && !head.contains("Connection: close"),
+            "the handshake must keep its Connection: Upgrade: {head}"
+        );
+        assert!(!head.to_ascii_lowercase().contains("proxy-connection"));
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(5), proxy)
+            .await
+            .expect("the tunnel must end once both sides close")
+            .unwrap();
+
+        let entries = state.lock().await.drain_entries();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].url, format!("ws://127.0.0.1:{origin_port}/chat"));
+        assert_eq!(entries[0].status_code, 101);
+        assert!(!entries[0].in_flight);
+        assert_eq!(entries[0].request_size, WS_CLIENT_FRAME.len() as u64);
+        assert_eq!(entries[0].response_size, WS_SERVER_FRAME.len() as u64);
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn upgrade_request_detection() {
+        let h = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert!(is_upgrade_request(&h(&[
+            ("connection", "keep-alive, Upgrade"),
+            ("upgrade", "websocket")
+        ])));
+        assert!(!is_upgrade_request(&h(&[("Upgrade", "websocket")])));
+        assert!(!is_upgrade_request(&h(&[("Connection", "Upgrade")])));
+        assert!(!is_upgrade_request(&h(&[
+            ("Connection", "upgraded"),
+            ("Upgrade", "websocket")
+        ])));
     }
 }
