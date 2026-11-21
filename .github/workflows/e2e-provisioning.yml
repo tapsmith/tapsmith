@@ -52,6 +52,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Trial of the xcode-27 image. Xcode 27.2 is named explicitly because the
+  # image's default (27.1) ships an iOS runtime with only the iPhone Duo.
+  XCODE_APP: /Applications/Xcode_27.2.app
   # Tapsmith's own CI is not a user; keep its runs out of the usage counts.
   TAPSMITH_TELEMETRY: "0"
   ANDROID_SYSTEM_IMAGE: "system-images;android-36;google_apis;x86_64"
@@ -228,7 +231,7 @@ jobs:
 
   build-daemon-macos:
     name: Build Daemon (macOS)
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -282,12 +285,12 @@ jobs:
 
   build-agent-ios:
     name: Build iOS Agent
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        run: sudo xcode-select -s "$XCODE_APP/Contents/Developer"
 
       # The xctestrun bundle is tied to the Xcode/SDK that produced it.
       - name: Resolve Xcode version
@@ -328,7 +331,7 @@ jobs:
 
   build-test-app-ios:
     name: Build iOS Test App
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -703,7 +706,7 @@ jobs:
   ios:
     name: iOS (Tapsmith boots the simulator)
     needs: [ build-sdk, build-daemon-macos, build-agent-ios, build-test-app-ios ]
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -737,11 +740,23 @@ jobs:
       # boot; the simulator is shut down again before the run.
       - name: Select Xcode and create a fresh simulator with two keyboard languages
         run: |
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           xcodebuild -version
-          MODEL=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
+          # Take a plain "iPhone <N>" model from the selected Xcode's own iOS
+          # runtime, and create the simulator on that runtime. A prefix match
+          # on the device list turns "iPhone 18 Pro" into a model that doesn't
+          # exist, and an unpinned create picks whichever runtime it likes.
+          RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-$(xcrun --sdk iphonesimulator --show-sdk-version | tr . -)"
+          echo "Simulator runtime: $RUNTIME"
+          MODEL=$(xcrun simctl list devices available -j | python3 -c "
+          import json,re,sys
+          for dev in json.load(sys.stdin)['devices'].get('$RUNTIME', []):
+            if re.fullmatch(r'iPhone \\d+', dev['name']):
+              print(dev['name']); sys.exit()
+          ")
+          if [ -z "$MODEL" ]; then echo "::error::No plain iPhone model on $RUNTIME"; exit 1; fi
           SIM="Tapsmith Fresh $MODEL"
-          UDID=$(xcrun simctl create "$SIM" "$MODEL")
+          UDID=$(xcrun simctl create "$SIM" "$MODEL" "$RUNTIME")
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID"
           xcrun simctl spawn "$UDID" defaults write -g AppleKeyboards -array \

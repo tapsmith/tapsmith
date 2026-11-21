@@ -62,6 +62,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Trial of the xcode-27 image. Xcode 27.2 is named explicitly because the
+  # image's default (27.1) ships an iOS runtime with only the iPhone Duo.
+  XCODE_APP: /Applications/Xcode_27.2.app
   # Tapsmith's own CI is not a user; keep its runs out of the usage counts.
   TAPSMITH_TELEMETRY: "0"
   # Simulator taps, double taps and long presses go through the daemon's
@@ -234,7 +237,7 @@ jobs:
     name: Build Daemon
     needs: gate
     if: needs.gate.outputs.daemon-cached != 'true'
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -292,12 +295,12 @@ jobs:
     name: Build Agent
     needs: gate
     if: needs.gate.outputs.agent-cached != 'true'
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        run: sudo xcode-select -s "$XCODE_APP/Contents/Developer"
 
       # The xctestrun bundle is tied to the Xcode/SDK that produced it, and the
       # build holds only the runner's own arch, so both are part of the key —
@@ -350,7 +353,7 @@ jobs:
     name: Build Test App
     needs: gate
     if: needs.gate.outputs.test-app-cached != 'true'
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -433,7 +436,7 @@ jobs:
       && contains(fromJSON('["success", "skipped"]'), needs.build-daemon.result)
       && contains(fromJSON('["success", "skipped"]'), needs.build-agent.result)
       && contains(fromJSON('["success", "skipped"]'), needs.build-test-app.result)
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -475,21 +478,23 @@ jobs:
       - name: Select Xcode and start simulator boot
         id: xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           xcodebuild -version
           # Same normalisation as build-agent's "Resolve Xcode version".
           echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')-$(uname -m)" >> "$GITHUB_OUTPUT"
-          SIM=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
+          # Pin the simulator to the selected Xcode's own iOS runtime. The image
+          # has several, and the device list's order decides which one an
+          # unpinned name lands on.
+          RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-$(xcrun --sdk iphonesimulator --show-sdk-version | tr . -)"
+          echo "Simulator runtime: $RUNTIME"
+          read -r UDID SIM < <(xcrun simctl list devices available -j | python3 -c "
+          import json,re,sys
+          for dev in json.load(sys.stdin)['devices'].get('$RUNTIME', []):
+            if re.fullmatch(r'iPhone \\d+', dev['name']) and dev['isAvailable']:
+              print(dev['udid'], dev['name']); sys.exit()
+          ")
           echo "Using simulator: $SIM"
           echo "TAPSMITH_IOS_SIMULATOR=$SIM" >> $GITHUB_ENV
-          UDID=$(xcrun simctl list devices available -j | python3 -c "
-          import json,sys
-          d=json.load(sys.stdin)
-          for devs in d['devices'].values():
-            for dev in devs:
-              if dev['name']=='$SIM' and dev['isAvailable']:
-                print(dev['udid']); sys.exit()
-          ")
           if [ -n "$UDID" ]; then
             echo "Booting $SIM ($UDID)"
             echo "TAPSMITH_IOS_UDID=$UDID" >> $GITHUB_ENV
@@ -915,7 +920,7 @@ jobs:
       && contains(fromJSON('["success", "skipped"]'), needs.build-agent.result)
       && contains(fromJSON('["success", "skipped"]'), needs.build-test-app.result)
       && github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -953,21 +958,23 @@ jobs:
       - name: Select Xcode and start simulator boot
         id: xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           xcodebuild -version
           # Same normalisation as build-agent's "Resolve Xcode version".
           echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -c 'A-Za-z0-9. ' '-' | xargs | tr ' ' '-')-$(uname -m)" >> "$GITHUB_OUTPUT"
-          SIM=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+ " | head -1 | xargs)
+          # Pin the simulator to the selected Xcode's own iOS runtime. The image
+          # has several, and the device list's order decides which one an
+          # unpinned name lands on.
+          RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-$(xcrun --sdk iphonesimulator --show-sdk-version | tr . -)"
+          echo "Simulator runtime: $RUNTIME"
+          read -r UDID SIM < <(xcrun simctl list devices available -j | python3 -c "
+          import json,re,sys
+          for dev in json.load(sys.stdin)['devices'].get('$RUNTIME', []):
+            if re.fullmatch(r'iPhone \\d+', dev['name']) and dev['isAvailable']:
+              print(dev['udid'], dev['name']); sys.exit()
+          ")
           echo "Using simulator: $SIM"
           echo "TAPSMITH_IOS_SIMULATOR=$SIM" >> $GITHUB_ENV
-          UDID=$(xcrun simctl list devices available -j | python3 -c "
-          import json,sys
-          d=json.load(sys.stdin)
-          for devs in d['devices'].values():
-            for dev in devs:
-              if dev['name']=='$SIM' and dev['isAvailable']:
-                print(dev['udid']); sys.exit()
-          ")
           if [ -n "$UDID" ]; then
             echo "Booting $SIM ($UDID)"
             echo "TAPSMITH_IOS_UDID=$UDID" >> $GITHUB_ENV
