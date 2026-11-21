@@ -685,6 +685,20 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
       expect(calls).toBeLessThanOrEqual(elements);
     });
 
+    it('counts includeHidden names as the page does, hidden content included', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><button id="ah" aria-hidden="true">AH</button>'
+        + '<button id="icon"><span aria-hidden="true">close</span>Save</button></body>', distinctBoxes);
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      for (const [code, locator] of [
+        ['webview.getByRole("button", { name: "AH", includeHidden: true })', handle.getByRole('button', { name: 'AH', includeHidden: true })],
+        ['webview.getByRole("button", { name: "Save", exact: true, includeHidden: true })', handle.getByRole('button', { name: 'Save', exact: true, includeHidden: true })],
+        ['webview.getByRole("button", { name: "close Save", exact: true, includeHidden: true })', handle.getByRole('button', { name: 'close Save', exact: true, includeHidden: true })],
+        ['webview.getByRole("button", { name: "Save", exact: true })', handle.getByRole('button', { name: 'Save', exact: true })],
+      ] as const) {
+        expect(count(roots, code), code).toBe(await locator.count());
+      }
+    });
+
     it('shows the error the page throws for a role webview.getByRole rejects', () => {
       const { handle } = handleOn('<!DOCTYPE html><body></body>');
       const thrown = (() => { try { handle.getByRole('textfeild'); } catch (e) { return (e as Error).message; } return null; })();

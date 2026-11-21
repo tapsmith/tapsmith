@@ -1018,6 +1018,12 @@ export class WebViewHandle {
             // label texts getByLabel matches (Playwright's rules, PILOT-1361).
             ariaRole: __ts.role(el) || '',
             ariaLabel: __ts.name(el).slice(0, 200),
+            // The name getByRole matches with includeHidden, when hidden
+            // content changes it (an aria-hidden control, an icon's text).
+            ariaLabelWithHidden: (() => {
+              const n = __ts.name(el, true).slice(0, 200);
+              return n !== __ts.name(el).slice(0, 200) ? n : undefined;
+            })(),
             // Raw, as a getByLabel RegExp tests them; a string match normalises.
             labels: __ts.labelTexts(el).map((t) => t.slice(0, 200)),
             // The attribute alone: what webview.getByLabel matches (PILOT-666).
@@ -1056,6 +1062,7 @@ export class WebViewHandle {
         if (node.placeholder) attrs.push(`hint="${escapeXmlAttr(node.placeholder)}"`);
         if (node.role) attrs.push(`webview-role="${escapeXmlAttr(node.role)}"`);
         if (node.ariaLabel) attrs.push(`content-desc="${escapeXmlAttr(node.ariaLabel)}"`);
+        if (node.ariaLabelWithHidden !== undefined) attrs.push(`webview-name-with-hidden="${escapeXmlAttr(node.ariaLabelWithHidden)}"`);
         // Always written, so a reader can tell "none" from a dump that
         // predates the attribute.
         attrs.push(`webview-aria-label="${escapeXmlAttr(node.ariaLabelAttr ?? '')}"`);
@@ -1392,6 +1399,8 @@ interface DomNode {
   /** The accessible name. */
   ariaLabel: string
   ariaLabelAttr?: string
+  /** The accessible name with hidden content, when it differs. */
+  ariaLabelWithHidden?: string
   ariaRole?: string
   labels?: string[]
   testId: string

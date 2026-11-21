@@ -276,7 +276,11 @@ export function webViewHasRole(node: HierarchyNode, role: string): boolean {
  * the dump's computed name (content-desc), or for a dump that predates
  * `webview-aria-role`, the name it can piece together.
  */
-export function webViewAccessibleName(node: HierarchyNode): string {
+export function webViewAccessibleName(node: HierarchyNode, includeHidden = false): string {
+  // With includeHidden the name takes in hidden content, which the dump
+  // writes separately when it differs.
+  const withHidden = includeHidden ? node.attributes.get('webview-name-with-hidden') : undefined;
+  if (withHidden !== undefined) return withHidden;
   const name = node.attributes.get('content-desc') ?? '';
   if (node.attributes.has('webview-aria-role')) return name;
   return name || node.attributes.get('text') || node.attributes.get('hint') || '';

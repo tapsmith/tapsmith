@@ -814,8 +814,9 @@ function webViewNodeMatchesSelector(node: HierarchyNode, selector: ParsedSelecto
       // getByRole skips what assistive technology does not see.
       if (!selector.includeHidden && node.attributes.get('webview-a11y-hidden') === 'true') return false;
       if (!webViewHasRole(node, selector.value)) return false;
-      if (selector.nameRegex) return toJsRegExp(selector.nameRegex).test(webViewAccessibleName(node));
-      if (selector.name !== undefined) return webViewTextMatches(webViewAccessibleName(node), selector.name, selector.exact === true);
+      const name = webViewAccessibleName(node, selector.includeHidden === true);
+      if (selector.nameRegex) return toJsRegExp(selector.nameRegex).test(name);
+      if (selector.name !== undefined) return webViewTextMatches(name, selector.name, selector.exact === true);
       return true;
     }
     case 'wv-label': {
