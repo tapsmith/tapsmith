@@ -167,6 +167,8 @@ strict mode violation: getByText("Sign in") resolved to 2 elements:
 Hint: use { exact: true }, getByRole(role, { name, exact: true }), getByTestId(), or .first()/.nth()/.last() to target a single element.
 ```
 
+The hint leaves out `{ exact: true }` when the locator already has it.
+
 This is the safety net for the substring default of `getByText` — without it, an ambiguous locator would silently act on the first match in document order, which is rarely the element you meant.
 
 | Operation | Strict? |

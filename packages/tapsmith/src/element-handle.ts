@@ -33,7 +33,7 @@ import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepRespons
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory } from './trace/types.js';
 import { type BeforeState, captureBeforeState, tracedAction } from './trace/traced-action.js';
-import { sleep, isAbortError } from './abort.js';
+import { sleep, isAbortError, throwIfAborted } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
@@ -690,7 +690,13 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
 
 /** Whether `match`, from a second read of the screen, is the element `el` listed. */
 function isSameListedElement(match: ElementInfo, el: ElementInfo): boolean {
-  if (hasUsableGeometry(el) && hasUsableGeometry(match)) return sameTargetKey(match) === sameTargetKey(el);
+  // Element ids are fresh per read, so the place and the text say which it
+  // is — and its class and id that it is still the same kind of thing, not
+  // a label that replaced a button there.
+  if (hasUsableGeometry(el) && hasUsableGeometry(match)) {
+    return sameTargetKey(match) === sameTargetKey(el)
+      && match.className === el.className && match.resourceId === el.resourceId;
+  }
   if (hasUsableGeometry(el) !== hasUsableGeometry(match)) return false;
   return match.className === el.className && match.text === el.text
     && match.contentDescription === el.contentDescription && match.resourceId === el.resourceId;
@@ -758,6 +764,12 @@ export function buildStrictModeViolationError(
   options?: {
     totalCount?: number;
     suggest?: (el: ElementInfo, index: number) => string | undefined;
+    /**
+     * What the failing locator already asks for, so the hint doesn't
+     * suggest it again: `text` for an exact getByText, `role` for a getByRole
+     * with an exact name.
+     */
+    alreadyExact?: 'text' | 'role';
   },
 ): StrictModeViolationError {
   const totalCount = options?.totalCount ?? elements.length;
@@ -778,8 +790,20 @@ export function buildStrictModeViolationError(
   const message =
     `strict mode violation: ${selectorDescription} resolved to ${totalCount} elements:\n` +
     `${lines.join('\n')}\n` +
-    'Hint: use { exact: true }, getByRole(role, { name, exact: true }), getByTestId(), or .first()/.nth()/.last() to target a single element.';
+    `Hint: use ${strictHintOptions(options?.alreadyExact)} to target a single element.`;
   return new StrictModeViolationError(message, elements, totalCount);
+}
+
+/** The ways out a strict-mode hint lists, without the one the locator already takes. */
+function strictHintOptions(alreadyExact: 'text' | 'role' | undefined): string {
+  const ways = [
+    ...(alreadyExact ? [] : ['{ exact: true }']),
+    ...(alreadyExact === 'role' ? [] : ['getByRole(role, { name, exact: true })']),
+    'getByTestId()',
+  ];
+  return ways.length > 1
+    ? `${ways.join(', ')}, or .first()/.nth()/.last()`
+    : `${ways.join(', ')} or .first()/.nth()/.last()`;
 }
 
 /**
@@ -1755,10 +1779,28 @@ export class ElementHandle {
    * the near-miss check may take, unchecked when the agent can't answer.
    */
   async _strictModeViolation(elements: ElementInfo[]): Promise<StrictModeViolationError> {
-    const suggest = this._options.uncheckedStrictAka
+    const signal = this._client._getAbortSignal?.();
+    const verified = this._options.uncheckedStrictAka
       ? undefined
-      : await verifiedStrictSuggestions(this._client, elements, this._client._getAbortSignal?.());
-    return buildStrictModeViolationError(this._describe(), elements, suggest ? { suggest } : undefined);
+      : await verifiedStrictSuggestions(this._client, elements, signal);
+    // A stop during the check is the run's stop, not this locator's error.
+    throwIfAborted(signal);
+    const description = this._describe();
+    // The locator that just matched them all is never any one's aka, checked or not.
+    const failing = `device.${description}`;
+    const suggest = verified
+      ? (el: ElementInfo) => { const aka = verified(el); return aka === failing ? undefined : aka; }
+      : (el: ElementInfo) => strictCandidatesFor(el).find((c) => c.code !== failing)?.code;
+    return buildStrictModeViolationError(description, elements, { suggest, alreadyExact: this._alreadyExact() });
+  }
+
+  /** @internal — Which exact match this locator already asks for, for the strict-mode hint. */
+  private _alreadyExact(): 'text' | 'role' | undefined {
+    if (this._options.andHandle || this._options.orHandle) return undefined;
+    const kind = this._selector.kind;
+    if (kind.type === 'text') return 'text';
+    if (kind.type === 'role' && kind.value.exact && kind.value.name) return 'role';
+    return undefined;
   }
 
   /**
