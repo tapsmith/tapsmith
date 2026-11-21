@@ -1,7 +1,8 @@
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { getNodeRole } from '../trace-viewer/components/hierarchy-utils.js';
 import { isNonAppNode, isNonAppSubtree } from '../trace-viewer/components/non-app-nodes.js';
-import { isInAppBrowserRoot, isNativeWebViewContainer } from '../trace-viewer/components/pick-node.js';
+import { isInAppBrowserRoot } from '../trace-viewer/components/hierarchy-utils.js';
+import { isNativeWebViewContainer } from '../trace-viewer/components/pick-node.js';
 import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
 import { escapeJsString } from '../js-string-escape.js';
 

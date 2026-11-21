@@ -6,7 +6,7 @@
  */
 
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
-import { getNodeBounds, getNodeRole, hitTest } from './hierarchy-utils.js';
+import { getNodeBounds, getNodeRole, hitTest, isInAppBrowserRoot } from './hierarchy-utils.js';
 import { findBetterDescendant, hasGoodSelectors } from './selector-generation.js';
 import { isHooksMarkerCarrier, isNonAppSubtree, isSwitchPartNode } from './non-app-nodes.js';
 
@@ -105,16 +105,6 @@ export function pickNodeAt(
 }
 
 // ─── WebView overlay detection (live mirror pick) ───
-
-/**
- * The root of an iOS in-app browser (SFSafariViewController), which the
- * agent names by SafariViewService's identifier (PILOT-1384). Its page is
- * SafariViewService's, not the app's: `device.webview()` cannot attach to
- * it, so its content is matched with native locators only.
- */
-export function isInAppBrowserRoot(node: HierarchyNode): boolean {
-  return (node.attributes.get('identifier') ?? '').startsWith('BrowserView?');
-}
 
 /** A native WebView element: what holds a page's accessibility projection. */
 export function isNativeWebViewContainer(node: HierarchyNode): boolean {
