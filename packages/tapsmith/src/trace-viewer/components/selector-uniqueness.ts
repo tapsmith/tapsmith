@@ -128,7 +128,11 @@ function tryExactRoleNameUpgrade(
  * The node's whole accessible name, as role-name matching reads it first —
  * for an iOS settings row's switch its row's title (`tapsmith-label`), one
  * part of its ", "-joined label that an exact name matches, so a pinned
- * name never holds the row's subtitle.
+ * name never holds the row's subtitle. Not an Android row name
+ * (`tapsmith-name`): it ends with the row's summary, which a SwitchPreference
+ * changes when it is toggled, so pinning it exactly would break right after
+ * a tap. An ambiguous Android row title is pinned by `getByLabel` (the row's
+ * title alone) instead.
  */
 function fullAccessibleName(node: HierarchyNode): string {
   const iosRowLabel = node.attributes.has('class') ? '' : node.attributes.get('tapsmith-label');

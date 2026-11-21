@@ -213,10 +213,25 @@ internal object HierarchyAttributes {
         return sb.toString()
     }
 
-    private fun escapeXmlAttr(s: String): String =
-        s
-            .replace("&", "&amp;")
-            .replace("\"", "&quot;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
+    /**
+     * [s] as an XML attribute value: markup escaped, line breaks and tabs as
+     * character references (a literal one would be read back as a space),
+     * and any other character XML 1.0 cannot hold dropped, as the stock dump
+     * drops them. An app's text reaches here in a row name ([RowName]).
+     */
+    private fun escapeXmlAttr(s: String): String {
+        val sb = StringBuilder(s.length)
+        for (c in s) {
+            when {
+                c == '&' -> sb.append("&amp;")
+                c == '"' -> sb.append("&quot;")
+                c == '<' -> sb.append("&lt;")
+                c == '>' -> sb.append("&gt;")
+                c == '\n' || c == '\r' || c == '\t' -> sb.append("&#").append(c.code).append(';')
+                c < ' ' || c == '\uFFFE' || c == '\uFFFF' -> Unit
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
 }

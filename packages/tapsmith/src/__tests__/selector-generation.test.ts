@@ -884,3 +884,51 @@ describe('role names in the playground match the runtime', () => {
     expect(codes).toContain('device.getByText("Open")');
   });
 });
+
+// ─── A nameless control named by its row: an androidx Preference ───
+
+describe('Android: a SwitchPreferenceCompat row', () => {
+  // The shape of AntennaPod's Settings → User interface screen: the agent's
+  // dump writes the row's name and title on each unnamed switch.
+  function preferenceRow(title: string, summary: string): HierarchyNode {
+    const name = `${title} ${summary}`;
+    return makeNode('node', { class: 'android.widget.LinearLayout', clickable: 'true', focusable: 'true' }, [
+      makeNode('node', { class: 'android.widget.RelativeLayout' }, [
+        makeNode('node', { class: 'android.widget.TextView', text: title, 'resource-id': 'android:id/title' }),
+        makeNode('node', { class: 'android.widget.TextView', text: summary, 'resource-id': 'android:id/summary' }),
+      ]),
+      makeNode('node', { class: 'android.widget.LinearLayout', 'resource-id': 'android:id/widget_frame' }, [
+        makeNode('node', {
+          class: 'android.widget.Switch', checkable: 'true', 'resource-id': 'app:id/switchWidget',
+          'tapsmith-name': name, 'tapsmith-label': title,
+        }),
+      ]),
+    ]);
+  }
+  const rows = [
+    preferenceRow('Full black', 'Use full black for the dark theme'),
+    preferenceRow('Dynamic colors', 'Adapt app colors based on the wallpaper'),
+  ];
+  const list = makeNode('node', { class: 'androidx.recyclerview.widget.RecyclerView', scrollable: 'true' }, rows);
+  const root = makeNode('node', { class: 'android.widget.FrameLayout' }, [
+    makeNode('node', { class: 'android.widget.FrameLayout', 'resource-id': 'android:id/content' }, [list]),
+  ]);
+  const fullBlack = rows[0].children[1].children[0];
+
+  it('suggests the switch by role and its row title first, and by label', () => {
+    const codes = generateSelectors(fullBlack).map((s) => s.code);
+    expect(codes[0]).toBe('device.getByRole("switch", { name: "Full black" })');
+    expect(codes).toContain('device.getByLabel("Full black")');
+    expect(generateBestSelector(fullBlack)).toBe(codes[0]);
+  });
+
+  it('each suggestion matches only that switch', () => {
+    for (const code of ['device.getByRole("switch", { name: "Full black" })', 'device.getByLabel("Full black")']) {
+      expect(findMatchingNodes([root], parseSelectorString(code)!), code).toEqual([fullBlack]);
+    }
+  });
+
+  it('listitem is each row, not the layouts in it or around the list', () => {
+    expect(findMatchingNodes([root], parseSelectorString('device.getByRole("listitem")')!)).toEqual(rows);
+  });
+});

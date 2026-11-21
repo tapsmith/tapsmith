@@ -268,21 +268,24 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   // A name that is nothing but glyphs (an icon-only element) stays whole:
   // it is the element's only name.
   // A text field with no other name is named by its placeholder, as the
-  // agents name it (PILOT-834). An iOS settings row's switch, which UIKit
-  // labels with the row's texts joined by ", ", is suggested by the row's
-  // title (`tapsmith-label`, the agent's RowName): a part of its name that
-  // getByRole's substring match and getByLabel both accept, and that a
-  // changing subtitle does not break.
+  // agents name it (PILOT-834). A control in a settings row is suggested by
+  // the row's title, which the agents dump as `tapsmith-label` (their
+  // RowName): a part of its name that getByRole's substring match and
+  // getByLabel both accept, and that a changing subtitle or summary does not
+  // break. On iOS that is a switch UIKit labels with the row's texts joined by
+  // ", "; on Android a control with no name of its own in an actionable row
+  // (a SwitchPreferenceCompat's switch), whose full name is `tapsmith-name`.
   const named = (value: string): string => (value.trim() ? value : '');
-  const iosRowLabel = ios ? named(node.attributes.get('tapsmith-label') ?? '') : '';
+  const rowLabel = named(node.attributes.get('tapsmith-label') ?? '');
   const fullName = ios
-    ? (iosRowLabel || named(label) || placeholderName(node))
-    : (named(contentDesc) || placeholderName(node) || text);
+    ? (rowLabel || named(label) || placeholderName(node))
+    : (named(contentDesc) || placeholderName(node) || text || rowLabel);
   const accessibleName = roleNameFor(fullName) || fullName;
   // getByLabel matches Android's content-desc (or a labelling view, which
-  // the dump does not carry) — never the field's own text, which is its
-  // typed value or hint — and iOS's label or title, or a settings row's title.
-  const labelName = ios ? (iosRowLabel || label || (node.attributes.get('title') ?? '')) : contentDesc;
+  // the dump does not carry, or a nameless control's row title) — never the
+  // field's own text, which is its typed value or hint — and iOS's label or
+  // title, or a settings row's title.
+  const labelName = ios ? (rowLabel || label || (node.attributes.get('title') ?? '')) : (contentDesc || rowLabel);
 
   // Demote role-based selectors when the role is generic OR when it came from
   // the agent's accessibility-trait heuristic (tapsmith-role) on a node whose

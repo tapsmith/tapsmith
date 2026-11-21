@@ -86,7 +86,7 @@ device.getByRole("button", { name: "Details", expanded: true })
 Unknown role "row". Supported: alert, button, checkbox, combobox, heading, image, link, list, listitem, menu, menubar, menuitem, progressbar, radiobutton, radiogroup, scrollbar, scrollview, searchfield, seekbar, spinbutton, spinner, summary, switch, tab, tablist, text, textfield, timer, toolbar (aliases: header → heading, slider → seekbar, search → searchfield, radio → radiobutton). For an element with no supported role, use getByText(), getByTestId() or getByDescription().
 ```
 
-The accessible name is the element's content description / accessibility label, its text, or — on Android — the joined text of its descendants. A text field with none of those (and, on iOS, no title) is named by its placeholder, as in Playwright: SwiftUI's `TextField("Title", text: $title)` has an empty accessibility label, so `getByRole("textfield", { name: "Title" })` finds it by its placeholder, and an Android `EditText` keeps its hint as its name after text is typed into it. A field with a label or title is named by it alone. Because the default is a case-insensitive substring match, a name can match more than one element (`{ name: "Show overlay" }` also matches *Show overlay briefly*); acting on such a locator throws a [strict mode](#strict-mode) violation — add `exact: true`. The case-insensitive default also covers platform casing differences, such as React Native's `<Button title="Sign In">`, which Android renders as `SIGN IN`.
+The accessible name is the element's content description / accessibility label, its text, or — on Android — the joined text of its descendants. On Android a switch or checkbox with none of those, inside a clickable row that TalkBack reads as one (an androidx `SwitchPreferenceCompat`), is named by the row: its description, or its title and summary ([Settings rows](locators.md#settings-rows)). A text field with none of those (and, on iOS, no title) is named by its placeholder, as in Playwright: SwiftUI's `TextField("Title", text: $title)` has an empty accessibility label, so `getByRole("textfield", { name: "Title" })` finds it by its placeholder, and an Android `EditText` keeps its hint as its name after text is typed into it. A field with a label or title is named by it alone. Because the default is a case-insensitive substring match, a name can match more than one element (`{ name: "Show overlay" }` also matches *Show overlay briefly*); acting on such a locator throws a [strict mode](#strict-mode) violation — add `exact: true`. The case-insensitive default also covers platform casing differences, such as React Native's `<Button title="Sign In">`, which Android renders as `SIGN IN`.
 
 ### `device.getByDescription(text: string): ElementHandle`
 
@@ -120,8 +120,8 @@ On Android the value is compared with the element's whole resource ID, which is 
 
 Locate an input element by its associated label text. Finds form controls (text fields, checkboxes, switches, etc.) whose accessible name matches the label.
 
-- **Android**: matches inputs (text fields, checkboxes, switches, radio buttons, seek bars and spinners) whose `contentDescription` equals the text, inputs linked via `labelFor`/`labeledBy`, or a Jetpack Compose text field whose `label` is the text (the label is a child of the field).
-- **iOS**: matches input elements (text fields, text views, switches and toggles, sliders, steppers, pickers, checkboxes and radio buttons, but not search fields) whose `accessibilityLabel` or title equals the text. A switch in a UIKit settings row, which UIKit labels with the row's texts joined by ", " (`"Wi-Fi, Join known networks"`), is also labelled by the row's title (`"Wi-Fi"`), but not by its subtitle ([Settings rows](locators.md#settings-rows-uikit)).
+- **Android**: matches inputs (text fields, checkboxes, switches, radio buttons, seek bars and spinners) whose `contentDescription` equals the text, inputs linked via `labelFor`/`labeledBy`, a Jetpack Compose text field whose `label` is the text (the label is a child of the field), or a switch or checkbox with no name of its own in a clickable row whose title is the text (an androidx `SwitchPreferenceCompat`: see [Settings rows](locators.md#settings-rows)).
+- **iOS**: matches input elements (text fields, text views, switches and toggles, sliders, steppers, pickers, checkboxes and radio buttons, but not search fields) whose `accessibilityLabel` or title equals the text. A switch in a UIKit settings row, which UIKit labels with the row's texts joined by ", " (`"Wi-Fi, Join known networks"`), is also labelled by the row's title (`"Wi-Fi"`), but not by its subtitle ([Settings rows](locators.md#settings-rows)).
 
 The comparison normalizes whitespace like `getByText`. A [RegExp](#regular-expressions) is tested against the label text instead.
 
@@ -590,6 +590,8 @@ const text = await device.getClipboard();
 ### `device.setOrientation(orientation: Orientation): Promise<void>`
 
 Set the device orientation. Accepts `"portrait"` or `"landscape"`, which name the screen's shape: `"portrait"` is taller than wide and `"landscape"` wider than tall, also on Android tablets whose screens are landscape when held the natural way. A turn made in a test, its `beforeEach` and `afterEach` hooks or its fixtures is undone after the test, whether it passed or failed, so the next test finds the device in the orientation the test found it in. A turn made in a `beforeAll` or `afterAll` hook is not undone.
+
+On Android it resolves once the screen has turned, so the next action already sees the turned screen, and throws if the screen is still turning after 10 s. On iOS it waits up to 2 s for the app's window to turn, then resolves either way. When the app in front holds its own orientation, the screen does not turn and the call resolves without error.
 
 ```typescript
 await device.setOrientation("landscape");
@@ -1740,7 +1742,7 @@ await expect(device.getByText("Item", { exact: true })).toHaveAttribute("classNa
 
 #### `.toHaveAccessibleName(name: string | RegExp, options?): Promise<void>`
 
-Assert that the element has the given accessible name: its content description (iOS: accessibility label) if set; otherwise, for a text field, its placeholder (a field's text is its typed value, not its name); otherwise its text. An iOS list row (`XCUIElementTypeCell`) is the exception: its text is joined from what it contains, so with no label of its own it has no name, as `getByRole("listitem", { name })` sees it.
+Assert that the element has the given accessible name: its content description (iOS: accessibility label) if set; otherwise, for a text field, its placeholder (a field's text is its typed value, not its name); otherwise its text. An iOS list row (`XCUIElementTypeCell`) is the exception: its text is joined from what it contains, so with no label of its own it has no name, as `getByRole("listitem", { name })` sees it. An Android switch or checkbox that `getByRole` names by its row ([Settings rows](locators.md#settings-rows)) has no name of its own here: assert it with `toHaveCount(1)` on `getByRole("switch", { name })` instead.
 
 ```typescript
 await expect(device.getByRole("button")).toHaveAccessibleName("Submit form");

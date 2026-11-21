@@ -114,6 +114,21 @@ describe("Orientation", () => {
     expect(orientation).toBe("portrait");
     await expectShape(device, "portrait");
   });
+
+  // setOrientation() resolves once the screen has turned, so the screen read
+  // straight after it already has the new shape: no polling. Android only,
+  // as expectShape above.
+  describe("read straight after the turn", () => {
+    test.use({ trace: "off" });
+
+    test("the screen already has the new shape", async ({ device }) => {
+      test.skip(device.platform !== "android", "some iOS simulator runtimes turn the device but not the app");
+      for (const wanted of ["landscape", "portrait", "landscape", "portrait"] as const) {
+        await device.setOrientation(wanted);
+        expect(await screenShape(device)).toBe(wanted);
+      }
+    });
+  });
 });
 
 // ─── Keyboard ───

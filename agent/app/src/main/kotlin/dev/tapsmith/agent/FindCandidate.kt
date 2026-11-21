@@ -26,6 +26,12 @@ internal interface FindCandidate {
 
     /** The text of the descendants a user can see ([FindRules.descendantTextParts]). */
     fun descendantTextParts(): List<String>
+
+    /** The name and label a control with none of its own takes from its row ([RowName.of]), or null. */
+    fun rowName(): RowName?
+
+    /** The class of the element's parent, or null: a listitem is a list's child. */
+    fun parentClassName(): String?
 }
 
 /**

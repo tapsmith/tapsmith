@@ -60,6 +60,14 @@ class LocatorConformanceTest {
         override fun labeledByText(): CharSequence? = labeledBy
 
         override fun descendantTextParts(): List<String> = childTexts
+
+        private val rowName =
+            c.optStringOrNull("rowName")?.let { RowName(it, c.optStringOrNull("rowLabel") ?: it) }
+        private val parentClass = c.optStringOrNull("parentType")
+
+        override fun rowName(): RowName? = rowName
+
+        override fun parentClassName(): String? = parentClass
     }
 
     private fun regexOf(q: JSONObject): TextRegex =
@@ -140,6 +148,21 @@ class LocatorConformanceTest {
                 }
             }
         assertEquals(emptyList<String>(), failures)
+    }
+
+    @Test
+    fun `the role a find reports for a layout is listitem only as a list's row`() {
+        // ElementInfo.role (toHaveRole) and getByRole("listitem") agree.
+        for (layout in listOf("android.widget.LinearLayout", "android.widget.RelativeLayout", "android.widget.FrameLayout")) {
+            for (list in listOf("android.widget.ListView", "android.widget.GridView", "androidx.recyclerview.widget.RecyclerView")) {
+                assertEquals("$layout in $list", "listitem", ElementFinder.roleForClass(layout) { list })
+            }
+            assertEquals("$layout in a layout", "", ElementFinder.roleForClass(layout) { "android.widget.LinearLayout" })
+            assertEquals("$layout at the root", "", ElementFinder.roleForClass(layout) { null })
+        }
+        // Other classes keep their role without reading the parent.
+        assertEquals("button", ElementFinder.roleForClass("android.widget.Button") { error("parent read") })
+        assertEquals("", ElementFinder.roleForClass("android.view.View") { error("parent read") })
     }
 
     @Test
