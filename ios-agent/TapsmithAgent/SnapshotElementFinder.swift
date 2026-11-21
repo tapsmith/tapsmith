@@ -1958,8 +1958,6 @@ class SnapshotElementFinder {
         return true
     }
 
-    /// Whether two frames are one target as the SDK's same-target collapse
-    /// keys it: equal once truncated to whole points, like ElementBounds.
     /// Whether a generic wrapper's label is only a name-only child's name on
     /// the same bounds (React Native's `<Image accessibilityLabel>`, an Other
     /// over the Image): getByText doesn't match it either, so a labelled
@@ -1979,6 +1977,8 @@ class SnapshotElementFinder {
         }
     }
 
+    /// Whether two frames are one target as the SDK's same-target collapse
+    /// keys it: equal once truncated to whole points, like ElementBounds.
     static func sameTarget(_ a: CGRect, _ b: CGRect) -> Bool {
         func bounds(_ r: CGRect) -> [Int] {
             [Int(r.origin.x), Int(r.origin.y), Int(r.origin.x + r.width), Int(r.origin.y + r.height)]
