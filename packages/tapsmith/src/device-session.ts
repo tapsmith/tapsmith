@@ -446,8 +446,12 @@ async function installAppUnderTest(
   try {
     artifact = resolveAppArtifact(config);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    phase('install', 'fail', message);
+    // Started first, as every other install failure is: a step that fails
+    // without starting leaves the device step open, and the sequential CLI
+    // would report the healthy device as failing to set up.
+    const configured = (config.platform === 'ios' ? config.app : config.apk) ?? '';
+    phase('install', 'start', `checking ${path.basename(configured)}`);
+    phase('install', 'fail', err instanceof Error ? err.message : String(err));
     throw err;
   }
 

@@ -1266,7 +1266,12 @@ describe('the app build the config names', () => {
     expect(installedApkMatches).not.toHaveBeenCalled();
     expect(mocks.devices[0].installApk).not.toHaveBeenCalled();
     expect(mocks.devices[0]._startAgent).not.toHaveBeenCalled();
-    expect(seen).toEqual([['install', 'fail', expect.stringContaining('App APK not found at')]]);
+    // Started, then failed: a failure with no start would leave the CLI's
+    // device step open, and the CLI would blame the device.
+    expect(seen).toEqual([
+      ['install', 'start', 'checking app-releasee.apk'],
+      ['install', 'fail', expect.stringContaining('App APK not found at')],
+    ]);
   });
 
   it('refuses a missing `apk` whether or not the app is installed, and with --force-install', async () => {
