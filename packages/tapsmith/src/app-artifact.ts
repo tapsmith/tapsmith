@@ -14,7 +14,7 @@ import type { TapsmithConfig } from './config.js';
  * Throws when the configured path does not exist. A path to nothing — a typo,
  * a CI artifact step that failed, the wrong flavor directory — must stop the
  * run before the install check: otherwise an app already on the device
- * stands in for the missing build and the run passes against it (PILOT-1381).
+ * stands in for the missing build and the run passes against it.
  */
 export function resolveAppArtifact(config: Pick<TapsmithConfig, 'platform' | 'apk' | 'app' | 'rootDir'>): string | undefined {
   const ios = config.platform === 'ios';
