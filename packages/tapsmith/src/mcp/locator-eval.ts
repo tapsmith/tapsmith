@@ -99,10 +99,10 @@ const NATIVE_LOCATOR_METHODS: Record<string, Param[]> = {
 
 const WEBVIEW_GETTERS: Record<string, Param[]> = {
   getByText: [text(), { type: { options: { exact: 'boolean' } }, optional: true }],
-  getByRole: [text(), { type: { options: { name: 'string' } }, optional: true }],
+  getByRole: [text(), { type: { options: { name: 'textOrRegex', exact: 'boolean', includeHidden: 'boolean' } }, optional: true }],
   getByPlaceholder: [text()],
   getByTestId: [text()],
-  getByLabel: [text()],
+  getByLabel: [textOrRegex(), { type: { options: { exact: 'boolean' } }, optional: true }],
   locator: [text()],
 };
 

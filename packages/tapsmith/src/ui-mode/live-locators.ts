@@ -11,7 +11,7 @@
 import type { TapsmithGrpcClient } from '../grpc-client.js';
 import type { WebViewHandle } from '../webview-handle.js';
 import { getNodeBounds, type Bounds, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
-import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
+import { exactWebViewVariant, generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { agentValidatedSuggestions, IOS_CHUNK_SIZE } from '../mcp/agent-suggestions.js';
 import { sdkDeviceFor, withEvaluatedLocator } from '../mcp/sdk-device.js';
 
@@ -119,12 +119,29 @@ export async function suggestLiveLocators(
     let found = false;
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
       if (options.superseded?.()) break;
-      const result = await webViewMatchesOf(client, serial, candidate.code, options);
+      let result = await webViewMatchesOf(client, serial, candidate.code, options);
       if (result.error) { note = result.error; break; }
       if (result.count > 0 && !(pickedPlace && result.matches.every((m) => m.bounds))) unplaced = true;
-      const index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
+      let index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
       if (index < 0) continue;
       found = true;
+      // A name or label matches a substring: the whole one may pin the pick
+      // ("Save" beside "Save draft"), as the Playground's suggestions do.
+      const exact = result.count > 1 ? exactWebViewVariant(candidate.code) : null;
+      if (exact) {
+        const pinned = await webViewMatchesOf(client, serial, exact, options);
+        if (pinned.count === 1 && pinned.matches[0] && isPickedWebViewElement(pinned.matches[0], node)) {
+          suggestions.push({ code: exact, label: candidate.label });
+          continue;
+        }
+        // The page may have changed since the first read: a position must
+        // come from the matches as they are now.
+        if (options.superseded?.()) break;
+        result = await webViewMatchesOf(client, serial, candidate.code, options);
+        if (result.error) { note = result.error; break; }
+        index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
+        if (index < 0) continue;
+      }
       if (result.count === 1) {
         suggestions.push({ code: candidate.code, label: candidate.label });
       } else if (

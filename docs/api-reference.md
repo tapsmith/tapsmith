@@ -3560,18 +3560,30 @@ Playwright-style locators for DOM elements, mirroring the native `device.getBy*`
 | Method | Matches |
 |---|---|
 | `webview.getByText(text, { exact? })` | Leaf elements by visible text (substring by default; unlike `device.getByText`, case-sensitive) |
-| `webview.getByRole(role, { name? })` | ARIA/HTML role, optionally filtered by accessible name. Like Playwright's, skips elements hidden from assistive technology (`display: none`, `visibility: hidden`, `aria-hidden`) |
+| `webview.getByRole(role, { name?, exact?, includeHidden? })` | ARIA role, optionally filtered by accessible name, as Playwright's `page.getByRole` matches them (below) |
 | `webview.getByPlaceholder(text)` | `placeholder` attribute |
 | `webview.getByTestId(testId)` | `data-testid` attribute |
-| `webview.getByLabel(text)` | `aria-label` attribute |
+| `webview.getByLabel(text, { exact? })` | Label text, as Playwright's `page.getByLabel` reads it: the element's `aria-labelledby` targets, else its `aria-label`, else, for a form control, its `<label>`s (`for=` or wrapping). `text` may be a RegExp |
 
 ```typescript
 await webview.getByRole("button", { name: "Login" }).click()
+await webview.getByLabel("Email").fill("user@test.com")
+await webview.getByRole("textbox", { name: "Password" }).fill("secret123")
 await webview.getByPlaceholder("Enter your email").fill("user@test.com")
 await expect(webview.getByText("Welcome back")).toBeVisible()
 ```
 
-**Shadow DOM.** As in Playwright, every WebView locator, and the string-selector methods (`webview.click(css)`, …), also finds elements inside open shadow roots, where Ionic, Stencil, Lit and Shoelace render their native controls: `webview.getByRole("button", { name: "Sign in" })` finds the `<button>` inside an `<ion-button>Sign in</ion-button>`. Matches come in shadow-including document order (an element, then its shadow root's contents, then its children). Playwright lists a tree's own matches before its shadow roots', so when a locator matches in both, `.first()` and `.nth()` can differ from Playwright's. Prefer a role or name to a position there. A `getByRole` name reads text slotted into the component, and `aria-labelledby` and `<label for>` are looked up in the element's own shadow tree. Elements inside closed shadow roots cannot be found. An attribute a component keeps on its host and also copies onto its inner control (a `placeholder`, a `data-testid`) matches both elements, as in Playwright: narrow with `getByRole(…)` or `.first()`. A CSS selector is matched within each tree separately, so its combinators do not cross a shadow boundary: `webview.locator("ion-button button")` finds nothing, while `webview.locator("button")` finds the button inside every `ion-button`.
+**Roles and names.** `webview.getByRole` follows Playwright's rules, so a locator ported from a Playwright web test finds the same elements:
+
+- The role is the element's `role` attribute (its first ARIA role) or its tag's implicit ARIA role: `<input>`, `<input type="email">` and `<textarea>` are `textbox`, `<input type="search">` is `searchbox`, `<input type="number">` is `spinbutton`, `<img alt="">` is `presentation`, a `<button role="tab">` is a `tab` and not a `button`. Role names are case-insensitive. Tapsmith's native names also work: `textfield` finds any `textbox`, `searchbox` or `spinbutton`, and `image` finds an `img`. Any other role that is not an ARIA role throws at once, listing the roles it takes.
+- The accessible name follows the accessible name computation: `aria-labelledby` (falling through when its targets have no text), `aria-label`, a form control's `<label>`s, then a button's, link's, heading's or tab's content, then `title`. A text field's `title` outranks its `placeholder`. A `dialog`, `list` or `textbox` is not named by its content.
+- `name` matches as a case-insensitive substring by default, with whitespace normalized; `exact: true` matches the whole name case-sensitively; a RegExp is tested against the name. So `{ name: "Sign in" }` also finds "Sign in with Google": pass `exact: true` to tell them apart.
+- Elements hidden from assistive technology (`display: none`, `visibility: hidden`, `aria-hidden`, the content of a closed `<details>`) are skipped unless `includeHidden: true`. A dropdown `<select>`'s options are not hidden, so `webview.getByRole("option", { name: "Red" })` finds one.
+- A field inside a label or a name contributes its value to that name, as in Playwright, except a password field, whose value never enters a name (names are recorded in traces).
+
+`webview.getByLabel` matches its text the same way (substring by default, `exact`, or a RegExp), and finds hidden elements too, as in Playwright. On an Ionic page, `webview.getByLabel("Email")` and `webview.getByRole("textbox", { name: "Email" })` both find the `<input>` inside `<ion-input label="Email">`. `getByRole` does not take Playwright's state options (`checked`, `level`, `pressed`, …) for WebView locators: passing one throws.
+
+**Shadow DOM.** As in Playwright, every WebView locator, and the string-selector methods (`webview.click(css)`, …), also finds elements inside open shadow roots, where Ionic, Stencil, Lit and Shoelace render their native controls: `webview.getByRole("button", { name: "Sign in" })` finds the `<button>` inside an `<ion-button>Sign in</ion-button>`. Matches come in shadow-including document order (an element, then its shadow root's contents, then its children). Playwright lists a tree's own matches before its shadow roots', so when a locator matches in both, `.first()` and `.nth()` can differ from Playwright's. Prefer a role or name to a position there. A `getByRole` name reads text slotted into the component, and `aria-labelledby` and `<label for>` are looked up in the element's own shadow tree, as are `getByLabel`'s. Elements inside closed shadow roots cannot be found. An attribute a component keeps on its host and also copies onto its inner control (a `placeholder`, a `data-testid`) matches both elements, as in Playwright: narrow with `getByRole(…)` or `.first()`. A CSS selector is matched within each tree separately, so its combinators do not cross a shadow boundary: `webview.locator("ion-button button")` finds nothing, while `webview.locator("button")` finds the button inside every `ion-button`.
 
 #### `webview.close(): Promise<void>`
 

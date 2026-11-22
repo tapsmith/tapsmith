@@ -1,4 +1,4 @@
-import { Device } from "tapsmith"
+import type { Device, WebViewHandle } from "tapsmith"
 
 export class WebViewScreen {
   constructor(private device: Device) {}
@@ -15,4 +15,15 @@ export class WebViewScreen {
    * the browser is up; the screen's own Done button otherwise.
    */
   get inAppBrowserDoneButton() { return this.device.getByRole("button", { name: "Done", exact: true }) }
+}
+
+/** The test app's /webview page, inside the WebView. */
+export class WebViewPage {
+  constructor(private webview: WebViewHandle) {}
+
+  /** The email <input>, by its <label for="email">. */
+  get emailByLabel() { return this.webview.getByLabel("Email") }
+  /** The same <input>, by Playwright's ARIA role and its label as its name. */
+  get emailTextbox() { return this.webview.getByRole("textbox", { name: "Email", exact: true }) }
+  get passwordByLabel() { return this.webview.getByLabel("Password") }
 }

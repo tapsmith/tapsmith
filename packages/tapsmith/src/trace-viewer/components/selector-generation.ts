@@ -1,8 +1,9 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
-import { getNodeRole, isLabelField, webViewAriaLabel, WEBVIEW_TAG_TO_ROLE, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
+import { getNodeRole, isLabelField, webViewAccessibleName, webViewLabels, legacyWebViewTagRole, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
 import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
+import { webViewRolesFor } from '../../webview-dom-js.js';
 import { isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { resourceIdEntryName } from './resource-id.js';
 import { placeholderName, textIsFieldValue } from './selector-matching.js';
@@ -54,22 +55,27 @@ function isIos(node: HierarchyNode): boolean {
 
 // ─── WebView Role Mapping ───
 
+/**
+ * Implicit ARIA roles worth suggesting a getByRole for: controls and the
+ * structure a test names. A `<p>` (paragraph) or `<div>` (generic) is not.
+ */
+const SUGGESTED_IMPLICIT_ROLES = new Set(['button', 'link', 'textbox', 'searchbox', 'spinbutton', 'checkbox', 'radio',
+  'slider', 'combobox', 'listbox', 'option', 'heading', 'img', 'list', 'listitem', 'progressbar', 'meter', 'dialog',
+  'switch', 'tab', 'menuitem', 'navigation', 'table', 'row', 'cell', 'columnheader', 'rowheader']);
+
 function getWebViewRole(node: HierarchyNode): string | null {
-  const explicitRole = node.attributes.get('webview-role');
-  if (explicitRole) return explicitRole;
-
-  const tag = node.attributes.get('webview-tag') ?? '';
-  const inputType = node.attributes.get('webview-type') ?? '';
-
-  if (tag === 'input') {
-    if (inputType === 'checkbox') return 'checkbox';
-    if (inputType === 'radio') return 'radio';
-    if (inputType === 'range') return 'slider';
-    if (inputType === 'button' || inputType === 'submit' || inputType === 'reset') return 'button';
-    return 'textfield';
+  // The role the page computed (PILOT-1361), in ARIA's spelling, as
+  // webview.getByRole matches it.
+  const computed = node.attributes.get('webview-aria-role');
+  if (computed !== undefined) {
+    if (!computed || ['none', 'presentation', 'generic'].includes(computed)) return null;
+    return node.attributes.get('webview-role') || SUGGESTED_IMPLICIT_ROLES.has(computed) ? computed : null;
   }
+  // A dump from before: a role attribute getByRole takes.
+  const explicitRole = node.attributes.get('webview-role');
+  if (explicitRole) return webViewRolesFor(explicitRole) ? explicitRole : null;
 
-  return WEBVIEW_TAG_TO_ROLE[tag] ?? null;
+  return legacyWebViewTagRole(node);
 }
 
 // ─── Selector Generation ───
@@ -144,6 +150,20 @@ export function generateSelectors(node: HierarchyNode): GeneratedSelector[] {
   return generateNativeSelectors(node);
 }
 
+/**
+ * The `{ exact: true }` variant of a generated webview.getByRole-with-name or
+ * webview.getByLabel suggestion, which match a case-insensitive substring by
+ * default (as in Playwright), or null when there is none to try. The live
+ * picker and the offline Playground both pin an ambiguous one with it.
+ */
+export function exactWebViewVariant(code: string): string | null {
+  const role = /^webview\.getByRole\(("(?:[^"\\]|\\.)*"), \{ name: ("(?:[^"\\]|\\.)*") \}\)$/.exec(code);
+  if (role) return `webview.getByRole(${role[1]}, { name: ${role[2]}, exact: true })`;
+  const label = /^webview\.getByLabel\(("(?:[^"\\]|\\.)*")\)$/.exec(code);
+  if (label) return `webview.getByLabel(${label[1]}, { exact: true })`;
+  return null;
+}
+
 // Priority follows Testing Library order:
 // Role → LabelText → Placeholder → Text → TestID → CSS
 function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
@@ -151,14 +171,13 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
   const tag = node.attributes.get('webview-tag') ?? '';
   const id = node.attributes.get('webview-id') ?? '';
   const text = getText(node);
-  const ariaLabel = getContentDesc(node);
   const placeholder = getHint(node);
   const testId = node.attributes.get('webview-testid') ?? '';
   // getByRole skips what assistive technology does not see.
   const role = node.attributes.get('webview-a11y-hidden') === 'true' ? null : getWebViewRole(node);
 
   // 1. Role + name (highest priority)
-  const accessibleName = ariaLabel || text || placeholder;
+  const accessibleName = webViewAccessibleName(node);
   if (role && accessibleName) {
     selectors.push({
       code: `webview.getByRole("${escapeJsString(role)}", { name: "${escapeJsString(accessibleName)}" })`,
@@ -176,12 +195,14 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
     });
   }
 
-  // 3. Label (aria-label) — Testing Library getByLabelText. webview.getByLabel
-  // matches the aria-label attribute only, not a <label> or aria-labelledby.
-  const ariaLabelAttr = webViewAriaLabel(node);
-  if (ariaLabelAttr) {
+  // 3. Label — Testing Library getByLabelText: aria-labelledby, aria-label
+  // or a <label>, as webview.getByLabel matches it.
+  const label = webViewLabels(node).map((l) => l.trim().replace(/\s+/g, ' ')).find(Boolean);
+  // Not when an element the dump left out (a hidden page) has the label too:
+  // the page's getByLabel finds it, so the Playground cannot vouch for it.
+  if (label && node.attributes.get('webview-label-elsewhere') !== 'true') {
     selectors.push({
-      code: `webview.getByLabel("${escapeJsString(ariaLabelAttr)}")`,
+      code: `webview.getByLabel("${escapeJsString(label)}")`,
       label: 'Label',
       priority: 3,
     });

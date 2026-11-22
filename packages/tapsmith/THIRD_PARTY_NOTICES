@@ -1,0 +1,49 @@
+Tapsmith third-party notices
+============================
+
+Tapsmith is licensed under the Apache License, Version 2.0 (see LICENSE in
+this package). It includes code derived from the third-party project below,
+which is also licensed under the Apache License, Version 2.0, the same terms
+as the copy in LICENSE.
+
+
+Playwright
+----------
+
+Source:  https://github.com/microsoft/playwright (ported from v1.62.0)
+License: Apache License, Version 2.0
+         https://github.com/microsoft/playwright/blob/v1.62.0/LICENSE
+
+Files containing code derived from Playwright:
+
+  src/webview-dom-js.ts (in the published package: dist/webview-dom-js.js;
+  the role list is also bundled into dist/trace-viewer/ and dist/ui-mode/)
+    - the ARIA role list (ARIA_ROLES), from Playwright's validRoles;
+    - the "Roles, accessible names and labels, as Playwright computes them"
+      section of the in-page WebView helpers: implicit and explicit ARIA
+      roles, hidden-from-accessibility checks, the accessible name
+      computation, label texts, and whitespace and text matching.
+  These are derived from Playwright's packages/injected/src/roleUtils.ts and
+  packages/injected/src/selectorUtils.ts (Copyright (c) Microsoft
+  Corporation).
+
+These files were modified by the Tapsmith contributors: the code was
+translated from TypeScript modules into one script evaluated inside a WebView
+over the Chrome DevTools Protocol (Android) and the WebKit Inspector protocol
+(iOS), adapted to Tapsmith's locator options, and some features were left out
+(CSS ::before/::after content, aria-owns and aria-describedby).
+
+Playwright's LICENSE carries these attribution notices:
+
+  Portions Copyright (c) Microsoft Corporation.
+  Portions Copyright 2017 Google Inc.
+
+Playwright's NOTICE file, reproduced verbatim:
+
+-------------------------------------------------------------------------------
+Playwright
+Copyright (c) Microsoft Corporation
+
+This software contains code derived from the Puppeteer project (https://github.com/puppeteer/puppeteer),
+available under the Apache 2.0 license (https://github.com/puppeteer/puppeteer/blob/master/LICENSE).
+-------------------------------------------------------------------------------

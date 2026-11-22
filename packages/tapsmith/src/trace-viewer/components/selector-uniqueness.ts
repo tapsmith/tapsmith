@@ -10,7 +10,7 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes, getNodeBounds } from './selector-matching.js';
 import type { GeneratedSelector } from './selector-generation.js';
-import { glyphAware, roleNameFor } from './selector-generation.js';
+import { glyphAware, roleNameFor, exactWebViewVariant } from './selector-generation.js';
 import { escapeJsString } from '../../js-string-escape.js';
 import { fullResourceIdUpgrade } from './resource-id.js';
 
@@ -112,7 +112,8 @@ function tryExactRoleNameUpgrade(
   node: HierarchyNode,
 ): GeneratedSelector | null {
   const parsed = parseSelectorString(s.code);
-  if (!parsed || parsed.type !== 'role' || !parsed.name || parsed.exact) return null;
+  if (!parsed || parsed.type === 'wv-role' || parsed.type === 'wv-label') return tryExactWebViewUpgrade(s, roots, node);
+  if (parsed.type !== 'role' || !parsed.name || parsed.exact) return null;
   // The suggested name may be the full name less its icon glyphs, which an
   // exact match never equals (PILOT-659): fall back to the full name.
   const names = [parsed.name, fullAccessibleName(node)].filter((n, i, all) => n && all.indexOf(n) === i);
@@ -122,6 +123,16 @@ function tryExactRoleNameUpgrade(
     if (uniquelyMatches(upgraded, roots, node)) return { ...s, code: upgraded, priority: glyphAware(s.priority, name) };
   }
   return null;
+}
+
+/** An ambiguous webview.getByRole name or getByLabel text → try the { exact: true } variant. */
+function tryExactWebViewUpgrade(
+  s: GeneratedSelector,
+  roots: HierarchyNode[],
+  node: HierarchyNode,
+): GeneratedSelector | null {
+  const upgraded = exactWebViewVariant(s.code);
+  return upgraded && uniquelyMatches(upgraded, roots, node) ? { ...s, code: upgraded } : null;
 }
 
 /**

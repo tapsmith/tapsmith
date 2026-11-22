@@ -1,10 +1,11 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { androidResourceIdMatches } from './resource-id.js';
-import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
+import { getNodeRole, isComposeRoleCarrier, isLabelField, getNodeBounds, webViewAccessibleName, webViewHasRole, webViewLabels, webViewTextMatches } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
 import { iosStaticTextCount, iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
+import { unknownWebViewRoleMessage } from '../../webview-dom-js.js';
 import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES, iosBackButtonName } from '../../accessible-name.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
@@ -22,6 +23,8 @@ export interface ParsedSelector {
   regex?: ParsedRegex
   /** getByRole `{ name: RegExp }`. */
   nameRegex?: ParsedRegex
+  /** webview.getByRole `{ includeHidden: true }`. */
+  includeHidden?: boolean
   /** getByRole's state filters. Absent means "either". */
   checked?: boolean
   disabled?: boolean
@@ -60,8 +63,8 @@ const OPTIONS = String.raw`((?:[^{}"'/]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|${RE
 const DEVICE_RE = new RegExp(
   String.raw`^device\.getBy(\w+)\(\s*(?:${DQ}|${SQ}|${REGEX_SOURCE})(?:\s*,\s*\{${OPTIONS}\})?\s*\)`,
 );
-// Matches: webview.getByText("value"), webview.getByRole("role", { name: "n" })
-// (same groups; a RegExp is refused — the WebView engine doesn't take one).
+// Matches: webview.getByText("value"), webview.getByRole("role", { name: "n" }),
+// webview.getByLabel(/re/) (same groups).
 const WEBVIEW_GETBY_RE = new RegExp(
   String.raw`^webview\.getBy(\w+)\(\s*(?:${DQ}|${SQ}|${REGEX_SOURCE})(?:\s*,\s*\{${OPTIONS}\})?\s*\)`,
 );
@@ -81,6 +84,7 @@ interface ParsedOptions {
   name?: string
   nameRegex?: ParsedRegex | null
   exact?: boolean
+  includeHidden?: boolean
   states: RoleStates
   /** Every option key given, so a getter can refuse the ones it does not take. */
   keys: Set<string>
@@ -117,11 +121,12 @@ function parseGetByOptions(blob: string | undefined): ParsedOptions | { error: s
     // A `name` the name pattern above could not read: a template literal,
     // an expression, a second name.
     if (key === 'name') return { error: 'cannot read the name option (use one quoted string or a RegExp literal)' };
-    if (key !== 'exact' && !(ROLE_STATE_KEYS as readonly string[]).includes(key)) {
+    if (key !== 'exact' && key !== 'includeHidden' && !(ROLE_STATE_KEYS as readonly string[]).includes(key)) {
       return { error: `unsupported option "${key}"` };
     }
     if (value !== 'true' && value !== 'false') return { error: `option "${key}" must be true or false, got ${value}` };
     if (key === 'exact') parsed.exact = value === 'true';
+    else if (key === 'includeHidden') parsed.includeHidden = value === 'true';
     else parsed.states[key as RoleStateKey] = value === 'true';
     parsed.keys.add(key);
   }
@@ -198,7 +203,8 @@ const DEVICE_OPTION_KEYS: Record<string, readonly string[]> = {
 };
 const WEBVIEW_OPTION_KEYS: Record<string, readonly string[]> = {
   Text: ['exact'],
-  Role: ['name'],
+  Role: ['name', 'exact', 'includeHidden'],
+  Label: ['exact'],
 };
 // Matches: webview.locator("css-selector") — groups: 1 = dq value, 2 = sq value
 const WEBVIEW_LOCATOR_RE = /^webview\.locator\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)/;
@@ -321,13 +327,18 @@ export function parseSelectorString(input: string): ParsedSelector | null {
     // WebView getBy*: webview.getByRole("button", { name: "Login" })
     case 'wv-getby': {
       const method = match[1];
-      if (match[4] !== undefined) return null;
-      const value = pick(match[2], match[3]);
       const options = getterOptions('webview', method, match[6]);
       if ('error' in options) return null;
-      const { name, nameRegex, exact } = options;
-      if (nameRegex !== undefined) return null;
-      const sel = mapWebViewMethod(method, value, name, exact);
+      const { name, nameRegex, exact, includeHidden } = options;
+      if (nameRegex === null) return null; // a malformed RegExp
+      let regex: ParsedRegex | undefined;
+      if (match[4] !== undefined) {
+        // Only getByLabel takes a RegExp as its argument.
+        const parsed = method === 'Label' ? parseRegex(match[4], match[5]) : null;
+        if (!parsed) return null;
+        regex = parsed;
+      }
+      const sel = mapWebViewMethod(method, pick(match[2], match[3]), { name, nameRegex, exact, includeHidden, regex });
       if (sel) sel.index = index;
       return sel;
     }
@@ -398,12 +409,24 @@ function mapDeviceRegexMethod(method: string, regex: ParsedRegex): ParsedSelecto
   }
 }
 
-function mapWebViewMethod(method: string, value: string, name?: string, exact?: boolean): ParsedSelector | null {
+function mapWebViewMethod(
+  method: string, value: string,
+  o: { name?: string; nameRegex?: ParsedRegex; exact?: boolean; includeHidden?: boolean; regex?: ParsedRegex },
+): ParsedSelector | null {
+  const { name, nameRegex, exact, includeHidden, regex } = o;
   switch (method) {
     // webview.getByText is substring by default too (webview-handle.ts).
     case 'Text': return exact ? { type: 'wv-text', value } : { type: 'wv-text-contains', value };
-    case 'Role': return { type: 'wv-role', value, name };
-    case 'Label': return { type: 'wv-label', value };
+    // Role names and labels match as Playwright's do (PILOT-1361): a
+    // case-insensitive substring unless { exact: true }; a RegExp ignores exact.
+    case 'Role':
+      return {
+        type: 'wv-role', value,
+        ...(nameRegex ? { nameRegex } : name !== undefined ? { name, ...(exact ? { exact: true } : {}) } : {}),
+        ...(includeHidden ? { includeHidden: true } : {}),
+      };
+    case 'Label':
+      return regex ? { type: 'wv-label', value: '', regex } : { type: 'wv-label', value, ...(exact ? { exact: true } : {}) };
     case 'Placeholder': return { type: 'wv-placeholder', value };
     case 'TestId': return { type: 'wv-testid', value };
     default: return null;
@@ -802,7 +825,6 @@ function webViewNodeMatchesSelector(node: HierarchyNode, selector: ParsedSelecto
   const tag = node.attributes.get('webview-tag') ?? '';
   const id = node.attributes.get('webview-id') ?? '';
   const text = node.attributes.get('text') ?? '';
-  const ariaLabel = node.attributes.get('content-desc') ?? '';
   const placeholder = node.attributes.get('hint') ?? '';
   const testId = node.attributes.get('webview-testid') ?? '';
   const cssClass = node.attributes.get('webview-class') ?? '';
@@ -814,16 +836,21 @@ function webViewNodeMatchesSelector(node: HierarchyNode, selector: ParsedSelecto
       return text.includes(selector.value);
     case 'wv-role': {
       // getByRole skips what assistive technology does not see.
-      if (node.attributes.get('webview-a11y-hidden') === 'true') return false;
-      const role = getNodeRole(node);
-      if (role !== selector.value) return false;
-      if (selector.name) {
-        return (ariaLabel || text || placeholder) === selector.name;
-      }
+      if (!selector.includeHidden && node.attributes.get('webview-a11y-hidden') === 'true') return false;
+      if (!webViewHasRole(node, selector.value)) return false;
+      const name = webViewAccessibleName(node, selector.includeHidden === true);
+      if (selector.nameRegex) return toJsRegExp(selector.nameRegex).test(name);
+      if (selector.name !== undefined) return webViewTextMatches(name, selector.name, selector.exact === true);
       return true;
     }
-    case 'wv-label':
-      return webViewAriaLabel(node) === selector.value;
+    case 'wv-label': {
+      const labels = webViewLabels(node);
+      if (selector.regex) {
+        const re = toJsRegExp(selector.regex);
+        return labels.some((label) => re.test(label));
+      }
+      return labels.some((label) => webViewTextMatches(label, selector.value, selector.exact === true));
+    }
     case 'wv-placeholder':
       return placeholder === selector.value;
     case 'wv-testid':
@@ -1008,12 +1035,14 @@ function nodeHasRole(node: HierarchyNode, role: string, named: boolean, parentCl
 }
 
 /**
- * Why a parsed locator would throw when the test builds it, or `null`. Today
- * that is a native getByRole role the runtime rejects; WebView
- * roles are DOM ARIA roles and are not checked.
+ * Why a parsed locator would throw when the test builds it, or `null`: a
+ * getByRole role the runtime rejects, native or WebView (which takes ARIA
+ * roles and Tapsmith's textfield and image).
  */
 export function parsedSelectorError(selector: ParsedSelector): string | null {
-  return selector.type === 'role' ? unknownRoleMessage(selector.value) : null;
+  if (selector.type === 'role') return unknownRoleMessage(selector.value);
+  if (selector.type === 'wv-role') return unknownWebViewRoleMessage(selector.value);
+  return null;
 }
 
 export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelector): HierarchyNode[] {
@@ -1069,7 +1098,10 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   }
 
   const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
-  return applyPositionalIndex(collapseSameTargetNodes(kept), selector.index);
+  // A WebView's nodes are its DOM elements, each one the page counts, never
+  // one target exposed twice: only native matches collapse.
+  const distinct = selector.type.startsWith('wv-') ? kept : collapseSameTargetNodes(kept);
+  return applyPositionalIndex(distinct, selector.index);
 }
 
 // Geometry lives with the hierarchy model (no matching); re-exported for

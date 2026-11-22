@@ -261,7 +261,10 @@ await webview.getByPlaceholder("Enter your email").fill("user@test.com")
 await expect(webview.getByText("Welcome back")).toBeVisible()
 await expect(webview.getByTestId("status")).toHaveText("Ready")
 await expect(webview.getByLabel("Close dialog")).toBeVisible()
+await webview.getByRole("textbox", { name: "Email" }).fill("user@test.com")
 ```
+
+`getByRole` and `getByLabel` follow Playwright's rules, so a locator from a Playwright web test of the same pages finds the same element: roles are ARIA roles (`textbox`, `searchbox`, `checkbox`, …, plus Tapsmith's `textfield`), names follow the accessible name computation, and `getByLabel` reads `<label for>`, a wrapping `<label>`, `aria-labelledby` and `aria-label`. A `name` or label is a case-insensitive substring unless you pass `exact: true`. See [Roles and names](api-reference.md#webviewgetbytexttext-options-and-friends) in the API reference.
 
 Locators also find elements inside open shadow roots, as Playwright's do, so they work on Ionic, Stencil, Lit and Shoelace components: `webview.getByRole("button", { name: "Sign in" })` finds the native `<button>` inside `<ion-button>Sign in</ion-button>`. Closed shadow roots stay out of reach, and a CSS selector's combinators don't cross a shadow boundary (`webview.locator("button")` finds the button inside an `ion-button`, `webview.locator("ion-button button")` does not). See [Shadow DOM](api-reference.md#webviewgetbytexttext-options-and-friends) in the API reference.
 

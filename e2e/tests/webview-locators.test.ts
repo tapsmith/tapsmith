@@ -4,6 +4,7 @@
  */
 import { beforeAll, describe, expect, test } from "tapsmith"
 import { openScreen } from "../utils/app-reset.js"
+import { WebViewPage } from "../screens/webview.screen.js"
 
 describe("WebView locator playground parity", () => {
   test.use({ timeout: 90_000 })
@@ -109,6 +110,15 @@ describe("WebView locator playground parity", () => {
     const webview = await device.webview()
     await expect(webview.locator("h1.header")).toHaveText("WebView Test Page")
     await expect(webview.locator("p.description")).toContainText("CDP")
+    await device.native()
+  })
+
+  test("getByLabel and getByRole textbox find a field by its <label>, as Playwright's do", async ({ device }) => {
+    const page = new WebViewPage(await device.webview())
+    await page.emailByLabel.fill("label@test.com")
+    await expect(page.emailTextbox).toHaveValue("label@test.com")
+    await page.passwordByLabel.fill("labelpass")
+    await expect(page.passwordByLabel).toHaveValue("labelpass")
     await device.native()
   })
 })

@@ -12,11 +12,14 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
 import type { TapsmithGrpcClient } from '../grpc-client.js';
 import { WebViewHandle } from '../webview-handle.js';
+import type { WebViewLocator } from '../webview-locator.js';
 import { isStrictModeViolation } from '../element-handle.js';
 import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
-import { findMatchingNodes, parseSelectorString } from '../trace-viewer/components/selector-matching.js';
+import { findMatchingNodes, parsedSelectorError, parseSelectorString } from '../trace-viewer/components/selector-matching.js';
 import { pickNodeAt } from '../trace-viewer/components/pick-node.js';
+import { withDomHelpers } from '../webview-dom-js.js';
+import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
 
 const SHADOW_PAGE = `<!DOCTYPE html><html><body>
   <button id="light">Light</button>
@@ -203,11 +206,14 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
     expect(await handle.getAttribute('input', 'placeholder')).toBe('Your nickname');
   });
 
-  it('getByRole filters on an explicit empty name', async () => {
+  it('getByRole filters on an explicit empty name, as Playwright does', async () => {
     const { handle } = handleOn('<!DOCTYPE html><body><button></button><button>X</button>'
-      + '<div role="banner"></div><div role="banner">Y</div></body>');
-    expect(await handle.getByRole('button', { name: '' }).count()).toBe(1);
-    expect(await handle.getByRole('banner', { name: '' }).count()).toBe(1);
+      + '<div role="banner" aria-label="Y"></div><div role="banner">Y</div></body>');
+    // A substring match: every name contains "". Exact, only the nameless.
+    expect(await handle.getByRole('button', { name: '' }).count()).toBe(2);
+    expect(await handle.getByRole('button', { name: '', exact: true }).count()).toBe(1);
+    // A banner is not named by its content.
+    expect(await handle.getByRole('banner', { name: '', exact: true }).count()).toBe(1);
     expect(await handle.getByRole('banner', { name: 'Y' }).count()).toBe(1);
   });
 
@@ -341,7 +347,7 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
       expect(suggestions).toEqual([
         'webview.getByRole("button", { name: "Sign in" })',
         'webview.getByRole("button", { name: "Close" })',
-        'webview.getByRole("textfield", { name: "Nickname" })',
+        'webview.getByRole("textbox", { name: "Nickname" })',
         'webview.getByRole("slider", { name: "Volume" })',
       ]);
       for (const code of suggestions) {
@@ -464,6 +470,397 @@ describe('WebView locators pierce open shadow roots (PILOT-1328)', () => {
       const { handle } = handleOn('<!DOCTYPE html><body><button aria-hidden="true">Hidden</button></body>');
       const button = parseHierarchyXml((await handle._dumpDomHierarchy())!)[0]!.children[0]!;
       expect(generateSelectors(button).map((g) => g.code).filter((c) => c.includes('getByRole'))).toEqual([]);
+    });
+  });
+});
+
+/**
+ * Roles, accessible names and labels as Playwright computes them
+ * (PILOT-1361, PILOT-700). Each expectation is what Playwright's
+ * page.getByRole / page.getByLabel finds on the same page.
+ */
+describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361, PILOT-700)', () => {
+  // ion-input (Ionic 8/9): a scoped component whose <label> wraps the input,
+  // which also points aria-labelledby at a copy of the label text.
+  const ION_LOGIN = '<!DOCTYPE html><body>'
+    + '<ion-input id="email-host"><label class="input-wrapper" for="ion-input-0"><div class="label-text">Email</div>'
+    + '<div class="native-wrapper"><input class="native-input" id="ion-input-0" type="email" placeholder="you@company.com"'
+    + ' aria-labelledby="ion-input-0-lbl"></div></label><span id="ion-input-0-lbl" hidden>Email</span></ion-input>'
+    + '<ion-input id="pw-host"><label><span>Password</span><input id="pw" type="password"></label></ion-input>'
+    + '<button id="sign-in">Sign in</button><button id="sign-in-google">Sign in with Google</button></body>';
+
+  it('finds an Ionic text field by the ARIA role "textbox" and its label', async () => {
+    const { handle } = handleOn(ION_LOGIN);
+    expect(await idsOf(handle, handle.getByRole('textbox')._finderAllJs)).toEqual(['ion-input-0', 'pw']);
+    expect(await idsOf(handle, handle.getByRole('textbox', { name: 'Email' })._finderAllJs)).toEqual(['ion-input-0']);
+    expect(await idsOf(handle, handle.getByLabel('Email')._finderAllJs)).toEqual(['ion-input-0']);
+    expect(await idsOf(handle, handle.getByLabel('Password')._finderAllJs)).toEqual(['pw']);
+    // Tapsmith's own name for the role still works.
+    expect(await handle.getByRole('textfield', { name: 'Password' }).count()).toBe(1);
+  });
+
+  it('matches a name or label as a case-insensitive substring, whole with exact, or by RegExp', async () => {
+    const { handle } = handleOn(ION_LOGIN);
+    expect(await handle.getByRole('button', { name: 'sign in' }).count()).toBe(2);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Sign in', exact: true })._finderAllJs)).toEqual(['sign-in']);
+    expect(await handle.getByRole('button', { name: 'sign in', exact: true }).count()).toBe(0);
+    expect(await idsOf(handle, handle.getByRole('button', { name: /google$/i })._finderAllJs)).toEqual(['sign-in-google']);
+    expect(await handle.getByLabel('email').count()).toBe(1);
+    expect(await handle.getByLabel('email', { exact: true }).count()).toBe(0);
+    expect(await idsOf(handle, handle.getByLabel(/^pass/i)._finderAllJs)).toEqual(['pw']);
+    // A global RegExp keeps no state between matches.
+    expect(await handle.getByRole('button', { name: /Sign/g }).count()).toBe(2);
+  });
+
+  it('splits text fields into textbox, searchbox and spinbutton, as ARIA does', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><input id="t"><input id="p" type="password"><textarea id="a"></textarea>'
+      + '<input id="s" type="search"><input id="n" type="number"><input id="c" type="checkbox"><div id="r" role="textbox"></div>'
+      + '<input id="h" type="hidden"></body>');
+    expect(await idsOf(handle, handle.getByRole('textbox')._finderAllJs)).toEqual(['t', 'p', 'a', 'r']);
+    expect(await idsOf(handle, handle.getByRole('searchbox')._finderAllJs)).toEqual(['s']);
+    expect(await idsOf(handle, handle.getByRole('spinbutton')._finderAllJs)).toEqual(['n']);
+    expect(await idsOf(handle, handle.getByRole('textfield')._finderAllJs)).toEqual(['t', 'p', 'a', 's', 'n', 'r']);
+    // Role names are case-insensitive, as Playwright lowercases them.
+    expect(await handle.getByRole('TextBox').count()).toBe(4);
+  });
+
+  it('takes an element\'s role attribute over its tag\'s role', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="b" role="tab">One</button><button id="plain">Two</button>'
+      + '<ul role="none"><li id="pres">A</li></ul><ol><li id="item">B</li></ol><img id="deco" alt=""><img id="logo" alt="Logo"></body>');
+    expect(await idsOf(handle, handle.getByRole('tab')._finderAllJs)).toEqual(['b']);
+    expect(await idsOf(handle, handle.getByRole('button')._finderAllJs)).toEqual(['plain']);
+    // A presentational list's items are presentational too.
+    expect(await idsOf(handle, handle.getByRole('listitem')._finderAllJs)).toEqual(['item']);
+    expect(await idsOf(handle, handle.getByRole('img')._finderAllJs)).toEqual(['logo']);
+    expect(await idsOf(handle, handle.getByRole('image', { name: 'Logo' })._finderAllJs)).toEqual(['logo']);
+  });
+
+  it('computes the accessible name in Playwright\'s order', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="tip" title="Tooltip">Save</button>'
+      + '<button id="fallback" aria-labelledby="empty">Fallback</button><span id="empty"></span>'
+      + '<input id="titled" title="Notes" placeholder="Write here"><input id="ph" placeholder="Only placeholder">'
+      + '<h2 id="hd" title="H">Heading text</h2><div role="dialog" id="dlg">Dialog content</div>'
+      + '<input id="sub" type="submit"><button id="blocks"><div>Two</div><div>Words</div></button></body>');
+    // Content outranks a title for a button; a title is the fallback.
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Save' })._finderAllJs)).toEqual(['tip']);
+    expect(await handle.getByRole('button', { name: 'Tooltip' }).count()).toBe(0);
+    expect(await idsOf(handle, handle.getByRole('heading', { name: 'Heading text' })._finderAllJs)).toEqual(['hd']);
+    // aria-labelledby whose target has no text falls through to the content.
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Fallback' })._finderAllJs)).toEqual(['fallback']);
+    // A field's title outranks its placeholder; a placeholder is the last resort.
+    expect(await idsOf(handle, handle.getByRole('textbox', { name: 'Notes' })._finderAllJs)).toEqual(['titled']);
+    expect(await handle.getByRole('textbox', { name: 'Write here' }).count()).toBe(0);
+    expect(await idsOf(handle, handle.getByRole('textbox', { name: 'Only placeholder' })._finderAllJs)).toEqual(['ph']);
+    // A dialog is not named by its content.
+    expect(await handle.getByRole('dialog', { name: 'Dialog content' }).count()).toBe(0);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Submit' })._finderAllJs)).toEqual(['sub']);
+    // Block children are separate words.
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Two Words', exact: true })._finderAllJs)).toEqual(['blocks']);
+  });
+
+  it('getByLabel reads <label for>, a wrapping <label>, aria-labelledby and aria-label', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><label for="first">First name</label><input id="first">'
+      + '<label>Last <input id="last"><input id="second"></label><span id="lab">Volume</span><div id="vol" role="slider" aria-labelledby="lab"></div>'
+      + '<div id="card" aria-label="Card">x</div><select id="pick"><option>One</option></select><label for="pick">Pick one</label>'
+      + '<div id="nolabel">First name</div><input id="ws" aria-label="   "><label for="ws">Spaces</label></body>');
+    expect(await idsOf(handle, handle.getByLabel('First name')._finderAllJs)).toEqual(['first']);
+    // A wrapping label labels its first control only.
+    expect(await idsOf(handle, handle.getByLabel('Last')._finderAllJs)).toEqual(['last']);
+    expect(await idsOf(handle, handle.getByLabel('Volume')._finderAllJs)).toEqual(['vol']);
+    // aria-label labels any element; a <label> only a form control.
+    expect(await idsOf(handle, handle.getByLabel('Card')._finderAllJs)).toEqual(['card']);
+    expect(await idsOf(handle, handle.getByLabel('Pick one')._finderAllJs)).toEqual(['pick']);
+    // A blank aria-label falls through to the <label>.
+    expect(await idsOf(handle, handle.getByLabel('Spaces')._finderAllJs)).toEqual(['ws']);
+  });
+
+  it('includeHidden finds what assistive technology does not see', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="v">Shown</button><button id="h" style="display:none">Gone</button>'
+      + '<button id="ah" aria-hidden="true">AH</button><input type="checkbox" id="cb" style="display:none"><label for="cb">Hidden box</label></body>');
+    expect(await idsOf(handle, handle.getByRole('button')._finderAllJs)).toEqual(['v']);
+    expect(await idsOf(handle, handle.getByRole('button', { includeHidden: true })._finderAllJs)).toEqual(['v', 'h', 'ah']);
+    expect(await handle.getByRole('checkbox', { name: 'Hidden box' }).count()).toBe(0);
+    expect(await handle.getByRole('checkbox', { name: 'Hidden box', includeHidden: true }).count()).toBe(1);
+    // getByLabel does not filter hidden elements, as in Playwright.
+    expect(await handle.getByLabel('Hidden box').count()).toBe(1);
+  });
+
+  it('treats aria-hidden case-insensitively everywhere, as Playwright does', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="v">Shown</button><button id="ah" aria-hidden="TRUE">AH</button></body>');
+    expect(await idsOf(handle, handle.getByRole('button')._finderAllJs)).toEqual(['v']);
+    expect(await idsOf(handle, handle.getByRole('button', { includeHidden: true })._finderAllJs)).toEqual(['v', 'ah']);
+    expect(await handle._dumpDomHierarchy()).toMatch(/webview-id="ah"[^>]*webview-a11y-hidden="true"/);
+  });
+
+  it('gives an unscoped <th> the role Playwright gives it from its neighbouring cells', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><table><tr><th id="c1">Plan</th><th id="c2">Price</th></tr>'
+      + '<tr><th id="r1">Basic</th><td>$1</td></tr><tr><th id="r2" scope="col">Pro</th><td>$2</td></tr></table>'
+      + '<table><tr><th id="only">Alone</th></tr></table></body>');
+    expect(await idsOf(handle, handle.getByRole('columnheader')._finderAllJs)).toEqual(['c1', 'c2', 'r2']);
+    expect(await idsOf(handle, handle.getByRole('rowheader', { name: 'Basic' })._finderAllJs)).toEqual(['r1']);
+    // The only cell of a one-row table heads nothing.
+    expect(await handle.getByRole('columnheader', { name: 'Alone' }).count()).toBe(0);
+  });
+
+  it('never puts a password\'s value into a name, while other fields\' values still name', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><label id="pl">PIN <input id="pin" type="password" value="hunter2"></label>'
+      + '<button id="go" aria-labelledby="pl">Go</button><label id="ql">Qty <input id="qty" value="3"></label>'
+      + '<button id="buy" aria-labelledby="ql">Buy</button></body>');
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'PIN', exact: true })._finderAllJs)).toEqual(['go']);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Qty 3', exact: true })._finderAllJs)).toEqual(['buy']);
+    expect(await idsOf(handle, handle.getByRole('textbox', { name: 'PIN' })._finderAllJs)).toEqual(['pin']);
+    expect(await handle._dumpDomHierarchy()).not.toContain('hunter2');
+    // Nor through another role a password field is given.
+    for (const role of ['combobox', 'spinbutton', 'slider']) {
+      const page = handleOn(`<!DOCTYPE html><body><label id="l">PIN <input type="password" role="${role}" value="hunter2"></label>`
+        + '<button aria-labelledby="l">Go</button></body>').handle;
+      expect(await page._dumpDomHierarchy(), role).not.toContain('hunter2');
+    }
+  });
+
+  it('finds a dropdown <select>\'s options by role, which have no box but are not hidden', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><select id="s"><option id="r">Red</option><option id="b">Blue</option></select>'
+      + '<div style="display:none"><div id="dc" style="display:contents" role="button">X</div></div></body>', (doc) => {
+      // A dropdown's options have no client rects in a browser.
+      for (const o of doc.querySelectorAll('option')) o.getClientRects = () => [] as unknown as DOMRectList;
+      // Text has a box unless an ancestor is display: none.
+      const win = doc.defaultView!;
+      win.Range.prototype.getBoundingClientRect = function (this: Range) {
+        const hidden = !!this.startContainer && !!(this.startContainer as Element).closest?.('[style*="display:none"]');
+        const size = hidden ? 0 : 10;
+        return { left: 0, top: 0, right: size, bottom: size, width: size, height: size, x: 0, y: 0 } as DOMRect;
+      };
+    });
+    expect(await idsOf(handle, handle.getByRole('option', { name: 'Red' })._finderAllJs)).toEqual(['r']);
+    expect(await handle.getByRole('option').count()).toBe(2);
+    // Inside a display: none ancestor, display: contents is hidden too.
+    expect(await handle.getByRole('button').count()).toBe(0);
+    expect(await handle.getByRole('button', { includeHidden: true }).count()).toBe(1);
+  });
+
+  it('strips soft hyphens and zero-width spaces before trimming, as Playwright normalises text', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="co" aria-label="Check\u00adout">x</button>'
+      + '<button id="zw" aria-label="\u200b Save">y</button></body>');
+    expect(await idsOf(handle, handle.getByLabel('Checkout', { exact: true })._finderAllJs)).toEqual(['co']);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Save', exact: true })._finderAllJs)).toEqual(['zw']);
+  });
+
+  it('keeps a RegExp\'s sticky flag, anchoring every test at the start', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="s" aria-label="Save">a</button>'
+      + '<button id="q" aria-label="Quick Save">b</button></body>');
+    const sticky = handle.getByLabel(/Save/y);
+    expect(await idsOf(handle, sticky._finderAllJs)).toEqual(['s']);
+    expect(await idsOf(handle, sticky._finderAllJs)).toEqual(['s']);
+    expect(await handle.getByRole('button', { name: /Save/y }).count()).toBe(1);
+  });
+
+  it('suggests, in a strict-mode error, the label getByLabel reads, and only one that tells the matches apart', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><span id="d">Save draft</span>'
+      + '<button aria-label="Save" aria-labelledby="d">a</button><button aria-label="Save">b</button>'
+      + '<button aria-label="Same">c</button><button aria-label="Same">d</button></body>');
+    const err = String(await handle.getByRole('button', { name: 'Sa' }).click().catch((e: unknown) => e));
+    expect(err).toContain('webview.getByLabel("Save draft", { exact: true })');
+    expect(err).toContain('webview.getByLabel("Save", { exact: true })');
+    expect(err).not.toContain('webview.getByLabel("Same"');
+    // A label something outside the matches also has (a hidden page of an
+    // Ionic stack) would find two elements: not suggested.
+    const stack = handleOn('<!DOCTYPE html><body><div style="display:none"><button aria-label="back">&lt;</button></div>'
+      + '<button aria-label="back">&lt;</button><button>Save</button></body>').handle;
+    const stackErr = String(await stack.getByRole('button').click().catch((e: unknown) => e));
+    expect(stackErr).toMatch(/strict mode/i);
+    expect(stackErr).not.toContain('webview.getByLabel("back"');
+    expect(await stack.getByLabel('back', { exact: true }).count()).toBe(2);
+  });
+
+  it('rejects a name that is only an inherited property, such as "constructor", as an unknown role', () => {
+    const { handle } = handleOn('<!DOCTYPE html><body></body>');
+    for (const role of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(() => handle.getByRole(role), role).toThrow(/unknown role/);
+      expect(parsedSelectorError(parseSelectorString(`webview.getByRole("${role}")`)!), role).toMatch(/unknown role/);
+    }
+  });
+
+  it('skips what a closed <details> hides, as Playwright does, but not its summary', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><details><summary id="q">Question</summary><button id="d1">Delete</button></details>'
+      + '<details open><summary>Open</summary><button id="d2">Delete</button></details><button id="d3">Delete</button></body>');
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Delete' })._finderAllJs)).toEqual(['d2', 'd3']);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Delete', includeHidden: true })._finderAllJs)).toEqual(['d1', 'd2', 'd3']);
+  });
+
+  it('throws at once on a role no element can have, an option it does not take, or a bad name', () => {
+    const { handle } = handleOn('<!DOCTYPE html><body></body>');
+    expect(() => handle.getByRole('textfeild')).toThrow(/unknown role "textfeild".*textbox.*textfield \(textbox, searchbox, spinbutton\)/);
+    expect(() => handle.getByRole('button', { checked: true } as never)).toThrow(/webview\.getByRole\(\): unknown option "checked"/);
+    expect(() => handle.getByRole('button', { name: 3 } as never)).toThrow(TypeError);
+    expect(() => handle.getByLabel(undefined as never)).toThrow(TypeError);
+    expect(() => handle.getByLabel('x', { name: 'y' } as never)).toThrow(/unknown option "name"/);
+  });
+
+  it('describes the locator with its options', () => {
+    const { handle } = handleOn('<!DOCTYPE html><body></body>');
+    expect(handle.getByRole('textbox', { name: 'Email' })._selector).toBe('role=textbox[name=Email]');
+    expect(handle.getByRole('textbox', { name: 'Email', exact: true })._selector).toBe('role=textbox[name="Email"]');
+    expect(handle.getByRole('button', { name: /sign/i, includeHidden: true })._selector).toBe('role=button[name=/sign/i][include-hidden]');
+    expect(handle.getByLabel(/mail/)._selector).toBe('label=/mail/');
+  });
+
+  describe('the Playground agrees with the page', () => {
+    function flatten(nodes: HierarchyNode[]): HierarchyNode[] {
+      return nodes.flatMap((n) => [n, ...flatten(n.children)]);
+    }
+    const count = (roots: HierarchyNode[], code: string) => findMatchingNodes(roots, parseSelectorString(code)!).length;
+    // A box of its own for every displayed element: the Playground counts
+    // nodes with the same box and text once.
+    const distinctBoxes = (doc: Document) => {
+      doc.body.querySelectorAll('*').forEach((el, i) => {
+        if ((el as HTMLElement).style.display !== 'none') el.setAttribute('data-rect', `0,${i * 10},100,${i * 10 + 9}`);
+      });
+    };
+
+    it('counts every role, name and label locator as the page does', async () => {
+      const { handle } = handleOn(ION_LOGIN.replace('</body>', '<input id="q" type="search" aria-label="Search">'
+        + '<input type="checkbox" id="cb" style="display:none"><label for="cb">Hidden box</label></body>'), distinctBoxes);
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      const cases: [string, WebViewLocator][] = [
+        ['webview.getByRole("textbox")', handle.getByRole('textbox')],
+        ['webview.getByRole("textfield")', handle.getByRole('textfield')],
+        ['webview.getByRole("searchbox")', handle.getByRole('searchbox')],
+        ['webview.getByRole("textbox", { name: "Email" })', handle.getByRole('textbox', { name: 'Email' })],
+        ['webview.getByRole("textbox", { name: "email", exact: true })', handle.getByRole('textbox', { name: 'email', exact: true })],
+        ['webview.getByRole("button", { name: "sign in" })', handle.getByRole('button', { name: 'sign in' })],
+        ['webview.getByRole("button", { name: "Sign in", exact: true })', handle.getByRole('button', { name: 'Sign in', exact: true })],
+        ['webview.getByRole("button", { name: /google/i })', handle.getByRole('button', { name: /google/i })],
+        // (includeHidden is left out: the dump has no node for an element
+        // with no box, which includeHidden finds on the page.)
+        ['webview.getByRole("checkbox")', handle.getByRole('checkbox')],
+        ['webview.getByLabel("Email")', handle.getByLabel('Email')],
+        ['webview.getByLabel("Password", { exact: true })', handle.getByLabel('Password', { exact: true })],
+        ['webview.getByLabel(/^pass/i)', handle.getByLabel(/^pass/i)],
+        ['webview.getByLabel("Search")', handle.getByLabel('Search')],
+      ];
+      for (const [code, locator] of cases) {
+        expect(count(roots, code), code).toBe(await locator.count());
+      }
+    });
+
+    it('suggests getByRole with the ARIA role and getByLabel from a <label>, pinned with exact when ambiguous', async () => {
+      const { handle } = handleOn(ION_LOGIN, distinctBoxes);
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      const nodes = flatten(roots);
+      const email = nodes.find((n) => n.attributes.get('webview-id') === 'ion-input-0')!;
+      const codes = generateSelectors(email).map((g) => g.code);
+      expect(codes[0]).toBe('webview.getByRole("textbox", { name: "Email" })');
+      expect(codes).toContain('webview.getByLabel("Email")');
+      const signIn = nodes.find((n) => n.attributes.get('webview-id') === 'sign-in')!;
+      const [best] = disambiguateSelectors(roots, signIn, generateSelectors(signIn));
+      expect(best!.code).toBe('webview.getByRole("button", { name: "Sign in", exact: true })');
+    });
+
+    it('tests a getByLabel RegExp against the raw label text, as the page does', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><label for="e">\n  Email\n</label><input id="e"></body>', distinctBoxes);
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      for (const [code, locator] of [
+        ['webview.getByLabel(/^Email$/)', handle.getByLabel(/^Email$/)],
+        ['webview.getByLabel(/^\\s+Email/)', handle.getByLabel(/^\s+Email/)],
+        ['webview.getByLabel("Email", { exact: true })', handle.getByLabel('Email', { exact: true })],
+      ] as const) {
+        expect(count(roots, code), code).toBe(await locator.count());
+      }
+      expect(await handle.getByLabel(/^\s+Email/).count()).toBe(1);
+      const input = flatten(roots).find((n) => n.attributes.get('webview-id') === 'e')!;
+      expect(generateSelectors(input).map((g) => g.code)).toContain('webview.getByLabel("Email")');
+    });
+
+    it('reads each element\'s style once while naming every element, however deep the names', async () => {
+      // A list whose rows are links named by their content, deep in the page:
+      // every name walks its row, and every node of it its ancestors.
+      const row = (i: number) => `<li><a href="#${i}"><h2>Item ${i}</h2><p>Detail <span>${i}</span></p><button>Open</button></a></li>`;
+      const nest = (html: string, depth: number): string => depth === 0 ? html : `<div>${nest(html, depth - 1)}</div>`;
+      const { handle, window } = handleOn(`<!DOCTYPE html><body>${nest(`<ul>${Array.from({ length: 30 }, (_, i) => row(i)).join('')}</ul>`, 15)}</body>`);
+      const elements = window.document.querySelectorAll('*').length;
+      const original = window.getComputedStyle.bind(window);
+      let calls = 0;
+      window.getComputedStyle = ((el: Element, pseudo?: string | null) => { calls++; return original(el, pseudo); }) as typeof window.getComputedStyle;
+      // Every element's name, as the DOM dump computes them.
+      const names = await handle._evaluate(withDomHelpers('__ts.all(document).map((el) => __ts.name(el))')) as string[];
+      expect(names).toContain('Item 3 Detail 3 Open');
+      expect(calls).toBeLessThanOrEqual(elements);
+    });
+
+    it('counts includeHidden names as the page does, hidden content included', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><button id="ah" aria-hidden="true">AH</button>'
+        + '<button id="icon"><span aria-hidden="true">close</span>Save</button></body>', distinctBoxes);
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      for (const [code, locator] of [
+        ['webview.getByRole("button", { name: "AH", includeHidden: true })', handle.getByRole('button', { name: 'AH', includeHidden: true })],
+        ['webview.getByRole("button", { name: "Save", exact: true, includeHidden: true })', handle.getByRole('button', { name: 'Save', exact: true, includeHidden: true })],
+        ['webview.getByRole("button", { name: "close Save", exact: true, includeHidden: true })', handle.getByRole('button', { name: 'close Save', exact: true, includeHidden: true })],
+        ['webview.getByRole("button", { name: "Save", exact: true })', handle.getByRole('button', { name: 'Save', exact: true })],
+      ] as const) {
+        expect(count(roots, code), code).toBe(await locator.count());
+      }
+    });
+
+    it('shows the error the page throws for a role webview.getByRole rejects', () => {
+      const { handle } = handleOn('<!DOCTYPE html><body></body>');
+      const thrown = (() => { try { handle.getByRole('textfeild'); } catch (e) { return (e as Error).message; } return null; })();
+      expect(thrown).not.toBeNull();
+      expect(parsedSelectorError(parseSelectorString('webview.getByRole("textfeild")')!)).toBe(thrown);
+      // An old dump's role attribute that is not an ARIA role is not suggested.
+      const roots = parseHierarchyXml('<webview.div bounds="[0,0][10,10]" class="webview.div" webview-tag="div"'
+        + ' webview-role="toast" text="Saved" webview="true" />');
+      expect(generateSelectors(roots[0]!).map((g) => g.code).filter((c) => c.includes('getByRole'))).toEqual([]);
+    });
+
+    it('agrees on soft hyphens, full-length names and labels, and an old dump\'s input types', async () => {
+      const long = `${'A'.repeat(200)}Z`;
+      const { handle } = handleOn(`<!DOCTYPE html><body><button id="co" aria-label="Check\u00adout">x</button>`
+        + `<button id="long">${long}</button><label for="f">${long}</label><input id="f">`
+        + '<button id="s1">One</button><button id="s2">One</button></body>');
+      // Every element here has the same 10×10 box: two buttons with the same
+      // box and text are still two to the page.
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      for (const [code, locator] of [
+        ['webview.getByLabel("Checkout")', handle.getByLabel('Checkout')],
+        ['webview.getByRole("button", { name: "Checkout", exact: true })', handle.getByRole('button', { name: 'Checkout', exact: true })],
+        [`webview.getByRole("button", { name: "${long}", exact: true })`, handle.getByRole('button', { name: long, exact: true })],
+        [`webview.getByRole("button", { name: "${'A'.repeat(200)}", exact: true })`, handle.getByRole('button', { name: 'A'.repeat(200), exact: true })],
+        ['webview.getByLabel(/Z$/)', handle.getByLabel(/Z$/)],
+        ['webview.getByRole("button", { name: "One" })', handle.getByRole('button', { name: 'One' })],
+      ] as const) {
+        expect(count(roots, code), code).toBe(await locator.count());
+      }
+      expect(await handle.getByLabel('Checkout').count()).toBe(1);
+      expect(await handle.getByRole('button', { name: 'One' }).count()).toBe(2);
+      // A dump from before PILOT-1361 suggests and matches an input's type-given role alike.
+      const old = parseHierarchyXml('<webview.input bounds="[0,0][10,10]" class="webview.input" webview-tag="input"'
+        + ' webview-type="checkbox" webview="true" />');
+      const suggested = generateSelectors(old[0]!).map((g) => g.code).filter((c) => c.includes('getByRole'));
+      expect(suggested[0]).toMatch(/^webview\.getByRole\("checkbox"/);
+      expect(count(old, suggested[0]!)).toBe(1);
+    });
+
+    it('offers no getByLabel for a label a hidden page also has, which the page\'s getByLabel finds too', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><div style="display:none"><label for="old">Email address</label><input id="old"></div>'
+        + '<label for="e">Email</label><input id="e"><label for="n">Name</label><input id="n"></body>', (doc) => {
+        distinctBoxes(doc);
+        // The hidden page has no box, inside as out.
+        for (const el of doc.querySelectorAll('[style*="display:none"] *')) el.removeAttribute('data-rect');
+      });
+      const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
+      const email = nodes.find((n) => n.attributes.get('webview-id') === 'e')!;
+      expect(await handle.getByLabel('Email').count()).toBe(2);
+      expect(generateSelectors(email).map((g) => g.code).filter((c) => c.includes('getByLabel'))).toEqual([]);
+      const name = nodes.find((n) => n.attributes.get('webview-id') === 'n')!;
+      expect(generateSelectors(name).map((g) => g.code)).toContain('webview.getByLabel("Name")');
+    });
+
+    it('reads a dump from before PILOT-1361', () => {
+      const roots = parseHierarchyXml('<webview.input bounds="[0,0][10,10]" class="webview.input" webview-tag="input"'
+        + ' content-desc="Email" webview-aria-label="" webview="true" />');
+      expect(count(roots, 'webview.getByRole("textbox", { name: "Email" })')).toBe(1);
+      expect(count(roots, 'webview.getByRole("textfield")')).toBe(1);
+      expect(count(roots, 'webview.getByLabel("Email")')).toBe(0);
     });
   });
 });

@@ -15,6 +15,7 @@ import {
   deprecationLines,
   disallowedInstallScripts,
   installScriptsOf,
+  missingLicenseFiles,
   nonExecutableFiles,
   npmReportsInstallScripts,
   packEntry,
@@ -197,6 +198,37 @@ describe('bundledDocsProblems', () => {
 
   it('finds no docs at all in a tarball built without them', () => {
     expect(bundledDocsProblems([{ path: 'dist/index.js' }], pages)).toHaveLength(2);
+  });
+});
+
+describe('missingLicenseFiles', () => {
+  it('passes when the tarball carries LICENSE and THIRD_PARTY_NOTICES', () => {
+    expect(missingLicenseFiles([{ path: 'LICENSE' }, { path: 'THIRD_PARTY_NOTICES' }, { path: 'dist/index.js' }])).toEqual([]);
+  });
+
+  it('names each license file the tarball leaves out', () => {
+    expect(missingLicenseFiles([{ path: 'dist/index.js' }, { path: 'docs/LICENSE' }])).toEqual(['LICENSE', 'THIRD_PARTY_NOTICES']);
+  });
+});
+
+describe('license files in the package', () => {
+  const packageDir = path.resolve(import.meta.dirname, '../..');
+
+  it('ships the repo LICENSE unchanged', () => {
+    expect(fs.readFileSync(path.join(packageDir, 'LICENSE'), 'utf8'))
+      .toBe(fs.readFileSync(path.resolve(packageDir, '../../LICENSE'), 'utf8'));
+  });
+
+  it('lists THIRD_PARTY_NOTICES in package.json files, so npm packs it', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
+    expect(pkg.files).toContain('THIRD_PARTY_NOTICES');
+  });
+
+  it("reproduces Playwright's NOTICE and names the derived file", () => {
+    const notices = fs.readFileSync(path.join(packageDir, 'THIRD_PARTY_NOTICES'), 'utf8');
+    expect(notices).toContain('Playwright\nCopyright (c) Microsoft Corporation\n');
+    expect(notices).toContain('src/webview-dom-js.ts');
+    expect(fs.readFileSync(path.join(packageDir, 'src/webview-dom-js.ts'), 'utf8')).toContain('see THIRD_PARTY_NOTICES');
   });
 });
 

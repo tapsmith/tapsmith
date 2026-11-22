@@ -22,6 +22,8 @@ describe("WebView shadow DOM", () => {
     await expect(screen.displayNameField).toBeVisible()
     await expect(screen.displayNameByPlaceholder).toBeVisible()
     await expect(screen.displayNameByTestId).toBeVisible()
+    await expect(screen.displayNameByLabel).toBeVisible()
+    await expect(screen.displayNameTextbox).toBeVisible()
     await expect(screen.dismissButton).toBeVisible()
     expect(await screen.hiddenAction.count()).toBe(0)
     await device.native()

@@ -13,40 +13,50 @@ import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 import type { TraceCollector } from './trace/trace-collector.js';
 import { extractStack } from './trace/trace-collector.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
-import { deepQueryAllJs, deepQueryJs, withDomHelpers } from './webview-dom-js.js';
+import { unknownWebViewRoleMessage, webViewRolesFor, deepQueryAllJs, deepQueryJs, withDomHelpers } from './webview-dom-js.js';
+import { assertTextArg } from './selectors.js';
 
 const WEB_SOCKET_CONNECT_TIMEOUT_MS = 5_000;
 const WEBVIEW_CLOSE_RPC_TIMEOUT_MS = 2_000;
 const WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS = 2_000;
 const WEBVIEW_CDP_MESSAGE_TIMEOUT_MS = 30_000;
 
-const ROLE_CSS_MAP: Record<string, string[]> = {
-  button: ['button', '[role="button"]', 'input[type="button"]', 'input[type="submit"]', 'input[type="reset"]'],
-  textfield: ['input:not([type])', 'input[type="text"]', 'input[type="email"]', 'input[type="password"]', 'input[type="search"]', 'input[type="tel"]', 'input[type="url"]', 'input[type="number"]', 'textarea', '[role="textbox"]'],
-  checkbox: ['input[type="checkbox"]', '[role="checkbox"]'],
-  radio: ['input[type="radio"]', '[role="radio"]'],
-  link: ['a[href]', '[role="link"]'],
-  heading: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', '[role="heading"]'],
-  img: ['img', '[role="img"]'],
-  list: ['ul', 'ol', '[role="list"]'],
-  listitem: ['li', '[role="listitem"]'],
-  switch: ['[role="switch"]'],
-  slider: ['input[type="range"]', '[role="slider"]'],
-  combobox: ['select', '[role="combobox"]'],
-  tab: ['[role="tab"]'],
-  progressbar: ['progress', '[role="progressbar"]'],
-  dialog: ['dialog', '[role="dialog"]'],
-  image: ['img', '[role="img"]'],
-};
+/** Options for `webview.getByRole()`: Playwright's `page.getByRole` options Tapsmith supports. */
+export interface WebViewRoleOptions {
+  /**
+   * Filter by accessible name. A case-insensitive substring match by default,
+   * like Playwright; whitespace is normalized on both sides. A RegExp is
+   * tested against the whitespace-normalized name.
+   */
+  name?: string | RegExp
+  /** Match a string `name` case-sensitively and as the whole string. Ignored for a RegExp. */
+  exact?: boolean
+  /** Also match elements hidden from assistive technology (`display: none`, `aria-hidden`, …). */
+  includeHidden?: boolean
+}
 
-/**
- * Roles whose accessible name comes from their content. The DOM dump gives
- * such an element its flattened text as its name when that text is not its
- * own leaf text, so the Playground suggests the name getByRole matches.
- */
-const NAME_FROM_CONTENT_SELECTOR = ['button', 'link', 'heading', 'tab', 'checkbox', 'radio', 'switch']
-  .flatMap((role) => ROLE_CSS_MAP[role]!)
-  .join(', ');
+/** Options for `webview.getByLabel()`. */
+export interface WebViewLabelOptions {
+  /** Match the label case-sensitively and as the whole string. Ignored for a RegExp. */
+  exact?: boolean
+}
+
+/** The in-page matcher (webview-dom-js.ts `textMatch`) for a getBy* text argument. */
+function textMatcherJs(text: string | RegExp, exact: boolean | undefined): string {
+  if (text instanceof RegExp) {
+    // The page builds a fresh RegExp for every test, so a global one keeps no
+    // state between them and a sticky one is anchored at the start, as in
+    // Playwright.
+    return JSON.stringify({ re: text.source, flags: text.flags.replace(/[gd]/g, '') });
+  }
+  return JSON.stringify({ s: text, exact: !!exact });
+}
+
+/** How a getBy* text argument reads in a locator's description. */
+function describeText(text: string | RegExp, exact: boolean | undefined): string {
+  if (text instanceof RegExp) return String(text);
+  return exact ? JSON.stringify(text) : text;
+}
 
 // ─── Strict mode (PILOT-227) ───
 
@@ -56,6 +66,10 @@ interface WebViewDomDescription {
   id: string
   testId: string
   ariaLabel: string
+  /** The first label text webview.getByLabel matches it by, whitespace-normalised ('' for none). */
+  label: string
+  /** Whether {@link label} labels no other element on the page, so getByLabel with exact finds only this one. */
+  labelUnique: boolean
   role: string
   text: string
   /** No child elements: the only kind of element webview.getByText finds. */
@@ -89,7 +103,13 @@ function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string
   const lit = (v: string): string => `"${escapeJsString(v)}"`;
   if (d.testId && !d.inShadow) return `webview.getByTestId(${lit(d.testId)})`;
   if (d.id && !d.inShadow) return `webview.locator(${lit(cssIdSelector(d.id))})`;
-  if (d.ariaLabel) return `webview.getByLabel(${lit(d.ariaLabel)})`;
+  // getByLabel matches a substring: exact pins this label (PILOT-1361). The
+  // label getByLabel reads (an aria-labelledby outranks an aria-label), and
+  // only when nothing else on the page has it: getByLabel also finds what
+  // the failing locator left out (a hidden page of an Ionic stack).
+  if (d.label && d.labelUnique) {
+    return `webview.getByLabel(${lit(d.label)}, { exact: true })`;
+  }
   // getByText finds leaf elements only: a parent's text would resolve to the
   // child holding it, or to nothing when it spans several (PILOT-666).
   if (d.text && d.leaf) {
@@ -648,8 +668,22 @@ export class WebViewHandle {
           return { found: true, value: (${opts.valueJs}) };
         })()`
       : 'undefined';
-    const probe = await this._evaluate(`(() => {
+    const probe = await this._evaluate(withDomHelpers(`(() => {
       const els = (${loc._finderAllJs});
+      const labelOf = (el) => __ts.norm(__ts.labelTexts(el).find((t) => __ts.norm(t)) || '');
+      // For a strict-mode error only: how many elements on the page each
+      // label text labels, as getByLabel with exact matches them.
+      let labelCounts = null;
+      const labelUnique = (label) => {
+        if (!label || els.length < 2) return false;
+        if (!labelCounts) {
+          labelCounts = new Map();
+          for (const e of __ts.all(document)) {
+            for (const t of new Set(__ts.labelTexts(e).map(__ts.norm))) labelCounts.set(t, (labelCounts.get(t) || 0) + 1);
+          }
+        }
+        return labelCounts.get(label) === 1;
+      };
       const vis = (el) => {
         // No client rects ⇒ not rendered at all (covers ancestors with
         // display:none, which the element's own computed style would miss).
@@ -667,6 +701,8 @@ export class WebViewHandle {
           id: el.id || '',
           testId: el.getAttribute('data-testid') || '',
           ariaLabel: el.getAttribute('aria-label') || '',
+          label: labelOf(el),
+          labelUnique: labelUnique(labelOf(el)),
           role: el.getAttribute('role') || '',
           text: (el.textContent || '').trim().slice(0, 80),
           leaf: el.firstElementChild === null,
@@ -674,7 +710,7 @@ export class WebViewHandle {
         })),
         target: ${targetJs},
       };
-    })()`, timeoutMs);
+    })()`), timeoutMs);
     return probe as WebViewLocatorProbe;
   }
 
@@ -985,6 +1021,8 @@ export class WebViewHandle {
         // its place, so a slot's content can still be picked.
         // depth counts the nodes emitted above el, not the shadow roots and
         // box-less elements walked through, which component trees are full of.
+        // Each element the dump has a node for.
+        const emitted = new Map();
         function walk(el, depth) {
           if (depth > 40) return [];
           const tag = el.tagName?.toLowerCase() || '';
@@ -992,6 +1030,9 @@ export class WebViewHandle {
           const kids = kidsOf(el);
           const r = el.getBoundingClientRect();
           if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth));
+          // Whole, as the page matches them (a long name's end can matter).
+          const name = __ts.name(el);
+          const nameWithHidden = __ts.name(el, true);
           const node = {
             tag: tag,
             id: el.id || '',
@@ -1005,24 +1046,15 @@ export class WebViewHandle {
             // host carries it without the input element's property.
             placeholder: el.getAttribute('placeholder') || '',
             role: el.getAttribute('role') || '',
-            ariaLabel: (() => {
-              const by = __ts.labelledBy(el);
-              if (by !== null) return by;
-              if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
-              const lbl = __ts.labelFor(el);
-              if (lbl) return __ts.flatText(lbl).trim();
-              const wrapped = __ts.wrappingLabel(el);
-              if (wrapped) return wrapped;
-              // A control named by its content that holds more than text
-              // (the <button> inside an ion-button holds a <slot>): the name
-              // getByRole matches it by, read through slots and shadow roots.
-              // The match is exact, so a name too long to keep whole is left out.
-              if ((!__ts.isLeaf(el) || el.shadowRoot) && el.matches(${JSON.stringify(NAME_FROM_CONTENT_SELECTOR)})) {
-                const name = __ts.name(el);
-                return name.length <= 200 ? name : '';
-              }
-              return '';
-            })(),
+            // The role and accessible name getByRole matches it by, and the
+            // label texts getByLabel matches (Playwright's rules, PILOT-1361).
+            ariaRole: __ts.role(el) || '',
+            ariaLabel: name,
+            // The name getByRole matches with includeHidden, when hidden
+            // content changes it (an aria-hidden control, an icon's text).
+            ariaLabelWithHidden: nameWithHidden !== name ? nameWithHidden : undefined,
+            // Raw, as a getByLabel RegExp tests them; a string match normalises.
+            labels: __ts.labelTexts(el),
             // The attribute alone: what webview.getByLabel matches (PILOT-666).
             ariaLabelAttr: el.getAttribute('aria-label') || '',
             testId: el.getAttribute('data-testid') || '',
@@ -1036,10 +1068,27 @@ export class WebViewHandle {
             },
             children: [],
           };
+          emitted.set(el, node);
           for (const child of kids) node.children.push(...walk(child, depth + 1));
           return [node];
         }
-        return walk(document.body, 0)[0] ?? null;
+        const root = walk(document.body, 0)[0] ?? null;
+        // getByLabel also finds elements the dump has no node for (no box: a
+        // hidden page of an Ionic stack). Mark a node whose label one of them
+        // also has (or contains, as a substring match finds it), so the
+        // Playground does not offer that label as unique.
+        const unshown = [];
+        for (const e of __ts.all(document)) {
+          if (emitted.has(e)) continue;
+          for (const t of __ts.labelTexts(e)) { const v = __ts.norm(t).toLowerCase(); if (v) unshown.push(v); }
+        }
+        if (unshown.length) {
+          for (const [el, node] of emitted) {
+            const own = node.labels.map((t) => __ts.norm(t).toLowerCase()).filter(Boolean);
+            if (own.some((l) => unshown.some((u) => u.includes(l)))) node.labelElsewhere = true;
+          }
+        }
+        return root;
       })()`), WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS) as DomNode | null;
 
       if (!domData) return undefined;
@@ -1059,9 +1108,13 @@ export class WebViewHandle {
         if (node.placeholder) attrs.push(`hint="${escapeXmlAttr(node.placeholder)}"`);
         if (node.role) attrs.push(`webview-role="${escapeXmlAttr(node.role)}"`);
         if (node.ariaLabel) attrs.push(`content-desc="${escapeXmlAttr(node.ariaLabel)}"`);
-        // Always written, so a reader can tell "no aria-label" from a dump
-        // that predates the attribute.
+        if (node.ariaLabelWithHidden !== undefined) attrs.push(`webview-name-with-hidden="${escapeXmlAttr(node.ariaLabelWithHidden)}"`);
+        // Always written, so a reader can tell "none" from a dump that
+        // predates the attribute.
         attrs.push(`webview-aria-label="${escapeXmlAttr(node.ariaLabelAttr ?? '')}"`);
+        attrs.push(`webview-aria-role="${escapeXmlAttr(node.ariaRole ?? '')}"`);
+        attrs.push(`webview-labels="${escapeXmlAttr(JSON.stringify(node.labels ?? []))}"`);
+        if (node.labelElsewhere) attrs.push('webview-label-elsewhere="true"');
         if (node.testId) attrs.push(`webview-testid="${escapeXmlAttr(node.testId)}"`);
         if (node.type) attrs.push(`webview-type="${escapeXmlAttr(node.type)}"`);
         if (node.href) attrs.push(`webview-href="${escapeXmlAttr(node.href)}"`);
@@ -1277,42 +1330,36 @@ export class WebViewHandle {
     return new WebViewLocator(this, `text=${text}`, this._timeoutMs, finderAllJs);
   }
 
-  /** Locate an element by its ARIA/HTML role, optionally filtered by accessible name. */
-  getByRole(role: string, options?: { name?: string }): WebViewLocator {
-    const cssSelectors = ROLE_CSS_MAP[role];
+  /**
+   * Locate an element by its ARIA role, optionally filtered by accessible
+   * name, as Playwright's `page.getByRole` does: the role is the element's
+   * `role` attribute or its tag's implicit role (an `<input type="email">` is
+   * a `textbox`), and the name follows the accessible name computation
+   * (aria-labelledby, aria-label, `<label>`, content, title, placeholder).
+   * Skips elements hidden from assistive technology unless `includeHidden`.
+   * Throws at once on a role no element can have.
+   */
+  getByRole(role: string, options?: WebViewRoleOptions): WebViewLocator {
+    if (typeof role !== 'string') {
+      throw new TypeError(`webview.getByRole() expects a role name string, got ${role === null ? 'null' : `a ${typeof role}`}.`);
+    }
+    checkOptions('webview.getByRole()', options, ['name', 'exact', 'includeHidden']);
+    // Playwright lowercases the role.
+    const wanted = role.toLowerCase();
+    const roles = webViewRolesFor(wanted);
+    if (!roles) throw new Error(unknownWebViewRoleMessage(role)!);
+    const name = options?.name;
+    if (name !== undefined) assertTextArg(name, 'webview.getByRole() option `name`');
+    const includeHidden = !!options?.includeHidden;
+    const tests = [`${JSON.stringify(roles)}.includes(__ts.role(el))`];
+    if (!includeHidden) tests.push('!__ts.a11yHidden(el)');
     // `!== undefined` (not truthiness) so an explicit empty name still filters.
-    const hasName = options?.name !== undefined;
-    const displaySuffix = hasName ? `[name=${options!.name}]` : '';
-    if (!cssSelectors) {
-      // Filter [role] elements by attribute comparison rather than
-      // interpolating the role into a CSS selector, where special
-      // characters could break the query.
-      const roleEscaped = JSON.stringify(role);
-      const nameTest = hasName
-        ? ` && (__ts.name(el) === ${JSON.stringify(options!.name)} || __ts.flatText(el).trim() === ${JSON.stringify(options!.name)})`
-        : '';
-      const finderAllJs = withDomHelpers(
-        `__ts.queryAll('[role]').filter((el) => el.getAttribute('role') === ${roleEscaped}${nameTest} && !__ts.a11yHidden(el))`);
-      return new WebViewLocator(this, `role=${role}${displaySuffix}`, this._timeoutMs, finderAllJs);
+    if (name !== undefined) {
+      tests.push(`__ts.textMatch(__ts.name(el, ${includeHidden}), ${textMatcherJs(name, options?.exact)})`);
     }
-
-    const selectorList = cssSelectors.join(', ');
-    const displayName = `role=${role}${displaySuffix}`;
-
-    if (!hasName) {
-      return new WebViewLocator(this, displayName, this._timeoutMs,
-        withDomHelpers(`__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => !__ts.a11yHidden(el))`));
-    }
-
-    // Non-null: hasName guarantees options.name is set (TS can't narrow through the const).
-    const nameEscaped = JSON.stringify(options!.name);
-    // Accessible name (webview-dom-js.ts `name`), each id and label looked
-    // up in the element's own tree: 1. aria-labelledby 2. aria-label
-    // 3. <label> (for or wrapping) 4. title 5. placeholder 6. text content,
-    // flattened through slots and shadow roots.
-    const finderAllJs = withDomHelpers(
-      `__ts.queryAll(${JSON.stringify(selectorList)}).filter((el) => __ts.name(el) === ${nameEscaped} && !__ts.a11yHidden(el))`);
-    return new WebViewLocator(this, displayName, this._timeoutMs, finderAllJs);
+    const display = `role=${role}${name !== undefined ? `[name=${describeText(name, options?.exact)}]` : ''}${includeHidden ? '[include-hidden]' : ''}`;
+    return new WebViewLocator(this, display, this._timeoutMs,
+      withDomHelpers(`__ts.all(document).filter((el) => ${tests.join(' && ')})`));
   }
 
   /** Locate an element by its placeholder text. */
@@ -1327,10 +1374,19 @@ export class WebViewHandle {
       deepQueryAllJs(`[data-testid=${JSON.stringify(testId)}]`));
   }
 
-  /** Locate an element by its `aria-label`. */
-  getByLabel(text: string): WebViewLocator {
-    return new WebViewLocator(this, `label=${text}`, this._timeoutMs,
-      deepQueryAllJs(`[aria-label=${JSON.stringify(text)}]`));
+  /**
+   * Locate an element by its label, as Playwright's `page.getByLabel` does:
+   * the text of its aria-labelledby targets, else its `aria-label`, else, for
+   * a form control, its `<label>`s (`for=` or wrapping). A case-insensitive
+   * substring match by default; `exact` matches the whole string
+   * case-sensitively; a RegExp is tested against the label text.
+   */
+  getByLabel(text: string | RegExp, options?: WebViewLabelOptions): WebViewLocator {
+    assertTextArg(text, 'webview.getByLabel()');
+    checkOptions('webview.getByLabel()', options, ['exact']);
+    const matcher = textMatcherJs(text, options?.exact);
+    return new WebViewLocator(this, `label=${describeText(text, options?.exact)}`, this._timeoutMs,
+      withDomHelpers(`__ts.all(document).filter((el) => __ts.labelTexts(el).some((t) => __ts.textMatch(t, ${matcher}, true)))`));
   }
 
   /** Locate an element by CSS selector. */
@@ -1387,8 +1443,15 @@ interface DomNode {
   text: string
   placeholder: string
   role: string
+  /** The accessible name. */
   ariaLabel: string
   ariaLabelAttr?: string
+  /** The accessible name with hidden content, when it differs. */
+  ariaLabelWithHidden?: string
+  ariaRole?: string
+  labels?: string[]
+  /** An element the dump has no node for has (or contains) one of these labels. */
+  labelElsewhere?: boolean
   testId: string
   type: string
   href: string

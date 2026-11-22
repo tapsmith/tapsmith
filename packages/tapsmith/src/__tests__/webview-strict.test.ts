@@ -20,6 +20,10 @@ interface ProbeMatch {
   id?: string
   testId?: string
   ariaLabel?: string
+  /** The label getByLabel reads; the aria-label by default. */
+  label?: string
+  /** Whether no other element on the page has that label (default true). */
+  labelUnique?: boolean
   role?: string
   text?: string
   /** Whether the element has no child elements (the elements getByText finds). */
@@ -39,6 +43,8 @@ function probeOf(matches: ProbeMatch[], nthIndex = 0): WebViewLocatorProbe {
       id: m.id ?? '',
       testId: m.testId ?? '',
       ariaLabel: m.ariaLabel ?? '',
+      label: m.label ?? m.ariaLabel ?? '',
+      labelUnique: m.labelUnique ?? true,
       role: m.role ?? '',
       text: m.text ?? '',
       leaf: m.leaf ?? true,
@@ -112,7 +118,7 @@ describe('WebView strict mode (PILOT-227)', () => {
       const message = (err as Error).message;
       expect(message).toContain('aka webview.getByTestId("save-primary")');
       expect(message).toContain('aka webview.locator("#save2")');
-      expect(message).toContain('aka webview.getByLabel("Save draft")');
+      expect(message).toContain('aka webview.getByLabel("Save draft", { exact: true })');
       expect(message).toContain('aka webview.getByText("Save", { exact: true })');
     });
 
@@ -124,7 +130,7 @@ describe('WebView strict mode (PILOT-227)', () => {
       ]);
       const err = await handle.locator('*').click().catch((e: unknown) => e);
       const message = (err as Error).message;
-      expect(message).toContain('aka webview.getByLabel("Pay\\u00A0now")');
+      expect(message).toContain('aka webview.getByLabel("Pay\\u00A0now", { exact: true })');
       expect(message).toContain(`aka webview.getByText("${long.slice(0, 60)}")`);
       expect(message).not.toContain('…", { exact: true })');
     });
@@ -223,10 +229,10 @@ describe('WebView strict mode (PILOT-227)', () => {
 
     it('getByRole treats an explicit empty accessible name as a filter, not "no filter"', () => {
       const { handle } = makeHandle([]);
-      // Mapped and unmapped roles both filter on the accessible name
+      // Every role filters on the accessible name
       // (webview-shadow-dom.test.ts runs these against a page).
-      expect(handle.getByRole('button', { name: '' })._finderAllJs).toContain('__ts.name(el) === ""');
-      expect(handle.getByRole('banner', { name: '' })._finderAllJs).toContain('__ts.name(el) === ""');
+      expect(handle.getByRole('button', { name: '' })._finderAllJs).toContain('{"s":"","exact":false}');
+      expect(handle.getByRole('banner', { name: '' })._finderAllJs).toContain('{"s":"","exact":false}');
     });
   });
 

@@ -75,14 +75,16 @@ describe('parseSelectorString: getByRole state options', () => {
 
 describe('locatorStringError: why a locator\'s options are refused', () => {
   it('names an unknown option, a non-boolean value and an option the getter does not take', () => {
-    expect(locatorStringError('device.getByRole("button", { includeHidden: true })')).toBe('unsupported option "includeHidden"');
+    expect(locatorStringError('device.getByRole("button", { level: 2 })')).toBe('unsupported option "level"');
+    expect(locatorStringError('device.getByRole("button", { includeHidden: true })'))
+      .toBe('device.getByRole() has no option "includeHidden" (it takes name, exact, checked, disabled, selected, expanded)');
     expect(locatorStringError('device.getByRole("button", { selected: "yes" })')).toBe('option "selected" must be true or false, got "yes"');
     expect(locatorStringError('device.getByText("A", { selected: true }).first()'))
       .toBe('device.getByText() has no option "selected" (it takes exact)');
     expect(locatorStringError('device.getByLabel("A", { exact: true })'))
       .toBe('device.getByLabel() has no option "exact" (it takes no options)');
     expect(locatorStringError('webview.getByRole("tab", { name: "A", selected: true })'))
-      .toBe('webview.getByRole() has no option "selected" (it takes name)');
+      .toBe('webview.getByRole() has no option "selected" (it takes name, exact, includeHidden)');
   });
 
   it('says the name could not be read rather than that getByRole has no name', () => {

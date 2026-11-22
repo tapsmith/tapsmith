@@ -1,5 +1,6 @@
 import { decodeXmlEntities } from '../../xml-entities.js';
 import { ANDROID_ROLE_CLASSES } from '../../roles.js';
+import { webViewRolesFor } from '../../webview-dom-js.js';
 import { isHooksMarkerCarrier } from './non-app-nodes.js';
 
 // ─── Types ───
@@ -245,13 +246,96 @@ export function isLabelField(node: HierarchyNode): boolean {
 }
 
 /**
- * The `aria-label` attribute of a WebView node — what `webview.getByLabel`
- * matches. The node's content-desc is its computed accessible name (also
- * from aria-labelledby or a `<label>`), which getByLabel does not read.
- * A dump that predates the attribute falls back to content-desc.
+ * The `aria-label` attribute of a WebView node. A dump that predates the
+ * attribute falls back to content-desc.
  */
 export function webViewAriaLabel(node: HierarchyNode): string {
   return node.attributes.get('webview-aria-label') ?? node.attributes.get('content-desc') ?? '';
+}
+
+/**
+ * A WebView node's ARIA role, as webview.getByRole computes it (the dump's
+ * `webview-aria-role`). A dump that predates the attribute falls back to the
+ * role attribute or the tag's role, in ARIA's spelling. Empty for none.
+ */
+export function webViewAriaRole(node: HierarchyNode): string {
+  const computed = node.attributes.get('webview-aria-role');
+  if (computed !== undefined) return computed;
+  const legacy = node.attributes.get('webview-role') || legacyWebViewTagRole(node) || '';
+  return legacy === 'textfield' ? 'textbox' : legacy === 'image' ? 'img' : legacy;
+}
+
+/**
+ * The role a WebView node's tag (and an input's type) gives it, in
+ * Tapsmith's spelling, for a dump that predates `webview-aria-role`: what
+ * the Playground both suggests and matches for such a dump.
+ */
+export function legacyWebViewTagRole(node: HierarchyNode): string | null {
+  const tag = node.attributes.get('webview-tag') ?? '';
+  if (tag === 'input') {
+    const inputType = node.attributes.get('webview-type') ?? '';
+    if (inputType === 'checkbox') return 'checkbox';
+    if (inputType === 'radio') return 'radio';
+    if (inputType === 'range') return 'slider';
+    if (inputType === 'button' || inputType === 'submit' || inputType === 'reset') return 'button';
+    return 'textfield';
+  }
+  return WEBVIEW_TAG_TO_ROLE[tag] ?? null;
+}
+
+/** Whether webview.getByRole(role) can find this WebView node. */
+export function webViewHasRole(node: HierarchyNode, role: string): boolean {
+  const own = webViewAriaRole(node);
+  return own !== '' && (webViewRolesFor(role) ?? []).includes(own);
+}
+
+/**
+ * A WebView node's accessible name, which a webview.getByRole name matches:
+ * the dump's computed name (content-desc), or for a dump that predates
+ * `webview-aria-role`, the name it can piece together.
+ */
+export function webViewAccessibleName(node: HierarchyNode, includeHidden = false): string {
+  // With includeHidden the name takes in hidden content, which the dump
+  // writes separately when it differs.
+  const withHidden = includeHidden ? node.attributes.get('webview-name-with-hidden') : undefined;
+  if (withHidden !== undefined) return withHidden;
+  const name = node.attributes.get('content-desc') ?? '';
+  if (node.attributes.has('webview-aria-role')) return name;
+  return name || node.attributes.get('text') || node.attributes.get('hint') || '';
+}
+
+/**
+ * The label texts webview.getByLabel matches a WebView node by
+ * (`webview-labels`: aria-labelledby, aria-label, `<label>`), raw: a RegExp
+ * tests them as they are, a string match normalises whitespace. A dump that
+ * predates the attribute has only the aria-label.
+ */
+export function webViewLabels(node: HierarchyNode): string[] {
+  const raw = node.attributes.get('webview-labels');
+  if (raw !== undefined) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((l): l is string => typeof l === 'string');
+    } catch {
+      // A malformed attribute reads as no labels.
+    }
+    return [];
+  }
+  const ariaLabel = webViewAriaLabel(node);
+  return ariaLabel ? [ariaLabel] : [];
+}
+
+/**
+ * A WebView getBy* string match, as the page runs it: a case-insensitive
+ * substring by default, the whole string case-sensitively with `exact`,
+ * whitespace normalised on both sides.
+ */
+export function webViewTextMatches(text: string, query: string, exact: boolean): boolean {
+  // Playwright's normalisation: zero-width spaces and soft hyphens out before the trim.
+  const norm = (s: string) => s.replace(/[\u200b\u00ad]/g, '').trim().replace(/\s+/g, ' ');
+  const v = norm(text);
+  const q = norm(query);
+  return exact ? v === q : v.toLowerCase().includes(q.toLowerCase());
 }
 
 // ─── Geometry ───

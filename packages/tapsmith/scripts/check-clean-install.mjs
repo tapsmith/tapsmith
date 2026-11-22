@@ -33,6 +33,7 @@ import {
   deprecationLines,
   disallowedInstallScripts,
   installScriptsOf,
+  missingLicenseFiles,
   nonExecutableFiles,
   npmReportsInstallScripts,
   packEntry,
@@ -174,6 +175,13 @@ function packTapsmith() {
     );
   }
   checkBundledDocsPacked(info);
+  const missingLicenses = missingLicenseFiles(info.files);
+  if (missingLicenses.length > 0) {
+    fail(
+      `${info.filename} does not ship ${missingLicenses.join(' or ')}. Apache-2.0 requires the License and the ` +
+        'Playwright notices to go with the package: keep them in packages/tapsmith and THIRD_PARTY_NOTICES in package.json `files`.',
+    );
+  }
   return info;
 }
 
