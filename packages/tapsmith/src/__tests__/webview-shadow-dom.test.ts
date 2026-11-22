@@ -680,6 +680,13 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
     }
   });
 
+  it('skips what a closed <details> hides, as Playwright does, but not its summary', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><details><summary id="q">Question</summary><button id="d1">Delete</button></details>'
+      + '<details open><summary>Open</summary><button id="d2">Delete</button></details><button id="d3">Delete</button></body>');
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Delete' })._finderAllJs)).toEqual(['d2', 'd3']);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Delete', includeHidden: true })._finderAllJs)).toEqual(['d1', 'd2', 'd3']);
+  });
+
   it('throws at once on a role no element can have, an option it does not take, or a bad name', () => {
     const { handle } = handleOn('<!DOCTYPE html><body></body>');
     expect(() => handle.getByRole('textfeild')).toThrow(/unknown role "textfeild".*textbox.*textfield \(textbox, searchbox, spinbutton\)/);
@@ -831,6 +838,21 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
       const suggested = generateSelectors(old[0]!).map((g) => g.code).filter((c) => c.includes('getByRole'));
       expect(suggested[0]).toMatch(/^webview\.getByRole\("checkbox"/);
       expect(count(old, suggested[0]!)).toBe(1);
+    });
+
+    it('offers no getByLabel for a label a hidden page also has, which the page\'s getByLabel finds too', async () => {
+      const { handle } = handleOn('<!DOCTYPE html><body><div style="display:none"><label for="old">Email address</label><input id="old"></div>'
+        + '<label for="e">Email</label><input id="e"><label for="n">Name</label><input id="n"></body>', (doc) => {
+        distinctBoxes(doc);
+        // The hidden page has no box, inside as out.
+        for (const el of doc.querySelectorAll('[style*="display:none"] *')) el.removeAttribute('data-rect');
+      });
+      const nodes = flatten(parseHierarchyXml((await handle._dumpDomHierarchy())!));
+      const email = nodes.find((n) => n.attributes.get('webview-id') === 'e')!;
+      expect(await handle.getByLabel('Email').count()).toBe(2);
+      expect(generateSelectors(email).map((g) => g.code).filter((c) => c.includes('getByLabel'))).toEqual([]);
+      const name = nodes.find((n) => n.attributes.get('webview-id') === 'n')!;
+      expect(generateSelectors(name).map((g) => g.code)).toContain('webview.getByLabel("Name")');
     });
 
     it('reads a dump from before PILOT-1361', () => {

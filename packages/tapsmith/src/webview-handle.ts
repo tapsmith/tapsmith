@@ -1021,6 +1021,8 @@ export class WebViewHandle {
         // its place, so a slot's content can still be picked.
         // depth counts the nodes emitted above el, not the shadow roots and
         // box-less elements walked through, which component trees are full of.
+        // Each element the dump has a node for.
+        const emitted = new Map();
         function walk(el, depth) {
           if (depth > 40) return [];
           const tag = el.tagName?.toLowerCase() || '';
@@ -1066,10 +1068,27 @@ export class WebViewHandle {
             },
             children: [],
           };
+          emitted.set(el, node);
           for (const child of kids) node.children.push(...walk(child, depth + 1));
           return [node];
         }
-        return walk(document.body, 0)[0] ?? null;
+        const root = walk(document.body, 0)[0] ?? null;
+        // getByLabel also finds elements the dump has no node for (no box: a
+        // hidden page of an Ionic stack). Mark a node whose label one of them
+        // also has (or contains, as a substring match finds it), so the
+        // Playground does not offer that label as unique.
+        const unshown = [];
+        for (const e of __ts.all(document)) {
+          if (emitted.has(e)) continue;
+          for (const t of __ts.labelTexts(e)) { const v = __ts.norm(t).toLowerCase(); if (v) unshown.push(v); }
+        }
+        if (unshown.length) {
+          for (const [el, node] of emitted) {
+            const own = node.labels.map((t) => __ts.norm(t).toLowerCase()).filter(Boolean);
+            if (own.some((l) => unshown.some((u) => u.includes(l)))) node.labelElsewhere = true;
+          }
+        }
+        return root;
       })()`), WEBVIEW_BEST_EFFORT_CDP_TIMEOUT_MS) as DomNode | null;
 
       if (!domData) return undefined;
@@ -1095,6 +1114,7 @@ export class WebViewHandle {
         attrs.push(`webview-aria-label="${escapeXmlAttr(node.ariaLabelAttr ?? '')}"`);
         attrs.push(`webview-aria-role="${escapeXmlAttr(node.ariaRole ?? '')}"`);
         attrs.push(`webview-labels="${escapeXmlAttr(JSON.stringify(node.labels ?? []))}"`);
+        if (node.labelElsewhere) attrs.push('webview-label-elsewhere="true"');
         if (node.testId) attrs.push(`webview-testid="${escapeXmlAttr(node.testId)}"`);
         if (node.type) attrs.push(`webview-type="${escapeXmlAttr(node.type)}"`);
         if (node.href) attrs.push(`webview-href="${escapeXmlAttr(node.href)}"`);
@@ -1430,6 +1450,8 @@ interface DomNode {
   ariaLabelWithHidden?: string
   ariaRole?: string
   labels?: string[]
+  /** An element the dump has no node for has (or contains) one of these labels. */
+  labelElsewhere?: boolean
   testId: string
   type: string
   href: string

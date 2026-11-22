@@ -302,8 +302,32 @@ const HELPERS_JS = `(() => {
       return true;
     }
     const optionInSelect = el.nodeName === 'OPTION' && !!el.closest('select');
-    if (!optionInSelect && !isSlot && style && (style.visibility === 'hidden' || style.visibility === 'collapse')) return true;
+    if (!optionInSelect && !isSlot && !styleVisible(el, style)) return true;
     return belongsToHidden(el);
+  }
+  // WKWebView (iOS): Playwright does not trust WebKit's checkVisibility
+  // (WebKit bug 264733) and checks for a closed <details> itself.
+  const IS_WEBKIT = typeof navigator !== 'undefined' && /AppleWebKit/.test(navigator.userAgent || '')
+    && !/Chrome\\/|Chromium|CriOS|Edg\\//.test(navigator.userAgent || '');
+  const styleVisibleCache = new Map();
+  // Playwright's isElementStyleVisibilityVisible: a closed <details>,
+  // content-visibility: hidden or hidden=until-found hides what is inside,
+  // as does any visibility but visible.
+  function styleVisible(el, style) {
+    let visible = styleVisibleCache.get(el);
+    if (visible !== undefined) return visible;
+    visible = true;
+    if (!style) {
+      visible = true;
+    } else if (typeof el.checkVisibility === 'function' && !IS_WEBKIT) {
+      visible = el.checkVisibility();
+    } else {
+      const ds = el.closest('details,summary');
+      if (ds !== el && ds && ds.nodeName === 'DETAILS' && !ds.open) visible = false;
+    }
+    if (visible && style && style.visibility !== 'visible') visible = false;
+    styleVisibleCache.set(el, visible);
+    return visible;
   }
   const ALWAYS_NAME_FROM_CONTENT = ['button', 'cell', 'checkbox', 'columnheader', 'gridcell', 'heading', 'link', 'menuitem',
     'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'row', 'rowheader', 'switch', 'tab', 'tooltip', 'treeitem'];

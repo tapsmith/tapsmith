@@ -198,7 +198,9 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
   // 3. Label — Testing Library getByLabelText: aria-labelledby, aria-label
   // or a <label>, as webview.getByLabel matches it.
   const label = webViewLabels(node).map((l) => l.trim().replace(/\s+/g, ' ')).find(Boolean);
-  if (label) {
+  // Not when an element the dump left out (a hidden page) has the label too:
+  // the page's getByLabel finds it, so the Playground cannot vouch for it.
+  if (label && node.attributes.get('webview-label-elsewhere') !== 'true') {
     selectors.push({
       code: `webview.getByLabel("${escapeJsString(label)}")`,
       label: 'Label',
