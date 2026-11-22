@@ -1617,8 +1617,8 @@ impl TapsmithServiceImpl {
                 "am start -S -a android.intent.action.MAIN -c android.intent.category.LAUNCHER --activity-clear-task -n {}",
                 android_component_arg(package_name, &activity)
             );
-            match adb::shell(serial, &cmd).await {
-                Ok(out) if !am_start_reported_error(&out) => {
+            match android_am_start(serial, &cmd).await {
+                Ok(()) => {
                     clean_started = true;
                     if wait_for_idle {
                         let timeout = if idle_timeout_ms > 0 {
@@ -1636,11 +1636,22 @@ impl TapsmithServiceImpl {
                             .await;
                     }
                 }
-                Ok(out) => {
-                    warn!(%activity, output = %out.trim(), "clean-task relaunch rejected; falling back to force-stop + launcher intent");
-                }
-                Err(e) => {
-                    warn!(%activity, error = %e, "clean-task relaunch failed; falling back to force-stop + launcher intent");
+                Err(reason) => {
+                    // The config's activity is the user's to fix: say so
+                    // rather than relaunch something else (PILOT-1402).
+                    if self
+                        .configured_launch_activity(package_name)
+                        .await
+                        .as_deref()
+                        == Some(activity.as_str())
+                    {
+                        return Err(configured_activity_refused_message(
+                            package_name,
+                            &activity,
+                            &reason,
+                        ));
+                    }
+                    warn!(%activity, %reason, "clean-task relaunch refused; falling back to force-stop + launcher intent");
                 }
             }
         }
@@ -2247,22 +2258,20 @@ impl TapsmithServiceImpl {
         wait_for_idle: bool,
         idle_timeout_ms: u64,
     ) -> Result<Response<proto::ActionResponse>, Status> {
-        match adb::shell(serial, launch_cmd).await {
-            Ok(_) => {
+        match android_am_start(serial, launch_cmd).await {
+            Ok(()) => {
                 self.finish_launch(request_id, wait_for_idle, idle_timeout_ms)
                     .await
             }
-            Err(e) => {
-                let screenshot = self.error_screenshot().await;
-                Ok(Response::new(proto::ActionResponse {
+            Err(reason) => Ok(self
+                .launch_failed(
                     request_id,
-                    success: false,
-                    error_type: "LAUNCH_FAILED".to_string(),
-                    error_message: format!("Failed to launch app: {e}"),
-                    screenshot,
-                    app_launched_fresh: false,
-                }))
-            }
+                    format!(
+                        "Failed to launch app: {reason}. Check the activity name (`activity` in \
+                         tapsmith.config.ts, or launchApp's `activity` option)."
+                    ),
+                )
+                .await),
         }
     }
 
@@ -2369,83 +2378,100 @@ impl TapsmithServiceImpl {
 
         // Start the launcher component directly, with the intent a launcher
         // tap sends (PILOT-976). `monkey` starts a VM of its own for the same
-        // intent; it stays the fallback for a package whose launcher activity
-        // cannot be resolved, or when the start is refused.
-        if let Some(activity) = self.launcher_activity(serial, package_name).await {
+        // intent; it stays the last resort for a package whose launcher
+        // activity cannot be resolved or started.
+        //
+        // The config's activity first: a refusal there is the user's to fix,
+        // so it fails loudly instead of launching something else (PILOT-1402).
+        if let Some(activity) = self.configured_launch_activity(package_name).await {
             let cmd = android_launcher_intent_cmd(package_name, &activity);
-            match adb::shell(serial, &cmd).await {
-                Ok(out) if !am_start_reported_error(&out) => {
+            return match android_am_start(serial, &cmd).await {
+                Ok(()) => {
+                    self.finish_launch(request_id, wait_for_idle, idle_timeout_ms)
+                        .await
+                }
+                Err(reason) => Ok(self
+                    .launch_failed(
+                        request_id,
+                        configured_activity_refused_message(package_name, &activity, &reason),
+                    )
+                    .await),
+            };
+        }
+
+        // Then the resolved one. A refused cached entry (the app was
+        // reinstalled with another launcher activity) is resolved again, once.
+        let mut refused: Option<(String, String)> = None;
+        for _ in 0..2 {
+            let Some(activity) = self.launcher_activity(serial, package_name).await else {
+                break;
+            };
+            if refused
+                .as_ref()
+                .is_some_and(|(tried, _)| *tried == activity)
+            {
+                break;
+            }
+            let cmd = android_launcher_intent_cmd(package_name, &activity);
+            match android_am_start(serial, &cmd).await {
+                Ok(()) => {
                     return self
                         .finish_launch(request_id, wait_for_idle, idle_timeout_ms)
                         .await;
                 }
-                refused => {
-                    // A stale entry (the app was reinstalled with another
-                    // launcher activity) is resolved again next time.
+                Err(reason) => {
                     self.android_launcher_activity
                         .write()
                         .await
                         .remove(package_name);
-                    let reason = match refused {
-                        Ok(out) => out.trim().to_string(),
-                        Err(e) => e.to_string(),
-                    };
-                    warn!(%activity, %reason, "launcher intent refused; falling back to monkey");
+                    warn!(%activity, %reason, "launcher intent refused");
+                    refused = Some((activity, reason));
                 }
             }
         }
 
-        let monkey_cmd = android_monkey_launch_cmd(package_name);
-
-        match adb::shell(serial, &monkey_cmd).await {
-            Ok(_) => {
+        let monkey = adb::shell_lenient(
+            serial,
+            &format!("{} 2>&1", android_monkey_launch_cmd(package_name)),
+        )
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|out| monkey_launch_result(&out));
+        match monkey {
+            Ok(()) => {
                 self.finish_launch(request_id, wait_for_idle, idle_timeout_ms)
                     .await
             }
-            Err(monkey_err) => {
-                let Some(activity) = self.resolve_launcher_activity(serial, package_name).await?
-                else {
-                    let installed = android_package_installed(serial, package_name).await;
-                    let screenshot = self.error_screenshot().await;
-                    return Ok(Response::new(proto::ActionResponse {
-                        request_id,
-                        success: false,
-                        error_type: "LAUNCH_FAILED".to_string(),
-                        error_message: unresolved_launcher_message(
-                            package_name,
-                            installed,
-                            &monkey_err.to_string(),
-                        ),
-                        screenshot,
-                        app_launched_fresh: false,
-                    }));
-                };
-
-                let fallback_cmd = format!(
-                    "am start -S --activity-clear-task -n {}",
-                    android_component_arg(package_name, &activity)
+            Err(monkey_reason) => {
+                let installed = android_package_installed(serial, package_name).await;
+                let message = unresolved_launcher_message(
+                    package_name,
+                    installed,
+                    refused
+                        .as_ref()
+                        .map(|(activity, reason)| (activity.as_str(), reason.as_str())),
+                    &monkey_reason,
                 );
-                match adb::shell(serial, &fallback_cmd).await {
-                    Ok(_) => {
-                        self.finish_launch(request_id, wait_for_idle, idle_timeout_ms)
-                            .await
-                    }
-                    Err(fallback_err) => {
-                        let screenshot = self.error_screenshot().await;
-                        Ok(Response::new(proto::ActionResponse {
-                            request_id,
-                            success: false,
-                            error_type: "LAUNCH_FAILED".to_string(),
-                            error_message: format!(
-                                "Failed to launch app via launcher intent ({monkey_err}) and explicit activity {activity} ({fallback_err})"
-                            ),
-                            screenshot,
-                            app_launched_fresh: false,
-                        }))
-                    }
-                }
+                Ok(self.launch_failed(request_id, message).await)
             }
         }
+    }
+
+    /// A failed launch's answer, with a screenshot of the device.
+    async fn launch_failed(
+        &self,
+        request_id: String,
+        error_message: String,
+    ) -> Response<proto::ActionResponse> {
+        let screenshot = self.error_screenshot().await;
+        Response::new(proto::ActionResponse {
+            request_id,
+            success: false,
+            error_type: "LAUNCH_FAILED".to_string(),
+            error_message,
+            screenshot,
+            app_launched_fresh: false,
+        })
     }
 
     /// Query dumpsys for the current resumed activity and return `(package, activity)`.
@@ -7095,16 +7121,66 @@ fn android_component_arg(package_name: &str, activity: &str) -> String {
     format!("'{package_name}/{activity}'")
 }
 
-/// Whether `am start`'s output reports that it started nothing: a line of
-/// its own that starts with `Error` ("Error type 3", "Error: Activity class
-/// … does not exist"). Current Android writes those to stderr and exits 1,
-/// which `adb::shell` already returns as an error; an adb that merges stderr
-/// into stdout and drops the exit status (no shell protocol v2) leaves them
-/// here. A "Warning: … brought to the front" is a launch.
-fn am_start_reported_error(output: &str) -> bool {
-    output
+/// Why `am start` started nothing, from its output with stderr merged in:
+/// its `Error…` lines ("Error type 3", "Error: Activity class … does not
+/// exist") or the exception it died of (a non-exported activity's
+/// SecurityException). `None` when it started something — a "Warning: …
+/// brought to the front" is a launch.
+fn am_start_error(output: &str) -> Option<String> {
+    let lines: Vec<&str> = output
         .lines()
-        .any(|line| line.trim_start().starts_with("Error"))
+        .map(str::trim)
+        .filter(|line| {
+            line.starts_with("Error")
+                || line.starts_with("Exception occurred")
+                || line.starts_with("java.lang.")
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join(" ").trim_end_matches('.').to_string())
+}
+
+/// Run an `am start` command; `Err` with the reason when it started
+/// nothing. `am start` reports a refusal on stderr, exiting 0 on Android 9
+/// and 1 on newer versions, and `adb::shell` keeps only stdout: so stderr
+/// is merged in and the exit status dropped, and the output is the one
+/// signal (PILOT-1402).
+async fn android_am_start(serial: &str, cmd: &str) -> Result<(), String> {
+    match adb::shell(serial, &format!("{cmd} 2>&1; true")).await {
+        Ok(out) => am_start_error(&out).map_or(Ok(()), Err),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Whether `monkey`, run with stderr merged into stdout, sent its launch
+/// event; `Err` with its reason (its last `** …` line, else its last line)
+/// when not. Android 9 prints the reason on stdout and its argument dump on
+/// stderr, Android 16 the other way round.
+fn monkey_launch_result(output: &str) -> Result<(), String> {
+    if output.contains("Events injected:") {
+        return Ok(());
+    }
+    let lines: Vec<&str> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let reason = lines
+        .iter()
+        .rev()
+        .find(|line| line.starts_with("**"))
+        .or_else(|| lines.last())
+        .map(|line| line.trim_start_matches('*').trim().to_string())
+        .unwrap_or_else(|| "no output".to_string());
+    Err(reason)
+}
+
+/// The error for a configured `activity` that `am start` refused.
+fn configured_activity_refused_message(package_name: &str, activity: &str, reason: &str) -> String {
+    format!(
+        "Failed to launch app: the configured activity {activity} of {package_name} could not \
+         be started: {reason}. Check `activity` in tapsmith.config.ts: it must name an \
+         exported activity of {package_name}, as '.MainActivity' or a full class name."
+    )
 }
 
 /// What the Android agent's `waitForAppReady` answered (PILOT-976).
@@ -7227,32 +7303,35 @@ fn android_monkey_launch_cmd(package_name: &str) -> String {
     format!("monkey --pct-syskeys 0 -p {package_name} -c android.intent.category.LAUNCHER 1")
 }
 
-/// The error for a package none of whose launcher activities resolved and
-/// that `monkey` could not start either: what went wrong and what to do,
-/// with monkey's own reason (its last line) rather than its argument dump.
-fn unresolved_launcher_message(package_name: &str, installed: bool, monkey_err: &str) -> String {
+/// The error for a package that no launcher activity and no `monkey`
+/// could start: what went wrong and what to do. `refused` is the resolved
+/// launcher activity that `am start` refused, with its reason;
+/// `monkey_reason` is monkey's own reason (see [`monkey_launch_result`]).
+fn unresolved_launcher_message(
+    package_name: &str,
+    installed: bool,
+    refused: Option<(&str, &str)>,
+    monkey_reason: &str,
+) -> String {
     if !installed {
         return format!(
             "Failed to launch app: {package_name} is not installed on the device. \
              Install it first, or set `apk` in tapsmith.config.ts to its APK so Tapsmith installs it."
         );
     }
-    let reason = monkey_err
-        .lines()
-        .map(str::trim)
-        .rfind(|line| !line.is_empty())
-        .map(|line| line.trim_start_matches('*').trim())
-        .unwrap_or("");
-    let reason = if reason.is_empty() {
-        String::new()
-    } else {
-        format!(" (monkey: {reason})")
+    let what = match refused {
+        Some((activity, reason)) => {
+            format!("its launcher activity {activity} could not be started ({reason})")
+        }
+        None => "couldn't resolve the launcher activity: no activity of it handles the \
+                 MAIN/LAUNCHER intent"
+            .to_string(),
     };
     format!(
-        "Failed to launch app: couldn't resolve the launcher activity of {package_name}: \
-         no activity of it handles the MAIN/LAUNCHER intent, and the monkey fallback could \
-         not start it either{reason}. Set `activity` in tapsmith.config.ts to the activity \
-         to launch, e.g. activity: '.MainActivity'."
+        "Failed to launch app {package_name}: {what}, and the monkey fallback could not start \
+         it either (monkey: {monkey_reason}). Name the activity to launch: `activity` in \
+         tapsmith.config.ts for the config's app, or launchApp(package, {{ activity }}), \
+         e.g. '.MainActivity'."
     )
 }
 
@@ -9930,24 +10009,76 @@ mod tests {
 
     #[test]
     fn am_start_errors_are_read_from_its_output() {
-        // `am start` exits 0 when it fails to start anything.
-        assert!(am_start_reported_error(
-            "Starting: Intent { cmp=com.example.app/.Gone }\nError type 3\nError: Activity class {com.example.app/.Gone} does not exist.\n"
-        ));
-        assert!(am_start_reported_error(
+        // `am start` reports a refusal on stderr, which `android_am_start`
+        // merges into its output: exit 0 on Android 9 (PILOT-1402 QA), 1 on
+        // newer versions, so the text is the one signal.
+        assert_eq!(
+            am_start_error(
+                "Starting: Intent { cmp=com.example.app/.Gone }\nError type 3\nError: Activity class {com.example.app/.Gone} does not exist.\n"
+            )
+            .as_deref(),
+            Some("Error type 3 Error: Activity class {com.example.app/.Gone} does not exist")
+        );
+        assert!(am_start_error(
             "Error: Activity not started, unable to resolve Intent { act=android.intent.action.MAIN }"
-        ));
-        assert!(!am_start_reported_error(
-            "Starting: Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.app/.MainActivity }"
-        ));
+        )
+        .is_some());
+        // A non-exported activity.
+        assert!(am_start_error(
+            "Starting: Intent { cmp=com.example.app/.Private }\nException occurred while executing 'start':\njava.lang.SecurityException: Permission Denial: starting Intent { cmp=com.example.app/.Private } from null (pid=1, uid=2000) not exported from uid 10155\n"
+        )
+        .is_some_and(|reason| reason.contains("not exported")));
+        assert_eq!(
+            am_start_error(
+                "Starting: Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.app/.MainActivity }"
+            ),
+            None
+        );
         // The app already in front is a successful launch.
-        assert!(!am_start_reported_error(
-            "Starting: Intent { cmp=com.example.app/.MainActivity }\nWarning: Activity not started, its current task has been brought to the front"
-        ));
+        assert_eq!(
+            am_start_error(
+                "Starting: Intent { cmp=com.example.app/.MainActivity }\nWarning: Activity not started, its current task has been brought to the front"
+            ),
+            None
+        );
         // An activity whose name contains "Error" is not an error.
-        assert!(!am_start_reported_error(
-            "Starting: Intent { cmp=com.example.app/.ErrorReportActivity }"
-        ));
+        assert_eq!(
+            am_start_error("Starting: Intent { cmp=com.example.app/.ErrorReportActivity }"),
+            None
+        );
+    }
+
+    #[test]
+    fn monkey_output_says_whether_it_launched_and_why_not() {
+        // Its stdout and stderr merged, as `launch_package` runs it.
+        assert_eq!(
+            monkey_launch_result("  bash arg: -p\nargs: [--pct-syskeys, 0, -p, com.android.settings]\nEvents injected: 1\n## Network stats: elapsed time=98ms\n"),
+            Ok(())
+        );
+        // Android 16 without physical system keys.
+        assert_eq!(
+            monkey_launch_result("args: [-p, org.wikipedia.dev, -c, android.intent.category.LAUNCHER, 1]\n arg: \"-p\"\ndata=\"org.wikipedia.dev\"\n** SYS_KEYS has no physical keys but with factor 2.0%.\n"),
+            Err("SYS_KEYS has no physical keys but with factor 2.0%.".to_string())
+        );
+        // Android 9: the reason is on stdout, the argument dump on stderr.
+        assert_eq!(
+            monkey_launch_result("  bash arg: -p\n  bash arg: com.android.shell\nargs: [--pct-syskeys, 0, -p, com.android.shell]\ndata=\"android.intent.category.LAUNCHER\"\n** No activities found to run, monkey aborted.\n"),
+            Err("No activities found to run, monkey aborted.".to_string())
+        );
+        assert_eq!(monkey_launch_result(""), Err("no output".to_string()));
+    }
+
+    #[test]
+    fn a_refused_configured_activity_names_it_and_the_config_option() {
+        let msg = configured_activity_refused_message(
+            "org.wikipedia.dev",
+            "org.wikipedia.NoSuchActivity",
+            "Error type 3 Error: Activity class {org.wikipedia.dev/org.wikipedia.NoSuchActivity} does not exist.",
+        );
+        assert!(msg.contains("org.wikipedia.NoSuchActivity"), "{msg}");
+        assert!(msg.contains("does not exist"), "{msg}");
+        assert!(msg.contains("`activity`"), "{msg}");
+        assert!(msg.contains("tapsmith.config"), "{msg}");
     }
 
     #[tokio::test]
@@ -10163,8 +10294,12 @@ mod tests {
 
     #[test]
     fn an_unresolvable_launcher_activity_says_so_and_points_at_the_config() {
-        let monkey_err = "adb command failed (exit exit status: 251): args: [-p, org.wikipedia.dev, -c, android.intent.category.LAUNCHER, 1]\n arg: \"-p\"\ndata=\"org.wikipedia.dev\"\n** SYS_KEYS has no physical keys but with factor 2.0%.\n";
-        let msg = unresolved_launcher_message("org.wikipedia.dev", true, monkey_err);
+        let msg = unresolved_launcher_message(
+            "org.wikipedia.dev",
+            true,
+            None,
+            "SYS_KEYS has no physical keys but with factor 2.0%.",
+        );
         assert!(msg.contains("org.wikipedia.dev"), "{msg}");
         assert!(
             msg.contains("couldn't resolve the launcher activity"),
@@ -10172,15 +10307,29 @@ mod tests {
         );
         assert!(msg.contains("`activity`"), "{msg}");
         assert!(msg.contains("tapsmith.config"), "{msg}");
-        // The reason, not the dump.
         assert!(msg.contains("SYS_KEYS has no physical keys"), "{msg}");
-        assert!(!msg.contains("args:"), "{msg}");
-        assert!(!msg.contains("arg: "), "{msg}");
+        // Another package's launch is told how to pass an activity too.
+        assert!(msg.contains("launchApp"), "{msg}");
+
+        // A launcher activity that resolved but was refused says so.
+        let refused = unresolved_launcher_message(
+            "com.example.app",
+            true,
+            Some((
+                ".Main",
+                "Error: Activity class {com.example.app/.Main} does not exist.",
+            )),
+            "No activities found to run, monkey aborted.",
+        );
+        assert!(refused.contains(".Main"), "{refused}");
+        assert!(refused.contains("does not exist"), "{refused}");
+        assert!(!refused.contains("couldn't resolve"), "{refused}");
 
         let missing = unresolved_launcher_message(
             "com.example.gone",
             false,
-            "adb command failed (exit exit status: 1): ** No activities found to run, monkey aborted.",
+            None,
+            "No activities found to run, monkey aborted.",
         );
         assert!(
             missing.contains("com.example.gone is not installed"),
