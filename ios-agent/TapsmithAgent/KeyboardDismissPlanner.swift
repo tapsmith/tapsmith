@@ -467,33 +467,49 @@ struct KeyboardDismissPlanner {
 
     /// A blank spot inside the scroll view `target` is in (keyboard first,
     /// PILOT-1432): above the keyboard and below the status bar, clear of
-    /// everything but plain containers and the scroll views around it, the
-    /// spot furthest from anything else. That scroll view is the one a
-    /// React Native ScrollView with `keyboardShouldPersistTaps` "never" or
-    /// "handled" puts the keyboard away for on a touch no child takes — the
-    /// touch it would otherwise spend the target's tap on. The innermost
-    /// such scroll view is tried first, then the ones around it. nil when
-    /// the target is not found in the tree, is in no scroll view, or no
-    /// scroll view of it has such a spot on screen.
+    /// everything but plain containers, the spot furthest from anything else.
+    /// That scroll view is the one a React Native ScrollView with
+    /// `keyboardShouldPersistTaps` "never" or "handled" puts the keyboard
+    /// away for on a touch no child takes — the touch it would otherwise
+    /// spend the target's tap on. The innermost such scroll view is tried
+    /// first, then the ones around it.
+    ///
+    /// What holds the scroll view never blocks: a touch on its blank part
+    /// goes to the scroll view, not to a container around it (React Native
+    /// wraps a list with an accessibility label in a labeled view of its
+    /// size). Content drawn over it from outside does, plain parts and all:
+    /// a sheet or modal over the list, whose unlabeled backdrop would take
+    /// the touch (and close it). Full-screen wrappers drawn after the screen
+    /// with nothing in them take no touch, and are left out.
+    ///
+    /// nil when the target is not found in the tree, is in no scroll view, or
+    /// no scroll view of it has such a spot on screen.
     func blankPointInScroller(of target: OcclusionAnalyzer.Target) -> CGPoint? {
         let area = touchableArea
         guard !area.isNull, let t = analyzer.locate(target) else { return nil }
-        let up = analyzer.ancestors(of: t)
-        for scroller in up where OcclusionAnalyzer.keyboardEatingScrollerTypes.contains(nodes[scroller].elementType) {
+        let windows = keyboardWindows
+        for scroller in analyzer.ancestors(of: t)
+        where OcclusionAnalyzer.keyboardEatingScrollerTypes.contains(nodes[scroller].elementType) {
             let rect = clippedToScrollers(nodes[scroller].frame.intersection(area), around: scroller)
             if rect.isNull { continue }
-            // The scroll view and what holds it are where the touch lands:
-            // plain containers and enclosing scroll views do not take it.
-            let transparent = Set([scroller] + analyzer.ancestors(of: scroller).filter {
-                isPlain($0) || OcclusionAnalyzer.scrollerTypes.contains(nodes[$0].elementType)
-            })
+            let holders = Set([scroller] + analyzer.ancestors(of: scroller))
+            let inside = (scroller + 1)..<nodes[scroller].subtreeEnd
             let point = clearestPoint(in: rect, avoiding: statusBar.map { [$0] } ?? []) { i in
-                if transparent.contains(i) { return false }
-                return !isPlain(i)
+                if holders.contains(i) { return false }
+                if inside.contains(i) || i < scroller { return !isPlain(i) }
+                // Drawn after the scroll view, outside it: over it.
+                if let w = nodes[i].window, windows.contains(w) { return !isPlain(i) }
+                return !isPlain(i) || holdsContent(i)
             }
             if let point { return point }
         }
         return nil
+    }
+
+    /// Whether anything in node `i`'s subtree is not plain: a container with
+    /// content in it, drawn over what is behind it.
+    private func holdsContent(_ i: Int) -> Bool {
+        ((i + 1)..<nodes[i].subtreeEnd).contains { !isPlain($0) }
     }
 
     // MARK: - 4. Return key

@@ -1097,57 +1097,75 @@ do {
 // target is in. On a search screen the field sits above a React Native list,
 // in a plain view that does not put the keyboard away when tapped; the list
 // does, so the blank spot must be in the list.
-let listSearchField = R(16, 132, 370, 44)
-/// /list with the keyboard up: a search field and two counts above a
-/// FlatList whose rows (React Native touchables) keep a 16 pt margin either
-/// side and 8 pt apart.
-func listScreen(rows count: Int, rowFrame: (Int) -> CGRect = { R(16, 242 + Double($0) * 66, 370, 58) }) -> [Row] {
+let listSearchField = R(17, 133, 368, 43)
+/// /list with the keyboard up, as recorded on an iPhone 17 / iOS 26.5
+/// simulator: a search field and two counts above a FlatList whose rows
+/// (React Native touchables) keep a 16 pt margin either side and 8 pt apart.
+/// The list's accessibility label puts it in a labeled view of its size; its
+/// scroll bars are labeled views inside it; full-screen wrappers and the
+/// test-hooks marker are drawn after the screen. `overlay` goes right after
+/// the list's screen in the app window, `windows` after the app window.
+func listScreen(
+    rows count: Int, rowFrame: (Int) -> CGRect = { R(16, 243 + Double($0) * 66, 370, 58) },
+    overlay: [Row] = [], windows: [Row] = []
+) -> [Row] {
     appHead + [
-        (4, .searchField, "Search", "search-input", listSearchField),
-        (4, .staticText, "30 items", "item-count", R(16, 192, 370, 17)),
-        (4, .staticText, "0 selected", "selected-count", R(16, 217, 370, 17)),
-        (4, .scrollView, "Shopping list", "", R(0, 242, 402, 632)),
-        (5, .other, "", "", R(0, 242, 402, max(632, Double(count) * 66))),
+        (4, .other, "", "", R(16, 132, 370, 45)),
+        (5, .searchField, "Search", "search-input", listSearchField),
+        (4, .staticText, "30 items", "item-count", R(0, 193, 402, 25)),
+        (4, .staticText, "0 selected", "selected-count", R(0, 218, 402, 25)),
+        (4, .other, "Shopping list", "", R(0, 243, 402, 631)),
+        (5, .scrollView, "", "", R(0, 243, 402, 631)),
+        (6, .other, "", "", R(0, 243, 402, max(631, Double(count) * 66))),
     ] + (0..<count).flatMap { i -> [Row] in
         [
-            (6, .other, "", "", rowFrame(i)),
-            (7, .button, "Item \(i + 1)", "item-\(i + 1)", rowFrame(i)),
-            (8, .staticText, "Item \(i + 1)", "", rowFrame(i).insetBy(dx: 16, dy: 12)),
+            (7, .other, "", "", rowFrame(i)),
+            (8, .button, "Item \(i + 1)", "item-\(i + 1)", rowFrame(i)),
         ]
-    } + keyboardWindows()
+    } + [
+        (6, .other, "Vertical scroll bar, 1 page", "", R(369, 271, 30, 541)),
+        (7, .other, "", "", R(396, 274, 3, 221)),
+    ] + overlay + [
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .staticText, "tapsmith-hooks:1;epoch=0;nav=1", "tapsmith-hooks", screen),
+        (4, .staticText, "tapsmith-hooks:1;epoch=0;nav=1", "", screen),
+    ] + windows + keyboardWindows()
 }
-func rowTarget(_ i: Int, _ frame: CGRect = R(16, 242 + Double(0) * 66, 370, 58)) -> OcclusionAnalyzer.Target {
-    .init(frame: frame, elementType: .button, label: "Item \(i + 1)", identifier: "item-\(i + 1)")
+func rowTarget(_ i: Int, _ frame: CGRect? = nil) -> OcclusionAnalyzer.Target {
+    .init(frame: frame ?? R(16, 243 + Double(i) * 66, 370, 58), elementType: .button,
+          label: "Item \(i + 1)", identifier: "item-\(i + 1)")
 }
-let listViewport = R(0, 242, 402, 529 - 242)
+let listViewport = R(0, 243, 402, 529 - 243)
 
 do {
     // Every row of a full list on screen: only the side margins are blank.
     let rows = listScreen(rows: 30)
-    let p = planner(rows).blankPointInScroller(of: rowTarget(1, R(16, 308, 370, 58)))
+    let p = planner(rows).blankPointInScroller(of: rowTarget(1))
     checkTrue("packed list: a blank spot in the list", p.map { listViewport.contains($0) } ?? false, "\(String(describing: p))")
-    checkTrue("packed list: the blank spot is clear of every row",
-              p.map { p in notInside(p, (0..<30).map { R(16, 242 + Double($0) * 66, 370, 58) }) } ?? false,
+    checkTrue("packed list: the blank spot is clear of every row and the scroll bar",
+              p.map { p in notInside(p, (0..<30).map { R(16, 243 + Double($0) * 66, 370, 58) } + [R(369, 271, 30, 541)]) } ?? false,
               "\(String(describing: p))")
-    // The field-scope blank spot is outside the list: the plain view the
+    // The field-scope blank spot is outside the list: in the plain view the
     // field sits in, which does not put the keyboard away.
     let fieldSpot = planner(rows).blankPoint(focusedFrame: listSearchField)
     checkTrue("packed list: the field's own blank spot is outside the list",
-              fieldSpot.map { !R(0, 242, 402, 632).contains($0) } ?? true, "\(String(describing: fieldSpot))")
+              fieldSpot.map { !R(0, 243, 402, 631).contains($0) } ?? false, "\(String(describing: fieldSpot))")
 }
 
 do {
     // One row left after filtering: the empty list below it is blank.
     let p = planner(listScreen(rows: 1)).blankPointInScroller(of: rowTarget(0))
     checkTrue("filtered list: a blank spot in the list", p.map { listViewport.contains($0) } ?? false, "\(String(describing: p))")
-    checkTrue("filtered list: clear of the row", p.map { notInside($0, [R(16, 242, 370, 58)]) } ?? false, "\(String(describing: p))")
+    checkTrue("filtered list: clear of the row", p.map { notInside($0, [R(16, 243, 370, 58)]) } ?? false, "\(String(describing: p))")
 }
 
 do {
     // Rows edge to edge with no gaps: nothing in the list is blank.
-    let rows = listScreen(rows: 30, rowFrame: { R(0, 242 + Double($0) * 58, 402, 58) })
+    let rows = listScreen(rows: 30, rowFrame: { R(0, 243 + Double($0) * 58, 402, 58) })
     check("edge-to-edge rows: no blank spot in the list",
-          planner(rows).blankPointInScroller(of: rowTarget(0, R(0, 242, 402, 58))), nil)
+          planner(rows).blankPointInScroller(of: rowTarget(0, R(0, 243, 402, 58))), nil)
 }
 
 do {
@@ -1175,12 +1193,43 @@ do {
 }
 
 do {
-    // A bar from elsewhere drawn over the list blocks the spot under it.
-    let bar = R(0, 300, 402, 229)
-    var rows = listScreen(rows: 1)
-    rows.insert((4, .button, "Floating action", "", bar), at: appHead.count + 5 + 3)
-    let p = planner(rows).blankPointInScroller(of: rowTarget(0))
-    checkTrue("bar over the list blocks the spot", p.map { notInside($0, [bar, R(16, 242, 370, 58)]) } ?? true,
+    // A bar from elsewhere drawn over the list blocks the spot under it;
+    // the list above it is still blank.
+    let bar = R(0, 330, 402, 199)
+    let p = planner(listScreen(rows: 1, overlay: [(4, .button, "Floating action", "", bar)])).blankPointInScroller(of: rowTarget(0))
+    checkTrue("bar over the list: a spot beside it",
+              p.map { listViewport.contains($0) && notInside($0, [bar, R(16, 243, 370, 58)]) } ?? false,
+              "\(String(describing: p))")
+}
+
+do {
+    // A sheet over the list holding the focused field, with a full-screen
+    // unlabeled backdrop (a Pressable that closes it): the list behind is
+    // covered, so no spot in it — the backdrop would take the touch.
+    let sheetField = R(16, 400, 370, 44)
+    let sheet: [Row] = [
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (3, .other, "", "", R(0, 380, 402, 494)),
+        (4, .textField, "Note", "", sheetField),
+    ]
+    check("sheet with a backdrop over the list: no spot in the list",
+          planner(listScreen(rows: 1, overlay: sheet)).blankPointInScroller(of: rowTarget(0)), nil)
+    // The same sheet presented in a window of its own (a React Native Modal).
+    let modal: [Row] = [
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (2, .other, "", "", R(0, 380, 402, 494)),
+        (3, .textField, "Note", "", sheetField),
+    ]
+    check("modal window over the list: no spot in the list",
+          planner(listScreen(rows: 1, windows: modal)).blankPointInScroller(of: rowTarget(0)), nil)
+    // A plain view with nothing in it drawn over part of the list (a
+    // pointerEvents="none" fade) is no cover.
+    let fade = R(0, 400, 402, 129)
+    let p = planner(listScreen(rows: 1, overlay: [(4, .other, "", "", fade)])).blankPointInScroller(of: rowTarget(0))
+    checkTrue("empty plain view over the list: still a spot in the list",
+              p.map { listViewport.contains($0) && notInside($0, [R(16, 243, 370, 58)]) } ?? false,
               "\(String(describing: p))")
 }
 
