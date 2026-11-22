@@ -48,6 +48,10 @@ class TargetSnapshot(
     val isEditable: Boolean,
     /** The text inside it, read only when an unlabelled target needs it. */
     private val readContent: () -> String,
+    /** Its app hit-tests touches itself and every plain view takes them
+     *  (React Native, [ReactNativeApps]), so a bar laid over its list covers
+     *  it (PILOT-1424). */
+    val plainViewsTakeTouches: Boolean = false,
 ) {
     val content: String by lazy(readContent)
 
@@ -160,6 +164,7 @@ class TouchPlanner(
                     targetWindowId = snapshot?.windowId,
                     windows = screen.windows(),
                     screen = screen.bounds,
+                    plainViewsTakeTouches = snapshot?.plainViewsTakeTouches == true,
                 )
             val now = clock.now()
             when (verdict) {
@@ -190,7 +195,7 @@ class TouchPlanner(
                     val sleep =
                         deadlines.sleepBeforeNextPass(now)
                             ?: throw ElementCoveredException(
-                                coveredMessage(verdict.by, coveredSinceMs?.let { now - it } ?: 0),
+                                coveredMessage(verdict.by, verdict.kind, coveredSinceMs?.let { now - it } ?: 0),
                                 verdict.kind,
                             )
                     if (coveredSinceMs == null) coveredSinceMs = now
@@ -265,12 +270,17 @@ class TouchPlanner(
      *  action timeout (resolving the element may have used part of it). */
     private fun coveredMessage(
         cover: String,
+        kind: OcclusionAnalyzer.CoverKind,
         waitedMs: Long,
     ): String {
-        var message = "Element is covered by $cover, so a touch would land on it instead"
+        var message = "Element is covered by $cover"
+        if (kind == OcclusionAnalyzer.CoverKind.BAR) message += ", a bar laid over its list"
+        message += ", so a touch would land on it instead"
         if (waitedMs > 0) message += " (still covered after waiting ${waitedMs}ms)"
         if (cover == "the keyboard") {
             message += ". Dismiss the keyboard first (device.hideKeyboard()) or scroll the element into view."
+        } else if (kind == OcclusionAnalyzer.CoverKind.BAR) {
+            message += ". Scroll it out from under the bar first (await locator.scrollIntoView(), or scroll() the list)."
         }
         return message
     }

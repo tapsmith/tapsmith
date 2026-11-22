@@ -893,5 +893,88 @@ if case .touchable(_, let types) = options.optionText("Large"), types.contains(.
     print("ok   an option in a sheet sits in the sheet")
 } else { failures += 1; print("FAIL an option in a sheet sits in the sheet") }
 
+// ─── Plain bars laid over a list (PILOT-1424) ───
+
+// A React Native screen: a list from y=100 to y=780 and a checkout bar the
+// screen lays over its bottom 64 points. The bar is a plain view: XCUITest
+// calls the row under it unhittable, and only the bar's shape says why.
+func barScreen(row: CGRect, bar: [Row], barFirst: Bool = false, listType: XCUIElement.ElementType = .scrollView) -> OcclusionAnalyzer {
+    let list: [Row] = [
+        (3, listType, "", "list", R(0, 100, 402, 680)),
+        (4, .other, "", "", R(0, 100, 402, 1400)),
+        (5, .button, "Row", "row", row),
+    ]
+    let head: [Row] = [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+    ]
+    return analyzer(head + (barFirst ? bar + list : list + bar))
+}
+let checkoutBar: [Row] = [
+    (3, .other, "", "checkout-bar", R(0, 716, 402, 64)),
+    (4, .staticText, "Checkout bar", "", R(16, 737, 370, 22)),
+]
+func rowAt(_ y: Double) -> OcclusionAnalyzer.Target {
+    .init(frame: R(16, y, 370, 48), elementType: .button, label: "Row", identifier: "row")
+}
+check("a row wholly under a plain bar laid over its list is covered by the bar",
+      barScreen(row: R(16, 724, 370, 48), bar: checkoutBar).analyze(rowAt(724), isHittable: false),
+      .covered(by: "element \"checkout-bar\"" + OcclusionAnalyzer.plainBarSuffix))
+checkPoint("a row partly under the bar is touched on the part left showing",
+           barScreen(row: R(16, 696, 370, 48), bar: checkoutBar).analyze(rowAt(696), isHittable: false),
+           CGPoint(x: 201, y: 706))
+checkPoint("a hittable row is not under the bar",
+           barScreen(row: R(16, 724, 370, 48), bar: checkoutBar).analyze(rowAt(724), isHittable: true),
+           CGPoint(x: 201, y: 748))
+check("a bar named only by its text is named by what it holds",
+      barScreen(row: R(16, 724, 370, 48), bar: [
+          (3, .other, "", "", R(0, 716, 402, 64)),
+          (4, .staticText, "Checkout bar", "", R(16, 737, 370, 22)),
+      ]).analyze(rowAt(724), isHittable: false),
+      .covered(by: "a bar holding text \"Checkout bar\"" + OcclusionAnalyzer.plainBarSuffix))
+checkPoint("a nameless view over the list (a pointerEvents=none fade) is no bar",
+           barScreen(row: R(16, 724, 370, 48), bar: [(3, .other, "", "", R(0, 716, 402, 64))])
+               .analyze(rowAt(724), isHittable: false),
+           CGPoint(x: 201, y: 748))
+checkPoint("a view over most of the list is no bar",
+           barScreen(row: R(16, 724, 370, 48), bar: [(3, .other, "", "toast-host", R(0, 100, 402, 680))])
+               .analyze(rowAt(724), isHittable: false),
+           CGPoint(x: 201, y: 748))
+checkPoint("a narrow badge over the list's edge is no bar",
+           barScreen(row: R(16, 724, 370, 48), bar: [(3, .other, "", "badge", R(300, 716, 102, 64))])
+               .analyze(rowAt(724), isHittable: false),
+           CGPoint(x: 201, y: 748))
+checkPoint("a bar listed before the list is under it",
+           barScreen(row: R(16, 724, 370, 48), bar: checkoutBar, barFirst: true).analyze(rowAt(724), isHittable: false),
+           CGPoint(x: 201, y: 748))
+checkPoint("a web view's own bars are its content",
+           barScreen(row: R(16, 724, 370, 48), bar: checkoutBar, listType: .webView).analyze(rowAt(724), isHittable: false),
+           CGPoint(x: 201, y: 748))
+check("a mini player stacked on a tab bar covers the rows under it",
+      barScreen(row: R(16, 664, 370, 48), bar: [
+          (3, .other, "", "mini-player", R(0, 652, 402, 64)),
+          (3, .other, "", "tab-bar", R(0, 716, 402, 64)),
+      ]).analyze(rowAt(664), isHittable: false),
+      .covered(by: "element \"mini-player\"" + OcclusionAnalyzer.plainBarSuffix))
+// iOS lists views top to bottom: a JS header laid over the list's top comes
+// before the list in the tree.
+check("a header laid over the top of the list, listed before it, covers the rows under it",
+      barScreen(row: R(16, 110, 370, 48), bar: [(3, .other, "", "header", R(0, 100, 402, 64))], barFirst: true)
+          .analyze(rowAt(110), isHittable: false),
+      .covered(by: "element \"header\"" + OcclusionAnalyzer.plainBarSuffix))
+check("a header laid over the top of the list, listed after it, covers the rows under it",
+      barScreen(row: R(16, 110, 370, 48), bar: [(3, .other, "", "header", R(0, 100, 402, 64))])
+          .analyze(rowAt(110), isHittable: false),
+      .covered(by: "element \"header\"" + OcclusionAnalyzer.plainBarSuffix))
+checkPoint("a row partly under a header listed before the list is touched below it",
+           barScreen(row: R(16, 140, 370, 48), bar: [(3, .other, "", "header", R(0, 100, 402, 64))], barFirst: true)
+               .analyze(rowAt(140), isHittable: false),
+           CGPoint(x: 201, y: 176))
+check("a button in the bar over the row is named before the bar",
+      barScreen(row: R(16, 724, 370, 48), bar: checkoutBar + [(4, .button, "Pay", "", R(100, 720, 200, 56))])
+          .analyze(rowAt(724), isHittable: false),
+      .covered(by: "button \"Pay\""))
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

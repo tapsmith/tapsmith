@@ -225,6 +225,30 @@ struct OcclusionAnalyzer {
             }
         }
 
+        // A plain bar laid over the edge of the target's list (PILOT-1424): a
+        // checkout bar or mini player takes the touch though nothing in it is
+        // a control. Only when XCUITest says the target is not hittable: a
+        // hittable one is not under it, or the bar passes touches through.
+        if !isHittable, let t = targetIndex {
+            for a in ancestors(of: t) where Self.barListTypes.contains(nodes[a].elementType) {
+                guard let clip = plainBarsOver(a) else { continue }
+                let left = visible.intersection(clip.view)
+                if left.isNull || left.width < Self.minVisibleExtent || left.height < Self.minVisibleExtent {
+                    // A control in the bar over the point is named first.
+                    if let control = interactiveCover(of: target, at: [CGPoint(x: visible.midX, y: visible.midY)]) {
+                        return .covered(by: control)
+                    }
+                    let over = visible
+                    let bar = clip.bars.max { a, b in
+                        let x = clippedFrame(of: a).intersection(over), y = clippedFrame(of: b).intersection(over)
+                        return (x.isNull ? 0 : x.width * x.height) < (y.isNull ? 0 : y.width * y.height)
+                    }!
+                    return .covered(by: describeBar(bar) + Self.plainBarSuffix)
+                }
+                visible = left
+            }
+        }
+
         let point = CGPoint(x: visible.midX, y: visible.midY)
         // XCUITest's hit test passed: trust it over the snapshot (see the
         // type comment on pass-through overlays) — except about a loading
@@ -374,6 +398,95 @@ struct OcclusionAnalyzer {
             return (nodes[p].frame, siblings)
         }
         return BarHost.isHost(elementType: nodes[i].elementType, frame: nodes[i].frame, levels: levels)
+    }
+
+    // MARK: - Plain bars over a list (PILOT-1424)
+
+    /// The lists a plain bar is laid over. Not a web view: its page lays out
+    /// its own bars, and they are its content.
+    static let barListTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView]
+
+    /// Ends the name of a plain bar in a `.covered` verdict, which the
+    /// "covered by" message follows with how to get the element out from
+    /// under it (the Android agent words it the same).
+    static let plainBarSuffix = ", a bar laid over its list"
+
+    /// Least height (points) of a list's view a bar may leave: a "bar" that
+    /// would leave less is the list's content, not over it. The SDK's
+    /// scrollIntoView() trims with the same bound.
+    static let minListView: CGFloat = 48
+
+    /// The part of list `list` no plain bar covers, and the bars cut off it —
+    /// nil when none is. A plain bar is drawn over the list (after it in the
+    /// tree, in its window), outside it, across its bottom or top edge, at
+    /// least half its width, at most a third of its height, and with
+    /// something named in it: the shape the SDK's scrollIntoView() trims off
+    /// a list's view (PILOT-1370). A bar over the top may also be listed
+    /// before the list (iOS lists views top to bottom). UIKit bars clip the
+    /// target already, and a nameless view (a `pointerEvents="none"` fade)
+    /// is never named. Trimmed
+    /// until nothing more trims it: a bar stacked on another (a mini player
+    /// above a tab bar) reaches the edge only once the outer one is cut off.
+    func plainBarsOver(_ list: Int) -> (view: CGRect, bars: [Int])? {
+        let frame = clippedFrame(of: list)
+        guard !frame.isNull, frame.width > 0, frame.height > 0 else { return nil }
+        let window = nodes[list].window
+        var candidates: [Int] = []
+        for i in nodes.indices where i >= nodes[list].subtreeEnd || nodes[i].subtreeEnd <= list {
+            let node = nodes[i]
+            guard node.window == window, !Self.barTypes.contains(node.elementType),
+                  !isScrollIndicator(node), !isTapsmithHooksMarker(node) else { continue }
+            let f = clippedFrame(of: i)
+            // iOS lists views top to bottom, not in drawing order: a header
+            // laid over the list's top comes before it. Only a bar over the
+            // top half is taken from before the list; the target being
+            // unhittable is the evidence that it is drawn on top.
+            if i < list, f.midY >= frame.midY { continue }
+            let across = f.intersection(frame)
+            guard !across.isNull, f.height * 3 <= frame.height, across.width * 2 >= frame.width,
+                  namedInside(i) != nil else { continue }
+            candidates.append(i)
+        }
+        guard !candidates.isEmpty else { return nil }
+        let middle = frame.midY
+        var r = frame
+        var cut: [Int] = []
+        for _ in 0...candidates.count {
+            let before = r
+            for i in candidates {
+                let b = clippedFrame(of: i)
+                let across = b.intersection(r)
+                if across.isNull || across.width * 2 < frame.width { continue }
+                if b.minY > middle, b.maxY >= r.maxY - b.height {
+                    if b.minY - r.minY >= Self.minListView, b.minY < r.maxY {
+                        r = CGRect(x: r.minX, y: r.minY, width: r.width, height: b.minY - r.minY)
+                        cut.append(i)
+                    }
+                } else if b.maxY < middle, b.minY <= r.minY + b.height {
+                    if r.maxY - b.maxY >= Self.minListView, b.maxY > r.minY {
+                        r = CGRect(x: r.minX, y: b.maxY, width: r.width, height: r.maxY - b.maxY)
+                        cut.append(i)
+                    }
+                }
+            }
+            if r == before { break }
+        }
+        return cut.isEmpty ? nil : (r, cut)
+    }
+
+    /// The first node in `i`'s subtree (itself first) with a label or an
+    /// identifier, leaving out the hooks marker; nil when there is none.
+    private func namedInside(_ i: Int) -> Int? {
+        (i..<nodes[i].subtreeEnd).first { j in
+            !isTapsmithHooksMarker(nodes[j]) && (!nodes[j].label.isEmpty || !nodes[j].identifier.isEmpty)
+        }
+    }
+
+    /// A plain bar named for a "covered by" message: by its own label or
+    /// identifier, else by what it holds.
+    private func describeBar(_ i: Int) -> String {
+        guard let named = namedInside(i) else { return describe(nodes[i]) }
+        return named == i ? describe(nodes[i]) : "a bar holding \(describe(nodes[named]))"
     }
 
     // MARK: - Keyboard

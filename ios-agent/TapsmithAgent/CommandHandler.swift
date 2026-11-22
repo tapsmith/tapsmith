@@ -1216,6 +1216,8 @@ class CommandHandler {
         if timeoutMs > 0 { message += " (still covered after waiting \(timeoutMs)ms)" }
         if cover == "the keyboard" {
             message += ". Dismiss the keyboard first (device.hideKeyboard()) or scroll the element into view."
+        } else if cover.hasSuffix(OcclusionAnalyzer.plainBarSuffix) {
+            message += ". Scroll it out from under the bar first (await locator.scrollIntoView(), or scroll() the list)."
         }
         return message
     }
