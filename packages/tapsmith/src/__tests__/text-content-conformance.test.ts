@@ -72,6 +72,7 @@ const A = {
   button: 'android.widget.Button',
   imageButton: 'android.widget.ImageButton',
   editText: 'android.widget.EditText',
+  materialEditText: 'com.google.android.material.textfield.TextInputEditText',
   viewGroup: 'android.view.ViewGroup',
 } as const;
 
@@ -173,9 +174,22 @@ const CASES: Case[] = [
   { why: 'padding in the query is ignored', platform: 'android', type: A.textView, text: 'Sign In', query: { exact: ' Sign  In ' }, matches: true },
   { why: 'substring across a whitespace run', platform: 'android', type: A.textView, text: 'Welcome  to\u00a0Expo', query: { substring: 'to expo' }, matches: true },
   { why: 'a button by its text', platform: 'android', type: A.button, text: 'Save', query: { exact: 'Save' }, matches: true },
-  { why: "a text field's typed value is text", platform: 'android', type: A.editText, text: 'ada@example.com', placeholder: 'Email', query: { exact: 'ada@example.com' }, matches: true },
+  // A text field's typed value is no getByText text, as an <input>'s value is
+  // not in Playwright (PILOT-1404): a search result's text typed into the
+  // search field must not find the field.
+  { why: "a text field's typed value is not text", platform: 'android', type: A.editText, text: 'ada@example.com', placeholder: 'Email', query: { exact: 'ada@example.com' }, matches: false },
+  { why: 'nor by substring', platform: 'android', type: A.editText, text: 'Apollo 11', placeholder: 'Search Wikipedia', query: { substring: 'apollo' }, matches: false },
+  { why: 'nor by RegExp', platform: 'android', type: A.editText, text: 'Apollo 11', placeholder: 'Search Wikipedia', query: { source: '^Apollo', flags: '' }, matches: false },
+  { why: 'nor with no hint', platform: 'android', type: A.editText, text: 'Apollo 11', query: { exact: 'Apollo 11' }, matches: false },
+  { why: "nor a Material field's", platform: 'android', type: A.materialEditText, text: 'Apollo 11', placeholder: 'Search', query: { exact: 'Apollo 11' }, matches: false },
+  { why: 'an empty field with no hint is no text, as any empty node', platform: 'android', type: A.editText, query: { source: '^$', flags: '' }, matches: true },
   // An empty EditText reports its hint as its text, and the walk compares that.
   { why: "an empty text field's hint is its text", platform: 'android', type: A.editText, text: 'Email', placeholder: 'Email', query: { exact: 'Email' }, matches: true },
+  { why: 'by substring too', platform: 'android', type: A.editText, text: 'Search Wikipedia', placeholder: 'Search Wikipedia', query: { substring: 'search' }, matches: true },
+  // A value equal to the hint reads as the hint, as getByRole's name reads it.
+  { why: 'a typed value equal to the hint reads as the hint', platform: 'android', type: A.editText, text: 'Email', placeholder: 'Email', query: { substring: 'mail' }, matches: true },
+  // The text of a view that only looks like a field is still text.
+  { why: "a TextView's text is text", platform: 'android', type: A.textView, text: 'Apollo 11', placeholder: 'Search', query: { exact: 'Apollo 11' }, matches: true },
   // Unlike an iOS label, a content description is no getByText text on Android.
   { why: 'a content description is not text', platform: 'android', type: A.imageButton, contentDesc: 'Close', query: { exact: 'Close' }, matches: false },
   { why: 'nor by substring', platform: 'android', type: A.viewGroup, contentDesc: 'Login Form', query: { substring: 'login' }, matches: false },
