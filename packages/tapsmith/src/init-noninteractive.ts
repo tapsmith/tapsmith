@@ -6,9 +6,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { simulatorChoices, type EnvScan } from './env-scan.js';
+import { runningAvds, simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
-import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
+import { EXAMPLE_TEST_PATH, connectedDeviceTarget, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import { pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
@@ -34,6 +34,8 @@ export interface InitArgs {
   app?: string;
   bundleId?: string;
   avd?: string;
+  /** `--device <serial>`: the Android device to use (PILOT-1201). */
+  device?: string;
   simulator?: string;
   deviceType?: DeviceType;
   /** `--network-capture` / `--no-network-capture`; unset takes the wizard's default. */
@@ -108,7 +110,14 @@ export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
     throw new InitError('INVALID_DEVICE_TYPE', `Unknown device type "${deviceType}"`, { fix: 'Use --device-type emulator|physical|both' });
   }
 
-  const valueFlags = [opts.platform, opts.apk, opts.package, opts.app, opts.bundleId, opts.avd, opts.simulator, opts.deviceType];
+  // --device picks the device, and with it what kind it is (PILOT-1201).
+  if (opts.device !== undefined && (opts.avd !== undefined || deviceType !== undefined)) {
+    throw new InitError('CONFLICTING_FLAGS', `--device cannot be combined with ${opts.avd !== undefined ? '--avd' : '--device-type'}`, {
+      fix: '--device picks the device and its kind: an emulator writes its AVD, a physical device pins `device`. Pass --device alone, or --avd/--device-type without it',
+    });
+  }
+
+  const valueFlags = [opts.platform, opts.apk, opts.package, opts.app, opts.bundleId, opts.avd, opts.device, opts.simulator, opts.deviceType];
   return {
     yes: opts.yes,
     json: opts.json,
@@ -119,6 +128,7 @@ export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
     app: opts.app,
     bundleId: opts.bundleId,
     avd: opts.avd,
+    device: opts.device,
     simulator: opts.simulator,
     deviceType,
     networkCapture: opts.networkCapture,
@@ -206,6 +216,12 @@ export function resolveInitPlan(
     warnings.push(`--bundle-id names an iOS bundle identifier, so ${args.bundleId} was not used: this setup has no iOS`);
   }
 
+  if (args.device && !platforms.includes('android')) {
+    throw new InitError('DEVICE_NEEDS_ANDROID', `--device names an Android device, but this setup has no Android`, {
+      fix: 'For an iOS simulator pass --simulator <name or UDID>; for Android add --platform android',
+    });
+  }
+
   if (platforms.includes('ios') && !env.isMacOS) {
     throw new InitError('IOS_REQUIRES_MACOS', 'iOS setup is only supported on macOS', {
       fix: 'Run on a macOS machine, or configure only the android platform',
@@ -263,13 +279,18 @@ export function resolveInitPlan(
     }
 
     const deviceType = args.deviceType ?? 'emulator';
-    const useEmulators = deviceType === 'emulator' || deviceType === 'both';
+    let useEmulators = deviceType === 'emulator' || deviceType === 'both';
+    let usePhysicalDevices = deviceType === 'physical' || deviceType === 'both';
     let avd = args.avd;
-    if (useEmulators && !avd) {
-      // Skip past Play-image AVDs (Android Studio's default, usually listed
-      // first), capture on or off: HTTPS is never captured or routed on them
-      // (PILOT-403, PILOT-721).
-      avd = preferredAvd(env.avds, env.avdImages);
+    let device: string | undefined;
+    if (args.device) {
+      ({ useEmulators, usePhysicalDevices, avd, device } = deviceFlagTarget(args.device, env, warnings));
+    } else if (useEmulators && !avd) {
+      // A running emulator first, so the first run boots nothing extra
+      // (PILOT-1201); then a capture-capable AVD, skipping Play images
+      // (Android Studio's default), capture on or off: HTTPS is never
+      // captured or routed on them (PILOT-403, PILOT-721).
+      avd = preferredAvd(env.avds, env.avdImages, runningAvds(env.androidDevices));
     }
     // Nothing listed: either there are no AVDs, or `emulator` (which Tapsmith
     // launches AVDs with) was not found — the latter matters for an explicit
@@ -279,7 +300,7 @@ export function resolveInitPlan(
     }
     const packageWarning = packageName && appIdWarning(packageName, 'android');
     if (packageWarning) warnings.push(packageWarning);
-    android = { apkPath, packageName, useEmulators, usePhysicalDevices: deviceType === 'physical' || deviceType === 'both', avd };
+    android = { apkPath, packageName, useEmulators, usePhysicalDevices, avd, ...(device ? { device } : {}) };
   }
 
   // The wizard's default when no flag says (PILOT-775): on, except for an
@@ -368,6 +389,30 @@ export function resolveInitPlan(
 
   const captureAvdStep = android?.useEmulators ? captureAvdNextStep(android.avd, env.avdImages, networkCapture) : undefined;
   return { platforms, android, ios, networkCapture, warnings, captureAvdStep };
+}
+
+/** What `--device <serial>` sets up (PILOT-1201): see {@link connectedDeviceTarget}. */
+function deviceFlagTarget(
+  serial: string,
+  env: EnvScan,
+  warnings: string[],
+): { useEmulators: boolean; usePhysicalDevices: boolean; avd?: string; device?: string } {
+  const connected = env.androidDevices.find((d) => d.serial === serial);
+  if (!connected) {
+    const listed = env.androidDevices.map((d) => d.serial);
+    throw new InitError('DEVICE_NOT_FOUND', `No connected Android device ${serial}`, {
+      fix: listed.length > 0
+        ? `Pass a serial \`adb devices\` lists (${listed.join(', ')}). For an iOS simulator pass --simulator <name or UDID>`
+        : 'Start the emulator or connect the device until `adb devices` lists it, then re-run. For an iOS simulator pass --simulator <name or UDID>',
+      candidates: listed,
+    });
+  }
+  if (connected.held) {
+    warnings.push(`${serial} is in use by another Tapsmith session right now, so test runs cannot use it until that session ends`);
+  }
+  const target = connectedDeviceTarget(connected);
+  if (target.warning) warnings.push(target.warning);
+  return target;
 }
 
 /**

@@ -120,17 +120,31 @@ export function avdCaptureSupport(avd: AvdImageInfo | undefined): AvdCaptureSupp
 }
 
 /**
- * The AVD init chooses when the user names none: the first
- * capture-capable one, else the first whose image could not be read (it may
- * well be capable), else the first listed. A Google Play image is the last
- * resort even when capture is off: `device.route()` cannot intercept HTTPS
- * there either, and `doctor` warns about it. `undefined` when none is listed.
+ * The one AVD ordering init and doctor share (PILOT-1201), best first:
+ * a running AVD (`running`: the AVD names of emulators already up), since
+ * choosing it boots nothing; then a capture-capable image, then one whose
+ * image could not be read (it may well be capable), then a Google Play image
+ * — the last resort even when capture is off, as `device.route()` cannot
+ * intercept HTTPS there either; then the newest API level; then list order.
  */
-export function preferredAvd(avds: string[], avdImages: AvdImageInfo[]): string | undefined {
-  const support = (name: string): AvdCaptureSupport => avdCaptureSupport(avdImages.find((a) => a.name === name));
-  return avds.find((name) => support(name) === 'capable')
-    ?? avds.find((name) => support(name) === 'unknown')
-    ?? avds[0];
+export function rankAvds(avds: readonly string[], avdImages: readonly AvdImageInfo[], running: readonly string[] = []): string[] {
+  const tier = { capable: 0, unknown: 1, 'play-image': 2 } as const;
+  const info = (name: string): AvdImageInfo | undefined => avdImages.find((a) => a.name === name);
+  return avds
+    .map((name, index) => ({ name, index, img: info(name) }))
+    .sort((a, b) => Number(running.includes(b.name)) - Number(running.includes(a.name))
+      || tier[avdCaptureSupport(a.img)] - tier[avdCaptureSupport(b.img)]
+      || (b.img?.apiLevel ?? -1) - (a.img?.apiLevel ?? -1)
+      || a.index - b.index)
+    .map((a) => a.name);
+}
+
+/**
+ * The AVD init chooses when the user names none: the first by
+ * {@link rankAvds}. `undefined` when none is listed.
+ */
+export function preferredAvd(avds: readonly string[], avdImages: readonly AvdImageInfo[], running: readonly string[] = []): string | undefined {
+  return rankAvds(avds, avdImages, running)[0];
 }
 
 /**
@@ -168,6 +182,8 @@ export interface CaptureAvdFixOptions {
   apiLevel?: number;
   /** Names another suggested command will create; never suggested again. */
   reserved?: string[];
+  /** AVDs running now, preferred as init prefers them ({@link rankAvds}). */
+  running?: readonly string[];
 }
 
 /**
@@ -177,9 +193,9 @@ export interface CaptureAvdFixOptions {
  * user's existing AVDs.
  */
 export function captureAvdFix(avds: AvdImageInfo[], opts: CaptureAvdFixOptions = {}): string {
-  const { replacing = [], apiLevel, reserved } = opts;
+  const { replacing = [], apiLevel, reserved, running } = opts;
   const inPlaceOf = replacing.length > 0 ? ` in place of ${replacing.map((n) => `'${n}'`).join(', ')}` : '';
-  const pick = pickCaptureAvd(avds, apiLevel, reserved);
+  const pick = pickCaptureAvd(avds, apiLevel, reserved, running);
   if (!pick.command) {
     return `Use ${pick.name}, which supports HTTPS capture: set avd: '${pick.name}' in your Tapsmith config${inPlaceOf}`;
   }
@@ -189,13 +205,15 @@ export function captureAvdFix(avds: AvdImageInfo[], opts: CaptureAvdFixOptions =
 
 /**
  * The capture-capable AVD to point `avd` at: one the machine already has
- * (preferring `apiLevel`; no `command`), or else a new one and the
- * `create-avd` command that makes it.
+ * (one on `apiLevel` first, else the first by {@link rankAvds}, as init
+ * picks; no `command`), or else a new one and the `create-avd` command that
+ * makes it.
  */
-function pickCaptureAvd(avds: AvdImageInfo[], apiLevel?: number, reserved?: string[]): { name: string; command?: string } {
-  const capable = avds.filter((a) => avdCaptureSupport(a) === 'capable');
+function pickCaptureAvd(avds: AvdImageInfo[], apiLevel?: number, reserved?: string[], running?: readonly string[]): { name: string; command?: string } {
+  const capable = rankAvds(avds.filter((a) => avdCaptureSupport(a) === 'capable').map((a) => a.name), avds, running);
   if (capable.length > 0) {
-    return { name: (capable.find((a) => apiLevel !== undefined && a.apiLevel === apiLevel) ?? capable[0]).name };
+    const onLevel = apiLevel === undefined ? undefined : capable.find((name) => avds.find((a) => a.name === name)?.apiLevel === apiLevel);
+    return { name: onLevel ?? capable[0] };
   }
   return newCaptureAvd(avds, apiLevel, reserved);
 }

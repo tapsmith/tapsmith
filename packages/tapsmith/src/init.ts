@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Enquirer from 'enquirer';
 import figlet from 'figlet';
-import { isCustomSimulatorName, scanEnvironment, simulatorChoices, type EnvScan } from './env-scan.js';
+import { isCustomSimulatorName, runningAvds, scanEnvironment, simulatorChoices, type ConnectedAndroidDevice, type EnvScan } from './env-scan.js';
 import type { SeStatus } from './setup-ios.js';
 import {
   detectAndroidPackage,
@@ -290,6 +290,8 @@ export interface AndroidConfig {
   useEmulators: boolean;
   usePhysicalDevices: boolean;
   avd?: string;
+  /** A pinned device serial (`--device`, or the wizard's connected device): only this machine has it (PILOT-1201). */
+  device?: string;
 }
 
 export interface IosConfig {
@@ -313,23 +315,56 @@ export interface IosConfig {
   deviceAppPath?: string;
 }
 
+// ─── A connected device as the target (PILOT-1201) ───
+
+/**
+ * What a connected Android device the user chose (`--device`, or the
+ * wizard's running emulator) sets up: an emulator whose AVD name adb reports
+ * becomes `avd`, which works on any machine with that AVD (and on CI, where
+ * the workflow's emulator stands in for a missing one); anything else — a
+ * physical device, or an emulator whose name cannot be read — is pinned as
+ * `device`, which only this machine has, as the warning says.
+ */
+export function connectedDeviceTarget(
+  connected: ConnectedAndroidDevice,
+): { useEmulators: boolean; usePhysicalDevices: boolean; avd?: string; device?: string; warning?: string } {
+  if (connected.avd !== undefined) return { useEmulators: true, usePhysicalDevices: false, avd: connected.avd };
+  const { serial } = connected;
+  const emulator = serial.startsWith('emulator-');
+  const warning = `Pinned device: '${serial}' in tapsmith.config.ts: only this machine has that `
+    + (emulator
+      ? `emulator serial (it changes when the emulator restarts on another port), so teammates and CI need to remove or change it — an \`avd\` works anywhere (Tapsmith could not read ${serial}'s AVD name)`
+      : 'device, so teammates and CI need to remove or change it');
+  return { useEmulators: false, usePhysicalDevices: !emulator, device: serial, warning };
+}
+
+/** A running emulator's wizard label: its AVD, else its serial. */
+function runningEmulatorLabel(d: ConnectedAndroidDevice): { message: string; hint: string } {
+  return d.avd !== undefined
+    ? { message: `The running emulator, ${d.avd}`, hint: d.serial }
+    : { message: `The running emulator ${d.serial}`, hint: "its AVD name can't be read, so the config pins this serial" };
+}
+
 // ─── AVD choice and HTTPS capture (PILOT-403) ───
 
 /**
- * The wizard's AVD picker: list order kept, Google Play images marked (HTTPS
- * is never captured on them), and the AVD `init --yes` would choose
- * pre-selected ({@link preferredAvd}: a capture-capable one first). The
- * capture question comes later and defaults to yes on a capable AVD.
+ * The wizard's AVD picker: list order kept, running AVDs and Google Play
+ * images (HTTPS is never captured on them) marked, and the AVD `init --yes`
+ * would choose pre-selected ({@link preferredAvd}: a running one, else a
+ * capture-capable one, newest first). The capture question comes later and
+ * defaults to yes on a capable AVD.
  */
 export function avdPickerChoices(
   avds: string[],
   avdImages: AvdImageInfo[],
+  running: readonly string[] = [],
 ): { choices: Array<{ name: string; message: string; hint?: string }>; initial: number } {
   const support = avds.map((name) => avdCaptureSupport(avdImages.find((a) => a.name === name)));
-  const choices = avds.map((name, i) => (support[i] === 'play-image'
-    ? { name, message: name, hint: 'no HTTPS capture' }
-    : { name, message: name }));
-  const preferred = preferredAvd(avds, avdImages);
+  const choices = avds.map((name, i) => {
+    const hints = [...(running.includes(name) ? ['running'] : []), ...(support[i] === 'play-image' ? ['no HTTPS capture'] : [])];
+    return hints.length > 0 ? { name, message: name, hint: hints.join(', ') } : { name, message: name };
+  });
+  const preferred = preferredAvd(avds, avdImages, running);
   return { choices, initial: preferred === undefined ? 0 : avds.indexOf(preferred) };
 }
 
@@ -458,24 +493,37 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
     console.log(`  ${YELLOW}⚠${RESET} No APK, so the config has no apk: Tapsmith will launch and reset ${packageName} but cannot install it — install the app on the device yourself, or add apk: '<path>' to tapsmith.config.ts`);
   }
 
+  // Running emulators first, the first selected (PILOT-1201): choosing one
+  // boots nothing. Not one another Tapsmith session drives.
+  const running = env.androidDevices.filter((d) => !d.held && d.serial.startsWith('emulator-'));
+  const RUNNING = 'running:';
   const deviceType = await ask<string>({
     type: 'select',
     message: 'How will you run Android tests?',
     choices: [
-      { name: 'emulators', message: 'Emulators', hint: 'Tapsmith auto-launches emulators' },
+      ...running.map((d) => ({ name: `${RUNNING}${d.serial}`, ...runningEmulatorLabel(d) })),
+      { name: 'emulators', message: running.length > 0 ? 'Another emulator' : 'Emulators', hint: 'Tapsmith launches the AVD you pick next, unless it is running' },
       { name: 'physical', message: 'Physical devices', hint: 'USB-connected devices' },
       { name: 'both', message: 'Both' },
     ],
   });
 
+  const chosen = deviceType.startsWith(RUNNING) ? running.find((d) => `${RUNNING}${d.serial}` === deviceType) : undefined;
+  if (chosen) {
+    const target = connectedDeviceTarget(chosen);
+    if (target.warning) console.log(`  ${YELLOW}⚠${RESET} ${target.warning}`);
+    const { warning: _warning, ...config } = target;
+    return { apkPath, packageName, ...config };
+  }
+
   const useEmulators = deviceType === 'emulators' || deviceType === 'both';
   let avd: string | undefined;
 
   if (useEmulators && env.avds.length > 0) {
-    const { choices, initial } = avdPickerChoices(env.avds, env.avdImages);
+    const { choices, initial } = avdPickerChoices(env.avds, env.avdImages, runningAvds(env.androidDevices));
     avd = await ask<string>({
       type: 'select',
-      message: 'Which AVD should Tapsmith auto-launch?',
+      message: 'Which AVD should Tapsmith use?',
       choices,
       initial,
     });
@@ -1054,7 +1102,16 @@ export function generateConfig(
       ...(!a.apkPath && !a.packageName ? [['apk', '<path to your .apk>'] as [string, string]] : []),
       ...(!a.packageName ? [APP_ID('android')] : []),
     ]),
-    ...(a.useEmulators && a.avd ? [`${indent}avd: '${esc(a.avd)}',`] : []),
+    ...(a.useEmulators && a.avd
+      ? [
+        // PILOT-1201: a committed `avd` must not break the CI workflows in
+        // docs/ci-setup.md, which boot their own emulator.
+        `${indent}// A running emulator of this AVD is used, else Tapsmith boots one. On CI, when`,
+        `${indent}// this AVD isn't on the machine, the emulator your workflow started is used.`,
+        `${indent}avd: '${esc(a.avd)}',`,
+      ]
+      : []),
+    ...(a.device ? [`${indent}device: '${esc(a.device)}',`] : []),
   ];
   /** An iOS scope's `package` and `app`, or placeholders for the missing ones. */
   const iosAppLines = (indent: string, pkg: string | undefined, app: string | undefined, appPlaceholder: string): string[] => [

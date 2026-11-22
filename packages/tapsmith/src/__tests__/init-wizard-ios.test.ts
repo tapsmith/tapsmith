@@ -74,6 +74,7 @@ const env: EnvScan = {
   simulators: [{ name: 'iPhone 17', udid: 'SIM-1', state: 'Shutdown', runtime: 'iOS 26.0' }],
   avds: [],
   avdImages: [],
+  androidDevices: [],
   isMacOS: true,
 };
 
