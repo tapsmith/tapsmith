@@ -20,6 +20,7 @@ import {
 import type { WatchRunMessage, WatchRunChildMessage } from '../watch-run.js';
 import { RunQueue } from '../watch-queue.js';
 import { knownInstalledBuilds, rememberInstalledBuilds } from '../installed-builds.js';
+import { foldBackCapabilities } from '../app-reset.js';
 import { telemetry } from '../telemetry.js';
 import { ensurePlatformTarget, platformTargetIsLive, type PlatformTarget } from './connection.js';
 import { deviceGroupNames, deviceGroupSize, pinnedDeviceSerials, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from '../config.js';
@@ -1546,15 +1547,17 @@ export class HeadlessTestDispatcher implements TestDispatcher {
           }
           case 'file-done': {
             // Fold what the child learned into the sticky per-device store,
-            // so the next fresh child starts already-detected.
+            // so the next fresh child starts already-detected. The child was
+            // seeded from the store, so its capabilities replace it: what a
+            // reinstall forgot stays forgotten.
             if (response.resetCapabilities) {
               const store = this._resetCapabilities.get(target.deviceSerial) ?? {};
-              Object.assign(store, response.resetCapabilities);
+              foldBackCapabilities(store, response.resetCapabilities);
               this._resetCapabilities.set(target.deviceSerial, store);
             }
             for (const [serial, learned] of Object.entries(response.groupResetCapabilities ?? {})) {
               const store = this._resetCapabilities.get(serial) ?? {};
-              Object.assign(store, learned);
+              foldBackCapabilities(store, learned);
               this._resetCapabilities.set(serial, store);
             }
             if (response.appBehindProxy !== undefined) this._appBehindProxy.set(target.deviceSerial, response.appBehindProxy);

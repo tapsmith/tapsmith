@@ -1603,6 +1603,20 @@ describe('a rebuilt app in a long-lived session', () => {
     expect(atLaunch).toBeUndefined();
   });
 
+  it('forgets what the old build taught about keeping restored data and its hooks URL', async () => {
+    const session = await adopt();
+    Object.assign(session.context.capabilities ??= {}, {
+      hooksUrlPrefix: 'old:///',
+      appStateKeep: { noWrites: true, writingKeeps: 2, daemonCannotKeep: true },
+    });
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    mocks.localStamp = 'rebuilt-with-onreload';
+    expect((await reinstallChangedBuild(session)).reinstalled).toBe(true);
+    expect(session.context.capabilities?.hooksUrlPrefix).toBeUndefined();
+    expect(session.context.capabilities?.appStateKeep).toEqual({ daemonCannotKeep: true });
+  });
+
   it('records the device\'s copy as it was before the comparison, never one installed meanwhile', async () => {
     const { installedApkMatches } = await import('../emulator.js');
     vi.mocked(installedApkMatches).mockClear();

@@ -35,7 +35,7 @@ import {
   probeResetCapabilities,
   type SessionPreflightContext,
 } from './session-preflight.js';
-import { satisfies, type AppResetPolicy, type PreparedState, type ResetCapabilities } from './app-reset.js';
+import { forgetBuildCapabilities, satisfies, type AppResetPolicy, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { timingLog } from './timing-log.js';
 import { resolveAppArtifact } from './app-artifact.js';
@@ -762,9 +762,10 @@ export async function reinstallChangedBuild(
     : install.uncompared ? `Reinstalled ${name} (could not compare it with the installed build)`
       : `Reinstalled ${name} (build changed since the last run)`;
   opts.onProgress?.(`relaunching ${config.package} after the reinstall`);
-  // Hook detection described the old build, and only ever upgrades: the
-  // relaunch probes the new one afresh (in place, as the runner shares it).
-  if (session.context.capabilities) delete session.context.capabilities.hooksDetected;
+  // Hook detection and what restores learnt described the old build, and
+  // only ever upgrade: the relaunch probes the new one afresh (in place, as
+  // the runner shares the object).
+  if (session.context.capabilities) forgetBuildCapabilities(session.context.capabilities);
   try {
     // Always from cleared data: a reinstall keeps the old build's data, and
     // the agent that launches a freshly installed app at its own start is

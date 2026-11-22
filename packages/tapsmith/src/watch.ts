@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { minimatch } from 'minimatch';
+import { foldBackCapabilities } from './app-reset.js';
 import { type TapsmithConfig } from './config.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed } from './daemon-start.js';
@@ -1325,13 +1326,15 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
           case 'file-done': {
             settled = true;
             // Fold what the child learned into the sticky store, so the next
-            // fresh child starts already-detected (a probe never demotes).
+            // fresh child starts already-detected. The child was seeded from
+            // the store, so its capabilities replace it: what a reinstall
+            // forgot stays forgotten.
             if (ctx.resetCapabilities && response.resetCapabilities) {
-              Object.assign(ctx.resetCapabilities, response.resetCapabilities);
+              foldBackCapabilities(ctx.resetCapabilities, response.resetCapabilities);
             }
             for (const member of ctx.groupMembers ?? []) {
               const learned = response.groupResetCapabilities?.[member.deviceSerial];
-              if (learned) Object.assign(member.resetCapabilities, learned);
+              if (learned) foldBackCapabilities(member.resetCapabilities, learned);
             }
             if (response.appBehindProxy !== undefined) state.appBehindProxy = response.appBehindProxy;
             rememberInstalledBuilds(response.installedBuilds);
