@@ -3259,6 +3259,26 @@ describe("filter({ hasText }) on an Android text field", () => {
   });
 });
 
+describe("filter({ hasText }) on an iOS read-only text view (PILOT-1417)", () => {
+  it('reads its text, which is no typed value', async () => {
+    const handle = new ElementHandle(makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse([
+        makeElementInfo({ elementId: 'v', className: 'XCUIElementTypeTextView', role: 'text', text: 'Terms of Service' }),
+      ])),
+    }), _className('XCUIElementTypeTextView'), 5000);
+    expect((await handle.filter({ hasText: 'Terms' }).find()).elementId).toBe('v');
+  });
+
+  it('is suggested as getByText in a strict-mode error, unlike an editable one', () => {
+    const err = buildStrictModeViolationError('getByRole("text")', [
+      makeElementInfo({ role: '', className: 'XCUIElementTypeTextView', text: 'Terms of Service', contentDescription: '' }),
+      makeElementInfo({ role: 'textfield', className: 'XCUIElementTypeTextView', text: 'Buy milk', contentDescription: '' }),
+    ]);
+    expect(err.message).toContain('aka device.getByText("Terms of Service", { exact: true })');
+    expect(err.message).not.toContain('getByText("Buy milk"');
+  });
+});
+
 describe("filter({ hasText }) on an iOS text field (PILOT-1417)", () => {
   const fieldAndRow = () => new ElementHandle(makeMockClient({
     findElements: vi.fn(async () => makeFindElementsResponse([

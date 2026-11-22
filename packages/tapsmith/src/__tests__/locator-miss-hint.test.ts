@@ -208,6 +208,23 @@ describe("a not-found error lists the near misses the agent finds", () => {
     );
   });
 
+  it("points at toHaveValue() only for a field holding the words, not one named by them", async () => {
+    // An empty field labelled "Email": getByRole's name matches the label.
+    const named = { ...element("f", ""), className: "android.widget.EditText", role: "textfield", contentDescription: "Email" };
+    const { client } = missingClient((s) =>
+      s.kind.type === "role" && s.kind.value.role === "textfield" && s.kind.value.name === "Email" ? [named] : []);
+    const d = new Device(client, { platform: "android", timeout: 50 });
+    const message = await err(d.getByText("Email").find());
+    vitestExpect(message).toContain('this locator matches: getByRole("textfield", { name: "Email", exact: true }) (1 element).');
+    vitestExpect(message).not.toContain("toHaveValue");
+    // The same field holding the words is told to assert its value.
+    const typed = { ...named, contentDescription: "", text: "Email" };
+    const holding = missingClient((s) =>
+      s.kind.type === "role" && s.kind.value.role === "textfield" && s.kind.value.name === "Email" ? [typed] : []);
+    vitestExpect(await err(new Device(holding.client, { platform: "android", timeout: 50 }).getByText("Email").find()))
+      .toContain("assert it with toHaveValue().");
+  });
+
   it("lists an unnamed iOS field by its role alone, and compares the value whitespace-normalized", async () => {
     const { client } = missingClient((s) =>
       s.kind.type === "role" && !s.kind.value.name && s.kind.value.role === "textfield"
@@ -217,6 +234,15 @@ describe("a not-found error lists the near misses the agent finds", () => {
     vitestExpect(await err(d.getByText("Apollo 11").find())).toContain(
       'this locator matches: getByRole("textfield") (1 element with the value "Apollo 11").',
     );
+  });
+
+  it("doesn't count a read-only iOS text view holding the words as a field", async () => {
+    const { client } = missingClient((s) =>
+      s.kind.type === "role" && !s.kind.value.name && s.kind.value.role === "textfield"
+        ? [{ ...element("v", "Terms"), className: "XCUIElementTypeTextView", role: "" }]
+        : []);
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    vitestExpect(await err(d.getByText("Terms", { exact: true }).find())).not.toContain('getByRole("textfield")');
   });
 
   it("only the picker when nothing near matches", async () => {

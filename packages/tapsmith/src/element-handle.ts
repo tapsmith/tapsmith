@@ -37,7 +37,7 @@ import { sleep, isAbortError, throwIfAborted } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
-import { IOS_NAME_ONLY_TYPES, IOS_TEXT_INPUT_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
+import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES, isIosTextInput } from './ios-text-content.js';
 import {
   LOCATOR_PICKER_HINT,
   NEAR_MISS_BUDGET_MS,
@@ -666,7 +666,8 @@ function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
     }
   } else {
     // An iOS text field's label is its text, its typed value never is (PILOT-1417).
-    const text = isIos && (IOS_TEXT_INPUT_TYPES.has(el.className)
+    const readOnlyTextView = el.className === 'XCUIElementTypeTextView' && !isIosTextInput(el.className, el.role);
+    const text = isIos && !readOnlyTextView && (isIosTextInput(el.className, el.role)
       || (!IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription))
       ? el.contentDescription
       : textContentOf(el);
@@ -692,7 +693,7 @@ function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
  * report an empty field's text as "" (not its hint or placeholder).
  */
 function textContentOf(el: ElementInfo): string {
-  return ANDROID_EDIT_TEXT_CLASSES.has(el.className) || IOS_TEXT_INPUT_TYPES.has(el.className) ? '' : el.text;
+  return ANDROID_EDIT_TEXT_CLASSES.has(el.className) || isIosTextInput(el.className, el.role) ? '' : el.text;
 }
 
 /** Best-effort unambiguous locator suggestion for one resolved element, unchecked. */

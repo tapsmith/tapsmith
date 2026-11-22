@@ -1817,7 +1817,11 @@ class SnapshotElementFinder {
         if selector.text != nil || selector.textContains != nil || selector.textRegex != nil {
             let texts = TextContent.texts(
                 elementType: elType, label: label, title: title, value: value,
-                placeholder: placeholderValue, containerLabel: containerLabel
+                placeholder: placeholderValue,
+                readOnlyTextView: RoleMapping.isReadOnlyTextView(
+                    elType, traits: SnapshotElementFinder.extractTraits(from: node)
+                ),
+                containerLabel: containerLabel
             )
             if let text = selector.text, !TextContent.matchesExact(texts, text) { return false }
             if let textRegex = selector.textRegex, !TextContent.matchesRegex(texts, textRegex) { return false }
@@ -1985,6 +1989,9 @@ class SnapshotElementFinder {
             title: node["title"] as? String ?? "",
             value: node["value"] as? String ?? "",
             placeholder: node["placeholderValue"] as? String ?? "",
+            readOnlyTextView: RoleMapping.isReadOnlyTextView(
+                type, traits: SnapshotElementFinder.extractTraits(from: node)
+            ),
             containerLabel: containerLabel
         )
         return TextContent.rowShows(query, texts: texts, node: node, rowCell: rowCell)

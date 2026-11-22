@@ -44,6 +44,8 @@ interface Case {
   contentDesc?: string
   /** An editable field's placeholder: Android's hint, iOS's placeholderValue. */
   placeholder?: string
+  /** iOS text view: false when it can't be edited (no text-entry trait; the dump's role is not textfield). */
+  editable?: boolean
   /** exact: getByText(q, { exact: true }); substring: getByText(q); or a RegExp as source + flags. */
   query: { exact: string } | { substring: string } | { source: string; flags: string }
   matches: boolean
@@ -131,6 +133,12 @@ const CASES: Case[] = [
   { why: 'and by RegExp', platform: 'ios', type: T.textView, label: '', value: 'Notes', placeholder: 'Notes', query: { source: '^Notes$', flags: '' }, matches: true },
   { why: 'a typed value equal to the placeholder reads as the placeholder', platform: 'ios', type: T.field, label: '', value: 'Email', placeholder: 'Email', query: { substring: 'mail' }, matches: true },
   { why: 'a placeholder is no text while a value is typed', platform: 'ios', type: T.field, label: '', value: 'ada', placeholder: 'Email', query: { exact: 'Email' }, matches: false },
+  // A text view that can't be edited (terms copy, React Native's
+  // <TextInput multiline editable={false} />) is text on screen, not an
+  // input: its value stays text (PILOT-697 keeps it out of the textfield role).
+  { why: "a read-only text view's value is text", platform: 'ios', type: T.textView, label: '', value: 'By signing up you agree to the Terms', editable: false, query: { substring: 'by signing up' }, matches: true },
+  { why: 'exactly too', platform: 'ios', type: T.textView, label: '', value: 'Terms of Service', editable: false, query: { exact: 'Terms of Service' }, matches: true },
+  { why: 'and by RegExp', platform: 'ios', type: T.textView, label: '', value: 'Terms of Service', editable: false, query: { source: '^Terms', flags: '' }, matches: true },
   // The value of a view that only looks like a field is still text.
   { why: "a static text's value beside a placeholder is text", platform: 'ios', type: T.text, label: '', value: 'Apollo 11', placeholder: 'Search', query: { exact: 'Apollo 11' }, matches: true },
   { why: "static text's value", platform: 'ios', type: T.text, label: '', value: 'Hello', query: { exact: 'Hello' }, matches: true },
@@ -258,6 +266,8 @@ function nodeFor(c: Case): HierarchyNode {
   const attrs: Record<string, string> = { type: c.type, label: c.label ?? '', identifier: '', value: c.value ?? '' };
   if (c.title !== undefined) attrs.title = c.title;
   if (c.placeholder !== undefined) attrs.placeholderValue = c.placeholder;
+  // The agent dumps an editable text view's role as textfield, a read-only one's as text (PILOT-697).
+  if (c.type === T.textView) attrs['tapsmith-role'] = c.editable === false ? 'text' : 'textfield';
   return { tagName: c.type, attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
 }
 

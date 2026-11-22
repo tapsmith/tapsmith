@@ -17,7 +17,7 @@
 
 import type { ElementInfo, EvaluateSelectorsResponse, GetSystemAlertResponse } from './grpc-client.js';
 import { collapseSameTargetDuplicates } from './element-handle.js';
-import { IOS_TEXT_INPUT_TYPES } from './ios-text-content.js';
+import { isIosTextInput } from './ios-text-content.js';
 import { normalizeRole } from './roles.js';
 import { formatSelector, makeSelector, type RoleSelectorValue, type Selector } from './selectors.js';
 
@@ -45,8 +45,12 @@ export interface NearMissEvaluator {
 interface Probe {
   selector: Selector;
   fallback?: boolean;
-  /** The probe looks for a text field holding the words: a hit is told to assert its value with toHaveValue(). */
-  field?: boolean;
+  /**
+   * The probe looks for a text field holding these words: a hit whose value
+   * is the words is told to assert it with toHaveValue(). (A field named by
+   * the words, through its label or placeholder, is not.)
+   */
+  fieldValue?: string;
   /**
    * iOS: the words a text field's typed value must equal. The selector
    * (a role without a name) finds every field, and only an iOS field holding
@@ -101,7 +105,7 @@ function tabProbe(needle: string): Probe {
  * locator that finds the field.
  */
 function fieldValueProbe(needle: string): Probe {
-  return { selector: makeSelector({ type: 'role', value: { role: 'textfield', name: needle, exact: true } }), field: true };
+  return { selector: makeSelector({ type: 'role', value: { role: 'textfield', name: needle, exact: true } }), fieldValue: needle };
 }
 
 /**
@@ -113,7 +117,7 @@ function fieldValueProbe(needle: string): Probe {
 function iosFieldValueProbes(needle: string): Probe[] {
   return (['textfield', 'searchfield'] as const).map((role) => ({
     selector: makeSelector({ type: 'role', value: { role, name: '' } }),
-    field: true,
+    fieldValue: needle,
     iosFieldValue: needle,
   }));
 }
@@ -128,7 +132,13 @@ function probeHits(probe: Probe, elements: ElementInfo[]): ElementInfo[] {
   const collapsed = collapseSameTargetDuplicates(elements);
   if (probe.iosFieldValue === undefined) return collapsed;
   const want = normalizeText(probe.iosFieldValue);
-  return collapsed.filter((el) => IOS_TEXT_INPUT_TYPES.has(el.className) && normalizeText(el.text) === want);
+  return collapsed.filter((el) => isIosTextInput(el.className, el.role) && normalizeText(el.text) === want);
+}
+
+/** Whether one of `elements` holds `value` as its text (a field: its typed value). */
+function holdsValue(elements: ElementInfo[], value: string): boolean {
+  const want = normalizeText(value);
+  return elements.some((el) => normalizeText(el.text) === want);
 }
 
 /** How a hit probe is listed: an iOS field-value probe by the field's own name. */
@@ -210,7 +220,7 @@ export function formatNearMisses(selector: Selector, probes: Probe[], response: 
       ? probeCode(h.probe, h.found)
       : `${probeCode(h.probe, h.found)} (${plural(h.found.length)})`).join(', ');
     // getByText reads no text field's typed value, as Playwright's doesn't.
-    const value = hits.some((h) => h.probe.field)
+    const value = hits.some((h) => h.probe.fieldValue !== undefined && holdsValue(h.found, h.probe.fieldValue))
       ? ' A text field\'s typed value is not text to getByText(): assert it with toHaveValue().'
       : '';
     return `Nothing matches it, but on screen now ${hits.length === 1 ? 'this locator matches' : 'these locators match'}: ${list}.${value}`;

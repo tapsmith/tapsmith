@@ -51,7 +51,9 @@ export function iosTexts(node: HierarchyNode, containerLabel: string): IosTexts 
   return {
     label: nameOnly ? '' : ownLabel(node.attributes.get('label') ?? '', containerLabel),
     title: nameOnly ? '' : node.attributes.get('title') ?? '',
-    value: iosTextValue(type, node.attributes.get('value') ?? '', node.attributes.get('placeholderValue') ?? ''),
+    value: iosTextValue(
+      type, node.attributes.get('tapsmith-role'), node.attributes.get('value') ?? '', node.attributes.get('placeholderValue') ?? '',
+    ),
   };
 }
 

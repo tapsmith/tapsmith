@@ -433,6 +433,45 @@
       "matches": false
     },
     {
+      "why": "a read-only text view's value is text",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "",
+      "value": "By signing up you agree to the Terms",
+      "editable": false,
+      "query": {
+        "substring": "by signing up"
+      },
+      "matches": true
+    },
+    {
+      "why": "exactly too",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "",
+      "value": "Terms of Service",
+      "editable": false,
+      "query": {
+        "exact": "Terms of Service"
+      },
+      "matches": true
+    },
+    {
+      "why": "and by RegExp",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "",
+      "value": "Terms of Service",
+      "editable": false,
+      "query": {
+        "source": "^Terms",
+        "flags": "",
+        "pattern": "\\ATerms",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
       "why": "a static text's value beside a placeholder is text",
       "platform": "ios",
       "type": "XCUIElementTypeStaticText",

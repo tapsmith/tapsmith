@@ -22,7 +22,10 @@ import XCTest
 ///   Playwright and an EditText's is not on Android: after typing "Alpha"
 ///   into a search field, getByText("Alpha") waits for the result, not the
 ///   field. The placeholder an empty field shows as its value still is, as
-///   an empty EditText's hint is (`inputValueText`).
+///   an empty EditText's hint is (`inputValueText`). A text view that can't
+///   be edited (`RoleMapping.isReadOnlyTextView`: terms copy, React Native's
+///   `<TextInput multiline editable={false} />`) is text on screen, not an
+///   input, so its value stays text.
 /// - A label that starts with its nearest labelled ancestor's label and ", "
 ///   (a SwiftUI Stepper's buttons: "Quantity: 1, Increment") is read without
 ///   that prefix: the text belongs to the ancestor.
@@ -74,18 +77,20 @@ enum TextContent {
 
     /// The node's label, title and value as text content: each empty when it
     /// isn't. `containerLabel` is the nearest ancestor's non-empty label;
-    /// `placeholder` the node's placeholderValue.
+    /// `placeholder` the node's placeholderValue; `readOnlyTextView` whether
+    /// it is a text view that can't be edited (RoleMapping.isReadOnlyTextView).
     static func texts(
         elementType: XCUIElement.ElementType,
         label: String,
         title: String,
         value: String,
         placeholder: String,
+        readOnlyTextView: Bool,
         containerLabel: String
     ) -> Texts {
         let nameOnly = nameOnlyTypes.contains(elementType)
         let valueText: String
-        if valueTextTypes.contains(elementType) {
+        if valueTextTypes.contains(elementType) || readOnlyTextView {
             valueText = value
         } else if textInputTypes.contains(elementType) {
             valueText = inputValueText(value: value, placeholder: placeholder)
