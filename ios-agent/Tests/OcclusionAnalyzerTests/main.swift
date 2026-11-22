@@ -957,6 +957,20 @@ check("a mini player stacked on a tab bar covers the rows under it",
           (3, .other, "", "tab-bar", R(0, 716, 402, 64)),
       ]).analyze(rowAt(664), isHittable: false),
       .covered(by: "element \"mini-player\"" + OcclusionAnalyzer.plainBarSuffix))
+// iOS lists views top to bottom: a JS header laid over the list's top comes
+// before the list in the tree.
+check("a header laid over the top of the list, listed before it, covers the rows under it",
+      barScreen(row: R(16, 110, 370, 48), bar: [(3, .other, "", "header", R(0, 100, 402, 64))], barFirst: true)
+          .analyze(rowAt(110), isHittable: false),
+      .covered(by: "element \"header\"" + OcclusionAnalyzer.plainBarSuffix))
+check("a header laid over the top of the list, listed after it, covers the rows under it",
+      barScreen(row: R(16, 110, 370, 48), bar: [(3, .other, "", "header", R(0, 100, 402, 64))])
+          .analyze(rowAt(110), isHittable: false),
+      .covered(by: "element \"header\"" + OcclusionAnalyzer.plainBarSuffix))
+checkPoint("a row partly under a header listed before the list is touched below it",
+           barScreen(row: R(16, 140, 370, 48), bar: [(3, .other, "", "header", R(0, 100, 402, 64))], barFirst: true)
+               .analyze(rowAt(140), isHittable: false),
+           CGPoint(x: 201, y: 176))
 check("a button in the bar over the row is named before the bar",
       barScreen(row: R(16, 724, 370, 48), bar: checkoutBar + [(4, .button, "Pay", "", R(100, 720, 200, 56))])
           .analyze(rowAt(724), isHittable: false),

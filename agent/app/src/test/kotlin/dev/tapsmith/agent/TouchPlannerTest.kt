@@ -186,6 +186,7 @@ class TouchPlannerTest {
         val e = assertThrows<ElementCoveredException> { planner.plan(target, LOW, budget(timeoutMs = 1_000), LABELLED) }
         assertEquals(CoverKind.KEYBOARD, e.kind)
         assertTrue(e.message, e.message!!.contains("covered by the keyboard"))
+        assertTrue(e.message, e.message!!.contains("covered by the keyboard, so a touch would land on it instead"))
         assertTrue(e.message, e.message!!.contains("still covered after waiting 1000ms"))
         assertTrue(e.message, e.message!!.contains("device.hideKeyboard()"))
         assertEquals(1_000, clock.nowMs)
@@ -221,7 +222,7 @@ class TouchPlannerTest {
         target.readAt = { snapshot(LOW, node = row, plainViewsTakeTouches = true) }
         val e = assertThrows<ElementCoveredException> { planner.plan(target, LOW, budget(timeoutMs = 1_000), LABELLED) }
         assertEquals(CoverKind.BAR, e.kind)
-        assertTrue(e.message, e.message!!.contains("covered by element \"checkout-bar\", a bar laid over its list,"))
+        assertTrue(e.message, e.message!!.contains("covered by element \"checkout-bar\", a bar laid over its list, so a touch"))
         assertTrue(e.message, e.message!!.contains("still covered after waiting"))
         assertTrue(e.message, e.message!!.contains("scrollIntoView()"))
 

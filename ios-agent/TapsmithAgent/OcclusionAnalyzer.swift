@@ -421,8 +421,10 @@ struct OcclusionAnalyzer {
     /// tree, in its window), outside it, across its bottom or top edge, at
     /// least half its width, at most a third of its height, and with
     /// something named in it: the shape the SDK's scrollIntoView() trims off
-    /// a list's view (PILOT-1370). UIKit bars clip the target already, and a
-    /// nameless view (a `pointerEvents="none"` fade) is never named. Trimmed
+    /// a list's view (PILOT-1370). A bar over the top may also be listed
+    /// before the list (iOS lists views top to bottom). UIKit bars clip the
+    /// target already, and a nameless view (a `pointerEvents="none"` fade)
+    /// is never named. Trimmed
     /// until nothing more trims it: a bar stacked on another (a mini player
     /// above a tab bar) reaches the edge only once the outer one is cut off.
     func plainBarsOver(_ list: Int) -> (view: CGRect, bars: [Int])? {
@@ -430,11 +432,16 @@ struct OcclusionAnalyzer {
         guard !frame.isNull, frame.width > 0, frame.height > 0 else { return nil }
         let window = nodes[list].window
         var candidates: [Int] = []
-        for i in nodes[list].subtreeEnd..<nodes.count {
+        for i in nodes.indices where i >= nodes[list].subtreeEnd || nodes[i].subtreeEnd <= list {
             let node = nodes[i]
             guard node.window == window, !Self.barTypes.contains(node.elementType),
                   !isScrollIndicator(node), !isTapsmithHooksMarker(node) else { continue }
             let f = clippedFrame(of: i)
+            // iOS lists views top to bottom, not in drawing order: a header
+            // laid over the list's top comes before it. Only a bar over the
+            // top half is taken from before the list; the target being
+            // unhittable is the evidence that it is drawn on top.
+            if i < list, f.midY >= frame.midY { continue }
             let across = f.intersection(frame)
             guard !across.isNull, f.height * 3 <= frame.height, across.width * 2 >= frame.width,
                   namedInside(i) != nil else { continue }

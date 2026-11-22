@@ -274,8 +274,8 @@ class TouchPlanner(
         waitedMs: Long,
     ): String {
         var message = "Element is covered by $cover"
-        if (kind == OcclusionAnalyzer.CoverKind.BAR) message += ", a bar laid over its list,"
-        message += " so a touch would land on it instead"
+        if (kind == OcclusionAnalyzer.CoverKind.BAR) message += ", a bar laid over its list"
+        message += ", so a touch would land on it instead"
         if (waitedMs > 0) message += " (still covered after waiting ${waitedMs}ms)"
         if (cover == "the keyboard") {
             message += ". Dismiss the keyboard first (device.hideKeyboard()) or scroll the element into view."
