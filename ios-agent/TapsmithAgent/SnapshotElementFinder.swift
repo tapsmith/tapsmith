@@ -1816,7 +1816,8 @@ class SnapshotElementFinder {
         // normalized like Playwright (PILOT-510).
         if selector.text != nil || selector.textContains != nil || selector.textRegex != nil {
             let texts = TextContent.texts(
-                elementType: elType, label: label, title: title, value: value, containerLabel: containerLabel
+                elementType: elType, label: label, title: title, value: value,
+                placeholder: placeholderValue, containerLabel: containerLabel
             )
             if let text = selector.text, !TextContent.matchesExact(texts, text) { return false }
             if let textRegex = selector.textRegex, !TextContent.matchesRegex(texts, textRegex) { return false }
@@ -1983,6 +1984,7 @@ class SnapshotElementFinder {
             label: node["label"] as? String ?? "",
             title: node["title"] as? String ?? "",
             value: node["value"] as? String ?? "",
+            placeholder: node["placeholderValue"] as? String ?? "",
             containerLabel: containerLabel
         )
         return TextContent.rowShows(query, texts: texts, node: node, rowCell: rowCell)

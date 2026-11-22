@@ -78,6 +78,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
             label: c["label"] as? String ?? "",
             title: c["title"] as? String ?? "",
             value: c["value"] as? String ?? "",
+            placeholder: c["placeholder"] as? String ?? "",
             containerLabel: c["container"] as? String ?? ""
         )
         let want = c["matches"] as? Bool ?? false
@@ -87,6 +88,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
             let node: [String: Any] = [
                 "elementType": type.rawValue, "label": c["label"] as? String ?? "",
                 "title": c["title"] as? String ?? "", "value": c["value"] as? String ?? "",
+                "placeholderValue": c["placeholder"] as? String ?? "",
             ]
             let rowCell: [String: Any]? = (c["row"] as? [String]).map { labels in
                 [
@@ -132,7 +134,8 @@ func exactMatches(_ query: String, in tree: [String: Any]) -> [String] {
         let label = node["label"] as? String ?? ""
         let texts = TextContent.texts(
             elementType: type, label: label, title: node["title"] as? String ?? "",
-            value: node["value"] as? String ?? "", containerLabel: containerLabel
+            value: node["value"] as? String ?? "",
+            placeholder: node["placeholderValue"] as? String ?? "", containerLabel: containerLabel
         )
         let rowShows = TextContent.rowShows(query, texts: texts, node: node, rowCell: rowCell)
         if TextContent.matchesExact(texts, query, rowShowsQuery: rowShows) {
@@ -158,7 +161,7 @@ expect("outside its row, a Remove control's joined part still matches",
        TextContent.rowShows("Alpha (a@example.com)",
                             texts: TextContent.texts(elementType: .button,
                                                      label: "Remove A, 981 195, Alpha (a@example.com)",
-                                                     title: "", value: "", containerLabel: ""),
+                                                     title: "", value: "", placeholder: "", containerLabel: ""),
                             node: [:], rowCell: nil) == false)
 
 if failures > 0 {

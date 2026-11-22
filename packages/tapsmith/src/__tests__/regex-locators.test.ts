@@ -68,8 +68,10 @@ describe('playground RegExp locators (PILOT-520)', () => {
     expect(count(androidRoots, 'device.getByText(/Welcome/, { exact: true })')).toBe(1);
   });
 
-  it('iOS getByText(RegExp) also tests the value', () => {
-    expect(count(iosRoots, 'device.getByText(/^Ada$/)')).toBe(1);
+  it("iOS getByText(RegExp) doesn't test a text field's typed value (PILOT-1417)", () => {
+    expect(count(iosRoots, 'device.getByText(/^Ada$/)')).toBe(0);
+    // Its label is still text.
+    expect(count(iosRoots, 'device.getByText(/^Full\\sname$/)')).toBe(1);
   });
 
   it('getByRole name RegExp tests the normalized name', () => {
