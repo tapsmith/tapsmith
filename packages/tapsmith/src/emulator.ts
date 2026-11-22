@@ -1812,15 +1812,18 @@ export interface AndroidDeviceTarget {
 
 /**
  * The run's Android device strategy ({@link resolveDeviceStrategy}), with
- * one CI rule: a config with `avd` and no `deviceStrategy` (so `avd-only`
- * by default) that runs on a CI machine without that AVD — a config `init`
- * wrote on a laptop, in a workflow that boots its own emulator such as
- * android-emulator-runner (docs/ci-setup.md) — uses the connected devices
- * instead, and boots nothing: the AVD cannot be booted there anyway. Only
- * on CI, where the machine and its devices are the job's; locally a
- * missing AVD stays an error (`avdNotFoundMessage`), since a connected
- * device may be someone else's. `freeSerials` are the connected Android
- * devices no other session holds; with none, nothing changes.
+ * one CI rule: a config with `avd` that runs on a CI machine without that
+ * AVD — a config `init` wrote on a laptop, in a workflow that boots its own
+ * emulator such as android-emulator-runner (docs/ci-setup.md) — uses the
+ * connected devices and boots nothing, as the AVD cannot be booted there.
+ * With no `deviceStrategy` (so `avd-only` by default) it says so in a
+ * notice; with an explicit `'prefer-connected'` it does so silently, so the
+ * config the notice recommends never tries to boot the missing AVD for an
+ * extra worker. An explicit `'avd-only'` is left alone. Only on CI, where
+ * the machine and its devices are the job's; locally a missing AVD stays
+ * an error (`avdNotFoundMessage`), since a connected device may be someone
+ * else's. `freeSerials` are the connected Android devices no other session
+ * holds; with none, nothing changes.
  */
 export function resolveAndroidDeviceTarget(
   config: Pick<TapsmithConfig, 'deviceStrategy' | 'avd' | 'launchEmulators'>,
@@ -1830,8 +1833,11 @@ export function resolveAndroidDeviceTarget(
   const strategy = resolveDeviceStrategy(config);
   const unchanged: AndroidDeviceTarget = { strategy, launchEmulators: config.launchEmulators };
   const isCi = deps.isCi ?? (runningInCi || !!(process.env.CI && process.env.CI !== 'false'));
-  if (config.deviceStrategy || !config.avd || !isCi || freeSerials.length === 0) return unchanged;
+  if (!config.avd || !isCi || freeSerials.length === 0 || config.deviceStrategy === 'avd-only') return unchanged;
+  // Explicit prefer-connected only changes anything when it would boot.
+  if (config.deviceStrategy === 'prefer-connected' && !config.launchEmulators) return unchanged;
   if ((deps.listAvds ?? listAvds)().includes(config.avd)) return unchanged;
+  if (config.deviceStrategy === 'prefer-connected') return { strategy, launchEmulators: false };
   const devices = freeSerials.join(', ');
   return {
     strategy: 'prefer-connected',

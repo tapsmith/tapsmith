@@ -2982,7 +2982,7 @@ describe('resolveAndroidDeviceTarget() — init\'s avd on CI (PILOT-1201)', () =
     expect(target.notice).toContain("deviceStrategy: process.env.CI ? 'prefer-connected' : undefined");
   });
 
-  it('keeps avd-only when the AVD exists, off CI, with no device connected, or with an explicit deviceStrategy', () => {
+  it('keeps avd-only when the AVD exists, off CI, with no device connected, or with an explicit avd-only', () => {
     const avdOnly = { strategy: 'avd-only', launchEmulators: true };
     expect(resolveAndroidDeviceTarget(config, ['emulator-5554'], { isCi: true, listAvds: () => ['Pixel_8_API_36'] })).toEqual(avdOnly);
     expect(resolveAndroidDeviceTarget(config, ['emulator-5554'], { isCi: false, listAvds: () => ['test'] })).toEqual(avdOnly);
@@ -2990,12 +2990,21 @@ describe('resolveAndroidDeviceTarget() — init\'s avd on CI (PILOT-1201)', () =
     expect(resolveAndroidDeviceTarget({ ...config, deviceStrategy: 'avd-only' }, ['emulator-5554'], ciRunner)).toEqual(avdOnly);
   });
 
+  it('with the explicit prefer-connected the notice recommends, never boots the missing AVD for an extra worker, silently', () => {
+    const explicit = { ...config, deviceStrategy: 'prefer-connected' as const };
+    expect(resolveAndroidDeviceTarget(explicit, ['emulator-5554'], ciRunner)).toEqual({ strategy: 'prefer-connected', launchEmulators: false });
+    // The AVD is there: booting more of it is fine.
+    expect(resolveAndroidDeviceTarget(explicit, ['emulator-5554'], { isCi: true, listAvds: () => ['Pixel_8_API_36'] }))
+      .toEqual({ strategy: 'prefer-connected', launchEmulators: true });
+  });
+
   it('does not list AVDs when nothing could change', () => {
     const listAvds = vi.fn(() => ['test']);
     expect(resolveAndroidDeviceTarget({ launchEmulators: false }, ['emulator-5554'], { isCi: true, listAvds }))
       .toEqual({ strategy: 'prefer-connected', launchEmulators: false });
-    expect(resolveAndroidDeviceTarget({ ...config, deviceStrategy: 'prefer-connected' }, ['emulator-5554'], { isCi: true, listAvds }))
-      .toEqual({ strategy: 'prefer-connected', launchEmulators: true });
+    expect(resolveAndroidDeviceTarget({ ...config, deviceStrategy: 'prefer-connected', launchEmulators: false }, ['emulator-5554'], { isCi: true, listAvds }))
+      .toEqual({ strategy: 'prefer-connected', launchEmulators: false });
+    resolveAndroidDeviceTarget({ ...config, deviceStrategy: 'avd-only' }, ['emulator-5554'], { isCi: true, listAvds });
     resolveAndroidDeviceTarget(config, ['emulator-5554'], { isCi: false, listAvds });
     resolveAndroidDeviceTarget(config, [], { isCi: true, listAvds });
     expect(listAvds).not.toHaveBeenCalled();

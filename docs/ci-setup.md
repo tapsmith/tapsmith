@@ -132,7 +132,9 @@ export default defineConfig({
 });
 ```
 
-An explicit `deviceStrategy: "avd-only"` keeps the old behavior: with the AVD missing, the run
+With it, Tapsmith still boots nothing on CI when the AVD isn't there, even with `workers` above
+the number of connected emulators: the run uses the emulators it has. An explicit
+`deviceStrategy: "avd-only"` keeps the old behavior: with the AVD missing, the run
 fails with `AVD "…" not found`. When Tapsmith launches the emulator itself in CI, the AVD must
 exist on the runner under the configured name (see
 [Letting Tapsmith launch the emulator](#letting-tapsmith-launch-the-emulator)).
