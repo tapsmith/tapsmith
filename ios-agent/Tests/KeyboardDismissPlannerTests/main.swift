@@ -1224,6 +1224,25 @@ do {
     ]
     check("modal window over the list: no spot in the list",
           planner(listScreen(rows: 1, windows: modal)).blankPointInScroller(of: rowTarget(0)), nil)
+    // A sheet the screen presents itself, inside the screen's own container
+    // (a sibling of the list): its backdrop covers the list too.
+    var local = listScreen(rows: 1)
+    let afterList = local[appHead.count...].firstIndex { $0.depth == 2 }!
+    local.insert(contentsOf: [
+        (4, .other, "", "", R(0, 116, 402, 758)),
+        (4, .other, "", "", R(0, 380, 402, 494)),
+        (5, .textField, "Note", "", sheetField),
+    ], at: afterList)
+    check("sheet in the screen's own container: no spot in the list",
+          planner(local).blankPointInScroller(of: rowTarget(0)), nil)
+    // An app-level overlay that lets touches through (a portal host, a
+    // box-none view) holding a floating button: only the button blocks.
+    let fab = R(330, 440, 56, 56)
+    let portal: [Row] = [(2, .other, "", "", screen), (3, .button, "Add", "", fab)]
+    let fp = planner(listScreen(rows: 1, overlay: portal)).blankPointInScroller(of: rowTarget(0))
+    checkTrue("box-none overlay with a floating button: a spot in the list beside the button",
+              fp.map { listViewport.contains($0) && notInside($0, [fab, R(16, 243, 370, 58)]) } ?? false,
+              "\(String(describing: fp))")
     // A plain view with nothing in it drawn over part of the list (a
     // pointerEvents="none" fade) is no cover.
     let fade = R(0, 400, 402, 129)

@@ -477,10 +477,12 @@ struct KeyboardDismissPlanner {
     /// What holds the scroll view never blocks: a touch on its blank part
     /// goes to the scroll view, not to a container around it (React Native
     /// wraps a list with an accessibility label in a labeled view of its
-    /// size). Content drawn over it from outside does, plain parts and all:
-    /// a sheet or modal over the list, whose unlabeled backdrop would take
-    /// the touch (and close it). Full-screen wrappers drawn after the screen
-    /// with nothing in them take no touch, and are left out.
+    /// size). What is drawn over it from outside does: content, and a
+    /// sheet's or modal's backdrop — an unlabeled view with nothing in it
+    /// laid under content drawn after it, which would take the touch (and
+    /// close the sheet). Other plain containers drawn after the screen (empty
+    /// wrappers, a box-none overlay holding a floating button) let the touch
+    /// through: only what they hold blocks.
     ///
     /// nil when the target is not found in the tree, is in no scroll view, or
     /// no scroll view of it has such a spot on screen.
@@ -499,17 +501,18 @@ struct KeyboardDismissPlanner {
                 if inside.contains(i) || i < scroller { return !isPlain(i) }
                 // Drawn after the scroll view, outside it: over it.
                 if let w = nodes[i].window, windows.contains(w) { return !isPlain(i) }
-                return !isPlain(i) || holdsContent(i)
+                return !isPlain(i) || isBackdrop(i)
             }
             if let point { return point }
         }
         return nil
     }
 
-    /// Whether anything in node `i`'s subtree is not plain: a container with
-    /// content in it, drawn over what is behind it.
-    private func holdsContent(_ i: Int) -> Bool {
-        ((i + 1)..<nodes[i].subtreeEnd).contains { !isPlain($0) }
+    /// Whether plain node `i` is a backdrop: it has nothing in it, and
+    /// content is drawn after it in its parent (the sheet over it).
+    private func isBackdrop(_ i: Int) -> Bool {
+        guard nodes[i].subtreeEnd == i + 1, let parent = nodes[i].parent else { return false }
+        return ((i + 1)..<nodes[parent].subtreeEnd).contains { !isPlain($0) }
     }
 
     // MARK: - 4. Return key
