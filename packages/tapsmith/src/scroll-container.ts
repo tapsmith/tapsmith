@@ -135,33 +135,46 @@ export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | unde
   // down is the edge swipe that pops the screen.
   let holder = self?.parent;
   while (holder && !(isScrollable(holder.node) && !holder.nonApp)) holder = holder.parent;
-  let r = holder && region(holder);
-  if (!self || !holder || !r) return undefined;
-  const height = r.bottom - r.top;
-  const width = r.right - r.left;
-  for (const c of entries) {
+  const container = holder && region(holder);
+  if (!self || !holder || !container) return undefined;
+  const list = holder;
+  const height = container.bottom - container.top;
+  const width = container.right - container.left;
+  const bars = entries.filter((c) => {
     const b = c.bounds;
-    if (!b || c.nonApp || isAncestor(holder, c) || isAncestor(c, holder) || isAncestor(c, self)) continue;
+    if (!b || c.nonApp || isAncestor(list, c) || isAncestor(c, list) || isAncestor(c, self)) return false;
     // Drawn over the list: after it, or a UIKit bar, which UIKit draws over
     // the content though XCUITest lists it first (a navigation bar a table
     // scrolls under).
-    if (c.order <= holder.order && !IOS_BAR_TYPES.has(c.node.attributes.get('type') ?? c.node.tagName)) continue;
-    const across = intersect(b, r);
-    if (!across || across.right - across.left < width / 2) continue;
-    const h = b.bottom - b.top;
-    if (h > height / 3 || !named(c, entries)) continue;
-    if (b.top > r.top + height / 2 && b.bottom >= r.bottom - h) {
-      if (b.top - r.top >= MIN_REGION) r = { ...r, bottom: Math.min(r.bottom, b.top) };
-    } else if (b.bottom < r.top + height / 2 && b.top <= r.top + h) {
-      if (r.bottom - b.bottom >= MIN_REGION) r = { ...r, top: Math.max(r.top, b.bottom) };
+    if (c.order <= list.order && !IOS_BAR_TYPES.has(c.node.attributes.get('type') ?? c.node.tagName)) return false;
+    return b.bottom - b.top <= height / 3 && named(c, entries);
+  });
+  // Trimmed until nothing more trims it: a bar stacked on another (a mini
+  // player above a tab bar) reaches the edge only once the outer one is taken
+  // off, whichever the tree lists first. Each pass that goes on trims at
+  // least one bar off for good, so there are at most as many as bars.
+  let r = container;
+  for (let pass = 0; pass <= bars.length; pass++) {
+    const before = r;
+    for (const c of bars) {
+      const b = c.bounds!;
+      const across = intersect(b, r);
+      if (!across || across.right - across.left < width / 2) continue;
+      const h = b.bottom - b.top;
+      if (b.top > r.top + height / 2 && b.bottom >= r.bottom - h) {
+        if (b.top - r.top >= MIN_REGION && b.top < r.bottom) r = { ...r, bottom: b.top };
+      } else if (b.bottom < r.top + height / 2 && b.top <= r.top + h) {
+        if (r.bottom - b.bottom >= MIN_REGION && b.bottom > r.top) r = { ...r, top: b.bottom };
+      }
     }
+    if (r === before) break;
   }
   return {
     region: r,
     // Judged without the element itself: one sticking out past the side of
     // a list that scrolls up and down does not make it scroll sideways.
-    vertical: scrollsAlong(holder, entries, 'vertical', self),
-    horizontal: scrollsAlong(holder, entries, 'horizontal', self),
+    vertical: scrollsAlong(list, entries, 'vertical', self),
+    horizontal: scrollsAlong(list, entries, 'horizontal', self),
   };
 }
 

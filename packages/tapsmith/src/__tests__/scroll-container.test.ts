@@ -386,6 +386,14 @@ describe('visibleRegionOf', () => {
     expect(visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 0, top: 800, right: 201, bottom: 874 })).toBeUndefined();
   });
 
+  it('leaves out two bars stacked over the bottom of the list, whichever the tree lists first', () => {
+    const miniBar = el('Other', '[0,660][402,720]', '', el('Button', '[0,660][402,720]', 'label="Now playing"'));
+    const checkout = el('Other', '[0,720][402,800]', '', el('Button', '[0,720][402,800]', 'label="Checkout"'));
+    const frame = { left: 100, top: 670, right: 140, bottom: 710 };
+    expect(visibleRegionOf(tabScreen('[100,670][140,710]', miniBar + checkout), frame)?.region).toEqual({ ...list, bottom: 660 });
+    expect(visibleRegionOf(tabScreen('[100,670][140,710]', checkout + miniBar), frame)?.region).toEqual({ ...list, bottom: 660 });
+  });
+
   it('leaves out a UIKit navigation bar, which XCUITest lists before the table it is drawn over', () => {
     const xml = ios(
       el('NavigationBar', '[0,24][402,82]', 'label="Native Screens"'),
