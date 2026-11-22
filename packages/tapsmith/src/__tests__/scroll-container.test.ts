@@ -461,6 +461,32 @@ describe('visibleRegionOf', () => {
     },
   );
 
+  it("does not take a carousel's cards past the side for its list scrolling sideways", () => {
+    const xml = ios(el('Other', '[0,0][402,874]', '',
+      el('Table', '[0,100][402,700]', '',
+        el('Cell', '[0,100][402,300]', '', el('CollectionView', '[0,110][402,290]', '',
+          el('Cell', '[16,110][216,290]', 'label="Card 1"') + el('Cell', '[232,110][432,290]', 'label="Card 2"'))) +
+        el('Cell', '[0,650][402,750]', 'label="Row 2"')) +
+      el('TabBar', '[0,700][402,874]', '', el('Button', '[0,700][201,874]', 'label="Home"')),
+    ));
+    const row = { left: 0, top: 650, right: 402, bottom: 750 };
+    const view = visibleRegionOf(xml, row);
+    expect(view).toMatchObject({ vertical: true, horizontal: false });
+    expect(outsideRegion(row, view!.region, view)).toBe('down');
+  });
+
+  it('does not nudge sideways in a list for a chip in a chip bar too small to swipe in, with more chips past the side', () => {
+    const xml = ios(
+      el('ScrollView', '[0,70][402,800]', '',
+        el('ScrollView', '[0,100][402,140]', '',
+          el('Button', '[360,100][440,140]', 'label="Chip 7"') + el('Button', '[450,100][530,140]', 'label="Chip 8"')) +
+        el('Other', '[0,140][402,1400]', '')),
+    );
+    const chip = { left: 360, top: 100, right: 440, bottom: 140 };
+    const view = visibleRegionOf(xml, chip);
+    expect(view ? outsideRegion(chip, view.region, view) : undefined).toBeUndefined();
+  });
+
   it.each(['CollectionView', 'ScrollView'])(
     'nudges up a row behind the tab bar of an iOS %s that runs under it, with content ending there',
     (type) => {

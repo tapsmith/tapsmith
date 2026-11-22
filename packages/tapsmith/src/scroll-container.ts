@@ -144,7 +144,7 @@ export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | unde
     if (!container) continue;
     // Judged without the element itself: one sticking out past the side of
     // a list that scrolls up and down does not make it scroll sideways.
-    const horizontal = scrollsAlong(a, entries, 'horizontal', self);
+    const horizontal = scrollsAlong(a, entries, 'horizontal', { except: self });
     const view: VisibleRegion = {
       region: trimBars(a, container, self, entries),
       horizontal,
@@ -153,7 +153,7 @@ export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | unde
       // lists only what shows, so the row reaching past its edge may be the
       // only one, and content that ends behind a tab bar the list runs under
       // reaches past nothing. A sideways nudge still needs content past a side.
-      vertical: scrollsAlong(a, entries, 'vertical', self) || (a.node.attributes.get('scrollable') !== 'true' && !horizontal),
+      vertical: scrollsAlong(a, entries, 'vertical', { except: self }) || (a.node.attributes.get('scrollable') !== 'true' && !horizontal),
     };
     if (outsideRegion(target, view.region, view) || !outsideRegion(target, view.region)) return view;
   }
@@ -362,17 +362,25 @@ export function hasScrollableContent(xml: string, region: Rect | undefined, axis
 
 /**
  * Whether the scrollable `e` has content to scroll along `axis`, as
- * {@link hasScrollableContent} judges it, leaving out `except` and what is in it.
+ * {@link hasScrollableContent} judges it. With `own`, only its own content
+ * counts: not `own.except` (the element being judged) and what is in it, nor
+ * what is inside a scrollable nested in `e` (a carousel's cards past the side
+ * of the list that holds it scroll with the carousel, not the list).
  */
-function scrollsAlong(e: Entry, entries: readonly Entry[], axis: 'vertical' | 'horizontal', except?: Entry): boolean {
+function scrollsAlong(e: Entry, entries: readonly Entry[], axis: 'vertical' | 'horizontal', own?: { except: Entry }): boolean {
   if (e.node.attributes.get('scrollable') === 'true') {
     const along = layoutAxis(e, entries);
     return along === undefined || along === axis;
   }
   const f = e.bounds;
   if (!f) return false;
+  const nested = (d: Entry): boolean => {
+    for (let p = d.parent; p && p !== e; p = p.parent) if (isScrollable(p.node) && !p.nonApp) return true;
+    return false;
+  };
   return entries.some((d) => {
-    if (d.nonApp || !d.bounds || !isAncestor(e, d) || d === except || (except && isAncestor(except, d))) return false;
+    if (d.nonApp || !d.bounds || !isAncestor(e, d)) return false;
+    if (own && (d === own.except || isAncestor(own.except, d) || nested(d))) return false;
     const b = d.bounds;
     return axis === 'vertical'
       ? b.top < f.top - FRAME_TOLERANCE || b.bottom > f.bottom + FRAME_TOLERANCE
