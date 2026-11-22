@@ -10,7 +10,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { claimBanner, printsBanner, runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
-import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
+import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
@@ -55,6 +55,7 @@ import {
   cleanupStaleEmulators,
   resolveEmulatorLaunchSettings,
   prefilterDevicesForStrategy,
+  resolveAndroidDeviceTarget,
   probeDeviceHealth,
   probeDeviceHealthIfSettled,
   provisionEmulators,
@@ -644,7 +645,7 @@ async function setupSequentialDeviceClaimed(
     progress?.fail('primary-device', 'no online device found');
     // Devices that are there but held by other sessions are named: the user
     // stops one, rather than looking for a device problem they do not have.
-    throw new Error(noOnlineDeviceMessage(cfg, listAdbDevices(), androidToolchainBlocker()) + heldDevicesNote(withoutHeldDevices(listConnectedDeviceSerials()).held));
+    throw new Error(noOnlineDeviceMessage({ ...cfg, avdMissingOnCi: target.avdMissingOnCi }, listAdbDevices(), androidToolchainBlocker()) + heldDevicesNote(withoutHeldDevices(listConnectedDeviceSerials()).held));
   }
 
   cfg.device = target.selectedSerial;
@@ -1088,6 +1089,8 @@ async function ensureSequentialTargetDevice(
   launched: LaunchedEmulator[]
   /** The iOS simulator was booted here and the app installed onto it fresh. */
   appInstalledFresh?: boolean
+  /** On CI the configured AVD is not on the machine, so nothing was booted. */
+  avdMissingOnCi?: true
 }> {
   // The first `use.devices` member's pin, or root `device` — not `config.device`
   // alone, which left a group pinning both members with its primary auto-picked.
@@ -1210,7 +1213,6 @@ async function ensureSequentialTargetDevice(
     else process.stderr.write(`${DIM}${message}${RESET}\n`);
   }
 
-  const deviceStrategy = resolveDeviceStrategy(config);
   const onlineSerials = listConnectedDeviceSerials();
   // Devices another live Tapsmith session holds are skipped, not taken
   // (PILOT-381). They stay "occupied" for the emulator launch below.
@@ -1218,6 +1220,11 @@ async function ensureSequentialTargetDevice(
   for (const claim of unheldOnline.held) {
     if (progress) progress.note(skippedHeldDeviceMessage(claim));
     else process.stderr.write(`${DIM}${skippedHeldDeviceMessage(claim)}${RESET}\n`);
+  }
+  const { strategy: deviceStrategy, launchEmulators, notice: ciTargetNotice, avdMissingOnCi } = resolveAndroidDeviceTarget(config, unheldOnline.free);
+  if (ciTargetNotice) {
+    if (progress) progress.note(ciTargetNotice);
+    else process.stderr.write(`${YELLOW}${ciTargetNotice}${RESET}\n`);
   }
   const prefilteredOnline = prefilterDevicesForStrategy(
     unheldOnline.free,
@@ -1246,8 +1253,8 @@ async function ensureSequentialTargetDevice(
     return { selectedSerial: pickedOnline, launched: [] };
   }
 
-  if (!config.launchEmulators) {
-    return { selectedSerial: undefined, launched: [] };
+  if (!launchEmulators) {
+    return { selectedSerial: undefined, launched: [], ...(avdMissingOnCi ? { avdMissingOnCi } : {}) };
   }
 
   assertAdbForEmulatorLaunch();
@@ -1629,13 +1636,17 @@ async function provisionDevicesForBucketUnclaimed(
 
   // Android
   const allConnected = listConnectedDeviceSerials();
-  const deviceStrategy = resolveDeviceStrategy(effectiveConfig);
   // Devices another live Tapsmith session holds are skipped (PILOT-381), but
   // stay "occupied" for the emulator launch below.
   const unheld = withoutHeldDevices(allConnected);
   for (const claim of unheld.held) {
     if (progress) progress.note(skippedHeldDeviceMessage(claim));
     else process.stderr.write(`${DIM}${skippedHeldDeviceMessage(claim)}${RESET}\n`);
+  }
+  const { strategy: deviceStrategy, launchEmulators, notice: ciTargetNotice } = resolveAndroidDeviceTarget(effectiveConfig, unheld.free);
+  if (ciTargetNotice) {
+    if (progress) progress.note(ciTargetNotice);
+    else process.stderr.write(`${YELLOW}${ciTargetNotice}${RESET}\n`);
   }
   const prefiltered = prefilterDevicesForStrategy(
     unheld.free,
@@ -1654,7 +1665,7 @@ async function provisionDevicesForBucketUnclaimed(
     return { serials, launched: [], reusedSimulatorCount: 0 };
   }
 
-  if (!effectiveConfig.launchEmulators) {
+  if (!launchEmulators) {
     return { serials, launched: [], reusedSimulatorCount: 0 };
   }
 

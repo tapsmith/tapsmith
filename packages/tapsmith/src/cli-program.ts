@@ -65,6 +65,7 @@ export interface InitCommandOptions {
   app?: string;
   bundleId?: string;
   avd?: string;
+  device?: string;
   simulator?: string;
   deviceType?: string;
   /** Unset when neither --network-capture nor --no-network-capture was passed. */
@@ -257,6 +258,7 @@ and/or explicit flags to run non-interactively (scripts and AI agents).
 Examples:
   npx tapsmith init --yes
   npx tapsmith init --yes --platform android --apk ./app-debug.apk
+  npx tapsmith init --yes --device emulator-5554
   npx tapsmith doctor --json   # check the environment first`;
 
 const MCP_EXAMPLES = `
@@ -466,7 +468,8 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--package <id>', 'Android package name (default: read from the APK; with no APK, writes a package-only config for an installed app)')
     .option('--app <path>', 'iOS simulator .app bundle (default: auto-detected in the iOS project\'s **/*-iphonesimulator/ or a Flutter app\'s build/ios/iphonesimulator/, else Xcode\'s DerivedData)')
     .option('--bundle-id <id>', 'iOS bundle identifier (default: read from Info.plist)')
-    .option('--avd <name>', 'Android AVD to auto-launch (default: the first that supports HTTPS capture, else the first available)')
+    .option('--avd <name>', 'Android AVD to auto-launch (default: a running emulator\'s AVD, else the newest that supports HTTPS capture)')
+    .option('--device <serial>', 'Android device to use, by its `adb devices` serial: an emulator writes its AVD, a physical device pins `device`')
     .option('--simulator <name>', 'iOS simulator name (default: a booted iOS simulator, else the newest available iPhone; stock names before renamed ones)')
     .option('--device-type <type>', 'emulator, physical or both (default: emulator)')
     .option('--network-capture', 'Record HTTP(S) traffic in traces (default: on, unless the only device is a Google Play-image emulator)')

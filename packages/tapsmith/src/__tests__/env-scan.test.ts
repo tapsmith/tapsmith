@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { isCustomSimulatorName, parseSimctlDevicesJson, parseSimctlDeviceTypesJson } from '../env-scan.js';
+import { describe, it, expect, vi } from 'vitest';
+import { isCustomSimulatorName, parseSimctlDevicesJson, parseSimctlDeviceTypesJson, runningAvds, scanAndroidDevices } from '../env-scan.js';
 import { parseAdbDevicesOutput } from '../adb-devices.js';
 
 describe('parseAdbDevicesOutput()', () => {
@@ -125,5 +125,34 @@ describe('parseSimctlDevicesJson()', () => {
     expect(parseSimctlDevicesJson(JSON.stringify({ devices: null }))).toEqual([]);
     expect(parseSimctlDevicesJson(JSON.stringify({ devices: [] }))).toEqual([]);
     expect(parseSimctlDevicesJson(JSON.stringify({ devices: { bad: {} } }))).toEqual([]);
+  });
+});
+
+describe('scanAndroidDevices() / runningAvds() (PILOT-1201)', () => {
+  const output = [
+    'List of devices attached',
+    'emulator-5554\tdevice',
+    'emulator-5556\tdevice',
+    'emulator-5558\toffline',
+    'R5CT10ABCDE\tdevice',
+    'XYZ\tunauthorized',
+    '',
+  ].join('\n');
+  const names: Record<string, string> = { 'emulator-5554': 'Pixel_8', 'emulator-5556': 'Busy_AVD' };
+
+  it('lists usable devices with each emulator\'s AVD and whether another session holds it', () => {
+    const devices = scanAndroidDevices(output, (s) => names[s], (serials) => serials.filter((s) => s === 'emulator-5556'));
+    expect(devices).toEqual([
+      { serial: 'emulator-5554', avd: 'Pixel_8', held: false },
+      { serial: 'emulator-5556', avd: 'Busy_AVD', held: true },
+      { serial: 'R5CT10ABCDE', held: false },
+    ]);
+    expect(runningAvds(devices)).toEqual(['Pixel_8']);
+  });
+
+  it('never reads an AVD name off a physical device', () => {
+    const readAvd = vi.fn((s: string) => names[s]);
+    scanAndroidDevices('R5CT10ABCDE\tdevice\n', readAvd, () => []);
+    expect(readAvd).not.toHaveBeenCalled();
   });
 });

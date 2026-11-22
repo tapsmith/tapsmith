@@ -12,6 +12,8 @@ import {
   newCaptureAvd,
   parseAvdApiLevel,
   parseAvdImageTag,
+  preferredAvd,
+  rankAvds,
   scanAvdImageTags,
   type AvdImageInfo,
 } from '../avd-images.js';
@@ -120,6 +122,38 @@ describe('newCaptureAvd()', () => {
       name: 'Tapsmith_Phone_API_36_3',
       command: 'npx tapsmith create-avd --name Tapsmith_Phone_API_36_3',
     });
+  });
+});
+
+describe('rankAvds() / preferredAvd() (PILOT-1201)', () => {
+  const images: AvdImageInfo[] = [
+    { name: 'A_Play_36', tagId: 'google_apis_playstore', apiLevel: 36 },
+    { name: 'B_Probe_28', tagId: 'google_apis', apiLevel: 28 },
+    { name: 'C_Phone_36', tagId: 'google_apis', apiLevel: 36 },
+    { name: 'D_Mystery' },
+  ];
+  const names = images.map((a) => a.name);
+
+  it('prefers capture-capable, then the newest API level, not the first alphabetically', () => {
+    expect(rankAvds(names, images)).toEqual(['C_Phone_36', 'B_Probe_28', 'D_Mystery', 'A_Play_36']);
+    expect(preferredAvd(names, images)).toBe('C_Phone_36');
+  });
+
+  it('puts a running AVD first, even an older or Play-image one, so nothing extra boots', () => {
+    expect(preferredAvd(names, images, ['B_Probe_28'])).toBe('B_Probe_28');
+    expect(preferredAvd(names, images, ['A_Play_36'])).toBe('A_Play_36');
+    // Two running: the capable one.
+    expect(preferredAvd(names, images, ['A_Play_36', 'B_Probe_28'])).toBe('B_Probe_28');
+  });
+
+  it('is undefined with no AVDs', () => {
+    expect(preferredAvd([], images)).toBeUndefined();
+  });
+
+  it('is the AVD doctor names too, so the two never disagree', () => {
+    const imgs: AvdImageInfo[] = images;
+    expect(captureAvdFix(imgs)).toContain(`set avd: '${preferredAvd(names, images)}'`);
+    expect(captureAvdFix(imgs, { running: ['B_Probe_28'] })).toContain("set avd: 'B_Probe_28'");
   });
 });
 

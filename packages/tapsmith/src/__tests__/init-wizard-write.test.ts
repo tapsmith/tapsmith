@@ -39,6 +39,8 @@ const env: EnvScan = {
   simulators: [],
   avds: ['Pixel_API_36'],
   avdImages: [{ name: 'Pixel_API_36', tagId: 'google_apis' }],
+  androidDevices: [],
+  unusableAndroidDevices: [],
   isMacOS: false,
 };
 vi.mock('../env-scan.js', async (importOriginal) => ({

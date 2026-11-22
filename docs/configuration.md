@@ -61,7 +61,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `daemonBin` | `string` | `undefined` | Path to the `tapsmith-core` binary. If unset, Tapsmith auto-resolves it from several common locations (including npm packages and monorepo build outputs) before falling back to `PATH`. |
 | `device` | `string` | `undefined` | Explicit single-device override. Useful for debugging or forcing one specific physical device/emulator/simulator. |
 | `devices` | `number \| { name: string; device?: string }[]` | `undefined` | Drive several devices from one test — `devices: 2`, or named members optionally pinned to a serial (at most 10). Project-level only. Tests receive them as the `devices` fixture. See [Multi-device tests](./multi-device.md). |
-| `deviceStrategy` | `"prefer-connected" \| "avd-only"` | contextual | Optional override for device selection (Android). Defaults to `"avd-only"` when `avd` is set, otherwise `"prefer-connected"`. |
+| `deviceStrategy` | `"prefer-connected" \| "avd-only"` | contextual | Optional override for device selection (Android). Defaults to `"avd-only"` when `avd` is set, otherwise `"prefer-connected"`. On CI, a default `"avd-only"` whose AVD is not on the machine uses the connected devices instead, with a note ([CI Setup](ci-setup.md#the-avd-in-a-config-from-tapsmith-init)); an explicit `"avd-only"` turns that off. |
 | `rootDir` | `string` | the directory the config is loaded from | Root for test discovery, and the base for relative paths elsewhere in the config (`app`, `apk`, agent artifacts). A relative `rootDir` resolves against the directory the config is loaded from — the working directory for `tapsmith test`, including `tapsmith test -c ../other/tapsmith.config.mjs`, and the config file's own directory for an MCP server that found a config elsewhere. Unset, it *is* that directory. |
 | `outputDir` | `string` | `"tapsmith-results"` | Directory for screenshots and other artifacts. |
 | `agentApk` | `string` | auto-resolved | Path to the Tapsmith agent APK (Android). When installed via npm, the APK from `@tapsmith/agent-android` is used automatically. Only set this to override with a custom build. |
@@ -433,6 +433,15 @@ while adb restarts), and when another Tapsmith session is using the emulator.
 If you want the opposite behavior, set `deviceStrategy: "prefer-connected"` to
 let Tapsmith reuse unrelated healthy connected devices first even when `avd` is
 configured.
+
+On CI there is one exception: when `avd` is set without `deviceStrategy`, the AVD
+is not on the CI machine, and a device is connected (an emulator the workflow
+booted, as `android-emulator-runner` does), Tapsmith uses the connected devices,
+boots nothing, and prints a note saying so. With an explicit
+`deviceStrategy: "prefer-connected"` it does the same without the note: it never
+tries to boot an AVD the CI machine lacks to fill more workers. This is what lets a config written
+by `tapsmith init` on your machine run in the [CI workflows](ci-setup.md). Locally
+a missing AVD is still an error, since a connected device may be someone else's.
 
 ### How Tapsmith launches emulators
 
