@@ -285,13 +285,13 @@ Element getByText("Item 1", { exact: true }) is off-screen: it was found, but no
 
 **What happened:** the element is in the hierarchy (iOS lists off-screen elements) but no part of it was on screen for the whole action timeout. Taps do not scroll for you, so the tap waited for it to come into view and then gave up.
 
-A row that is on screen but clipped by its list, for example scrolled under a header above the list, fails the same way with a slightly different message:
+A row that is on screen but clipped by its list or covered, for example scrolled under a header above the list or just below the list behind a tab bar, fails the same way with a slightly different message:
 
 ```
-Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 30000ms timeout: it may be clipped by its list (for example behind a header). tap() does not scroll, so scroll it into view first with scroll("up") on the list that holds it (scroll("down") if it is clipped at the bottom), then tap() it.
+Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 30000ms timeout: it may be clipped by its list or covered (for example behind a header or a tab bar). tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() (or scroll() the list that holds it), then tap() it.
 ```
 
-`scrollIntoView()` cannot help in this case: a clipped row counts as visible, so it returns at once. Move the list itself with `scroll()`.
+`scrollIntoView()` scrolls such a row inside the part of its list where content shows: past the list's edge, or under a bar the app draws over the list's top or bottom edge. If something else covers it, move the list itself with `scroll()`.
 
 **Fix:** scroll to it first with `scrollIntoView()`, using the direction the error names, then tap. For an element in a horizontal list, scroll that list with `scroll()`.
 
