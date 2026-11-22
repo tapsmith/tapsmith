@@ -28,6 +28,7 @@ import {
 import type { TapsmithConfig } from '../config.js';
 import { Tracing } from '../trace/tracing.js';
 import { getActiveTraceCollector, type TraceCollector } from '../trace/trace-collector.js';
+import { rememberCaptureFailures } from '../capture-warnings.js';
 import { isCurrentAttemptClosed } from '../attempt-fence.js';
 import { EventEmitter } from 'node:events';
 import { NetworkRouteManager } from '../network.js';
@@ -939,6 +940,49 @@ describe('runner execution', () => {
       // one member's failure behind another's identical message.
       const disabled = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('Network capture disabled'));
       expect(disabled).toEqual(['[tapsmith] Network capture disabled: [bob] system-proxy fallback refused']);
+    } finally {
+      warn.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a capture failure an earlier run printed in one line, then not again', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-capture-repeat-'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failure = 'iOS network capture unavailable for SIM-REPEAT: the extension did not connect';
+    const device = {
+      tracing: new Tracing(async () => undefined, async () => undefined),
+      waitForIdle: vi.fn(async () => {}),
+      _startNetworkCapture: vi.fn(async () => ({ success: false, proxyPort: 0, errorMessage: failure })),
+      _stopNetworkCapture: vi.fn(async () => ({ success: true, entries: [], errorMessage: '' })),
+      _stopDeviceLogStream: vi.fn(),
+      _startDaemonLogStream: vi.fn(),
+      _stopDaemonLogStream: vi.fn(),
+      _disposeRouteManager: vi.fn(async () => {}),
+      _disposeWebViewManager: vi.fn(async () => {}),
+      _resetWebViewContext: vi.fn(),
+    };
+    // A watch or MCP re-run: a fresh child, seeded with what earlier runs printed.
+    rememberCaptureFailures([failure]);
+    try {
+      pushContext();
+      tapsmithTest('first traced test', async () => {});
+      tapsmithTest('second traced test', async () => {});
+      const ctx = popContext();
+      await runSuiteContext(ctx, '', [], [], makeOpts({
+        config: makeConfig({
+          rootDir: tempRoot,
+          outputDir: 'out',
+          trace: { mode: 'on', network: true, screenshots: false, snapshots: false, sources: false, deviceLogs: false },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+        devices: [{ name: 'only', device: device as any }],
+      }));
+      expect(device._startNetworkCapture).toHaveBeenCalledTimes(2);
+      const disabled = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('Network capture disabled'));
+      expect(disabled).toHaveLength(1);
+      expect(disabled[0]).toMatch(/^\[tapsmith\] Network capture disabled: still unavailable, for the reason an earlier run/);
+      expect(disabled[0]).not.toContain(failure);
     } finally {
       warn.mockRestore();
       fs.rmSync(tempRoot, { recursive: true, force: true });
