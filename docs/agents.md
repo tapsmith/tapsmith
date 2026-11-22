@@ -14,7 +14,8 @@ npm install -D tapsmith    # or: yarn add -D tapsmith / pnpm add -D tapsmith
 # 1. Diagnose the environment. Every failing check includes a `fix`.
 npx tapsmith doctor --json
 
-# 2. Configure non-interactively. Auto-detects APK/.app, package name, devices.
+# 2. Configure non-interactively. Auto-detects APK/.app, package name, devices
+#    (a running emulator's AVD first; pin one with --device <serial>).
 npx tapsmith init --yes --json
 #    Undecidable cases exit 1 with JSON listing candidates and the flag to pass,
 #    e.g. {"error":{"code":"AMBIGUOUS_APK","candidates":[...],"fix":"Pass --apk <path>"}}
@@ -37,9 +38,13 @@ error code are in the [API reference](api-reference.md#json-output---json).
 ## init flags
 
 Run `npx tapsmith init --help` for the full list: `--platform`, `--apk`, `--package`,
-`--app`, `--bundle-id`, `--avd`, `--simulator`, `--device-type`, `--network-capture`,
+`--app`, `--bundle-id`, `--avd`, `--device`, `--simulator`, `--device-type`, `--network-capture`,
 `--no-network-capture`, `--no-example-test`, `--no-agents-md`, `--force`, `--json`, `--yes`.
 
+With an emulator already running, `init --yes` writes its AVD (one another Tapsmith
+session is using is skipped); `--device <serial>` picks a connected device by its
+`adb devices` serial. The `avd` init writes keeps working on CI, where the workflow boots its
+own emulator ([CI Setup](ci-setup.md#the-avd-in-a-config-from-tapsmith-init)).
 iOS *physical* devices require the interactive wizard (code-signing preflight);
 everything else works unattended.
 
