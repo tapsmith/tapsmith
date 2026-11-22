@@ -312,6 +312,14 @@ function isPathSpecifier(name: string): boolean {
   return name.startsWith('.') || name.startsWith('file:') || path.isAbsolute(name);
 }
 
+function isFile(file: string): boolean {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** The package a bare specifier imports: `pkg/sub` → `pkg`, `@scope/pkg/sub` → `@scope/pkg`. */
 function packageNameOf(specifier: string): string {
   const parts = specifier.split('/');
@@ -363,13 +371,17 @@ async function loadCustomReporter(
       );
     }
     specifier = pathToFileURL(file).href;
+  } else if (isFile(path.resolve(rootDir, name))) {
+    // `reporters/custom.js`: a file under rootDir wins over a package of
+    // that name, as in Playwright.
+    specifier = pathToFileURL(path.resolve(rootDir, name)).href;
   }
 
   let mod: Record<string, unknown>;
   try {
     mod = await import(specifier) as Record<string, unknown>;
   } catch (err) {
-    if (!isPathSpecifier(name) && isMissingPackage(err, name)) {
+    if (specifier === name && isMissingPackage(err, name)) {
       throw new ReporterLoadError(unknownReporterMessage(name), 'unknown', { cause: err });
     }
     throw loadFailed(name, err);

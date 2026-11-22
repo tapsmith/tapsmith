@@ -408,6 +408,14 @@ describe('createReporters: unknown and custom reporters', () => {
     expect((reporters[0] as unknown as { name: string }).name).toBe('object-reporter');
   });
 
+  // Playwright tries `path.resolve(rootDir, id)` before a package name.
+  it('loads a file under rootDir named without a leading ./', async () => {
+    fs.mkdirSync(path.join(dir, 'reporters'));
+    fs.writeFileSync(path.join(dir, 'reporters', 'bare.mjs'), 'export default class BareReporter {}\n');
+    const reporters = await createReporters('reporters/bare.mjs', { rootDir: dir });
+    expect(reporters.map((r) => r.constructor.name)).toEqual(['BareReporter']);
+  });
+
   it('names the file it looked for when a reporter path leads nowhere', async () => {
     const err = await loadError('./missing-reporter.mjs');
     expect(err.kind).toBe('unknown');
@@ -972,6 +980,24 @@ describe('GitHubActionsReporter', () => {
 });
 
 describe('JsonReporter', () => {
+  it('does not say where it wrote the report for a caller that owns the file (TAPSMITH_JSON_REPORT_QUIET)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-json-'));
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.stubEnv('TAPSMITH_JSON_REPORT_QUIET', '1');
+    try {
+      const { JsonReporter } = await import('../reporters/json.js');
+      const reporter = new JsonReporter({ outputFile: 'out/results.json' });
+      reporter.onRunStart!(makeConfig({ rootDir: tmpDir }), 1);
+      await reporter.onRunEnd!(makeFullResult());
+      expect(fs.existsSync(path.join(tmpDir, 'out/results.json'))).toBe(true);
+      expect(stderr.mock.calls.map((c) => String(c[0])).join('')).not.toContain('report written to');
+    } finally {
+      vi.unstubAllEnvs();
+      stderr.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
   it('says where it wrote the report', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-json-'));
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
