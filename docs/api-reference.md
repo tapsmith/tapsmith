@@ -2609,7 +2609,7 @@ export default defineConfig({
 A relative path is resolved against `rootDir`, as other paths in the config are; a name that is not a path is
 imported as an installed package. The module's default export is a reporter class, constructed with the
 reporter's options, or a reporter object. A reporter whose module or constructor throws stops the run with
-that error and its stack.
+that error (`tapsmith test` also prints its stack).
 
 ### `TapsmithReporter` interface
 
