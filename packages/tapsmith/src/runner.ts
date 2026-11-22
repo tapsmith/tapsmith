@@ -1048,15 +1048,42 @@ function validateScopeTimeoutAndRetries(options: { timeout?: number; retries?: n
   }
 }
 
+/**
+ * The title and test function of a `test()` or `test.only()` declaration,
+ * refusing the call shapes Tapsmith does not support at load time. Without
+ * this, Playwright's `(title, details, callback)` form stores the details
+ * object as the test function and drops the callback, and fails only when
+ * the test runs, with a raw TypeError.
+ */
+function testDeclaration(api: string, args: unknown[]): [string, TestCallback] {
+  const [name, second, third] = args;
+  if (typeof name !== 'string') {
+    throw new Error(`${api}() takes a title string and a test function: ${api}('my test', async () => { ... }).`);
+  }
+  if (typeof second === 'function') return [name, second as TestCallback];
+  if (second !== null && typeof second === 'object' && typeof third === 'function') {
+    throw new Error(
+      `${api}('${name}', details, callback): the details object (tag, annotation) isn't supported yet. `
+      + `Drop it and call ${api}('${name}', async () => { ... }).`,
+    );
+  }
+  throw new Error(
+    `${api}('${name}') needs a test function: ${api}('${name}', async () => { ... }). `
+    + `Got ${second === null ? 'null' : typeof second} instead.`,
+  );
+}
+
 function createTestFn<F extends object = TestFixtures>(registry: FixtureRegistry): TestFn<F> {
   const syncRegistry = () => { setActiveFixtureRegistry(registry); };
   const fn = Object.assign(
-    (name: string, testFn: TestCallback) => {
+    (...args: unknown[]) => {
+      const [name, testFn] = testDeclaration('test', args);
       syncRegistry();
       currentContext().tests.push({ name, fn: testFn, only: false, skip: false, registry, declaredIn: hookLocation()?.file });
     },
     {
-      only: (name: string, testFn: TestCallback) => {
+      only: (...args: unknown[]) => {
+        const [name, testFn] = testDeclaration('test.only', args);
         syncRegistry();
         currentContext().tests.push({ name, fn: testFn, only: true, skip: false, registry, declaredIn: hookLocation()?.file });
       },

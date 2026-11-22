@@ -2130,7 +2130,7 @@ Any other option throws.
 
 ### Playwright APIs not supported yet
 
-These Playwright names exist so that a test which uses one fails with a clear error rather than `test.step is not a function`. They are not part of the TypeScript types, so the type checker reports them as missing.
+These Playwright names exist so that a test which uses one fails with a clear error rather than `test.step is not a function`. They are not part of the TypeScript types, so the type checker reports them as missing. Playwright's `(title, details, callback)` call form is refused the same way, when the test file loads.
 
 | API | Error suggests |
 |---|---|
@@ -2141,6 +2141,7 @@ These Playwright names exist so that a test which uses one fails with a clear er
 | `test.info()` | — |
 | `test.describe.fixme()` | `test.describe.skip(title, fn)` |
 | `test.describe.parallel()` | `test.describe()` (and `--workers` for parallel files) |
+| The details object of `test()`, `test.only()`, `test.skip()` and `test.describe()` (`{ tag, annotation }`) | drop it: `test(title, fn)`. Put a tag in the title (`test('logs in @smoke', …)`) and select it with `--grep @smoke` |
 | `expect.configure()` | `{ timeout }` on the assertion, or `timeout` in the config / `test.use()` |
 | `expect.extend()` | — |
 | `expect(fn).toPass()` | `expect.poll(fn)` |

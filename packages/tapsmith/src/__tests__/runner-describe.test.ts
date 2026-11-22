@@ -105,6 +105,53 @@ describe('test.describe', () => {
   });
 });
 
+describe('test() call shapes', () => {
+  type Loose = (...args: unknown[]) => void;
+
+  it('refuses the details object at load time instead of dropping the test function', () => {
+    const ctx = pushContext();
+    try {
+      expect(() => (tapsmithTest as unknown as Loose)('x', { tag: '@smoke' }, async () => {}))
+        .toThrow("test('x', details, callback): the details object (tag, annotation) isn't supported yet. Drop it and call test('x', async () => { ... }).");
+      expect(() => (tapsmithTest.only as unknown as Loose)('x', { annotation: { type: 'issue' } }, async () => {}))
+        .toThrow(/^test\.only\('x', details, callback\): the details object \(tag, annotation\) isn't supported yet/);
+      // A fixture-extended test shares the same checks.
+      const extended = tapsmithTest.extend({});
+      expect(() => (extended as unknown as Loose)('x', { tag: ['@a'] }, async () => {}))
+        .toThrow(/details object \(tag, annotation\) isn't supported yet/);
+      expect(ctx.tests).toEqual([]);
+    } finally {
+      popContext();
+    }
+  });
+
+  it('refuses a missing test function or title at load time', () => {
+    const ctx = pushContext();
+    try {
+      expect(() => (tapsmithTest as unknown as Loose)('x'))
+        .toThrow("test('x') needs a test function: test('x', async () => { ... }). Got undefined instead.");
+      expect(() => (tapsmithTest.only as unknown as Loose)('x', undefined))
+        .toThrow(/^test\.only\('x'\) needs a test function/);
+      expect(() => (tapsmithTest as unknown as Loose)(async () => {}))
+        .toThrow("test() takes a title string and a test function: test('my test', async () => { ... }).");
+      expect(ctx.tests).toEqual([]);
+    } finally {
+      popContext();
+    }
+  });
+
+  it('still registers a test declared the supported way', () => {
+    const ctx = pushContext();
+    try {
+      tapsmithTest('a', async () => {});
+      tapsmithTest.only('b', async () => {});
+      expect(ctx.tests.map((t) => [t.name, t.only])).toEqual([['a', false], ['b', true]]);
+    } finally {
+      popContext();
+    }
+  });
+});
+
 // ─── Focus across the file's tree (Playwright's filterOnly) ───
 
 describe('.only focuses the whole file', () => {
