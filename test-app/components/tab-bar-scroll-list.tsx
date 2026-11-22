@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react"
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native"
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
+import { useIsFocused } from "expo-router"
 
 export const ROW_HEIGHT = 48
 
@@ -21,10 +22,14 @@ type TabBarScrollListProps = {
 }
 
 export function TabBarScrollList(props: TabBarScrollListProps) {
-  // A warm reset navigates here rather than remounting: remount on each one,
-  // so the tap count, the ready flag and the list's offset start afresh.
+  // A warm reset navigates here rather than remounting, and a tab stays
+  // mounted while another is shown, where its list is not laid out and its
+  // starting offset would not apply. So the list mounts afresh each time its
+  // tab is shown and on each reset: the tap count, the ready flag and the
+  // offset start over.
   const resetEpoch = useTapsmithResetEpoch()
-  return <List key={resetEpoch} {...props} />
+  const focused = useIsFocused()
+  return focused ? <List key={resetEpoch} {...props} /> : null
 }
 
 function List(props: TabBarScrollListProps) {
