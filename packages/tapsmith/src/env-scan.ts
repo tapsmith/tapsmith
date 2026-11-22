@@ -7,7 +7,9 @@ import { findDaemonBin } from './daemon-bin.js';
 import { rosettaNodeWarning } from './host-arch.js';
 import { findAgentApk, findAgentTestApk } from './agent-resolve.js';
 import { scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
-import { resolveEmulatorBinary } from './emulator.js';
+import { getRunningAvdName, resolveEmulatorBinary } from './emulator.js';
+import { parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
+import { withoutHeldDevices } from './device-claims.js';
 import { adbOffPathDir } from './toolchain.js';
 
 // ─── Helpers ───
@@ -43,7 +45,42 @@ export interface EnvScan {
   avds: string[];
   /** Each AVD's system image, for judging HTTPS capture (`avdCaptureSupport`). */
   avdImages: AvdImageInfo[];
+  /** Android devices adb can use now (`adb devices` state `device`), in its order. */
+  androidDevices: ConnectedAndroidDevice[];
+  /** Android devices adb lists but cannot use (unauthorized, offline, …), for init's `--device` errors. */
+  unusableAndroidDevices: AdbDevice[];
   isMacOS: boolean;
+}
+
+/** A connected Android device, as init offers it. */
+export interface ConnectedAndroidDevice {
+  serial: string;
+  /** An emulator's AVD name; undefined for a physical device, or when it could not be read. */
+  avd?: string;
+  /** Another live Tapsmith session drives it: init never picks it. */
+  held: boolean;
+}
+
+/** The AVD names of the running emulators init may pick: not held by another session. */
+export function runningAvds(devices: readonly ConnectedAndroidDevice[]): string[] {
+  return devices.filter((d) => !d.held && d.avd !== undefined).map((d) => d.avd as string);
+}
+
+/**
+ * The usable Android devices in `adb devices` output, each emulator with its
+ * AVD name (`readAvd`) and each device marked when another session holds it.
+ */
+export function scanAndroidDevices(
+  adbDevicesOutput: string,
+  readAvd: (serial: string) => string | undefined = getRunningAvdName,
+  heldElsewhere: (serials: string[]) => string[] = (serials) => withoutHeldDevices(serials).held.map((c) => c.device),
+): ConnectedAndroidDevice[] {
+  const serials = parseAdbDevicesOutput(adbDevicesOutput).filter((d) => d.state === 'device').map((d) => d.serial);
+  const held = new Set(heldElsewhere(serials));
+  return serials.map((serial) => {
+    const avd = serial.startsWith('emulator-') ? readAvd(serial) : undefined;
+    return { serial, ...(avd !== undefined ? { avd } : {}), held: held.has(serial) };
+  });
 }
 
 export interface SimulatorInfo {
@@ -223,5 +260,9 @@ export function scanEnvironment(): EnvScan {
 
   const avdImages = scanAvdImageTags();
 
-  return { nodeVersion, rosettaWarning, daemonBin, agentApk, agentTestApk, adbVersion, ...(adbOffPath ? { adbOffPath } : {}), androidHome, xcodeVersion, simulators, avds, avdImages, isMacOS };
+  const adbDevicesOut = adbVersion ? tryExec('adb', ['devices']) : undefined;
+  const androidDevices = adbDevicesOut ? scanAndroidDevices(adbDevicesOut) : [];
+  const unusableAndroidDevices = adbDevicesOut ? parseAdbDevicesOutput(adbDevicesOut).filter((d) => d.state !== 'device') : [];
+
+  return { nodeVersion, rosettaWarning, daemonBin, agentApk, agentTestApk, adbVersion, ...(adbOffPath ? { adbOffPath } : {}), androidHome, xcodeVersion, simulators, avds, avdImages, androidDevices, unusableAndroidDevices, isMacOS };
 }

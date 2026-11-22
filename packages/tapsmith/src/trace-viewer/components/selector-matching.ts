@@ -3,7 +3,7 @@ import { androidResourceIdMatches } from './resource-id.js';
 import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
-import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
+import { iosStaticTextCount, iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES, iosBackButtonName } from '../../accessible-name.js';
 import { unescapeJsString } from '../../js-string-escape.js';
@@ -547,6 +547,18 @@ function backButtonName(node: HierarchyNode): string {
 }
 
 /**
+ * Whether an Android node's text is a text field's typed value: an EditText's
+ * text, unless it is the hint an empty field reports as its text. getByText
+ * never matches it, as Playwright's never matches an `<input>`'s value — the
+ * Android agent's textIsFieldValue.
+ */
+export function textIsFieldValue(node: HierarchyNode): boolean {
+  const text = node.attributes.get('text');
+  return !!text && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
+    && text !== node.attributes.get('hint');
+}
+
+/**
  * Whether an Android EditText's text is its hint — what an empty field
  * reports as its text — which names it only through {@link placeholderName},
  * so a described field is named by its description alone (PILOT-834).
@@ -618,10 +630,18 @@ const TEXT_SELECTOR_TYPES: ReadonlySet<string> = new Set(['text', 'textContains'
  * getByText on an iOS node (PILOT-794): its text content, as the agent's
  * TextContent reads it. `containerLabel` is the nearest app ancestor's label.
  */
-function iosNodeMatchesText(node: HierarchyNode, selector: ParsedSelector, containerLabel: string): boolean {
+function iosNodeMatchesText(
+  node: HierarchyNode, selector: ParsedSelector, containerLabel: string, rowCell: HierarchyNode | undefined,
+): boolean {
   const texts = iosTexts(node, containerLabel);
   switch (selector.type) {
-    case 'text': return iosTextMatchesExact(texts, selector.value);
+    case 'text': {
+      // A joined part its row shows as a static text outside it is the
+      // row's text, not this node's (PILOT-1374).
+      const rowShows = rowCell !== undefined && !iosTextMatchesExact(texts, selector.value, true)
+        && iosStaticTextCount(rowCell, selector.value) > iosStaticTextCount(node, selector.value);
+      return iosTextMatchesExact(texts, selector.value, rowShows);
+    }
     case 'textContains': return iosTextMatchesSubstring(texts, selector.value);
     default: return selector.regex !== undefined && iosTextMatchesRegex(texts, toJsRegExp(selector.regex));
   }
@@ -662,6 +682,9 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector, pare
     if (!isWebViewNode(node)) return false;
     return webViewNodeMatchesSelector(node, selector);
   }
+
+  // A text field's typed value is no getByText text (PILOT-1404).
+  if (TEXT_SELECTOR_TYPES.has(selector.type) && textIsFieldValue(node)) return false;
 
   // Native selector types match native nodes
   switch (selector.type) {
@@ -1006,14 +1029,17 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   // alert, like the agent (PILOT-919).
   const role = selector.type === 'role' ? normalizeRole(selector.value) : '';
 
-  function walk(node: HierarchyNode, containerLabel: string, inAlert: boolean, parentClass: string | undefined) {
+  function walk(
+    node: HierarchyNode, containerLabel: string, inAlert: boolean, parentClass: string | undefined,
+    rowCell: HierarchyNode | undefined,
+  ) {
     // What isn't the app's never matches (PILOT-756, non-app-nodes.ts).
     if (isNonAppSubtree(node)) return;
     const isIos = !node.attributes.has('class') && !isWebViewNode(node);
     const appNode = !isNonAppNode(node);
     const type = node.attributes.get('type') ?? node.tagName;
     const matches = appNode && (iosText && isIos
-      ? iosNodeMatchesText(node, selector, containerLabel) && !echoesNameOnlyChild(node)
+      ? iosNodeMatchesText(node, selector, containerLabel, rowCell) && !echoesNameOnlyChild(node)
       : !(isIos && iosInsideNativeAlert(role, type, inAlert)) && nodeMatchesSelector(node, selector, parentClass));
     let pushed = false;
     if (matches) {
@@ -1033,13 +1059,13 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     const childContainer = isIos && appNode && label !== '' ? label : containerLabel;
     const childInAlert = inAlert || (isIos && type === 'XCUIElementTypeAlert');
     for (const child of node.children) {
-      walk(child, childContainer, childInAlert, node.attributes.get('class'));
+      walk(child, childContainer, childInAlert, node.attributes.get('class'), isIos && type === 'XCUIElementTypeCell' ? node : rowCell);
     }
     if (pushed) matchedAncestors.pop();
   }
 
   for (const root of roots) {
-    walk(root, '', false, undefined);
+    walk(root, '', false, undefined, undefined);
   }
 
   const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));

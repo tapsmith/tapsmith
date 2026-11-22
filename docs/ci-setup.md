@@ -108,6 +108,37 @@ export default defineConfig({
 });
 ```
 
+### The `avd` in a config from `tapsmith init`
+
+`tapsmith init` writes the AVD it found on your machine (`avd: "Pixel_8_API_36"`, say), and
+`avd` makes Tapsmith use only that AVD (`deviceStrategy: "avd-only"`). The runner in this
+workflow has no such AVD: `android-emulator-runner` creates its own (named `test`) and boots it
+before `script` runs. So on CI, when the configured AVD is not on the machine, `deviceStrategy`
+is not set and a device is connected, Tapsmith uses the connected emulator, boots nothing, and
+prints a note:
+
+```
+AVD "Pixel_8_API_36" (the config's avd) is not on this CI machine, so Tapsmith uses the connected device emulator-5554 instead. …
+```
+
+The config works as committed. To make the choice explicit (and drop the note), set
+`deviceStrategy` on CI, keeping `avd` for your machine:
+
+```typescript
+export default defineConfig({
+  // ...
+  avd: "Pixel_8_API_36",
+  deviceStrategy: process.env.CI ? "prefer-connected" : undefined,
+});
+```
+
+With it, Tapsmith still boots nothing on CI when the AVD isn't there, even with `workers` above
+the number of connected emulators: the run uses the emulators it has. An explicit
+`deviceStrategy: "avd-only"` keeps the old behavior: with the AVD missing, the run
+fails with `AVD "…" not found`. When Tapsmith launches the emulator itself in CI, the AVD must
+exist on the runner under the configured name (see
+[Letting Tapsmith launch the emulator](#letting-tapsmith-launch-the-emulator)).
+
 ### Key Points
 
 - **Release build.** A debug APK loads its JavaScript from the Metro dev server, so in CI the app

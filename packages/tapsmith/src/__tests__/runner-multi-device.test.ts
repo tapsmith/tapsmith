@@ -506,6 +506,32 @@ describe('runner reports one anonymous telemetry event per file (PILOT-330)', ()
     }
   });
 
+  it('on a retry-capable path, reports the embedder\'s last attempt even with an infrastructure failure (PILOT-1383)', async () => {
+    // Nothing re-runs the file after its last attempt: that is the outcome.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-telemetry-final-'));
+    const filePath = path.join(tempDir, 'flaky.mjs');
+    const runnerUrl = pathToFileURL(path.resolve('src/runner.ts')).href;
+    const recordRun = vi.spyOn(telemetry, 'recordRun').mockImplementation(() => undefined);
+    try {
+      fs.writeFileSync(filePath, `
+        import { test } from ${JSON.stringify(runnerUrl)};
+        test('hits an agent drop', async () => { throw new Error('Agent connection dropped'); });
+        test('never runs', async () => {});
+      `);
+      const alice = makeDevice('alice');
+      await runTestFile(pathToFileURL(filePath).href, makeOpts([alice], makeConfig({ devices: undefined }), {
+        runMode: 'test',
+        abortFileOnError: () => true,
+        finalFileAttempt: true,
+      }));
+      expect(recordRun).toHaveBeenCalledTimes(1);
+      expect(recordRun.mock.calls[0][1]).toMatchObject({ mode: 'test', tests: 2, failed: 2, passed: 0 });
+    } finally {
+      recordRun.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('on a non-retry path (watch/mcp), still reports a single infra-degraded run (PILOT-330 review 2)', async () => {
     // watch-run runs a file exactly once with in-place recovery and no
     // abortFileOnError, so its infra-degraded run is the real outcome and must

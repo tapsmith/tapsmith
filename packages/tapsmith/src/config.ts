@@ -77,9 +77,11 @@ export interface TapsmithConfig {
   app?: string;
 
   /**
-   * Optional activity name to use when auto-launching the app under test.
-   * Usually not needed. When unset, Tapsmith launches the package's default
-   * launcher activity and falls back to resolving it automatically.
+   * Android: the activity to launch the app under test with, as
+   * `.MainActivity` or a full class name. Used on every launch of `package`:
+   * the first, app resets, `restartApp()` and recovery relaunches. Usually not
+   * needed: when unset, Tapsmith starts the package's launcher activity,
+   * preferring the app's own over a debug tool's (LeakCanary's).
    */
   activity?: string;
 

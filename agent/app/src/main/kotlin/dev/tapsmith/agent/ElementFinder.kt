@@ -611,6 +611,15 @@ class ElementFinder(
                 return matchesLabel(candidate) { selector.labelRegex.matches(it) }
             }
 
+            // getByText reads text on screen, and a text field's typed value
+            // is not that, as an <input>'s value is not in Playwright
+            // (PILOT-1404): the text typed into a search field must find the
+            // result, not the field. The walk can't tell a field's value from
+            // other text, so it is rejected here. An empty field's hint,
+            // reported as its text, is still text.
+            val hasTextCriterion = selector.text != null || selector.textContains != null || selector.textRegex != null
+            if (hasTextCriterion && textIsFieldValue(candidate)) return false
+
             // Trait-based and dual-path roles use the broad any-class walk,
             // so the trait decides first, then the name. Matching the
             // name alone on the broad set is unreliable — a View whose
@@ -655,6 +664,18 @@ class ElementFinder(
                 return candidate.hint() == selector.hint || candidate.text == selector.hint
             }
             return true
+        }
+
+        /**
+         * Whether [candidate]'s text is a text field's typed value: an
+         * EditText's text, unless it is the hint an empty field reports as
+         * its text (the rule getByRole's name reads it by, too). A value
+         * typed to equal the hint reads as the hint.
+         */
+        private fun textIsFieldValue(candidate: FindCandidate): Boolean {
+            val text = candidate.text
+            if (text.isNullOrEmpty() || !EDIT_TEXT_HINT_CLASS_PATTERN.matcher(candidate.className ?: "").matches()) return false
+            return text != candidate.hint()
         }
 
         /**

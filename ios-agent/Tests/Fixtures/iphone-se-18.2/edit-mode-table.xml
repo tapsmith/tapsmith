@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A UIKit table in edit mode (UITableView.isEditing), iPhone SE (3rd gen), iOS 18.2: each row a static text, a code, an initial, and the Remove and Reorder controls UIKit labels with the row's texts (PILOT-1374). -->
+<hierarchy>
+<XCUIElementTypeTable label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeTable" tapsmith-role="list" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,0][375,667]">
+  <XCUIElementTypeCell label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeCell" tapsmith-role="listitem" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,168][359,252]">
+    <XCUIElementTypeStaticText label="Alpha (a@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[147,223][271,241]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,168][359,168]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,168][359,252]">
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,168][359,252]" />
+    </XCUIElementTypeOther>
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[24,251][359,252]" />
+    <XCUIElementTypeButton label="Remove A, 981 195, Alpha (a@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[31,196][57,222]">
+      <XCUIElementTypeImage label="remove" identifier="minus.circle.fill" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[31,197][57,223]" />
+    </XCUIElementTypeButton>
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[32,251][359,252]" />
+    <XCUIElementTypeImage label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[72,178][136,242]" />
+    <XCUIElementTypeButton label="chevron" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[289,203][299,217]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[307,168][308,252]" />
+    <XCUIElementTypeButton label="Reorder A, 981 195, Alpha (a@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[316,168][343,252]">
+      <XCUIElementTypeImage label="drag" identifier="line.horizontal.3" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[316,203][343,218]" />
+    </XCUIElementTypeButton>
+    <XCUIElementTypeStaticText label="981 195" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[146,174][271,227]" />
+    <XCUIElementTypeStaticText label="A" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[93,188][115,231]" />
+  </XCUIElementTypeCell>
+  <XCUIElementTypeCell label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeCell" tapsmith-role="listitem" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,252][359,336]">
+    <XCUIElementTypeStaticText label="Bravo (b@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[147,307][271,325]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,252][359,336]">
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,252][359,336]" />
+    </XCUIElementTypeOther>
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[24,335][359,336]" />
+    <XCUIElementTypeButton label="Remove B, 981 195, Bravo (b@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[31,280][57,306]">
+      <XCUIElementTypeImage label="remove" identifier="minus.circle.fill" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[31,281][57,307]" />
+    </XCUIElementTypeButton>
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[32,335][359,336]" />
+    <XCUIElementTypeImage label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[72,262][136,326]" />
+    <XCUIElementTypeButton label="chevron" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[289,287][299,301]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[307,252][308,336]" />
+    <XCUIElementTypeButton label="Reorder B, 981 195, Bravo (b@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[316,252][343,336]">
+      <XCUIElementTypeImage label="drag" identifier="line.horizontal.3" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[316,287][343,302]" />
+    </XCUIElementTypeButton>
+    <XCUIElementTypeStaticText label="981 195" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[146,258][271,311]" />
+    <XCUIElementTypeStaticText label="B" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[94,272][114,315]" />
+  </XCUIElementTypeCell>
+  <XCUIElementTypeCell label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeCell" tapsmith-role="listitem" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,336][359,420]">
+    <XCUIElementTypeStaticText label="Charlie (c@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[147,391][271,409]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,336][359,420]">
+      <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,336][359,420]" />
+    </XCUIElementTypeOther>
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[16,419][359,420]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[24,419][359,420]" />
+    <XCUIElementTypeButton label="Remove C, 981 195, Charlie (c@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[31,364][57,390]">
+      <XCUIElementTypeImage label="remove" identifier="minus.circle.fill" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[31,365][57,391]" />
+    </XCUIElementTypeButton>
+    <XCUIElementTypeImage label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[72,346][136,410]" />
+    <XCUIElementTypeButton label="chevron" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[289,371][299,385]" />
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[307,336][308,420]" />
+    <XCUIElementTypeButton label="Reorder C, 981 195, Charlie (c@example.com)" identifier="" value="" placeholderValue="" type="XCUIElementTypeButton" tapsmith-role="button" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[316,336][343,420]">
+      <XCUIElementTypeImage label="drag" identifier="line.horizontal.3" value="" placeholderValue="" type="XCUIElementTypeImage" tapsmith-role="image" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[316,371][343,386]" />
+    </XCUIElementTypeButton>
+    <XCUIElementTypeStaticText label="981 195" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[146,342][271,395]" />
+    <XCUIElementTypeStaticText label="C" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[92,356][116,399]" />
+  </XCUIElementTypeCell>
+  <XCUIElementTypeOther label="Vertical scroll bar, 1 page" identifier="" value="0%" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[342,64][372,667]">
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[369,276][372,664]" />
+  </XCUIElementTypeOther>
+  <XCUIElementTypeOther label="Horizontal scroll bar, 1 page" identifier="" value="0%" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[0,634][375,664]">
+    <XCUIElementTypeOther label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeOther" enabled="true" visible="true" selected="false" hasFocus="false" bounds="[3,661][372,664]" />
+  </XCUIElementTypeOther>
+</XCUIElementTypeTable>
+</hierarchy>

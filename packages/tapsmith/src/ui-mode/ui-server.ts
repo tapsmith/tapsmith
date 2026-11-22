@@ -82,7 +82,7 @@ import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-re
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
 import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
 import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, PickGenerations, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
-import { nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
+import { hierarchyShowsAppWebView, nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import {
   forkStdioForLaunchProgress,
   pipeForkOutputForLaunchProgress,
@@ -4123,7 +4123,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const beforeConnect = () => {
       const xml = liveHierarchies.latest(id, index);
       if (xml === undefined) throw new Error('Reading the screen…');
-      if (!xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
+      // An in-app browser's page is not one to connect to (PILOT-1384).
+      if (!hierarchyShowsAppWebView(xml)) {
         throw new Error('No WebView on screen.');
       }
       if (!device && Date.now() - (liveConnectFailedAt.get(`${id}:${index}`) ?? 0) < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {

@@ -5,6 +5,8 @@ pub mod device;
 pub mod iproxy;
 pub mod launch_gate;
 #[cfg(target_os = "macos")]
+pub mod loopback_watch;
+#[cfg(target_os = "macos")]
 pub mod physical_device_proxy;
 pub mod recording;
 pub mod screenshot;

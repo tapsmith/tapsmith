@@ -1767,6 +1767,29 @@ describe('runner app reset (declared isolation)', () => {
     expect(onTestEnd).not.toHaveBeenCalled();
   });
 
+  it('on the embedder\'s last attempt, a recoverable file-entry reset error fails every test of the file (PILOT-1383)', async () => {
+    // The retry after a session recovery is the last attempt: propagating the
+    // error there left the file's tests out of every report.
+    const d = makeDevice();
+    d.device._resetApp.mockRejectedValue(new Error('UNAVAILABLE: agent socket closed'));
+    pushContext();
+    tapsmithTest('one', async () => {});
+    tapsmithTest('two', async () => {});
+    const ctx = popContext();
+    const onTestEnd = vi.fn();
+
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig(), {
+      abortFileOnError: (err) => err.message.includes('UNAVAILABLE'),
+      finalFileAttempt: true,
+      reporter: { onTestEnd },
+    }));
+
+    const flat = collectResults(result);
+    expect(flat.map((t) => [t.fullName, t.status])).toEqual([['one', 'failed'], ['two', 'failed']]);
+    expect(flat[1].error?.message).toContain('agent socket closed');
+    expect(onTestEnd).toHaveBeenCalledTimes(2);
+  });
+
   it('a non-recoverable file-entry reset error still fails the scope even when the embedder opted into recovery', async () => {
     const d = makeDevice();
     d.device._resetApp.mockRejectedValue(new Error('pm clear failed'));

@@ -51,7 +51,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `apk` | `string` | `undefined` | Path to the APK under test (Android), relative to `rootDir`. Installed unless the device already holds this exact build. A path to nothing fails the run before any test, rather than testing whatever build is installed. |
 | `app` | `string` | `undefined` | Path to the .app bundle under test (iOS), relative to `rootDir`. A path to nothing fails the run before any test. For simulators, build a simulator-slice `.app`. For physical devices, the `.app` must be code-signed with a profile matching the device — see [iOS physical devices](./ios-physical-devices.md). |
 | `package` | `string` | `undefined` | Package name (Android) or bundle identifier (iOS) of the app under test. An Android package name may contain letters, digits, dots and underscores; an iOS bundle identifier letters, digits, dots, hyphens and underscores. Tapsmith launches the app before tests and resets it between test files only when this is set; without it, tests start on whatever is on screen. |
-| `activity` | `string` | `undefined` | Optional activity name to launch (Android only). Usually not needed; Tapsmith will try the default launcher activity automatically. |
+| `activity` | `string` | `undefined` | Activity to launch the app with (Android only), as `.MainActivity` or a full class name. Used on every launch: the first one, app resets, `restartApp()` and recovery relaunches. Usually not needed: without it Tapsmith starts the app's launcher activity, preferring the app's own over a debug tool's such as LeakCanary's. |
 | `timeout` | `number` | `30000` | Default timeout in milliseconds for actions and assertions. Each test body also gets a safety timeout of 3× this value; that budget counts only time spent in test code — time inside slow device operations (app launches, deep links, state saves), which carry their own bounded deadlines and may run long while Tapsmith recovers a struggling device, is excluded, backstopped by a hard wall-clock cap of 5× the test timeout. Each `beforeAll`/`beforeEach`/`afterEach`/`afterAll` hook gets a budget of its own of the same length ([hook timeouts](api-reference.md#hook-timeouts)). |
 | `typingDelay` | `number` | `0` | Delay in milliseconds between keystrokes when typing text. Helps prevent dropped characters on slow CI simulators/emulators. Can be overridden per-call via `type("text", { delay: 50 })`. On iOS, any delay above `0` also makes typing check what arrived: the first key is sent alone and waited for, the rest go at least `typingDelay` apart (at most 100 a second; a burst's rate is rounded to whole keys a second, and a delay over a second sends them one at a time), and the field is read back, typed again a key at a time if keys came out short or out of order, and the action fails if the field changed the text. A first key that replaces text the field selected as it took the focus (`selectTextOnFocus`) is taken as typing into an empty field; into a field holding just that key's character, where a replaced selection and a lost key look the same, the action fails and says so. With no delay, the text is sent as it always was, then the field is read back once: if the field was empty, up to three keys (and fewer than half) are missing, and it still has the focus, it is selected, deleted and typed again. That includes a field that dropped up to three characters it does not take. Anything else the field shows is left as it is, keys out of order too (a field that falls behind the keys; use a typing delay for it), because a field can format, filter or limit what is typed (an input mask, a digits-only filter, `maxLength`), the app can move the focus on or remove the field, and a read-back cannot tell those from lost keys. Secure fields, `device.inputText()` and text with a control character (a tab, a newline) are not read back with no delay. |
 | `retries` | `number` | `0` | Number of times to retry a failed test. A retry starts from a freshly reset app, with the enclosing `beforeAll` hooks run again (see [Retries start from a fresh app](writing-tests.md#retries-start-from-a-fresh-app)). [UI mode](ui-mode.md#each-test-runs-once) never retries. |
@@ -61,7 +61,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `daemonBin` | `string` | `undefined` | Path to the `tapsmith-core` binary. If unset, Tapsmith auto-resolves it from several common locations (including npm packages and monorepo build outputs) before falling back to `PATH`. |
 | `device` | `string` | `undefined` | Explicit single-device override. Useful for debugging or forcing one specific physical device/emulator/simulator. |
 | `devices` | `number \| { name: string; device?: string }[]` | `undefined` | Drive several devices from one test — `devices: 2`, or named members optionally pinned to a serial (at most 10). Project-level only. Tests receive them as the `devices` fixture. See [Multi-device tests](./multi-device.md). |
-| `deviceStrategy` | `"prefer-connected" \| "avd-only"` | contextual | Optional override for device selection (Android). Defaults to `"avd-only"` when `avd` is set, otherwise `"prefer-connected"`. |
+| `deviceStrategy` | `"prefer-connected" \| "avd-only"` | contextual | Optional override for device selection (Android). Defaults to `"avd-only"` when `avd` is set, otherwise `"prefer-connected"`. On CI, a default `"avd-only"` whose AVD is not on the machine uses the connected devices instead, with a note ([CI Setup](ci-setup.md#the-avd-in-a-config-from-tapsmith-init)); an explicit `"avd-only"` turns that off. |
 | `rootDir` | `string` | the directory the config is loaded from | Root for test discovery, and the base for relative paths elsewhere in the config (`app`, `apk`, agent artifacts). A relative `rootDir` resolves against the directory the config is loaded from — the working directory for `tapsmith test`, including `tapsmith test -c ../other/tapsmith.config.mjs`, and the config file's own directory for an MCP server that found a config elsewhere. Unset, it *is* that directory. |
 | `outputDir` | `string` | `"tapsmith-results"` | Directory for screenshots and other artifacts. |
 | `agentApk` | `string` | auto-resolved | Path to the Tapsmith agent APK (Android). When installed via npm, the APK from `@tapsmith/agent-android` is used automatically. Only set this to override with a custom build. |
@@ -334,7 +334,11 @@ export default defineConfig({
 ```
 
 If your app has an unusual launcher setup, you can also provide `activity`, but
-most apps do not need it:
+most apps do not need it: Tapsmith starts the app's launcher activity, and when a
+debug build has a second one (LeakCanary adds a "Leaks" launcher icon) it picks the
+app's own. Set `activity` when Tapsmith picks the wrong one, or when a launch fails
+with "couldn't resolve the launcher activity". Tapsmith then starts it on every
+launch, including app resets and `restartApp()`:
 
 ```typescript
 import { defineConfig } from "tapsmith";
@@ -429,6 +433,15 @@ while adb restarts), and when another Tapsmith session is using the emulator.
 If you want the opposite behavior, set `deviceStrategy: "prefer-connected"` to
 let Tapsmith reuse unrelated healthy connected devices first even when `avd` is
 configured.
+
+On CI there is one exception: when `avd` is set without `deviceStrategy`, the AVD
+is not on the CI machine, and a device is connected (an emulator the workflow
+booted, as `android-emulator-runner` does), Tapsmith uses the connected devices,
+boots nothing, and prints a note saying so. With an explicit
+`deviceStrategy: "prefer-connected"` it does the same without the note: it never
+tries to boot an AVD the CI machine lacks to fill more workers. This is what lets a config written
+by `tapsmith init` on your machine run in the [CI workflows](ci-setup.md). Locally
+a missing AVD is still an error, since a connected device may be someone else's.
 
 ### How Tapsmith launches emulators
 

@@ -953,6 +953,9 @@ export class TapsmithGrpcClient {
     iosAppPath?: string,
     networkTracingEnabled = false,
     clearAppDataFirst = false,
+    /** Android: the config's `activity`, which the daemon then starts on
+     *  every launch of `targetPackage`. Empty: resolve it. */
+    launchActivity = '',
   ): Promise<ActionResponse> {
     return this.call<ActionResponse>('startAgent', {
       requestId: requestId(),
@@ -963,6 +966,7 @@ export class TapsmithGrpcClient {
       iosAppPath: iosAppPath ?? '',
       networkTracingEnabled,
       clearAppDataFirst,
+      launchActivity,
       // Must comfortably exceed the daemon's internal agent-launch wait (150s
       // in agent_launch.rs) plus simulator configuration around it, so the
       // daemon's clean, retryable failure text reaches us instead of a bare
@@ -1347,6 +1351,12 @@ export class TapsmithGrpcClient {
       routeAction: string;
       osService?: boolean;
     }>;
+    /**
+     * Servers on the host's loopback interface (`127.0.0.1:4610`) the app was
+     * seen connected to since the previous stop, which capture cannot see.
+     * Only iOS simulators fill it; absent from older daemons.
+     */
+    loopbackDestinations?: string[];
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon
     // even when the run was stopped, or the proxy keeps capturing into a

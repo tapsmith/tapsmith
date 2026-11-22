@@ -602,6 +602,12 @@ message StartAgentRequest {
   // device, a failed wipe) the data is untouched or partly wiped, and the
   // caller must clear and relaunch the app itself.
   bool clear_app_data_first = 8;
+  // Android: the activity of target_package to launch (the config's
+  // `activity`, as `.MainActivity` or a full class name). Every launch of
+  // target_package for the rest of the session starts it — resets, restarts,
+  // recovery relaunches and LaunchApp without an activity — instead of the
+  // resolved launcher activity. Empty: resolve the launcher activity.
+  string launch_activity = 9;
 }
 
 message PingRequest {}
@@ -1182,6 +1188,13 @@ message StopNetworkCaptureResponse {
   // bodies are empty. Only for naming a request sent before a test's route was
   // registered; never part of the test's capture.
   repeated CapturedNetworkEntry entries_before_start = 7;
+  // Servers on the host's loopback interface ("127.0.0.1:4610", "[::1]:4610";
+  // sorted) that the app was seen connected to since the previous stop. No
+  // capture route sees that traffic: an iOS simulator shares the Mac's network
+  // stack, so `localhost` in the app is the Mac, and macOS never hands loopback
+  // flows to the Network Extension (the system-proxy fallback bypasses
+  // localhost). Sampled, so best effort. Only iOS simulators fill it.
+  repeated string loopback_destinations = 8;
 }
 
 // ─── Physical iOS device network capture (PILOT-185) ───
