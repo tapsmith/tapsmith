@@ -7576,8 +7576,9 @@ describe('scrollIntoView() scrolls in an element on screen but out of its list\'
     `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][1032,1376]">` +
     `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,0][1032,1307]">` +
     `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,70][1032,1307]">` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,70][1032,2400]">` +
     `<XCUIElementTypeOther type="XCUIElementTypeOther" identifier="counter plus button" bounds="${plus}"/>` +
-    `</XCUIElementTypeScrollView>` +
+    `</XCUIElementTypeOther></XCUIElementTypeScrollView>` +
     `<XCUIElementTypeToolbar type="XCUIElementTypeToolbar" label="Toolbar" tapsmith-empty-bar-host="true" bounds="[0,0][1032,1307]"/>` +
     `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,0][1032,1376]"/>` +
     overBar +
@@ -7631,6 +7632,20 @@ describe('scrollIntoView() scrolls in an element on screen but out of its list\'
     await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
 
     expect(swipeCalls(swipe)).toEqual([['up', 0.3, { ...list, bottom: 1247 }]]);
+  });
+
+  it('does not swipe sideways for an element reaching past the side of a list that scrolls only up and down', async () => {
+    const chip = makeElementInfo({ resourceId: 'counter plus button', visible: true, bounds: { left: 1000, top: 600, right: 1080, bottom: 640 } });
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: scripted([chip]),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([screen('[1000,600][1080,640]')])),
+    });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipe).not.toHaveBeenCalled();
   });
 
   it('does not swipe for an element inside its list, with nothing over it', async () => {

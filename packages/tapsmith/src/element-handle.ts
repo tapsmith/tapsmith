@@ -4571,9 +4571,9 @@ export class ElementHandle {
             const frame = usableFrame(el);
             const read = frame ? await readScreen() : undefined;
             const view = frame && read ? visibleRegionOf(read.xml, frame) : undefined;
-            const toward = frame && view ? outsideRegion(frame, view) : undefined;
+            const toward = frame && view ? outsideRegion(frame, view.region, view) : undefined;
             if (toward) {
-              region = view;
+              region = view!.region;
               regionHolds = true;
               direction = toward;
               positioned = true;

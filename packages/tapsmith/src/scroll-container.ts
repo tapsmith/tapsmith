@@ -109,39 +109,43 @@ export function pickScrollRegion(xml: string, target?: Rect, previous?: Rect): S
 }
 
 /**
- * The part of the scroll container holding `target` where its content shows
- * (PILOT-1370): the container's region (as {@link pickScrollRegion} picks it
- * for `target`) less a bar drawn over one of its edges — a tab bar, toolbar
+ * The part of the scroll container holding `target` where its content shows:
+ * the region of the nearest scrollable around it (`undefined` when that one
+ * is too small or off screen) less a bar drawn over one of its edges — a tab bar, toolbar
  * or header the app lays over the list, that content scrolls under.
  * `undefined` when `target` matches nothing in the dump or no scrollable
  * holds it.
  *
- * A bar is an app element drawn after the container, outside it, that lies
+ * A bar is an app element drawn over the container (after it, or a UIKit
+ * bar), outside it, that lies
  * across its top or bottom edge: at least half its width, at most a third of
  * its height, and with something named in it (a label, an id, text). That
  * leaves out what is drawn over the whole screen without hiding anything: a
  * React Native wrapper view, an empty toolbar host, a pointer-events-none
  * marker.
  */
-export function visibleRegionOf(xml: string, target: Rect): Rect | undefined {
+export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | undefined {
   const scan = scanScrollables(xml);
   if (!scan) return undefined;
   const { entries, region } = scan;
   const self = entries.filter((e) => !e.nonApp && e.bounds && sameFrame(e.bounds, target)).at(-1);
-  let holder: Entry | undefined;
-  let r: Rect | undefined;
-  for (let a = self?.parent; a && !r; a = a.parent) {
-    r = region(a);
-    if (r) holder = a;
-  }
-  if (!holder || !r || !self) return undefined;
+  // The nearest scrollable around the element, only: a farther one may not
+  // scroll the way the element lies (a list holding a chip bar too small to
+  // swipe in), and a slow sideways drag in a list that scrolls only up and
+  // down is the edge swipe that pops the screen.
+  let holder = self?.parent;
+  while (holder && !(isScrollable(holder.node) && !holder.nonApp)) holder = holder.parent;
+  let r = holder && region(holder);
+  if (!self || !holder || !r) return undefined;
   const height = r.bottom - r.top;
   const width = r.right - r.left;
   for (const c of entries) {
     const b = c.bounds;
-    if (!b || c.nonApp || c.order <= holder.order || isAncestor(holder, c) || isAncestor(c, holder) || isAncestor(c, self)) {
-      continue;
-    }
+    if (!b || c.nonApp || isAncestor(holder, c) || isAncestor(c, holder) || isAncestor(c, self)) continue;
+    // Drawn over the list: after it, or a UIKit bar, which UIKit draws over
+    // the content though XCUITest lists it first (a navigation bar a table
+    // scrolls under).
+    if (c.order <= holder.order && !IOS_BAR_TYPES.has(c.node.attributes.get('type') ?? c.node.tagName)) continue;
     const across = intersect(b, r);
     if (!across || across.right - across.left < width / 2) continue;
     const h = b.bottom - b.top;
@@ -152,8 +156,28 @@ export function visibleRegionOf(xml: string, target: Rect): Rect | undefined {
       if (r.bottom - b.bottom >= MIN_REGION) r = { ...r, top: Math.max(r.top, b.bottom) };
     }
   }
-  return r;
+  return {
+    region: r,
+    // Judged without the element itself: one sticking out past the side of
+    // a list that scrolls up and down does not make it scroll sideways.
+    vertical: scrollsAlong(holder, entries, 'vertical', self),
+    horizontal: scrollsAlong(holder, entries, 'horizontal', self),
+  };
 }
+
+/** {@link visibleRegionOf}'s answer: the region, and the axes its scrollable has content to scroll along. */
+export interface VisibleRegion {
+  region: Rect;
+  vertical: boolean;
+  horizontal: boolean;
+}
+
+/** UIKit bars, drawn over the content they sit by whatever their place in the tree. */
+const IOS_BAR_TYPES: ReadonlySet<string> = new Set([
+  'XCUIElementTypeNavigationBar',
+  'XCUIElementTypeTabBar',
+  'XCUIElementTypeToolbar',
+]);
 
 /** Attributes that name an element, on either platform. */
 const NAME_ATTRIBUTES = ['label', 'identifier', 'text', 'content-desc', 'resource-id'] as const;
@@ -167,20 +191,25 @@ function named(e: Entry, entries: readonly Entry[]): boolean {
 
 /**
  * The way to scroll to bring `frame` inside `region`, when it reaches past
- * one of its edges (PILOT-1370): `"down"` for one below it, `"up"` above,
+ * one of its edges: `"down"` for one below it, `"up"` above,
  * then `"right"` and `"left"` likewise. `undefined` when it is inside, or
- * reaches past both edges of an axis (it cannot fit any better). iOS frames
+ * reaches past both edges of an axis (it cannot fit any better), and only
+ * along the `axes` its container scrolls on. iOS frames
  * are not clipped, so an element below its list, behind a tab bar, reaches
  * past the list's bottom edge; Android clips them to the list.
  */
-export function outsideRegion(frame: Rect, region: Rect): 'up' | 'down' | 'left' | 'right' | undefined {
+export function outsideRegion(
+  frame: Rect,
+  region: Rect,
+  axes: { vertical: boolean; horizontal: boolean } = { vertical: true, horizontal: true },
+): 'up' | 'down' | 'left' | 'right' | undefined {
   const past = (start: number, end: number, regionStart: number, regionEnd: number, back: 'up' | 'left', on: 'down' | 'right') => {
     const before = start < regionStart - EDGE_SLACK;
     const after = end > regionEnd + EDGE_SLACK;
     return before === after ? undefined : before ? back : on;
   };
-  return past(frame.top, frame.bottom, region.top, region.bottom, 'up', 'down') ??
-    past(frame.left, frame.right, region.left, region.right, 'left', 'right');
+  return (axes.vertical ? past(frame.top, frame.bottom, region.top, region.bottom, 'up', 'down') : undefined) ??
+    (axes.horizontal ? past(frame.left, frame.right, region.left, region.right, 'left', 'right') : undefined);
 }
 
 /** How far past a region's edge a frame may reach and still count as inside it: rounding, and an iOS bounce settling. */
@@ -281,19 +310,26 @@ export function hasScrollableContent(xml: string, region: Rect | undefined, axis
   // trim an edge differently: then the one under its centre.
   let swiped = scan.candidates.filter(({ r }) => sameFrame(r, region));
   if (swiped.length === 0) swiped = scan.candidates.filter(({ r }) => contains(r, centre(region)));
-  return swiped.some(({ e }) => {
-    if (e.node.attributes.get('scrollable') === 'true') {
-      const along = layoutAxis(e, scan.entries);
-      return along === undefined || along === axis;
-    }
-    const f = e.bounds!;
-    return scan.entries.some((d) => {
-      if (d.nonApp || !d.bounds || !isAncestor(e, d)) return false;
-      const b = d.bounds;
-      return axis === 'vertical'
-        ? b.top < f.top - FRAME_TOLERANCE || b.bottom > f.bottom + FRAME_TOLERANCE
-        : b.left < f.left - FRAME_TOLERANCE || b.right > f.right + FRAME_TOLERANCE;
-    });
+  return swiped.some(({ e }) => scrollsAlong(e, scan.entries, axis));
+}
+
+/**
+ * Whether the scrollable `e` has content to scroll along `axis`, as
+ * {@link hasScrollableContent} judges it, leaving out `except` and what is in it.
+ */
+function scrollsAlong(e: Entry, entries: readonly Entry[], axis: 'vertical' | 'horizontal', except?: Entry): boolean {
+  if (e.node.attributes.get('scrollable') === 'true') {
+    const along = layoutAxis(e, entries);
+    return along === undefined || along === axis;
+  }
+  const f = e.bounds;
+  if (!f) return false;
+  return entries.some((d) => {
+    if (d.nonApp || !d.bounds || !isAncestor(e, d) || d === except || (except && isAncestor(except, d))) return false;
+    const b = d.bounds;
+    return axis === 'vertical'
+      ? b.top < f.top - FRAME_TOLERANCE || b.bottom > f.bottom + FRAME_TOLERANCE
+      : b.left < f.left - FRAME_TOLERANCE || b.right > f.right + FRAME_TOLERANCE;
   });
 }
 

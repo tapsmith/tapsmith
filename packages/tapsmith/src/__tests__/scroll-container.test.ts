@@ -357,19 +357,19 @@ describe('visibleRegionOf', () => {
 
   it('is the list holding the element when nothing is drawn over it', () => {
     const frame = { left: 100, top: 800, right: 140, bottom: 840 };
-    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), frame)).toEqual(list);
+    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), frame)?.region).toEqual(list);
   });
 
   it('leaves out a bar the app draws over the bottom of the list', () => {
     const bar = el('Other', '[0,740][402,800]', '', el('Button', '[0,740][402,800]', 'label="Add to cart"'));
     const frame = { left: 100, top: 750, right: 140, bottom: 790 };
-    expect(visibleRegionOf(tabScreen('[100,750][140,790]', bar), frame)).toEqual({ ...list, bottom: 740 });
+    expect(visibleRegionOf(tabScreen('[100,750][140,790]', bar), frame)?.region).toEqual({ ...list, bottom: 740 });
   });
 
   it('leaves out a header drawn over the top of the list', () => {
     const header = el('NavigationBar', '[0,70][402,130]', 'label="Catalog"');
     const frame = { left: 100, top: 80, right: 140, bottom: 120 };
-    expect(visibleRegionOf(tabScreen('[100,80][140,120]', header), frame)).toEqual({ ...list, top: 130 });
+    expect(visibleRegionOf(tabScreen('[100,80][140,120]', header), frame)?.region).toEqual({ ...list, top: 130 });
   });
 
   it('ignores an unnamed overlay, a narrow button and a tall sheet drawn over the list', () => {
@@ -378,12 +378,36 @@ describe('visibleRegionOf', () => {
       el('Button', '[330,720][390,780]', 'label="Add"') + // a floating button, not across the list
       el('Other', '[0,300][402,800]', '', el('StaticText', '[0,300][402,340]', 'label="Sheet"')); // too tall for a bar
     const frame = { left: 100, top: 750, right: 140, bottom: 790 };
-    expect(visibleRegionOf(tabScreen('[100,750][140,790]', overlays), frame)).toEqual(list);
+    expect(visibleRegionOf(tabScreen('[100,750][140,790]', overlays), frame)?.region).toEqual(list);
   });
 
   it('is undefined when the element matches nothing in the dump, or no scrollable holds it', () => {
     expect(visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 1, top: 2, right: 3, bottom: 4 })).toBeUndefined();
     expect(visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 0, top: 800, right: 201, bottom: 874 })).toBeUndefined();
+  });
+
+  it('leaves out a UIKit navigation bar, which XCUITest lists before the table it is drawn over', () => {
+    const xml = ios(
+      el('NavigationBar', '[0,24][402,82]', 'label="Native Screens"'),
+      el('CollectionView', '[0,0][402,874]', '',
+        el('Cell', '[0,40][402,90]', 'label="Row 3"') + el('Cell', '[0,90][402,1400]', 'label="Rest"')),
+    );
+    expect(visibleRegionOf(xml, { left: 0, top: 40, right: 402, bottom: 90 })?.region)
+      .toEqual({ left: 0, top: 82, right: 402, bottom: 874 });
+  });
+
+  it('is only the nearest scrollable, never a farther one standing in for a chip bar too small to swipe in', () => {
+    const xml = ios(
+      el('ScrollView', '[0,70][402,800]', '',
+        el('ScrollView', '[0,100][402,140]', '', el('Button', '[360,100][440,140]', 'label="Chip 7"')) +
+        el('Other', '[0,140][402,1400]', '')),
+    );
+    expect(visibleRegionOf(xml, { left: 360, top: 100, right: 440, bottom: 140 })).toBeUndefined();
+  });
+
+  it('says which ways its scrollable has content to scroll', () => {
+    const view = visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 100, top: 800, right: 140, bottom: 840 });
+    expect(view).toMatchObject({ vertical: true, horizontal: false });
   });
 
   it('on Android, leaves out a bottom bar laid over the list', () => {
@@ -394,7 +418,7 @@ describe('visibleRegionOf', () => {
         node('android.view.View', '[0,2200][1080,2400]', '', node('android.widget.Button', '[0,2200][540,2400]', 'text="Home"'))),
       statusBar,
     );
-    expect(visibleRegionOf(xml, { left: 0, top: 2250, right: 1080, bottom: 2350 }))
+    expect(visibleRegionOf(xml, { left: 0, top: 2250, right: 1080, bottom: 2350 })?.region)
       .toEqual({ left: 0, top: 200, right: 1080, bottom: 2200 });
   });
 });
@@ -408,6 +432,13 @@ describe('outsideRegion', () => {
     expect(outsideRegion({ left: 100, top: 20, right: 140, bottom: 60 }, region)).toBe('up');
     expect(outsideRegion({ left: 380, top: 100, right: 450, bottom: 140 }, region)).toBe('right');
     expect(outsideRegion({ left: -40, top: 100, right: 20, bottom: 140 }, region)).toBe('left');
+  });
+
+  it('only along the axes the container scrolls on: no sideways nudge in a list that scrolls up and down', () => {
+    expect(outsideRegion({ left: 380, top: 100, right: 450, bottom: 140 }, region, { vertical: true, horizontal: false }))
+      .toBeUndefined();
+    expect(outsideRegion({ left: 100, top: 800, right: 140, bottom: 840 }, region, { vertical: false, horizontal: true }))
+      .toBeUndefined();
   });
 
   it('is undefined inside the region (within rounding), or for a frame spanning it', () => {
