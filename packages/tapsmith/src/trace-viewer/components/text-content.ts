@@ -1,5 +1,5 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
-import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from '../../ios-text-content.js';
+import { IOS_NAME_ONLY_TYPES, iosTextValue } from '../../ios-text-content.js';
 
 // ─── iOS text content for getByText (PILOT-794) ───
 //
@@ -11,7 +11,9 @@ import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from '../../ios-text-conten
 // - A label or title is text content, except on a control whose label is only
 //   its accessible name (IOS_NAME_ONLY_TYPES, ios-text-content.ts).
 // - A value is text content only where it is the text on screen
-//   (IOS_VALUE_TEXT_TYPES).
+//   (IOS_VALUE_TEXT_TYPES). A text input's typed value is not, as an
+//   `<input>`'s value is not in Playwright; the placeholder an empty field
+//   shows as its value still is (iosTextValue, PILOT-1417).
 // - A label that starts with its nearest labelled ancestor's label and ", " is
 //   read without that prefix (a SwiftUI Stepper's "Quantity: 1, Increment").
 // - An exact match on one ", "-joined part of a label isn't one when the
@@ -49,7 +51,9 @@ export function iosTexts(node: HierarchyNode, containerLabel: string): IosTexts 
   return {
     label: nameOnly ? '' : ownLabel(node.attributes.get('label') ?? '', containerLabel),
     title: nameOnly ? '' : node.attributes.get('title') ?? '',
-    value: IOS_VALUE_TEXT_TYPES.has(type) ? node.attributes.get('value') ?? '' : '',
+    value: iosTextValue(
+      type, node.attributes.get('tapsmith-role'), node.attributes.get('value') ?? '', node.attributes.get('placeholderValue') ?? '',
+    ),
   };
 }
 

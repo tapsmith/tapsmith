@@ -15,10 +15,17 @@ import XCTest
 ///   under a labelled image is one match. A button's label stays text: an
 ///   icon button's can't be told from a text button's.
 /// - A value is text content only where it is the text on screen
-///   (`valueTextTypes`): static text, the typed text of a text input, a
-///   picker wheel's selected row. A
+///   (`valueTextTypes`): static text, a picker wheel's selected row. A
 ///   switch's "0"/"1", a stepper's or a slider's value, a button's value or
-///   an accessibilityValue are not.
+///   an accessibilityValue are not. Nor is a text input's typed value
+///   (`textInputTypes`, PILOT-1417), as an `<input>`'s value is not in
+///   Playwright and an EditText's is not on Android: after typing "Alpha"
+///   into a search field, getByText("Alpha") waits for the result, not the
+///   field. The placeholder an empty field shows as its value still is, as
+///   an empty EditText's hint is (`inputValueText`). A text view that can't
+///   be edited (`RoleMapping.isReadOnlyTextView`: terms copy, React Native's
+///   `<TextInput multiline editable={false} />`) is text on screen, not an
+///   input, so its value stays text.
 /// - A label that starts with its nearest labelled ancestor's label and ", "
 ///   (a SwiftUI Stepper's buttons: "Quantity: 1, Increment") is read without
 ///   that prefix: the text belongs to the ancestor.
@@ -44,8 +51,22 @@ enum TextContent {
     /// Element types whose value is the text they show: a picker wheel's
     /// selected row is only its value.
     static let valueTextTypes: Set<XCUIElement.ElementType> = [
-        .staticText, .textField, .secureTextField, .textView, .searchField, .pickerWheel,
+        .staticText, .pickerWheel,
     ]
+
+    /// Text inputs: their value is text only while it is the placeholder an
+    /// empty field shows.
+    static let textInputTypes: Set<XCUIElement.ElementType> = [
+        .textField, .secureTextField, .textView, .searchField,
+    ]
+
+    /// A text input's value as text content: the placeholder it shows when
+    /// empty (XCUITest reports an empty field's placeholder as its value),
+    /// else "" — a typed value is not text. A value typed to equal the
+    /// placeholder reads as the placeholder; a snapshot can't tell them apart.
+    static func inputValueText(value: String, placeholder: String) -> String {
+        !value.isEmpty && value == placeholder ? value : ""
+    }
 
     /// One node's text content, as getByText compares it.
     struct Texts {
@@ -55,19 +76,31 @@ enum TextContent {
     }
 
     /// The node's label, title and value as text content: each empty when it
-    /// isn't. `containerLabel` is the nearest ancestor's non-empty label.
+    /// isn't. `containerLabel` is the nearest ancestor's non-empty label;
+    /// `placeholder` the node's placeholderValue; `readOnlyTextView` whether
+    /// it is a text view that can't be edited (RoleMapping.isReadOnlyTextView).
     static func texts(
         elementType: XCUIElement.ElementType,
         label: String,
         title: String,
         value: String,
+        placeholder: String,
+        readOnlyTextView: Bool,
         containerLabel: String
     ) -> Texts {
         let nameOnly = nameOnlyTypes.contains(elementType)
+        let valueText: String
+        if valueTextTypes.contains(elementType) || readOnlyTextView {
+            valueText = value
+        } else if textInputTypes.contains(elementType) {
+            valueText = inputValueText(value: value, placeholder: placeholder)
+        } else {
+            valueText = ""
+        }
         return Texts(
             label: nameOnly ? "" : ownLabel(label, containerLabel: containerLabel),
             title: nameOnly ? "" : title,
-            value: valueTextTypes.contains(elementType) ? value : ""
+            value: valueText
         )
     }
 

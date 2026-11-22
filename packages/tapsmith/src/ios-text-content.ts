@@ -19,11 +19,41 @@ export const IOS_NAME_ONLY_TYPES: ReadonlySet<string> = new Set([
 /** Element types whose value is the text they show (a picker wheel's selected row is only its value). */
 export const IOS_VALUE_TEXT_TYPES: ReadonlySet<string> = new Set([
   'XCUIElementTypeStaticText',
-  'XCUIElementTypeTextField',
-  'XCUIElementTypeSecureTextField',
-  'XCUIElementTypeTextView',
-  'XCUIElementTypeSearchField',
   'XCUIElementTypePickerWheel',
   // A picker wheel as dumps recorded before the agent named it write it.
   'XCUIElementType(39)',
 ]);
+
+/**
+ * Text inputs, whose value is text only while it is the placeholder an empty
+ * field shows: a typed value is no text, as an `<input>`'s value is not in
+ * Playwright (an Android EditText's typed value is not either).
+ */
+export const IOS_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
+  'XCUIElementTypeTextField',
+  'XCUIElementTypeSecureTextField',
+  'XCUIElementTypeTextView',
+  'XCUIElementTypeSearchField',
+]);
+
+/**
+ * Whether an iOS element is a text input, by its type and its role (the
+ * dump's `tapsmith-role`, a found element's `role`): a text view that can't
+ * be edited is text on screen, which the agent reports by a role other than
+ * `textfield`.
+ */
+export function isIosTextInput(type: string, role: string | undefined): boolean {
+  return IOS_TEXT_INPUT_TYPES.has(type) && (type !== 'XCUIElementTypeTextView' || role === 'textfield');
+}
+
+/**
+ * The value an iOS node's text content holds: its value for a type whose
+ * value is text (and a read-only text view), for a text input only the
+ * placeholder it shows when empty (its value equals its placeholder), else ''.
+ */
+export function iosTextValue(type: string, role: string | undefined, value: string, placeholder: string): string {
+  if (IOS_VALUE_TEXT_TYPES.has(type)) return value;
+  if (isIosTextInput(type, role)) return value !== '' && value === placeholder ? value : '';
+  if (type === 'XCUIElementTypeTextView') return value;
+  return '';
+}

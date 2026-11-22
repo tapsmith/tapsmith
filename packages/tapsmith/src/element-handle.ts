@@ -37,7 +37,7 @@ import { sleep, isAbortError, throwIfAborted } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
-import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
+import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES, isIosTextInput } from './ios-text-content.js';
 import {
   LOCATOR_PICKER_HINT,
   NEAR_MISS_BUDGET_MS,
@@ -665,7 +665,10 @@ function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
       candidates.push({ code: `device.getByDescription("${desc}")`, selector: _contentDesc(el.contentDescription) });
     }
   } else {
-    const text = isIos && !IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription
+    // An iOS text field's label is its text, its typed value never is (PILOT-1417).
+    const readOnlyTextView = el.className === 'XCUIElementTypeTextView' && !isIosTextInput(el.className, el.role);
+    const text = isIos && !readOnlyTextView && (isIosTextInput(el.className, el.role)
+      || (!IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription))
       ? el.contentDescription
       : textContentOf(el);
     if (text) {
@@ -685,12 +688,12 @@ function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
 
 /**
  * The text getByText and `filter({ hasText })` read of a resolved element: its
- * text, except that an Android text field's is its typed value, which is no
- * text, as an `<input>`'s value is not in Playwright. The agent
- * reports an empty field's text as "" (not its hint).
+ * text, except that a text field's is its typed value, which is no
+ * text, as an `<input>`'s value is not in Playwright. The agents
+ * report an empty field's text as "" (not its hint or placeholder).
  */
 function textContentOf(el: ElementInfo): string {
-  return ANDROID_EDIT_TEXT_CLASSES.has(el.className) ? '' : el.text;
+  return ANDROID_EDIT_TEXT_CLASSES.has(el.className) || isIosTextInput(el.className, el.role) ? '' : el.text;
 }
 
 /** Best-effort unambiguous locator suggestion for one resolved element, unchecked. */

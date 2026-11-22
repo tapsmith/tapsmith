@@ -142,6 +142,28 @@ describe('a label-less text field is named by its placeholder', () => {
   });
 });
 
+describe('iOS text fields (PILOT-1417)', () => {
+  it("never suggests getByText for a text field's typed value", () => {
+    for (const type of ['XCUIElementTypeTextField', 'XCUIElementTypeSearchField', 'XCUIElementTypeSecureTextField', 'XCUIElementTypeTextView']) {
+      const node = makeNode(type, { type, label: '', value: 'Apollo 11', placeholderValue: 'Search' });
+      const codes = generateSelectors(node).map((s) => s.code);
+      expect(codes.some((c) => c.startsWith('device.getByText(')), type).toBe(false);
+    }
+  });
+
+  it('getByText finds the result typed into a search field, not the field', () => {
+    const field = makeNode('XCUIElementTypeSearchField', { type: 'XCUIElementTypeSearchField', label: '', value: 'Apollo 11', placeholderValue: 'Search Wikipedia' });
+    const result = makeNode('XCUIElementTypeStaticText', { type: 'XCUIElementTypeStaticText', label: 'Apollo 11', value: '' });
+    const root = makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther', label: '' }, [field, result]);
+    for (const code of ['device.getByText("Apollo 11", { exact: true })', 'device.getByText("apollo")', 'device.getByText(/^Apollo 11$/)']) {
+      expect(findMatchingNodes([root], parseSelectorString(code)!), code).toEqual([result]);
+    }
+    // An empty field shows its placeholder as its value, which is its text.
+    const empty = makeNode('XCUIElementTypeSearchField', { type: 'XCUIElementTypeSearchField', label: '', value: 'Search Wikipedia', placeholderValue: 'Search Wikipedia' });
+    expect(findMatchingNodes([empty], parseSelectorString('device.getByText("Search Wikipedia")')!)).toHaveLength(1);
+  });
+});
+
 // ─── Native selector priority order ───
 
 describe('generateNativeSelectors priority order', () => {
@@ -803,9 +825,9 @@ describe('parseSelectorString getByText semantics', () => {
     expect(findMatchingNodes([card], parseSelectorString('device.getByText("The Flower Girl", { exact: true })')!)).toEqual([caption]);
   });
 
-  it("text matching reads an iOS text field's value, not a control's (PILOT-794)", () => {
-    const field = makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', label: '', value: 'nick' });
-    expect(findMatchingNodes([field], parseSelectorString('device.getByText("nick", { exact: true })')!)).toHaveLength(1);
+  it("text matching reads neither an iOS text field's typed value nor a control's (PILOT-794, PILOT-1417)", () => {
+    const field = makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', label: '', value: 'nick', placeholderValue: 'Nickname' });
+    expect(findMatchingNodes([field], parseSelectorString('device.getByText("nick", { exact: true })')!)).toHaveLength(0);
     const slider = makeNode('XCUIElementTypeSlider', { type: 'XCUIElementTypeSlider', label: 'Volume', value: '50%' });
     expect(findMatchingNodes([slider], parseSelectorString('device.getByText("50%", { exact: true })')!)).toHaveLength(0);
   });

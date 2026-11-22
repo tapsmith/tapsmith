@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
-import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from '../ios-text-content.js';
+import { IOS_NAME_ONLY_TYPES, IOS_TEXT_INPUT_TYPES, IOS_VALUE_TEXT_TYPES } from '../ios-text-content.js';
 import { escapeJsString } from '../js-string-escape.js';
 import { translateRegex } from '../text-regex.js';
 
@@ -42,8 +42,10 @@ interface Case {
   /** Android: the node's text (an empty EditText reports its hint here). */
   text?: string
   contentDesc?: string
-  /** Android: an editable field's hint. */
+  /** An editable field's placeholder: Android's hint, iOS's placeholderValue. */
   placeholder?: string
+  /** iOS text view: false when it can't be edited (no text-entry trait; the dump's role is not textfield). */
+  editable?: boolean
   /** exact: getByText(q, { exact: true }); substring: getByText(q); or a RegExp as source + flags. */
   query: { exact: string } | { substring: string } | { source: string; flags: string }
   matches: boolean
@@ -113,11 +115,32 @@ const CASES: Case[] = [
   { why: 'an accessibilityValue is not text', platform: 'ios', type: T.other, label: 'Upload progress', value: '65%', query: { exact: '65%' }, matches: false },
   { why: "a progress indicator's value is not text", platform: 'ios', type: T.progress, label: 'Loading', value: '40%', query: { source: '%', flags: '' }, matches: false },
   { why: "a link's value (its URL) is not text", platform: 'ios', type: T.link, label: 'Docs', value: 'https://example.com', query: { substring: 'example' }, matches: false },
-  { why: "a text field's typed value is text", platform: 'ios', type: T.field, label: '', value: 'nick', query: { substring: 'nick' }, matches: true },
-  { why: "a text field's value, exactly", platform: 'ios', type: T.field, label: 'Email', value: 'ada@example.com', query: { exact: 'ada@example.com' }, matches: true },
-  { why: "a secure field's value", platform: 'ios', type: T.secure, label: 'Password', value: '••••', query: { exact: '••••' }, matches: true },
-  { why: "a text view's value", platform: 'ios', type: T.textView, label: 'Notes', value: 'Buy milk', query: { source: 'milk', flags: '' }, matches: true },
-  { why: "a search field's value", platform: 'ios', type: T.search, label: 'Search', value: 'cats', query: { exact: 'cats' }, matches: true },
+  // A text input's typed value is no getByText text, as an <input>'s value is
+  // not in Playwright and as on Android (PILOT-1417): a search result's text
+  // typed into the search field must not find the field.
+  { why: "a text field's typed value is not text", platform: 'ios', type: T.field, label: '', value: 'nick', placeholder: 'Nickname', query: { substring: 'nick' }, matches: false },
+  { why: 'nor exactly', platform: 'ios', type: T.field, label: '', value: 'ada@example.com', placeholder: 'Email', query: { exact: 'ada@example.com' }, matches: false },
+  { why: 'nor by RegExp', platform: 'ios', type: T.field, label: '', value: 'Apollo 11', placeholder: 'Search', query: { source: '^Apollo', flags: '' }, matches: false },
+  { why: 'nor with no placeholder', platform: 'ios', type: T.field, label: '', value: 'Apollo 11', query: { exact: 'Apollo 11' }, matches: false },
+  { why: "nor a secure field's", platform: 'ios', type: T.secure, label: 'Password', value: '••••', query: { exact: '••••' }, matches: false },
+  { why: "nor a text view's", platform: 'ios', type: T.textView, label: 'Notes', value: 'Buy milk', query: { source: 'milk', flags: '' }, matches: false },
+  { why: "nor a search field's", platform: 'ios', type: T.search, label: 'Search', value: 'cats', placeholder: 'Search', query: { exact: 'cats' }, matches: false },
+  { why: "a labelled field's label is still text", platform: 'ios', type: T.field, label: 'Email', value: 'ada@example.com', placeholder: 'you@example.com', query: { exact: 'Email' }, matches: true },
+  // An empty field shows its placeholder as its value, and that is its text,
+  // as an empty Android EditText's hint is.
+  { why: "an empty field's placeholder is its text", platform: 'ios', type: T.field, label: '', value: 'Search items...', placeholder: 'Search items...', query: { exact: 'Search items...' }, matches: true },
+  { why: 'by substring too', platform: 'ios', type: T.search, label: '', value: 'Search', placeholder: 'Search', query: { substring: 'sea' }, matches: true },
+  { why: 'and by RegExp', platform: 'ios', type: T.textView, label: '', value: 'Notes', placeholder: 'Notes', query: { source: '^Notes$', flags: '' }, matches: true },
+  { why: 'a typed value equal to the placeholder reads as the placeholder', platform: 'ios', type: T.field, label: '', value: 'Email', placeholder: 'Email', query: { substring: 'mail' }, matches: true },
+  { why: 'a placeholder is no text while a value is typed', platform: 'ios', type: T.field, label: '', value: 'ada', placeholder: 'Email', query: { exact: 'Email' }, matches: false },
+  // A text view that can't be edited (terms copy, React Native's
+  // <TextInput multiline editable={false} />) is text on screen, not an
+  // input: its value stays text (PILOT-697 keeps it out of the textfield role).
+  { why: "a read-only text view's value is text", platform: 'ios', type: T.textView, label: '', value: 'By signing up you agree to the Terms', editable: false, query: { substring: 'by signing up' }, matches: true },
+  { why: 'exactly too', platform: 'ios', type: T.textView, label: '', value: 'Terms of Service', editable: false, query: { exact: 'Terms of Service' }, matches: true },
+  { why: 'and by RegExp', platform: 'ios', type: T.textView, label: '', value: 'Terms of Service', editable: false, query: { source: '^Terms', flags: '' }, matches: true },
+  // The value of a view that only looks like a field is still text.
+  { why: "a static text's value beside a placeholder is text", platform: 'ios', type: T.text, label: '', value: 'Apollo 11', placeholder: 'Search', query: { exact: 'Apollo 11' }, matches: true },
   { why: "static text's value", platform: 'ios', type: T.text, label: '', value: 'Hello', query: { exact: 'Hello' }, matches: true },
   { why: "a picker wheel's selected row is its value", platform: 'ios', type: T.wheel, label: '', value: 'Medium', query: { exact: 'Medium' }, matches: true },
   { why: 'a picker wheel by substring', platform: 'ios', type: T.wheel, label: '', value: 'Medium', query: { substring: 'med' }, matches: true },
@@ -242,6 +265,9 @@ function nodeFor(c: Case): HierarchyNode {
   }
   const attrs: Record<string, string> = { type: c.type, label: c.label ?? '', identifier: '', value: c.value ?? '' };
   if (c.title !== undefined) attrs.title = c.title;
+  if (c.placeholder !== undefined) attrs.placeholderValue = c.placeholder;
+  // The agent dumps an editable text view's role as textfield, a read-only one's as text (PILOT-697).
+  if (c.type === T.textView) attrs['tapsmith-role'] = c.editable === false ? 'text' : 'textfield';
   return { tagName: c.type, attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
 }
 
@@ -517,5 +543,9 @@ describe('iOS text-content types match the agent\'s source (PILOT-794)', () => {
   it('valueTextTypes', () => {
     // Less the raw `XCUIElementType(<n>)` spelling older dumps carry.
     expect(typesOf('valueTextTypes')).toEqual([...IOS_VALUE_TEXT_TYPES].filter((t) => !t.includes('(')).sort());
+  });
+
+  it('textInputTypes', () => {
+    expect(typesOf('textInputTypes')).toEqual([...IOS_TEXT_INPUT_TYPES].sort());
   });
 });

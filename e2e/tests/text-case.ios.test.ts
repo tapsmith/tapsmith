@@ -17,17 +17,15 @@ describe("Case-insensitive substring getByText, live elements (PILOT-522)", () =
     await expect(device.getByLabel("Full name")).toHaveValue("Ada")
   })
 
-  test("a field matched only through its value types into that field", async ({ device }) => {
-    // The nickname field has no accessibility label. An empty field's
-    // placeholder isn't its value, so give it one: it then matches through
-    // that value alone, after the uppercased "NICKNAME" text above it.
+  test("a field's typed value is no match, so the text above it is the one match", async ({ device }) => {
+    // The nickname field has no accessibility label. Its typed value is not
+    // text, as an <input>'s value is not in Playwright (PILOT-1417), so
+    // getByText finds only the uppercased "NICKNAME" text above it.
     const nickname = device.getByPlaceholder("Nickname")
     await nickname.type("nick")
     const matches = device.getByText("NICK")
-    await expect(matches).toHaveCount(2)
-    // type(), not clearAndType(): clearing would remove the very value the
-    // locator matches through.
-    await matches.last().type("name")
-    await expect(nickname).toHaveValue("nickname")
+    await expect(matches).toHaveCount(1)
+    await expect(matches).toHaveRole("text")
+    await expect(nickname).toHaveValue("nick")
   })
 })

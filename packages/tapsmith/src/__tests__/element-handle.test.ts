@@ -1249,7 +1249,8 @@ describe('tap()', () => {
     ]);
     expect(err.message).toMatch(/1\) XCUIElementTypeStepper "1".* aka device\.getByLabel\("Quantity: 1"\)/);
     expect(err.message).toContain('aka device.getByText("Upload progress", { exact: true })');
-    expect(err.message).toContain('aka device.getByText("nick", { exact: true })');
+    // A text field's typed value is not text either (PILOT-1417).
+    expect(err.message).not.toContain('getByText("nick"');
     expect(err.message).not.toContain('getByText("1"');
     expect(err.message).not.toContain('getByText("65%"');
   });
@@ -1274,6 +1275,17 @@ describe('tap()', () => {
       makeElementInfo({ role: '', className: 'android.widget.TextView', text: 'Apollo 12' }),
     ]);
     expect(err.message).not.toContain('getByText("Apollo 11"');
+    expect(err.message).toContain('aka device.getByText("Apollo 12", { exact: true })');
+  });
+
+  it("never suggests getByText for an iOS text field's typed value (PILOT-1417)", () => {
+    const err = buildStrictModeViolationError('getByRole("textfield")', [
+      makeElementInfo({ role: 'textfield', className: 'XCUIElementTypeTextField', text: 'Apollo 11', hint: 'Search', contentDescription: '' }),
+      makeElementInfo({ role: 'searchfield', className: 'XCUIElementTypeSearchField', text: 'cats', hint: '', contentDescription: '' }),
+      makeElementInfo({ role: 'text', className: 'XCUIElementTypeStaticText', text: 'Apollo 12', contentDescription: 'Apollo 12' }),
+    ]);
+    expect(err.message).not.toContain('getByText("Apollo 11"');
+    expect(err.message).not.toContain('getByText("cats"');
     expect(err.message).toContain('aka device.getByText("Apollo 12", { exact: true })');
   });
 
@@ -3234,6 +3246,46 @@ describe("filter({ hasText }) on an Android text field", () => {
       makeElementInfo({ elementId: 'r', className: 'android.widget.TextView', text: 'Apollo 11', bounds: { left: 0, top: 50, right: 100, bottom: 100 } }),
     ])),
   }), _className('android.view.View'), 5000);
+
+  it("doesn't read the typed value as text, by a string or a RegExp", async () => {
+    for (const hasText of ['Apollo', /^Apollo 11$/]) {
+      expect((await fieldAndRow().filter({ hasText }).all()).length).toBe(1);
+      expect((await fieldAndRow().filter({ hasText }).find()).elementId).toBe('r');
+    }
+  });
+
+  it('hasNotText keeps the field', async () => {
+    expect((await fieldAndRow().filter({ hasNotText: 'Apollo' }).find()).elementId).toBe('f');
+  });
+});
+
+describe("filter({ hasText }) on an iOS read-only text view (PILOT-1417)", () => {
+  it('reads its text, which is no typed value', async () => {
+    const handle = new ElementHandle(makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse([
+        makeElementInfo({ elementId: 'v', className: 'XCUIElementTypeTextView', role: 'text', text: 'Terms of Service' }),
+      ])),
+    }), _className('XCUIElementTypeTextView'), 5000);
+    expect((await handle.filter({ hasText: 'Terms' }).find()).elementId).toBe('v');
+  });
+
+  it('is suggested as getByText in a strict-mode error, unlike an editable one', () => {
+    const err = buildStrictModeViolationError('getByRole("text")', [
+      makeElementInfo({ role: '', className: 'XCUIElementTypeTextView', text: 'Terms of Service', contentDescription: '' }),
+      makeElementInfo({ role: 'textfield', className: 'XCUIElementTypeTextView', text: 'Buy milk', contentDescription: '' }),
+    ]);
+    expect(err.message).toContain('aka device.getByText("Terms of Service", { exact: true })');
+    expect(err.message).not.toContain('getByText("Buy milk"');
+  });
+});
+
+describe("filter({ hasText }) on an iOS text field (PILOT-1417)", () => {
+  const fieldAndRow = () => new ElementHandle(makeMockClient({
+    findElements: vi.fn(async () => makeFindElementsResponse([
+      makeElementInfo({ elementId: 'f', className: 'XCUIElementTypeSearchField', text: 'Apollo 11', hint: 'Search', bounds: { left: 0, top: 0, right: 100, bottom: 50 } }),
+      makeElementInfo({ elementId: 'r', className: 'XCUIElementTypeStaticText', text: 'Apollo 11', contentDescription: 'Apollo 11', bounds: { left: 0, top: 50, right: 100, bottom: 100 } }),
+    ])),
+  }), _className('XCUIElementTypeOther'), 5000);
 
   it("doesn't read the typed value as text, by a string or a RegExp", async () => {
     for (const hasText of ['Apollo', /^Apollo 11$/]) {

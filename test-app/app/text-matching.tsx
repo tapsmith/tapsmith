@@ -19,9 +19,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   (PILOT-522), so getByText("get started") finds it. Tapping it counts.
 // - "Full name" above the field, also uppercased: getByText("full name")
 //   matches it and the field, two element types (PILOT-522).
-// - "Nickname", uppercased, above a field with no accessibility label: once
-//   text is typed into it, getByText finds the field only through that
-//   value (PILOT-522).
+// - "Nickname", uppercased, above a field with no accessibility label: text
+//   typed into it is no getByText text (PILOT-1417), so getByText("nick")
+//   finds the uppercased text alone.
 // - "The Flower Girl" is a gallery card: an image whose accessibility label
 //   is its caption's text, above that caption. getByText finds the caption
 //   alone on both platforms (PILOT-1366): an image's label is its name, for

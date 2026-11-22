@@ -271,29 +271,57 @@
       "matches": false
     },
     {
-      "why": "a text field's typed value is text",
+      "why": "a text field's typed value is not text",
       "platform": "ios",
       "type": "XCUIElementTypeTextField",
       "label": "",
       "value": "nick",
+      "placeholder": "Nickname",
       "query": {
         "substring": "nick"
       },
-      "matches": true
+      "matches": false
     },
     {
-      "why": "a text field's value, exactly",
+      "why": "nor exactly",
       "platform": "ios",
       "type": "XCUIElementTypeTextField",
-      "label": "Email",
+      "label": "",
       "value": "ada@example.com",
+      "placeholder": "Email",
       "query": {
         "exact": "ada@example.com"
       },
-      "matches": true
+      "matches": false
     },
     {
-      "why": "a secure field's value",
+      "why": "nor by RegExp",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "",
+      "value": "Apollo 11",
+      "placeholder": "Search",
+      "query": {
+        "source": "^Apollo",
+        "flags": "",
+        "pattern": "\\AApollo",
+        "ignoreCase": false
+      },
+      "matches": false
+    },
+    {
+      "why": "nor with no placeholder",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "",
+      "value": "Apollo 11",
+      "query": {
+        "exact": "Apollo 11"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor a secure field's",
       "platform": "ios",
       "type": "XCUIElementTypeSecureTextField",
       "label": "Password",
@@ -301,10 +329,10 @@
       "query": {
         "exact": "••••"
       },
-      "matches": true
+      "matches": false
     },
     {
-      "why": "a text view's value",
+      "why": "nor a text view's",
       "platform": "ios",
       "type": "XCUIElementTypeTextView",
       "label": "Notes",
@@ -315,16 +343,143 @@
         "pattern": "milk",
         "ignoreCase": false
       },
-      "matches": true
+      "matches": false
     },
     {
-      "why": "a search field's value",
+      "why": "nor a search field's",
       "platform": "ios",
       "type": "XCUIElementTypeSearchField",
       "label": "Search",
       "value": "cats",
+      "placeholder": "Search",
       "query": {
         "exact": "cats"
+      },
+      "matches": false
+    },
+    {
+      "why": "a labelled field's label is still text",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "Email",
+      "value": "ada@example.com",
+      "placeholder": "you@example.com",
+      "query": {
+        "exact": "Email"
+      },
+      "matches": true
+    },
+    {
+      "why": "an empty field's placeholder is its text",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "",
+      "value": "Search items...",
+      "placeholder": "Search items...",
+      "query": {
+        "exact": "Search items..."
+      },
+      "matches": true
+    },
+    {
+      "why": "by substring too",
+      "platform": "ios",
+      "type": "XCUIElementTypeSearchField",
+      "label": "",
+      "value": "Search",
+      "placeholder": "Search",
+      "query": {
+        "substring": "sea"
+      },
+      "matches": true
+    },
+    {
+      "why": "and by RegExp",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "",
+      "value": "Notes",
+      "placeholder": "Notes",
+      "query": {
+        "source": "^Notes$",
+        "flags": "",
+        "pattern": "\\ANotes\\z",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
+      "why": "a typed value equal to the placeholder reads as the placeholder",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "",
+      "value": "Email",
+      "placeholder": "Email",
+      "query": {
+        "substring": "mail"
+      },
+      "matches": true
+    },
+    {
+      "why": "a placeholder is no text while a value is typed",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "",
+      "value": "ada",
+      "placeholder": "Email",
+      "query": {
+        "exact": "Email"
+      },
+      "matches": false
+    },
+    {
+      "why": "a read-only text view's value is text",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "",
+      "value": "By signing up you agree to the Terms",
+      "editable": false,
+      "query": {
+        "substring": "by signing up"
+      },
+      "matches": true
+    },
+    {
+      "why": "exactly too",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "",
+      "value": "Terms of Service",
+      "editable": false,
+      "query": {
+        "exact": "Terms of Service"
+      },
+      "matches": true
+    },
+    {
+      "why": "and by RegExp",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "",
+      "value": "Terms of Service",
+      "editable": false,
+      "query": {
+        "source": "^Terms",
+        "flags": "",
+        "pattern": "\\ATerms",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
+      "why": "a static text's value beside a placeholder is text",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "label": "",
+      "value": "Apollo 11",
+      "placeholder": "Search",
+      "query": {
+        "exact": "Apollo 11"
       },
       "matches": true
     },
