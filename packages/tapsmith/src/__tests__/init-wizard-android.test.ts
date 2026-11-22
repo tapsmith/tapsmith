@@ -551,8 +551,8 @@ describe('configureAndroid() with a running emulator (PILOT-1201)', () => {
 
     const android = await configureAndroid(withRunning([{ serial: 'emulator-5570', avd: 'Tapsmith_Fold_API_36', held: false }]));
 
-    const q = question(/Which AVD/) as Question & { choices: Array<{ name: string; hint?: string }> };
-    expect(q.choices.find((c) => c.name === 'Tapsmith_Fold_API_36')?.hint).toBe('running');
+    const choices = question(/Which AVD/)?.choices as Array<{ name: string; hint?: string }> | undefined;
+    expect(choices?.find((c) => c.name === 'Tapsmith_Fold_API_36')?.hint).toBe('running');
     expect(android.avd).toBe('Tapsmith_Fold_API_36');
   });
 

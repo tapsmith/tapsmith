@@ -22,6 +22,8 @@ vi.mock('../emulator-app-nap.js', async (importOriginal) => {
   return { ...actual, disableEmulatorAppNap: () => ({ kind: 'disabled', domains: [], changed: [] }) };
 });
 import {
+  avdNotFoundMessage,
+  resolveAndroidDeviceTarget,
   serialForPort,
   readUiHierarchyViaAdb,
   detectBlockingSystemDialog,
@@ -2964,5 +2966,48 @@ describe('stopLaunchedEmulator (PILOT-512)', () => {
     } finally {
       child.kill('SIGKILL');
     }
+  });
+});
+
+describe('resolveAndroidDeviceTarget() — init\'s avd on CI (PILOT-1201)', () => {
+  const config = { avd: 'Pixel_8_API_36', launchEmulators: true };
+  const ciRunner = { isCi: true, listAvds: () => ['test'] };
+
+  it('on CI, uses the connected emulator when the configured AVD is not on the machine', () => {
+    const target = resolveAndroidDeviceTarget(config, ['emulator-5554'], ciRunner);
+    expect(target.strategy).toBe('prefer-connected');
+    expect(target.launchEmulators).toBe(false);
+    expect(target.notice).toContain('AVD "Pixel_8_API_36"');
+    expect(target.notice).toContain('emulator-5554');
+    expect(target.notice).toContain("deviceStrategy: process.env.CI ? 'prefer-connected' : undefined");
+  });
+
+  it('keeps avd-only when the AVD exists, off CI, with no device connected, or with an explicit deviceStrategy', () => {
+    const avdOnly = { strategy: 'avd-only', launchEmulators: true };
+    expect(resolveAndroidDeviceTarget(config, ['emulator-5554'], { isCi: true, listAvds: () => ['Pixel_8_API_36'] })).toEqual(avdOnly);
+    expect(resolveAndroidDeviceTarget(config, ['emulator-5554'], { isCi: false, listAvds: () => ['test'] })).toEqual(avdOnly);
+    expect(resolveAndroidDeviceTarget(config, [], ciRunner)).toEqual(avdOnly);
+    expect(resolveAndroidDeviceTarget({ ...config, deviceStrategy: 'avd-only' }, ['emulator-5554'], ciRunner)).toEqual(avdOnly);
+  });
+
+  it('does not list AVDs when nothing could change', () => {
+    const listAvds = vi.fn(() => ['test']);
+    expect(resolveAndroidDeviceTarget({ launchEmulators: false }, ['emulator-5554'], { isCi: true, listAvds }))
+      .toEqual({ strategy: 'prefer-connected', launchEmulators: false });
+    expect(resolveAndroidDeviceTarget({ ...config, deviceStrategy: 'prefer-connected' }, ['emulator-5554'], { isCi: true, listAvds }))
+      .toEqual({ strategy: 'prefer-connected', launchEmulators: true });
+    resolveAndroidDeviceTarget(config, ['emulator-5554'], { isCi: false, listAvds });
+    resolveAndroidDeviceTarget(config, [], { isCi: true, listAvds });
+    expect(listAvds).not.toHaveBeenCalled();
+  });
+});
+
+describe('avdNotFoundMessage() (PILOT-1201)', () => {
+  it('lists the AVDs and says how to use an emulator the CI workflow boots', () => {
+    const message = avdNotFoundMessage('Pixel_8_API_36', ['test']);
+    expect(message).toContain('AVD "Pixel_8_API_36" not found. Available AVDs: test');
+    expect(message).toContain("deviceStrategy: 'prefer-connected'");
+    expect(message).toContain('android-emulator-runner');
+    expect(avdNotFoundMessage('X', [])).toContain('Available AVDs: (none)');
   });
 });
