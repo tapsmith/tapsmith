@@ -954,7 +954,7 @@ export class TapsmithGrpcClient {
     networkTracingEnabled = false,
     clearAppDataFirst = false,
     /** Android: the config's `activity`, which the daemon then starts on
-     *  every launch of `targetPackage` (PILOT-1402). Empty: resolve it. */
+     *  every launch of `targetPackage`. Empty: resolve it. */
     launchActivity = '',
   ): Promise<ActionResponse> {
     return this.call<ActionResponse>('startAgent', {

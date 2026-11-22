@@ -365,7 +365,7 @@ export class Device {
   /**
    * The config's Android `activity`, sent with every agent start so the
    * daemon launches it on every path: resets, restarts and recovery
-   * relaunches, not only the session's first launch (PILOT-1402).
+   * relaunches, not only the session's first launch.
    */
   private _launchActivity: string;
 
