@@ -49,7 +49,8 @@
       "./plugins/with-webview-debugging",
       "./plugins/with-scene-lifecycle",
       "./plugins/with-native-settings-screen",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

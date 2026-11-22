@@ -33,6 +33,8 @@
 		8000000000000000000000A1 /* CellFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8000000000000000000000A2 /* CellFrames.swift */; };
 		8950000000000000000000B1 /* CellAccessories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8950000000000000000000B2 /* CellAccessories.swift */; };
 		1363000000000000000000A1 /* RowName.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1363000000000000000000A2 /* RowName.swift */; };
+		1384000000000000000000A1 /* InAppBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1384000000000000000000A2 /* InAppBrowser.swift */; };
+		1384000000000000000000A3 /* InAppBrowserSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1384000000000000000000A4 /* InAppBrowserSnapshot.swift */; };
 		8950000000000000000000B3 /* DescendantText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8950000000000000000000B4 /* DescendantText.swift */; };
 		A1C3E5F7092B4D6F8A0C2E41 /* AgentAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D4F6A8103C5E7A9B1D3F52 /* AgentAuth.swift */; };
 		9780000000000000000000A1 /* AccessibilityTimeout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9780000000000000000000A2 /* AccessibilityTimeout.swift */; };
@@ -95,6 +97,8 @@
 		8000000000000000000000A2 /* CellFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellFrames.swift; sourceTree = "<group>"; };
 		8950000000000000000000B2 /* CellAccessories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellAccessories.swift; sourceTree = "<group>"; };
 		1363000000000000000000A2 /* RowName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RowName.swift; sourceTree = "<group>"; };
+		1384000000000000000000A2 /* InAppBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppBrowser.swift; sourceTree = "<group>"; };
+		1384000000000000000000A4 /* InAppBrowserSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppBrowserSnapshot.swift; sourceTree = "<group>"; };
 		8950000000000000000000B4 /* DescendantText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DescendantText.swift; sourceTree = "<group>"; };
 		B2D4F6A8103C5E7A9B1D3F52 /* AgentAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAuth.swift; sourceTree = "<group>"; };
 		9780000000000000000000A2 /* AccessibilityTimeout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTimeout.swift; sourceTree = "<group>"; };
@@ -172,6 +176,8 @@
 				8000000000000000000000A2 /* CellFrames.swift */,
 				8950000000000000000000B2 /* CellAccessories.swift */,
 				1363000000000000000000A2 /* RowName.swift */,
+				1384000000000000000000A2 /* InAppBrowser.swift */,
+				1384000000000000000000A4 /* InAppBrowserSnapshot.swift */,
 				8950000000000000000000B4 /* DescendantText.swift */,
 				9780000000000000000000A2 /* AccessibilityTimeout.swift */,
 				9780000000000000000000A4 /* XCTestIssueRelay.swift */,
@@ -336,6 +342,8 @@
 				8000000000000000000000A1 /* CellFrames.swift in Sources */,
 				8950000000000000000000B1 /* CellAccessories.swift in Sources */,
 				1363000000000000000000A1 /* RowName.swift in Sources */,
+				1384000000000000000000A1 /* InAppBrowser.swift in Sources */,
+				1384000000000000000000A3 /* InAppBrowserSnapshot.swift in Sources */,
 				8950000000000000000000B3 /* DescendantText.swift in Sources */,
 				9780000000000000000000A1 /* AccessibilityTimeout.swift in Sources */,
 				9780000000000000000000A3 /* XCTestIssueRelay.swift in Sources */,

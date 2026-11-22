@@ -51,6 +51,7 @@ import {
   currentRouteScope,
 } from './network.js';
 import { WebViewHandle } from './webview-handle.js';
+import { hierarchyShowsAppWebView } from './trace-viewer/components/hierarchy-utils.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
 import type { Platform } from './config.js';
 
@@ -468,8 +469,8 @@ export class Device {
    * connect attempt spins until the configured timeout).
    */
   async _dumpWebViewDomForInspection(hierarchyXml: string): Promise<string | null | undefined> {
-    const marker = this._platform === 'ios' ? 'XCUIElementTypeWebView' : 'android.webkit.WebView';
-    if (!hierarchyXml.includes(marker)) return undefined;
+    // An in-app browser's page is not the app's to connect to (PILOT-1384).
+    if (!hierarchyShowsAppWebView(hierarchyXml)) return undefined;
     // _establishWebView (unlike _connectWebView) never writes _activeWebView,
     // so a poll cannot clobber a handle a concurrent test session activated.
     // Captured outside attempt() so the connected handle stays disposable even

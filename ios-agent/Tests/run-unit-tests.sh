@@ -422,6 +422,14 @@ xcrun swiftc -sdk "$SDK" \
   Tests/SystemAlertTests/main.swift \
   TapsmithAgent/SystemAlert.swift \
   -o "$OUT/system-alert-tests"
+
+# When an in-app browser's content is looked for (PILOT-1384).
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/InAppBrowserTests/main.swift \
+  TapsmithAgent/InAppBrowser.swift \
+  -o "$OUT/in-app-browser-tests"
+"$OUT/in-app-browser-tests"
 "$OUT/system-alert-tests"
 
 # XCTestIssueRelay needs the Objective-C exception catcher it raises into.
