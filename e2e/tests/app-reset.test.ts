@@ -183,7 +183,10 @@ describe("Declared start route (appResetRoute)", () => {
  * remounts it on every reset.
  */
 describe("Screens a tab navigator keeps mounted", () => {
-  test.use({ appResetScope: "test", appResetRoute: "/native-tabs" })
+  // No retries: a retry resets cold, and a relaunched app starts the counter
+  // at 0 whether or not the hooks remount anything, so a broken remount would
+  // only show as a flaky pass.
+  test.use({ appResetScope: "test", appResetRoute: "/native-tabs", retries: 0 })
 
   test("a test leaves state on a tab that stays mounted", async ({ nativeTabsScreen }) => {
     await expect(nativeTabsScreen.homeContent).toBeVisible()
