@@ -68,6 +68,8 @@ interface WebViewDomDescription {
   ariaLabel: string
   /** The first label text webview.getByLabel matches it by, whitespace-normalised ('' for none). */
   label: string
+  /** Whether {@link label} labels no other element on the page, so getByLabel with exact finds only this one. */
+  labelUnique: boolean
   role: string
   text: string
   /** No child elements: the only kind of element webview.getByText finds. */
@@ -95,10 +97,7 @@ export interface WebViewLocatorProbe {
 }
 
 /** Best-effort unambiguous WebView locator suggestion for one DOM match. */
-function suggestWebViewSelectorFor(
-  d: WebViewDomDescription | undefined,
-  sample: readonly WebViewDomDescription[] = [],
-): string | undefined {
+function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string | undefined {
   if (!d) return undefined;
   // Copy-paste-safe string literals, like the native suggestions (PILOT-659).
   const lit = (v: string): string => `"${escapeJsString(v)}"`;
@@ -106,8 +105,9 @@ function suggestWebViewSelectorFor(
   if (d.id && !d.inShadow) return `webview.locator(${lit(cssIdSelector(d.id))})`;
   // getByLabel matches a substring: exact pins this label (PILOT-1361). The
   // label getByLabel reads (an aria-labelledby outranks an aria-label), and
-  // only when no other match shares it.
-  if (d.label && sample.every((other) => other === d || other.label !== d.label)) {
+  // only when nothing else on the page has it: getByLabel also finds what
+  // the failing locator left out (a hidden page of an Ionic stack).
+  if (d.label && d.labelUnique) {
     return `webview.getByLabel(${lit(d.label)}, { exact: true })`;
   }
   // getByText finds leaf elements only: a parent's text would resolve to the
@@ -168,7 +168,7 @@ function buildWebViewStrictError(loc: WebViewLocator, probe: WebViewLocatorProbe
   }));
   return buildStrictModeViolationError(`"${loc._selector}"`, elements, {
     totalCount: probe.count,
-    suggest: (_el, i) => suggestWebViewSelectorFor(probe.sample[i], probe.sample),
+    suggest: (_el, i) => suggestWebViewSelectorFor(probe.sample[i]),
   });
 }
 
@@ -670,6 +670,20 @@ export class WebViewHandle {
       : 'undefined';
     const probe = await this._evaluate(withDomHelpers(`(() => {
       const els = (${loc._finderAllJs});
+      const labelOf = (el) => __ts.norm(__ts.labelTexts(el).find((t) => __ts.norm(t)) || '');
+      // For a strict-mode error only: how many elements on the page each
+      // label text labels, as getByLabel with exact matches them.
+      let labelCounts = null;
+      const labelUnique = (label) => {
+        if (!label || els.length < 2) return false;
+        if (!labelCounts) {
+          labelCounts = new Map();
+          for (const e of __ts.all(document)) {
+            for (const t of new Set(__ts.labelTexts(e).map(__ts.norm))) labelCounts.set(t, (labelCounts.get(t) || 0) + 1);
+          }
+        }
+        return labelCounts.get(label) === 1;
+      };
       const vis = (el) => {
         // No client rects ⇒ not rendered at all (covers ancestors with
         // display:none, which the element's own computed style would miss).
@@ -687,7 +701,8 @@ export class WebViewHandle {
           id: el.id || '',
           testId: el.getAttribute('data-testid') || '',
           ariaLabel: el.getAttribute('aria-label') || '',
-          label: __ts.norm(__ts.labelTexts(el).find((t) => __ts.norm(t)) || ''),
+          label: labelOf(el),
+          labelUnique: labelUnique(labelOf(el)),
           role: el.getAttribute('role') || '',
           text: (el.textContent || '').trim().slice(0, 80),
           leaf: el.firstElementChild === null,

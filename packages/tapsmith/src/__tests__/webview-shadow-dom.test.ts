@@ -662,6 +662,14 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
     expect(err).toContain('webview.getByLabel("Save draft", { exact: true })');
     expect(err).toContain('webview.getByLabel("Save", { exact: true })');
     expect(err).not.toContain('webview.getByLabel("Same"');
+    // A label something outside the matches also has (a hidden page of an
+    // Ionic stack) would find two elements: not suggested.
+    const stack = handleOn('<!DOCTYPE html><body><div style="display:none"><button aria-label="back">&lt;</button></div>'
+      + '<button aria-label="back">&lt;</button><button>Save</button></body>').handle;
+    const stackErr = String(await stack.getByRole('button').click().catch((e: unknown) => e));
+    expect(stackErr).toMatch(/strict mode/i);
+    expect(stackErr).not.toContain('webview.getByLabel("back"');
+    expect(await stack.getByLabel('back', { exact: true }).count()).toBe(2);
   });
 
   it('rejects a name that is only an inherited property, such as "constructor", as an unknown role', () => {
