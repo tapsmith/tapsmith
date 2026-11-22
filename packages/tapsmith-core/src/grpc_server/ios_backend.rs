@@ -2089,25 +2089,59 @@ impl DeviceBackend for IosBackend<'_> {
                     ios::system_proxy::fallback_allowed_from_env(),
                 );
                 // A recent NE failure skips the doomed launch (each waits
-                // out a 10 s control-channel timeout) and goes straight to
-                // the decision above; see `cached_ne_failure` for why it
-                // expires and why multi-device callers never use it.
-                let cached_ne_error = ios::system_proxy::cached_ne_failure(
+                // out a 10–20 s dial-back) and goes straight to the decision
+                // above; see `cached_ne_failure` for why it expires and why
+                // multi-device callers never use it. A launch that was only
+                // late is kept, and taken over here if the extension has
+                // dialled back since (`ios_redirect::ne_attempt`).
+                let cached_ne = ios::system_proxy::cached_ne_failure(
                     self.svc.ios_ne_unavailable.read().await.as_ref(),
                     req.require_isolation,
                     std::time::Instant::now(),
                 );
-                let ne_known_bad = cached_ne_error.is_some();
-                let ne_result = if let Some(cached) = cached_ne_error {
-                    debug!("Skipping NE attempt (previously failed: {cached})");
-                    Err(anyhow::anyhow!("{cached}"))
-                } else {
-                    crate::ios_redirect::IosRedirect::start(
-                        serial.clone(),
-                        proxy.state_handle(),
-                        Arc::clone(mitm_ca),
-                    )
-                    .await
+                let ne_known_bad = cached_ne.is_some();
+                let pending = self.svc.ios_ne_pending.write().await.take();
+                let attempt = crate::ios_redirect::ne_attempt(
+                    pending.as_ref().map(|p| (p.udid() == serial, p.age())),
+                    ne_known_bad,
+                    ios::system_proxy::NE_RETRY_AFTER,
+                    crate::ios_redirect::full_dial_back_wait(),
+                );
+                let ne_result = match (attempt, pending) {
+                    (crate::ios_redirect::NeAttempt::Resume(wait), Some(pending)) => {
+                        crate::ios_redirect::IosRedirect::resume(
+                            pending,
+                            wait,
+                            proxy.state_handle(),
+                            Arc::clone(mitm_ca),
+                        )
+                        .await
+                    }
+                    (attempt, pending) => {
+                        // Stop a stale (or other simulator's) launch before a
+                        // fresh one rebinds its socket path.
+                        drop(pending);
+                        match (attempt, &cached_ne) {
+                            (crate::ios_redirect::NeAttempt::UseCached, Some(cached)) => {
+                                debug!(
+                                    "Skipping NE attempt (previously failed: {})",
+                                    cached.message
+                                );
+                                Err(crate::ios_redirect::StartError::from(anyhow::anyhow!(
+                                    "{}",
+                                    cached.message
+                                )))
+                            }
+                            _ => {
+                                crate::ios_redirect::IosRedirect::start(
+                                    serial.clone(),
+                                    proxy.state_handle(),
+                                    Arc::clone(mitm_ca),
+                                )
+                                .await
+                            }
+                        }
+                    }
                 };
                 match ne_result {
                     Ok(redirect) => {
@@ -2119,27 +2153,33 @@ impl DeviceBackend for IosBackend<'_> {
                             "iOS redirector session established"
                         );
                     }
-                    Err(e) => {
+                    Err(failure) => {
+                        // A cached failure keeps its own kind: the error built
+                        // from its message above is not typed.
+                        let connect_timeout = failure.is_connect_timeout()
+                            || cached_ne.as_ref().is_some_and(|c| c.connect_timeout);
+                        let e = format!("{:#}", failure.error);
+                        let pending = failure.pending;
                         if !ne_known_bad && !req.require_isolation {
                             *self.svc.ios_ne_unavailable.write().await =
                                 Some(ios::system_proxy::NeFailure {
-                                    message: e.to_string(),
+                                    message: e.clone(),
                                     at: std::time::Instant::now(),
+                                    connect_timeout,
                                 });
                             warn!("Network Extension redirector unavailable: {e}");
                         }
-                        // Two daemons launching the redirector at once used to
-                        // be the most common local cause of an NE failure (they
-                        // share one NETransparentProxyManager and the loser's
-                        // control channel never connects); launches are now
-                        // serialised by `ios_redirect::LaunchLock`.
-                        if decision == ios::system_proxy::FallbackDecision::RefuseIsolation {
-                            let msg = format!(
-                                "iOS network capture unavailable for this device: the \
-                                     Network Extension redirector failed ({e}) and the \
-                                     macOS system-proxy fallback is not device-isolated, so \
-                                     it is refused for multi-device runs. See \
-                                     docs/ios-network-capture.md#multi-device-groups"
+                        if decision == ios::system_proxy::FallbackDecision::RefuseIsolation
+                            || decision == ios::system_proxy::FallbackDecision::RefuseLocal
+                        {
+                            // Capture stays off until the extension answers:
+                            // keep a late launch for the next start to take.
+                            *self.svc.ios_ne_pending.write().await = pending;
+                            let msg = ios::system_proxy::ne_refusal_message(
+                                decision,
+                                &serial,
+                                &e,
+                                connect_timeout,
                             );
                             warn!("{msg}");
                             return Err(CaptureStop::Respond(proto::StartNetworkCaptureResponse {
@@ -2150,25 +2190,9 @@ impl DeviceBackend for IosBackend<'_> {
                                 ..Default::default()
                             }));
                         }
-                        if decision == ios::system_proxy::FallbackDecision::RefuseLocal {
-                            let msg = format!(
-                                    "iOS network capture unavailable for {serial}: the Network \
-                                     Extension redirector failed ({e}). Run `npx tapsmith \
-                                     doctor` and `npx tapsmith ios network setup-simulator` to fix it. The \
-                                     macOS system-proxy fallback would record all traffic on \
-                                     this Mac, so it is only used on CI; set {}=1 to allow it \
-                                     here anyway. See docs/ios-network-capture.md",
-                                    ios::system_proxy::FALLBACK_ENV
-                                );
-                            warn!("{msg}");
-                            return Err(CaptureStop::Respond(proto::StartNetworkCaptureResponse {
-                                request_id,
-                                success: false,
-                                proxy_port: 0,
-                                error_message: msg,
-                                ..Default::default()
-                            }));
-                        }
+                        // The fallback routes this capture: a late dial-back
+                        // has nothing to take over.
+                        drop(pending);
                         // `acquire` releases a lease whose caller was
                         // cancelled mid-acquire; from here until the capture
                         // is published the guard does the same.

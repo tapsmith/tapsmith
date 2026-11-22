@@ -107,20 +107,39 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 const MAX_CONSECUTIVE_ACCEPT_FAILURES: u32 = 32;
 
 /// How long to wait for the System Extension to connect back to our
-/// listener after spawning the launcher binary.
+/// listener after spawning the launcher binary, on an idle Mac — and the
+/// floor of the wait whatever the load ([`control_channel_wait`]).
 const CONTROL_CHANNEL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The longest the dial-back wait stretches on a loaded Mac. Under heavy load
+/// the launcher and the extension both run late, and a fixed 10 s gave up on
+/// launches that would have connected a few seconds later; a launch later
+/// still is picked up by the next capture start ([`PendingRedirect`]).
+const CONTROL_CHANNEL_MAX_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Budget for one redirector start, from entering [`IosRedirect::start`] to
+/// giving up on the dial-back: the launch-lock wait comes out of it, so a
+/// start queued behind other daemons' launches still answers well inside the
+/// SDK's 60 s capture-start deadline. The dial-back always gets at least
+/// `CONTROL_CHANNEL_TIMEOUT`.
+const NE_START_BUDGET: Duration = Duration::from_secs(40);
+
+/// How long a capture start polls a pending launch ([`PendingRedirect`])
+/// while its failure is still cached: long enough to take a dial-back that
+/// is already queued on the listener, short enough not to slow a test.
+pub(crate) const LATE_CONNECT_POLL: Duration = Duration::from_millis(250);
 
 /// How long to wait for another daemon's redirector launch to finish before
 /// launching anyway. A healthy launch holds the lock for well under a second
 /// (dial-back, then the launcher's exit, then `LAUNCH_LOCK_GRACE`). A failing
-/// one holds it until its error return: up to `CONTROL_CHANNEL_TIMEOUT` when
-/// the accept times out, or about 15 s when the extension connects but the
-/// initial InterceptConf write then times out; the slowest possible success holds it for
-/// about 20.5 s (a 10 s accept, the 5 s InterceptConf write bound, then
-/// `LAUNCHER_EXIT_WAIT` 5 s, then the 0.5 s grace). So 25 s waits out any
-/// single holder, and running unserialised after it only happens behind a
-/// queue of failing or pathologically slow launches.
-const LAUNCH_LOCK_TIMEOUT: Duration = Duration::from_secs(25);
+/// one holds it until its launcher has exited (or been stopped,
+/// `LAUNCHER_EXIT_WAIT` after the dial-back wait ran out) plus the grace:
+/// up to about 25.5 s with the longest wait. The slowest possible success
+/// holds it for about 30.5 s (a 20 s dial-back, the 5 s InterceptConf write
+/// bound, then `LAUNCHER_EXIT_WAIT` 5 s, then the 0.5 s grace). So 30 s waits
+/// out any realistic single holder, and running unserialised after it only
+/// happens behind a queue of failing or pathologically slow launches.
+const LAUNCH_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long the launch lock is kept after the extension has connected, the
 /// initial InterceptConf is accepted and the launcher has exited (see
@@ -232,6 +251,221 @@ impl Drop for LaunchCleanup {
 
 fn launch_lock_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".tapsmith").join("ios-redirector-launch.lock"))
+}
+
+/// How long to wait for the extension's dial-back: `CONTROL_CHANNEL_TIMEOUT`
+/// on an idle Mac, stretched with the one-minute load average per CPU up to
+/// `CONTROL_CHANNEL_MAX_TIMEOUT` (at two runnable threads per CPU), and cut
+/// to what is left of the start's budget — never below the base wait.
+pub(crate) fn control_channel_wait(
+    load1: Option<f64>,
+    cpus: usize,
+    budget_left: Duration,
+) -> Duration {
+    let per_cpu = match load1 {
+        Some(load) if load.is_finite() && cpus > 0 => load / cpus as f64,
+        _ => 0.0,
+    };
+    let max_factor =
+        CONTROL_CHANNEL_MAX_TIMEOUT.as_secs_f64() / CONTROL_CHANNEL_TIMEOUT.as_secs_f64();
+    // Load up to one runnable thread per CPU is "idle enough"; each extra one
+    // per CPU stretches the wait by the base again, up to the cap.
+    let factor = per_cpu.clamp(1.0, max_factor);
+    CONTROL_CHANNEL_TIMEOUT
+        .mul_f64(factor)
+        .min(budget_left)
+        .max(CONTROL_CHANNEL_TIMEOUT)
+}
+
+/// The host's one-minute load average (`None` when unavailable) and CPU count.
+fn host_load() -> (Option<f64>, usize) {
+    let mut avg = [0f64; 3];
+    // SAFETY: `getloadavg` writes at most `nelem` (1) doubles into `avg`.
+    let n = unsafe { libc::getloadavg(avg.as_mut_ptr(), 1) };
+    let load1 = (n >= 1).then_some(avg[0]);
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    (load1, cpus)
+}
+
+/// A dial-back wait and the load it was sized for (for the log).
+pub(crate) struct DialBackWait {
+    pub(crate) wait: Duration,
+    load1: Option<f64>,
+    cpus: usize,
+}
+
+/// The dial-back wait for a start (or a pending launch's full retry) given
+/// what is left of `NE_START_BUDGET`.
+pub(crate) fn control_channel_wait_for(budget_left: Duration) -> DialBackWait {
+    let (load1, cpus) = host_load();
+    DialBackWait {
+        wait: control_channel_wait(load1, cpus, budget_left),
+        load1,
+        cpus,
+    }
+}
+
+/// The full dial-back wait for a pending launch's retry.
+pub(crate) fn full_dial_back_wait() -> Duration {
+    control_channel_wait_for(NE_START_BUDGET).wait
+}
+
+/// The extension did not dial back in time. Its text is the same for every
+/// failure of one daemon (the details — how long it waited, the load — go to
+/// the daemon log), so the runner prints it once per session, and it fits on
+/// one line. The cleanup it suggests touches only this daemon's redirector:
+/// other Tapsmith sessions on the Mac keep theirs.
+#[derive(Debug)]
+pub struct ControlChannelTimeout {
+    pub socket: PathBuf,
+}
+
+impl std::fmt::Display for ControlChannelTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Mitmproxy Redirector System Extension did not connect within {}–{} s (the wait \
+             grows with the Mac's load); Tapsmith tries again on the next test and picks up a \
+             late connect then. If it keeps failing on an idle Mac, stop this session's \
+             redirector with `pkill -9 -f '{}'` (other Tapsmith sessions keep theirs), or \
+             reboot macOS. See docs/ios-network-capture.md#se-control-channel-timeout",
+            CONTROL_CHANNEL_TIMEOUT.as_secs(),
+            CONTROL_CHANNEL_MAX_TIMEOUT.as_secs(),
+            self.socket.display()
+        )
+    }
+}
+
+impl std::error::Error for ControlChannelTimeout {}
+
+/// A launch whose extension did not dial back in time, kept so a late
+/// dial-back still brings capture up: its listener stays bound (the
+/// extension dials the socket path it was given, whenever it gets there), and
+/// its launcher is left to finish — stopped only if it has not exited
+/// `LAUNCHER_EXIT_WAIT` after the wait ran out. [`IosRedirect::resume`]
+/// takes the dial-back on a later capture start. Dropping it stops the
+/// launcher and removes the socket.
+pub struct PendingRedirect {
+    listener: Option<UnixListener>,
+    listener_path: PathBuf,
+    launcher: Option<JoinHandle<()>>,
+    udid: String,
+    since: Instant,
+}
+
+impl PendingRedirect {
+    /// The simulator this launch was for.
+    pub fn udid(&self) -> &str {
+        &self.udid
+    }
+
+    /// How long ago the dial-back wait ran out.
+    pub fn age(&self) -> Duration {
+        self.since.elapsed()
+    }
+
+    /// The extension's dial-back, if it arrives within `wait`. `None` on
+    /// timeout (the launch stays pending).
+    async fn accept(&self, wait: Duration) -> Option<std::io::Result<UnixStream>> {
+        let listener = self.listener.as_ref()?;
+        timeout(wait, listener.accept())
+            .await
+            .ok()
+            .map(|r| r.map(|(stream, _)| stream))
+    }
+
+    fn timeout_error(&self) -> anyhow::Error {
+        ControlChannelTimeout {
+            socket: self.listener_path.clone(),
+        }
+        .into()
+    }
+
+    /// Hand the listener and launcher over to a session, disarming `Drop`.
+    fn into_parts(mut self) -> (UnixListener, PathBuf, JoinHandle<()>) {
+        let listener = self.listener.take().expect("pending listener taken twice");
+        let launcher = self.launcher.take().expect("pending launcher taken twice");
+        (listener, self.listener_path.clone(), launcher)
+    }
+}
+
+impl Drop for PendingRedirect {
+    fn drop(&mut self) {
+        if let Some(launcher) = self.launcher.take() {
+            launcher.abort();
+        }
+        if self.listener.take().is_some() {
+            let _ = std::fs::remove_file(&self.listener_path);
+        }
+    }
+}
+
+/// A failed redirector start. `pending` is the launch, kept when only the
+/// dial-back was late ([`PendingRedirect`]); hold on to it to recover the
+/// session, or drop it to stop the launch.
+pub struct StartError {
+    pub error: anyhow::Error,
+    pub pending: Option<PendingRedirect>,
+}
+
+impl From<anyhow::Error> for StartError {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            pending: None,
+        }
+    }
+}
+
+impl StartError {
+    /// Whether this is a dial-back timeout (which `tapsmith doctor` cannot
+    /// see: the extension is installed and enabled), as opposed to a setup
+    /// problem doctor reports.
+    pub fn is_connect_timeout(&self) -> bool {
+        self.error.downcast_ref::<ControlChannelTimeout>().is_some()
+    }
+}
+
+/// What a capture start does about the redirector, given a pending launch
+/// (whether it is for this simulator and how old it is) and whether a recent
+/// failure is cached (`system_proxy::cached_ne_failure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NeAttempt {
+    /// Wait this long for the pending launch's dial-back.
+    Resume(Duration),
+    /// Use the cached failure without trying.
+    UseCached,
+    /// Drop any pending launch and launch afresh.
+    Launch,
+}
+
+/// A pending launch is worth waiting on until the failure it caused would
+/// have expired from the cache: after that a fresh launch (which rebinds the
+/// same socket path, so even a very late dial-back still lands) is tried, as
+/// it was before launches were kept. While the failure is cached, a start
+/// only polls it (`LATE_CONNECT_POLL`), so a test is not slowed; a start with
+/// nothing cached (a multi-device member, which never uses the cache) waits
+/// the full dial-back wait on it rather than relaunching while the extension
+/// may still be on its way.
+pub fn ne_attempt(
+    pending: Option<(bool, Duration)>,
+    cached: bool,
+    retry_after: Duration,
+    full_wait: Duration,
+) -> NeAttempt {
+    match pending {
+        Some((true, age)) if age < retry_after => {
+            if cached {
+                NeAttempt::Resume(LATE_CONNECT_POLL)
+            } else {
+                NeAttempt::Resume(full_wait)
+            }
+        }
+        _ if cached => NeAttempt::UseCached,
+        _ => NeAttempt::Launch,
+    }
 }
 
 /// How long to wait for a write to the SE control channel before giving up.
@@ -424,7 +658,10 @@ impl IosRedirect {
     ///    where to connect. The launcher is a short-lived helper that
     ///    hands our listener path to the System Extension and then exits
     ///    cleanly with status 0.
-    /// 4. Accepts the control-channel connection from the SE (10 s timeout).
+    /// 4. Accepts the control-channel connection from the SE (10–20 s,
+    ///    by host load — [`control_channel_wait`]). On a timeout the launch
+    ///    is returned in the error as a [`PendingRedirect`], for
+    ///    [`IosRedirect::resume`] to take a late connect.
     /// 5. Sends the initial `InterceptConf` over the control channel,
     ///    wrapped in the length-delimited framing that the SE expects.
     /// 6. Spawns the background refresh task (owns the control channel and
@@ -440,7 +677,8 @@ impl IosRedirect {
         udid: String,
         proxy_state: Arc<Mutex<ProxyState>>,
         mitm_ca: Arc<MitmAuthority>,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, StartError> {
+        let started = Instant::now();
         let initial_pids = simulator_processes::resolve_simulator_pids(&udid)
             .await
             .context("resolving initial simulator PID set")?;
@@ -469,9 +707,12 @@ impl IosRedirect {
         ));
         if let Err(e) = std::fs::remove_file(&listener_path) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                return Err(e).with_context(|| {
-                    format!("removing stale Unix socket at {}", listener_path.display())
-                });
+                return Err(anyhow::Error::new(e)
+                    .context(format!(
+                        "removing stale Unix socket at {}",
+                        listener_path.display()
+                    ))
+                    .into());
             }
         }
         let listener = UnixListener::bind(&listener_path)
@@ -509,13 +750,13 @@ impl IosRedirect {
                 debug!("Mitmproxy Redirector SE is [activated enabled]");
             }
             SeStatus::WaitingForUser => {
-                bail!(
-                    "Mitmproxy Redirector Network Extension is installed but not approved.\n\
-                     \n\
-                     Approve it in: System Settings → General → Login Items & Extensions → Network Extensions → Mitmproxy Redirector\n\
-                     \n\
-                     Or run: npx tapsmith ios network setup-simulator"
-                );
+                return Err(anyhow::anyhow!(
+                    "Mitmproxy Redirector Network Extension is installed but not approved: \
+                     approve it in System Settings → General → Login Items & Extensions → \
+                     Network Extensions → Mitmproxy Redirector, or run \
+                     `npx tapsmith ios network setup-simulator`"
+                )
+                .into());
             }
             SeStatus::NotRegistered => {
                 // First-run case: the SE has never been registered. Spawning
@@ -600,50 +841,67 @@ impl IosRedirect {
         // Until the extension has connected and accepted its first
         // configuration, a failure (or this future being cancelled) must stop
         // the launcher — dropping its JoinHandle would only detach the task,
-        // leaving the child running — and remove our socket. Declared after
+        // leaving the child running — and remove our socket. The one
+        // exception is a dial-back that is only late: that launch is kept
+        // ([`PendingRedirect`]). Declared after
         // `launch_lock`, so it runs before the lock is released: the next
         // daemon's launch can't overlap a launcher we are abandoning.
         let mut launch_cleanup = LaunchCleanup {
             launcher: Some(launcher_handle),
             socket: listener_path.clone(),
         };
-        let connected = async {
-            let (control_stream, _) = timeout(CONTROL_CHANNEL_TIMEOUT, listener.accept())
-                .await
-                .map_err(|_| {
-                anyhow::anyhow!(
-                    "Mitmproxy Redirector System Extension did not connect within {}s.\n\
-                     \n\
-                     Common causes:\n\
-                     • A stuck redirector process from a prior Tapsmith session is wedging the SE.\n\
-                     • The macOS host is under heavy load (load average > 10).\n\
-                     • The SE got into a bad state after a macOS update or long uptime.\n\
-                     \n\
-                     Quick fixes (in order):\n\
-                     \x20\x201. pkill -9 -f 'Mitmproxy Redirector' && rm -f /tmp/tapsmith-redirector-*.sock\n\
-                     \x20\x202. Restart tapsmith-core and re-run `tapsmith test`.\n\
-                     \x20\x203. If it still times out, reboot macOS.\n\
-                     \n\
-                     See: docs/ios-network-capture.md#se-control-channel-timeout",
-                    CONTROL_CHANNEL_TIMEOUT.as_secs()
-                )
-            })?
-            .context("accepting System Extension control channel")?;
-            debug!("System Extension control channel connected");
-
-            let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
-            send_intercept_conf(&mut control, &udid, &initial_pids)
-                .await
-                .context("sending initial InterceptConf")?;
-            debug!(pids = initial_pids.len(), "initial InterceptConf accepted");
-            Ok::<_, anyhow::Error>(control)
-        }
-        .await;
-        let control = match connected {
+        let wait = control_channel_wait_for(NE_START_BUDGET.saturating_sub(started.elapsed()));
+        let control_stream = match timeout(wait.wait, listener.accept()).await {
+            Ok(Ok((stream, _))) => stream,
+            Ok(Err(e)) => {
+                launch_cleanup.stop().await;
+                return Err(anyhow::Error::new(e)
+                    .context("accepting System Extension control channel")
+                    .into());
+            }
+            Err(_) => {
+                // Late, not necessarily dead: under load the extension can
+                // dial back seconds after this. Keep the listener and leave
+                // the launcher to finish, so a later start can take the
+                // session over (`resume`).
+                warn!(
+                    waited_s = wait.wait.as_secs_f64(),
+                    load1 = ?wait.load1,
+                    cpus = wait.cpus,
+                    listener = %listener_path.display(),
+                    "Mitmproxy Redirector System Extension did not connect in time; keeping the launch for a late connect"
+                );
+                let launcher = launch_cleanup.disarm();
+                // Release the launch lock only once this launcher is gone, as
+                // after a success: stop it if it has not exited by itself, so
+                // the next daemon's launch never overlaps it.
+                let launcher_abort = launcher.abort_handle();
+                tokio::spawn(async move {
+                    if timeout(LAUNCHER_EXIT_WAIT, launcher_done_rx).await.is_err() {
+                        launcher_abort.abort();
+                    }
+                    tokio::time::sleep(LAUNCH_LOCK_GRACE).await;
+                    drop(launch_lock);
+                });
+                let pending = PendingRedirect {
+                    listener: Some(listener),
+                    listener_path,
+                    launcher: Some(launcher),
+                    udid,
+                    since: Instant::now(),
+                };
+                return Err(StartError {
+                    error: pending.timeout_error(),
+                    pending: Some(pending),
+                });
+            }
+        };
+        debug!("System Extension control channel connected");
+        let control = match handshake(control_stream, &udid, &initial_pids).await {
             Ok(control) => control,
             Err(e) => {
                 launch_cleanup.stop().await;
-                return Err(e);
+                return Err(e.into());
             }
         };
         let launcher_handle = launch_cleanup.disarm();
@@ -663,12 +921,82 @@ impl IosRedirect {
             });
         }
 
+        Ok(Self::assemble(
+            listener,
+            listener_path,
+            launcher_handle,
+            control,
+            udid,
+            initial_pids,
+            proxy_state,
+            mitm_ca,
+        ))
+    }
+
+    /// Take over a launch whose extension did not dial back in time
+    /// ([`PendingRedirect`]), waiting up to `wait` for the dial-back. On a
+    /// timeout the launch is handed back, still pending, in the error.
+    pub async fn resume(
+        pending: PendingRedirect,
+        wait: Duration,
+        proxy_state: Arc<Mutex<ProxyState>>,
+        mitm_ca: Arc<MitmAuthority>,
+    ) -> std::result::Result<Self, StartError> {
+        let control_stream = match pending.accept(wait).await {
+            None => {
+                return Err(StartError {
+                    error: pending.timeout_error(),
+                    pending: Some(pending),
+                })
+            }
+            Some(Err(e)) => {
+                return Err(anyhow::Error::new(e)
+                    .context("accepting System Extension control channel")
+                    .into())
+            }
+            Some(Ok(stream)) => stream,
+        };
+        info!(
+            late_by_s = pending.age().as_secs_f64(),
+            udid = %pending.udid,
+            "Mitmproxy Redirector System Extension connected late; network capture recovered"
+        );
+        // The simulator's processes may have changed since the launch.
+        let pids = simulator_processes::resolve_simulator_pids(&pending.udid)
+            .await
+            .context("resolving simulator PID set")?;
+        let control = handshake(control_stream, &pending.udid, &pids).await?;
+        let udid = pending.udid.clone();
+        let (listener, listener_path, launcher_handle) = pending.into_parts();
+        Ok(Self::assemble(
+            listener,
+            listener_path,
+            launcher_handle,
+            control,
+            udid,
+            pids,
+            proxy_state,
+            mitm_ca,
+        ))
+    }
+
+    /// Start the session's background tasks over a connected control channel.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        listener: UnixListener,
+        listener_path: PathBuf,
+        launcher_handle: JoinHandle<()>,
+        control: Framed<UnixStream, LengthDelimitedCodec>,
+        udid: String,
+        initial_pids: Vec<u32>,
+        proxy_state: Arc<Mutex<ProxyState>>,
+        mitm_ca: Arc<MitmAuthority>,
+    ) -> Self {
         // Refresh task owns the control channel for the remainder of the
         // session. It polls `ps` every PID_REFRESH_INTERVAL and writes a
         // new InterceptConf iff the PID set has changed.
-        let refresh_udid = udid.clone();
         let refresh_handle = tokio::spawn(async move {
-            pid_refresh_loop(refresh_udid, control, initial_pids).await;
+            pid_refresh_loop(udid, control, initial_pids).await;
         });
 
         // Accept task owns the listener and spawns one per-flow handler
@@ -680,14 +1008,28 @@ impl IosRedirect {
             accept_flow_loop(listener, proxy_state, mitm_ca, flow_tasks_for_accept).await;
         });
 
-        Ok(Self {
+        Self {
             accept_handle,
             refresh_handle,
             launcher_handle,
             flow_tasks,
             listener_path,
-        })
+        }
     }
+}
+
+/// Send the first `InterceptConf` over a freshly connected control channel.
+async fn handshake(
+    stream: UnixStream,
+    udid: &str,
+    pids: &[u32],
+) -> Result<Framed<UnixStream, LengthDelimitedCodec>> {
+    let mut control = Framed::new(stream, LengthDelimitedCodec::new());
+    send_intercept_conf(&mut control, udid, pids)
+        .await
+        .context("sending initial InterceptConf")?;
+    debug!(pids = pids.len(), "initial InterceptConf accepted");
+    Ok(control)
 }
 
 impl Drop for IosRedirect {
@@ -1401,6 +1743,162 @@ mod launch_lock_tests {
         tokio::time::sleep(Duration::from_millis(150)).await;
         drop(first);
         assert!(waiter.await.unwrap().is_some());
+    }
+}
+
+#[cfg(test)]
+mod late_connect_tests {
+    use super::*;
+
+    const SECS: fn(u64) -> Duration = Duration::from_secs;
+
+    #[test]
+    fn the_dial_back_wait_grows_with_load_up_to_its_cap() {
+        let budget = NE_START_BUDGET;
+        // Idle, or load unknown: the base wait.
+        assert_eq!(control_channel_wait(Some(0.5), 8, budget), SECS(10));
+        assert_eq!(control_channel_wait(None, 8, budget), SECS(10));
+        assert_eq!(control_channel_wait(Some(f64::NAN), 8, budget), SECS(10));
+        assert_eq!(control_channel_wait(Some(8.0), 0, budget), SECS(10));
+        // One and a half runnable threads per CPU: half again.
+        assert_eq!(control_channel_wait(Some(12.0), 8, budget), SECS(15));
+        // The onboarding pass's load (hundreds on a 12-core Mac): the cap.
+        assert_eq!(control_channel_wait(Some(950.0), 12, budget), SECS(20));
+    }
+
+    #[test]
+    fn the_dial_back_wait_fits_the_start_budget_but_never_drops_below_the_base() {
+        // 25 s already spent waiting for other daemons' launches.
+        assert_eq!(control_channel_wait(Some(950.0), 12, SECS(15)), SECS(15));
+        assert_eq!(control_channel_wait(Some(950.0), 12, SECS(2)), SECS(10));
+        assert_eq!(
+            control_channel_wait(Some(950.0), 12, Duration::ZERO),
+            SECS(10)
+        );
+    }
+
+    #[test]
+    fn a_start_polls_a_young_pending_launch_and_relaunches_after_the_retry_window() {
+        let retry = SECS(60);
+        let full = SECS(20);
+        // Failure cached: only a short poll, so a test is not slowed.
+        assert_eq!(
+            ne_attempt(Some((true, SECS(5))), true, retry, full),
+            NeAttempt::Resume(LATE_CONNECT_POLL)
+        );
+        // Nothing cached (a multi-device member): wait the full dial-back on
+        // it rather than relaunch while the extension may be on its way.
+        assert_eq!(
+            ne_attempt(Some((true, SECS(5))), false, retry, full),
+            NeAttempt::Resume(full)
+        );
+        // Too old: a fresh launch (or the cache, while it lasts).
+        assert_eq!(
+            ne_attempt(Some((true, retry)), false, retry, full),
+            NeAttempt::Launch
+        );
+        assert_eq!(
+            ne_attempt(Some((true, retry)), true, retry, full),
+            NeAttempt::UseCached
+        );
+        // Another simulator's launch is never taken over.
+        assert_eq!(
+            ne_attempt(Some((false, SECS(1))), false, retry, full),
+            NeAttempt::Launch
+        );
+        assert_eq!(
+            ne_attempt(Some((false, SECS(1))), true, retry, full),
+            NeAttempt::UseCached
+        );
+        // Nothing pending.
+        assert_eq!(ne_attempt(None, true, retry, full), NeAttempt::UseCached);
+        assert_eq!(ne_attempt(None, false, retry, full), NeAttempt::Launch);
+    }
+
+    fn pending_at(path: &Path) -> (PendingRedirect, tokio::sync::oneshot::Receiver<()>) {
+        let listener = UnixListener::bind(path).unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let launcher = tokio::spawn(async move {
+            let _alive = tx;
+            std::future::pending::<()>().await;
+        });
+        (
+            PendingRedirect {
+                listener: Some(listener),
+                listener_path: path.to_path_buf(),
+                launcher: Some(launcher),
+                udid: "SIM-1".into(),
+                since: Instant::now(),
+            },
+            rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_dial_back_after_the_wait_is_still_taken_by_a_later_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.sock");
+        let (pending, _launcher) = pending_at(&path);
+        // The start's wait runs out with nothing connected: still pending.
+        assert!(pending.accept(Duration::from_millis(50)).await.is_none());
+        // The extension dials back late, while nobody is accepting.
+        let mut extension = UnixStream::connect(&path).await.unwrap();
+        // The next start's short poll takes it.
+        let mut control = pending
+            .accept(LATE_CONNECT_POLL)
+            .await
+            .expect("late dial-back not taken")
+            .unwrap();
+        use tokio::io::AsyncWriteExt;
+        control.write_all(b"conf").await.unwrap();
+        let mut buf = [0u8; 4];
+        extension.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"conf");
+        // Taken over by a session, the socket and launcher stay up.
+        let (_listener, socket, launcher) = pending.into_parts();
+        assert!(socket.exists());
+        assert!(!launcher.is_finished());
+        launcher.abort();
+    }
+
+    #[tokio::test]
+    async fn dropping_a_pending_launch_stops_its_launcher_and_removes_its_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.sock");
+        let (pending, launcher) = pending_at(&path);
+        assert!(path.exists());
+        drop(pending);
+        assert!(
+            timeout(Duration::from_secs(2), launcher)
+                .await
+                .unwrap()
+                .is_err(),
+            "launcher still running"
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_timeout_message_is_one_line_and_scoped_to_this_daemon() {
+        let msg = ControlChannelTimeout {
+            socket: PathBuf::from("/tmp/tapsmith-redirector-4242.sock"),
+        }
+        .to_string();
+        assert!(!msg.contains('\n'), "{msg}");
+        assert!(
+            msg.contains("pkill -9 -f '/tmp/tapsmith-redirector-4242.sock'"),
+            "{msg}"
+        );
+        // Nothing that would stop other sessions' redirectors.
+        assert!(!msg.contains("pkill -9 -f 'Mitmproxy Redirector'"), "{msg}");
+        assert!(!msg.contains("*.sock"), "{msg}");
+        // Doctor reports an enabled extension as fine, so it is not suggested.
+        assert!(!msg.contains("doctor"), "{msg}");
+        let err = StartError::from(anyhow::Error::new(ControlChannelTimeout {
+            socket: PathBuf::from("/tmp/x.sock"),
+        }));
+        assert!(err.is_connect_timeout());
+        assert!(!StartError::from(anyhow::anyhow!("not approved")).is_connect_timeout());
     }
 }
 

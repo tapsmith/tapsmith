@@ -241,6 +241,12 @@ pub struct TapsmithServiceImpl {
     /// (~10s × N tests). Cleared when the redirector connects.
     #[cfg(target_os = "macos")]
     ios_ne_unavailable: Arc<RwLock<Option<ios::system_proxy::NeFailure>>>,
+    /// The redirector launch whose extension did not dial back in time, kept
+    /// so the next `start_network_capture` can take a late dial-back and
+    /// recover capture (`ios_redirect::PendingRedirect`). Only kept while
+    /// capture is refused for want of it.
+    #[cfg(target_os = "macos")]
+    ios_ne_pending: Arc<RwLock<Option<crate::ios_redirect::PendingRedirect>>>,
     /// Session cache of `simctl get_app_container` results keyed by
     /// `udid\0bundle_id`. The data-container path of an installed app is
     /// stable (it changes only on reinstall) and is plain host filesystem —
@@ -529,6 +535,8 @@ impl TapsmithServiceImpl {
             proxy_start_warnings: Arc::new(RwLock::new(Vec::new())),
             #[cfg(target_os = "macos")]
             ios_ne_unavailable: Arc::new(RwLock::new(None)),
+            #[cfg(target_os = "macos")]
+            ios_ne_pending: Arc::new(RwLock::new(None)),
             ios_app_container_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
             ios_ca_cert_installed: Arc::new(RwLock::new(std::collections::HashSet::new())),
             ios_agent_config: Arc::new(RwLock::new(None)),
