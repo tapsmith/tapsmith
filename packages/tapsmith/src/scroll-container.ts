@@ -109,44 +109,60 @@ export function pickScrollRegion(xml: string, target?: Rect, previous?: Rect): S
 }
 
 /**
- * The part of the scroll container holding `target` where its content shows:
- * the region of the nearest scrollable around it (`undefined` when that one
- * is too small or off screen) less a bar drawn over one of its edges — a tab bar, toolbar
- * or header the app lays over the list, that content scrolls under.
- * `undefined` when `target` matches nothing in the dump or no scrollable
- * holds it.
+ * The part of the scroll container holding `target` where its content shows,
+ * and the axes that container scrolls along: its region less a bar drawn over
+ * one of its edges — a tab bar, toolbar or header the app lays over the list,
+ * that content scrolls under. `undefined` when `target` matches nothing in the
+ * dump or no scrollable holds it.
  *
- * A bar is an app element drawn over the container (after it, or a UIKit
- * bar), outside it, that lies
+ * The container is the nearest scrollable around the element that can bring
+ * it in: one the element lies inside, or one it reaches past along an axis
+ * that scrollable scrolls on. A nearer one too small to swipe in, or reached
+ * past only along an axis it does not scroll on (a carousel row below the
+ * list that holds it), gives way to the next one out. So a slow sideways drag
+ * never runs in a list that scrolls only up and down, where it is the edge
+ * swipe that pops the screen.
+ *
+ * A bar is an app element drawn over the container, outside it, that lies
  * across its top or bottom edge: at least half its width, at most a third of
  * its height, and with something named in it (a label, an id, text). That
  * leaves out what is drawn over the whole screen without hiding anything: a
  * React Native wrapper view, an empty toolbar host, a pointer-events-none
- * marker.
+ * marker. Drawn over it means after it in the tree, or a UIKit bar in the
+ * same screen (a navigation bar a table scrolls under is listed first); not
+ * the bars of a screen a sheet is presented over.
  */
 export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | undefined {
   const scan = scanScrollables(xml);
   if (!scan) return undefined;
   const { entries, region } = scan;
   const self = entries.filter((e) => !e.nonApp && e.bounds && sameFrame(e.bounds, target)).at(-1);
-  // The nearest scrollable around the element, only: a farther one may not
-  // scroll the way the element lies (a list holding a chip bar too small to
-  // swipe in), and a slow sideways drag in a list that scrolls only up and
-  // down is the edge swipe that pops the screen.
-  let holder = self?.parent;
-  while (holder && !(isScrollable(holder.node) && !holder.nonApp)) holder = holder.parent;
-  const container = holder && region(holder);
-  if (!self || !holder || !container) return undefined;
-  const list = holder;
+  if (!self) return undefined;
+  for (let a = self.parent; a; a = a.parent) {
+    if (!isScrollable(a.node) || a.nonApp) continue;
+    const container = region(a);
+    if (!container) continue;
+    const view: VisibleRegion = {
+      region: trimBars(a, container, self, entries),
+      // Judged without the element itself: one sticking out past the side of
+      // a list that scrolls up and down does not make it scroll sideways.
+      vertical: scrollsAlong(a, entries, 'vertical', self),
+      horizontal: scrollsAlong(a, entries, 'horizontal', self),
+    };
+    if (outsideRegion(target, view.region, view) || !outsideRegion(target, view.region)) return view;
+  }
+  return undefined;
+}
+
+/** `container`, the region of the scrollable `list`, less the bars drawn over its top or bottom edge. */
+function trimBars(list: Entry, container: Rect, self: Entry, entries: readonly Entry[]): Rect {
   const height = container.bottom - container.top;
   const width = container.right - container.left;
+  const middle = container.top + height / 2;
   const bars = entries.filter((c) => {
     const b = c.bounds;
     if (!b || c.nonApp || isAncestor(list, c) || isAncestor(c, list) || isAncestor(c, self)) return false;
-    // Drawn over the list: after it, or a UIKit bar, which UIKit draws over
-    // the content though XCUITest lists it first (a navigation bar a table
-    // scrolls under).
-    if (c.order <= list.order && !IOS_BAR_TYPES.has(c.node.attributes.get('type') ?? c.node.tagName)) return false;
+    if (c.order <= list.order && !sameScreenUIKitBar(c, list)) return false;
     return b.bottom - b.top <= height / 3 && named(c, entries);
   });
   // Trimmed until nothing more trims it: a bar stacked on another (a mini
@@ -161,21 +177,30 @@ export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | unde
       const across = intersect(b, r);
       if (!across || across.right - across.left < width / 2) continue;
       const h = b.bottom - b.top;
-      if (b.top > r.top + height / 2 && b.bottom >= r.bottom - h) {
+      if (b.top > middle && b.bottom >= r.bottom - h) {
         if (b.top - r.top >= MIN_REGION && b.top < r.bottom) r = { ...r, bottom: b.top };
-      } else if (b.bottom < r.top + height / 2 && b.top <= r.top + h) {
+      } else if (b.bottom < middle && b.top <= r.top + h) {
         if (r.bottom - b.bottom >= MIN_REGION && b.bottom > r.top) r = { ...r, top: b.bottom };
       }
     }
     if (r === before) break;
   }
-  return {
-    region: r,
-    // Judged without the element itself: one sticking out past the side of
-    // a list that scrolls up and down does not make it scroll sideways.
-    vertical: scrollsAlong(list, entries, 'vertical', self),
-    horizontal: scrollsAlong(list, entries, 'horizontal', self),
-  };
+  return r;
+}
+
+/**
+ * Whether `c` is a UIKit bar drawn over the content of its own container,
+ * which holds `list`: XCUITest lists a navigation bar before the table that
+ * scrolls under it. Not one whose container is the window or the
+ * application, which hold everything, including a sheet presented over the
+ * bar's screen (the agent's occlusion check draws the same line).
+ */
+function sameScreenUIKitBar(c: Entry, list: Entry): boolean {
+  if (!IOS_BAR_TYPES.has(c.node.attributes.get('type') ?? c.node.tagName)) return false;
+  const container = c.parent;
+  const type = container?.node.attributes.get('type') ?? container?.node.tagName;
+  if (!container || type === 'XCUIElementTypeWindow' || type === 'XCUIElementTypeApplication') return false;
+  return isAncestor(container, list);
 }
 
 /** {@link visibleRegionOf}'s answer: the region, and the axes its scrollable has content to scroll along. */
@@ -185,7 +210,7 @@ export interface VisibleRegion {
   horizontal: boolean;
 }
 
-/** UIKit bars, drawn over the content they sit by whatever their place in the tree. */
+/** UIKit bars, drawn over the content of their container whatever their place in the tree. */
 const IOS_BAR_TYPES: ReadonlySet<string> = new Set([
   'XCUIElementTypeNavigationBar',
   'XCUIElementTypeTabBar',

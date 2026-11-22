@@ -395,13 +395,41 @@ describe('visibleRegionOf', () => {
   });
 
   it('leaves out a UIKit navigation bar, which XCUITest lists before the table it is drawn over', () => {
-    const xml = ios(
-      el('NavigationBar', '[0,24][402,82]', 'label="Native Screens"'),
-      el('CollectionView', '[0,0][402,874]', '',
-        el('Cell', '[0,40][402,90]', 'label="Row 3"') + el('Cell', '[0,90][402,1400]', 'label="Rest"')),
-    );
+    const xml = ios(el('Other', '[0,0][402,874]', '',
+      el('NavigationBar', '[0,24][402,82]', 'label="Native Screens"') +
+      el('Other', '[0,0][402,874]', '', el('CollectionView', '[0,0][402,874]', '',
+        el('Cell', '[0,40][402,90]', 'label="Row 3"') + el('Cell', '[0,90][402,1400]', 'label="Rest"'))),
+    ));
     expect(visibleRegionOf(xml, { left: 0, top: 40, right: 402, bottom: 90 })?.region)
       .toEqual({ left: 0, top: 82, right: 402, bottom: 874 });
+  });
+
+  it('does not count the bars of a screen a sheet is presented over', () => {
+    // The tab bar of the screen under the sheet is still in the tree, in its
+    // own container; the sheet is drawn after it, at the window's level.
+    const xml = ios(
+      el('Other', '[0,0][402,874]', '',
+        el('Other', '[0,0][402,874]', '') + el('TabBar', '[0,790][402,874]', '', el('Button', '[0,790][201,874]', 'label="Home"'))),
+      el('Other', '[0,60][402,874]', '', el('Table', '[0,60][402,874]', '',
+        el('Cell', '[0,800][402,850]', 'label="Last row"') + el('Cell', '[0,850][402,1400]', 'label="More"'))),
+    );
+    const view = visibleRegionOf(xml, { left: 0, top: 800, right: 402, bottom: 850 });
+    expect(view?.region).toEqual({ left: 0, top: 60, right: 402, bottom: 874 });
+    expect(outsideRegion({ left: 0, top: 800, right: 402, bottom: 850 }, view!.region, view)).toBeUndefined();
+  });
+
+  it('judges a carousel card below the list by the list, which scrolls the way the card lies', () => {
+    const xml = ios(
+      el('ScrollView', '[0,70][402,800]', '',
+        el('Other', '[0,70][402,1400]', '',
+          el('ScrollView', '[0,780][402,900]', '',
+            el('Other', '[0,780][900,900]', '',
+              el('Button', '[16,790][200,890]', 'label="Card 1"') + el('Button', '[216,790][400,890]', 'label="Card 2"'))))),
+    );
+    const card = { left: 16, top: 790, right: 200, bottom: 890 };
+    const view = visibleRegionOf(xml, card);
+    expect(view?.region).toEqual({ left: 0, top: 70, right: 402, bottom: 800 });
+    expect(outsideRegion(card, view!.region, view)).toBe('down');
   });
 
   it('is only the nearest scrollable, never a farther one standing in for a chip bar too small to swipe in', () => {
