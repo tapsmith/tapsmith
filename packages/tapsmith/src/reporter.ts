@@ -7,7 +7,11 @@
  * can be provided as objects or npm packages.
  */
 
-import type { TapsmithConfig } from './config.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { suggestFrom, type TapsmithConfig } from './config.js';
+import { BUILT_IN_REPORTERS, parseReporterList } from './reporter-names.js';
 import type { TestResult, SuiteResult } from './runner.js';
 
 // ─── Reporter types ───
@@ -176,15 +180,38 @@ export class ReporterDispatcher implements TapsmithReporter {
 
 // ─── Reporter factory ───
 
+/** How `createReporters` finds custom reporter modules. */
+export interface CreateReportersOptions {
+  /** The base a relative custom-reporter path is resolved against: the config's `rootDir`. */
+  rootDir: string
+}
+
+/**
+ * A reporter that could not be created. `unknown`: no built-in reporter, file
+ * or package has that name, and the message is the whole story. `load-failed`:
+ * the custom reporter's module was found, but importing or constructing it
+ * threw; `cause` is that error, whose stack points into the user's code.
+ */
+export class ReporterLoadError extends Error {
+  readonly kind: 'unknown' | 'load-failed';
+
+  constructor(message: string, kind: 'unknown' | 'load-failed', options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'ReporterLoadError';
+    this.kind = kind;
+  }
+}
+
 export async function createReporters(
   config: ReporterConfig | undefined,
+  options: CreateReportersOptions,
 ): Promise<TapsmithReporter[]> {
   const descriptions = normalizeReporterConfig(config);
   const reporters: TapsmithReporter[] = [];
 
   for (const desc of descriptions) {
-    const [name, options] = typeof desc === 'string' ? [desc, {}] : desc;
-    reporters.push(await resolveReporter(name, options));
+    const [name, reporterOptions] = typeof desc === 'string' ? [desc, {}] : desc;
+    reporters.push(await resolveReporter(name, reporterOptions ?? {}, options.rootDir));
   }
 
   return reporters;
@@ -236,6 +263,7 @@ function isSingleTuple(config: ReporterConfig): boolean {
 async function resolveReporter(
   name: string,
   options: Record<string, unknown>,
+  rootDir: string,
 ): Promise<TapsmithReporter> {
   switch (name) {
     case 'list': {
@@ -270,19 +298,100 @@ async function resolveReporter(
       const { BlobReporter } = await import('./reporters/blob.js');
       return new BlobReporter(options);
     }
-    default: {
-      // Try loading as a module path (custom reporter)
-      try {
-        const mod = await import(name);
-        const ReporterClass = mod.default ?? mod;
-        if (typeof ReporterClass === 'function') {
-          return new ReporterClass(options);
-        }
-        // If it's already an object implementing the interface
-        return ReporterClass as TapsmithReporter;
-      } catch (err) {
-        throw new Error(`Unknown reporter "${name}": ${err}`);
-      }
-    }
+    default:
+      return loadCustomReporter(name, options, rootDir);
   }
+}
+
+const REPORTER_HOOKS = [
+  'onRunStart', 'onTestFileStart', 'onTestStart', 'onTestEnd', 'onTestFileEnd', 'onTestFileRetry', 'onRunEnd', 'onError',
+] as const satisfies readonly (keyof TapsmithReporter)[];
+
+/** A specifier that names a file rather than a package: `./r.ts`, `../r.js`, `/abs/r.mjs`, `file:…`. */
+function isPathSpecifier(name: string): boolean {
+  return name.startsWith('.') || name.startsWith('file:') || path.isAbsolute(name);
+}
+
+/** The package a bare specifier imports: `pkg/sub` → `pkg`, `@scope/pkg/sub` → `@scope/pkg`. */
+function packageNameOf(specifier: string): string {
+  const parts = specifier.split('/');
+  return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+}
+
+function unknownReporterMessage(name: string): string {
+  const suggestion = name.includes(',') ? undefined : suggestFrom(name, BUILT_IN_REPORTERS);
+  const head = `Unknown reporter "${name}"${suggestion ? ` (did you mean "${suggestion}"?)` : ''}.`;
+  const builtIns = `Built-in reporters: ${BUILT_IN_REPORTERS.join(', ')} — or the path or package name of a custom reporter module.`;
+  // `--reporter list,json` is split on the command line; a config string is
+  // one name, as in Playwright.
+  const names = parseReporterList(name);
+  const commaHint = names.length > 1
+    ? ` In the config, list each reporter on its own: reporter: [${names.map((n) => `['${n}']`).join(', ')}]`
+    : '';
+  return `${head} ${builtIns}${commaHint}`;
+}
+
+/**
+ * Whether an import failed because `specifier` itself is not installed, as
+ * opposed to a module it imports being missing (the reporter's own bug).
+ */
+function isMissingPackage(err: unknown, specifier: string): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') return false;
+  const message = err instanceof Error ? err.message : String(err);
+  const pkg = packageNameOf(specifier);
+  return message.includes(`'${pkg}'`) || message.includes(`"${pkg}"`);
+}
+
+/**
+ * Load a custom reporter: a file path (relative to `rootDir`, as other paths
+ * in the config are) or an installed package. Its default export is a class,
+ * constructed with the reporter's options, or a reporter object.
+ */
+async function loadCustomReporter(
+  name: string,
+  options: Record<string, unknown>,
+  rootDir: string,
+): Promise<TapsmithReporter> {
+  let specifier = name;
+  if (isPathSpecifier(name)) {
+    const file = name.startsWith('file:') ? fileURLToPath(name) : path.resolve(rootDir, name);
+    if (!fs.existsSync(file)) {
+      throw new ReporterLoadError(
+        `Reporter "${name}" not found: no file at ${file}. A relative reporter path is resolved against rootDir.`,
+        'unknown',
+      );
+    }
+    specifier = pathToFileURL(file).href;
+  }
+
+  let mod: Record<string, unknown>;
+  try {
+    mod = await import(specifier) as Record<string, unknown>;
+  } catch (err) {
+    if (!isPathSpecifier(name) && isMissingPackage(err, name)) {
+      throw new ReporterLoadError(unknownReporterMessage(name), 'unknown', { cause: err });
+    }
+    throw loadFailed(name, err);
+  }
+
+  // A module whose named exports are the hooks is a reporter object too.
+  const exported = mod.default ?? (REPORTER_HOOKS.some((hook) => typeof mod[hook] === 'function') ? mod : undefined);
+  if (exported === undefined || exported === null) {
+    throw new ReporterLoadError(
+      `Reporter "${name}" failed to load: its module has no default export (a reporter class or object).`,
+      'load-failed',
+    );
+  }
+  if (typeof exported !== 'function') return exported as TapsmithReporter;
+  try {
+    return new (exported as new (options: Record<string, unknown>) => TapsmithReporter)(options);
+  } catch (err) {
+    throw loadFailed(name, err);
+  }
+}
+
+function loadFailed(name: string, err: unknown): ReporterLoadError {
+  const message = err instanceof Error ? err.message : String(err);
+  return new ReporterLoadError(`Reporter "${name}" failed to load: ${message}`, 'load-failed', { cause: err });
 }

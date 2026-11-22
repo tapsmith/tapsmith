@@ -1,12 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   ReporterDispatcher,
+  ReporterLoadError,
   createReporters,
   type TapsmithReporter,
   type FullResult,
 } from '../reporter.js';
+import { parseReporterList } from '../reporter-names.js';
 import type { TapsmithConfig } from '../config.js';
 import type { TestResult } from '../runner.js';
+
+/** createReporters' options for built-in reporters, which take no path. */
+const OPTS = { rootDir: process.cwd() };
 
 // ─── Test data helpers ───
 
@@ -250,7 +258,7 @@ describe('createReporters', () => {
   // `reporter: ['html', CI ? { open: 'never' } : undefined]` — config
   // validation accepts it (PILOT-552), so it must create the reporter.
   it('creates a single [name, undefined] tuple with the reporter\'s default options', async () => {
-    const reporters = await createReporters(['dot', undefined] as unknown as TapsmithConfig['reporter']);
+    const reporters = await createReporters(['dot', undefined] as unknown as TapsmithConfig['reporter'], OPTS);
     expect(reporters.map((r) => r.constructor.name)).toEqual(['DotReporter']);
   });
 
@@ -258,7 +266,7 @@ describe('createReporters', () => {
     const origCI = process.env.CI;
     delete process.env.CI;
 
-    const reporters = await createReporters(undefined);
+    const reporters = await createReporters(undefined, OPTS);
     expect(reporters).toHaveLength(1);
     expect(reporters[0].constructor.name).toBe('ListReporter');
 
@@ -269,7 +277,7 @@ describe('createReporters', () => {
     const origCI = process.env.CI;
     process.env.CI = 'true';
 
-    const reporters = await createReporters(undefined);
+    const reporters = await createReporters(undefined, OPTS);
     expect(reporters).toHaveLength(1);
     expect(reporters[0].constructor.name).toBe('ListReporter');
 
@@ -281,19 +289,19 @@ describe('createReporters', () => {
   });
 
   it('creates a single reporter from a string', async () => {
-    const reporters = await createReporters('dot');
+    const reporters = await createReporters('dot', OPTS);
     expect(reporters).toHaveLength(1);
     expect(reporters[0].constructor.name).toBe('DotReporter');
   });
 
   it('creates a reporter with options from a tuple', async () => {
-    const reporters = await createReporters(['json', { outputFile: 'custom.json' }]);
+    const reporters = await createReporters(['json', { outputFile: 'custom.json' }], OPTS);
     expect(reporters).toHaveLength(1);
     expect(reporters[0].constructor.name).toBe('JsonReporter');
   });
 
   it('creates multiple reporters from an array', async () => {
-    const reporters = await createReporters(['list', 'dot']);
+    const reporters = await createReporters(['list', 'dot'], OPTS);
     expect(reporters).toHaveLength(2);
     expect(reporters[0].constructor.name).toBe('ListReporter');
     expect(reporters[1].constructor.name).toBe('DotReporter');
@@ -303,7 +311,7 @@ describe('createReporters', () => {
     const reporters = await createReporters([
       'list',
       ['json', { outputFile: 'out.json' }],
-    ]);
+    ], OPTS);
     expect(reporters).toHaveLength(2);
     expect(reporters[0].constructor.name).toBe('ListReporter');
     expect(reporters[1].constructor.name).toBe('JsonReporter');
@@ -312,15 +320,120 @@ describe('createReporters', () => {
   it('creates all built-in reporter types', async () => {
     const names = ['list', 'line', 'dot', 'json', 'junit', 'html', 'github', 'blob'];
     for (const name of names) {
-      const reporters = await createReporters(name);
+      const reporters = await createReporters(name, OPTS);
       expect(reporters).toHaveLength(1);
     }
   });
 
-  it('throws for unknown reporter name', async () => {
-    await expect(createReporters('nonexistent-reporter-xyz')).rejects.toThrow(
-      /Unknown reporter "nonexistent-reporter-xyz"/,
+});
+
+// ─── Loading custom and unknown reporters ───
+
+describe('createReporters: unknown and custom reporters', () => {
+  const BUILT_INS = 'Built-in reporters: list, line, dot, json, junit, html, github, blob';
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-reporters-'));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function loadError(config: TapsmithConfig['reporter']): Promise<ReporterLoadError> {
+    const err = await createReporters(config, { rootDir: dir }).then(
+      () => { throw new Error('expected createReporters to reject'); },
+      (e: unknown) => e,
     );
+    expect(err).toBeInstanceOf(ReporterLoadError);
+    return err as ReporterLoadError;
+  }
+
+  it('names the built-in reporters for a name that is neither built in nor installed', async () => {
+    const err = await loadError('nonexistent-reporter-xyz');
+    expect(err.message).toBe(
+      `Unknown reporter "nonexistent-reporter-xyz". ${BUILT_INS} — or the path or package name of a custom reporter module.`,
+    );
+    expect(err.kind).toBe('unknown');
+  });
+
+  it('suggests the built-in reporter a misspelled name meant', async () => {
+    const err = await loadError([['htm', {}]]);
+    expect(err.message).toBe(
+      `Unknown reporter "htm" (did you mean "html"?). ${BUILT_INS} — or the path or package name of a custom reporter module.`,
+    );
+  });
+
+  it('says to list a comma-separated config string as separate reporters', async () => {
+    const err = await loadError('list,json');
+    expect(err.message).toContain('Unknown reporter "list,json"');
+    expect(err.message).toContain('In the config, list each reporter on its own: reporter: [[\'list\'], [\'json\']]');
+  });
+
+  it('loads a custom reporter by a path relative to rootDir', async () => {
+    fs.writeFileSync(path.join(dir, 'my-reporter.mjs'), 'export default class MyReporter { constructor(o) { this.options = o; } }\n');
+    const reporters = await createReporters([['./my-reporter.mjs', { flag: 1 }]], { rootDir: dir });
+    expect(reporters.map((r) => r.constructor.name)).toEqual(['MyReporter']);
+    expect((reporters[0] as unknown as { options: unknown }).options).toEqual({ flag: 1 });
+  });
+
+  it('loads a custom reporter by an absolute path, and one exported as an object', async () => {
+    const file = path.join(dir, 'object-reporter.mjs');
+    fs.writeFileSync(file, 'export default { name: "object-reporter", onRunEnd() {} };\n');
+    const reporters = await createReporters(file, { rootDir: '/' });
+    expect((reporters[0] as unknown as { name: string }).name).toBe('object-reporter');
+  });
+
+  it('names the file it looked for when a reporter path leads nowhere', async () => {
+    const err = await loadError('./missing-reporter.mjs');
+    expect(err.kind).toBe('unknown');
+    expect(err.message).toBe(
+      `Reporter "./missing-reporter.mjs" not found: no file at ${path.join(dir, 'missing-reporter.mjs')}. `
+      + 'A relative reporter path is resolved against rootDir.',
+    );
+  });
+
+  it('reports a custom reporter that throws on import as that failure, with its error as the cause', async () => {
+    fs.writeFileSync(path.join(dir, 'broken.mjs'), 'throw new Error("reporter blew up");\n');
+    const err = await loadError('./broken.mjs');
+    expect(err.kind).toBe('load-failed');
+    expect(err.message).toBe('Reporter "./broken.mjs" failed to load: reporter blew up');
+    expect((err.cause as Error).message).toBe('reporter blew up');
+  });
+
+  it('reports a custom reporter whose constructor throws as a load failure', async () => {
+    fs.writeFileSync(path.join(dir, 'ctor.mjs'), 'export default class R { constructor() { throw new Error("bad options"); } }\n');
+    const err = await loadError('./ctor.mjs');
+    expect(err.kind).toBe('load-failed');
+    expect(err.message).toBe('Reporter "./ctor.mjs" failed to load: bad options');
+  });
+
+  it('reports a custom reporter missing a dependency of its own as a load failure, not an unknown reporter', async () => {
+    fs.writeFileSync(path.join(dir, 'dep.mjs'), 'import "some-package-that-is-not-installed-xyz";\nexport default class R {}\n');
+    const err = await loadError('./dep.mjs');
+    expect(err.kind).toBe('load-failed');
+    expect(err.message).toContain('Reporter "./dep.mjs" failed to load:');
+    expect(err.message).toContain('some-package-that-is-not-installed-xyz');
+  });
+
+  it('refuses a module that exports no reporter', async () => {
+    fs.writeFileSync(path.join(dir, 'empty.mjs'), 'export const x = 1;\n');
+    const err = await loadError('./empty.mjs');
+    expect(err.kind).toBe('load-failed');
+    expect(err.message).toBe('Reporter "./empty.mjs" failed to load: its module has no default export (a reporter class or object).');
+  });
+});
+
+describe('parseReporterList', () => {
+  it('splits a comma-separated list, trimming spaces and dropping empty entries', () => {
+    expect(parseReporterList('list,junit')).toEqual(['list', 'junit']);
+    expect(parseReporterList(' list , html ,')).toEqual(['list', 'html']);
+    expect(parseReporterList('json')).toEqual(['json']);
+  });
+
+  it('returns an empty list when no name is given', () => {
+    expect(parseReporterList(',')).toEqual([]);
+    expect(parseReporterList('')).toEqual([]);
   });
 });
 
@@ -835,6 +948,21 @@ describe('GitHubActionsReporter', () => {
 });
 
 describe('JsonReporter', () => {
+  it('says where it wrote the report', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-json-'));
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const { JsonReporter } = await import('../reporters/json.js');
+      const reporter = new JsonReporter({ outputFile: 'out/results.json' });
+      reporter.onRunStart!(makeConfig({ rootDir: tmpDir }), 1);
+      await reporter.onRunEnd!(makeFullResult());
+      expect(stderr.mock.calls.map((c) => String(c[0]))).toContain(`JSON report written to ${path.join(tmpDir, 'out/results.json')}\n`);
+    } finally {
+      stderr.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
   it('writes JSON report to file on onRunEnd', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
@@ -939,6 +1067,21 @@ describe('JsonReporter', () => {
 });
 
 describe('JUnitReporter', () => {
+  it('says where it wrote the report', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-junit-'));
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const { JUnitReporter } = await import('../reporters/junit.js');
+      const reporter = new JUnitReporter({ outputFile: 'out/results.xml' });
+      reporter.onRunStart!(makeConfig({ rootDir: tmpDir }), 1);
+      await reporter.onRunEnd!(makeFullResult());
+      expect(stderr.mock.calls.map((c) => String(c[0]))).toContain(`JUnit report written to ${path.join(tmpDir, 'out/results.xml')}\n`);
+    } finally {
+      stderr.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
   it('writes JUnit XML to file on onRunEnd', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');

@@ -959,7 +959,7 @@ function describeValue(value: unknown): string {
  * The candidate `input` most likely meant: a case-insensitive match, else the
  * closest within a small edit distance (`timout` → `timeout`, `apkk` → `apk`).
  */
-function suggestFrom(input: string, candidates: readonly string[]): string | undefined {
+export function suggestFrom(input: string, candidates: readonly string[]): string | undefined {
   const lower = input.toLowerCase();
   const sameCase = candidates.find((c) => c.toLowerCase() === lower);
   if (sameCase) return sameCase;

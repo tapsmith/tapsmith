@@ -70,7 +70,7 @@ describe('tapsmith test', () => {
       device: 'emulator-5554',
       workers: 2,
       config: 'x.config.mjs',
-      reporter: 'json',
+      reporter: ['json'],
       uiDevUrl: 'http://localhost:5173',
       forceInstall: true,
       watch: true,
@@ -435,6 +435,24 @@ describe('commands', () => {
     expect(args.trace).toBeUndefined();
     expect(args.video).toBeUndefined();
     expect(args.uiDevUrl).toBeUndefined();
+  });
+
+  it('test --reporter takes a comma-separated list, as in Playwright, and adds up repeated flags', async () => {
+    expect((await testArgs(['--reporter', 'list,junit'])).reporter).toEqual(['list', 'junit']);
+    expect((await testArgs(['--reporter=list, html ,'])).reporter).toEqual(['list', 'html']);
+    expect((await testArgs(['--reporter', 'list', '--reporter', 'html,json'])).reporter).toEqual(['list', 'html', 'json']);
+    // An empty value still means unset, even after a named one.
+    expect((await testArgs(['--reporter', 'list', '--reporter='])).reporter).toEqual(['list']);
+  });
+
+  it('test --reporter with only commas is an error', async () => {
+    const h = await usageError(['test', '--reporter', ',']);
+    expect(h.err).toContain('--reporter needs at least one reporter name, e.g. --reporter list,html');
+  });
+
+  it('merge-reports adds up repeated --reporter flags', async () => {
+    expect((await run(['merge-reports', '--reporter', 'html', '--reporter', 'junit'])).calls)
+      .toEqual([['mergeReports', { dir: undefined, config: undefined, reporter: 'html,junit' }]]);
   });
 
   it('a short-flag bundle in = form gives the value to the last flag', async () => {

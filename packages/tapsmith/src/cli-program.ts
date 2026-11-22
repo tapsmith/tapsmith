@@ -26,6 +26,7 @@
 import { Argument, Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 import { DEFAULT_API_LEVEL, DEFAULT_DEVICE_PROFILE, defaultAbi } from './avd-defaults.js';
 import { formatJson, jsonError } from './cli-json.js';
+import { BUILT_IN_REPORTERS, parseReporterList } from './reporter-names.js';
 import { TELEMETRY_DOCS_URL } from './telemetry.js';
 import { TRACE_MODES, type TraceMode } from './trace/types.js';
 import { VIDEO_MODES, type VideoMode } from './video/types.js';
@@ -50,7 +51,8 @@ export interface TestCommandArgs {
   tsxReexec: boolean;
   grep?: RegExp;
   grepInvert?: RegExp;
-  reporter?: string;
+  /** `--reporter`, comma-separated and repeatable: the names in order. */
+  reporter?: string[];
   project?: string[];
 }
 
@@ -221,6 +223,25 @@ function nonEmpty(flag: string) {
   };
 }
 
+/**
+ * `tapsmith test --reporter list,junit`, as in Playwright; repeated flags add
+ * up. An empty value means not given, like the other value flags' (`--reporter
+ * "$REPORTER"` with an empty variable keeps the config's reporters).
+ */
+function collectReporters(value: string, previous: string[] | '' | undefined): string[] | undefined {
+  // Commander stores an undefined result as '', which the action reads as unset.
+  const sofar = Array.isArray(previous) ? previous : undefined;
+  if (value === '') return sofar;
+  const names = parseReporterList(value);
+  if (names.length === 0) throw new InvalidArgumentError('--reporter needs at least one reporter name, e.g. --reporter list,html');
+  return [...(sofar ?? []), ...names];
+}
+
+/** `merge-reports --reporter`: repeated flags join into one comma-separated list, which the command checks. */
+function joinReporters(value: string, previous: string | undefined): string {
+  return previous === undefined ? value : `${previous},${value}`;
+}
+
 function collectProject(value: string, previous: string[] | undefined): string[] {
   if (!value) throw new InvalidArgumentError('--project needs a project name.');
   return [...(previous ?? []), value];
@@ -384,7 +405,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .addOption(configOption())
     .option('-g, --grep <pattern>', 'Only run tests whose full name matches this regex', regex('--grep'))
     .option('--grep-invert <pattern>', 'Skip tests whose full name matches this regex', regex('--grep-invert'))
-    .option('--reporter <name>', 'Reporter: list, line, dot, json, junit, html, github, blob')
+    .option('--reporter <names>', `Reporters to use, comma-separated, in place of the config's: ${BUILT_IN_REPORTERS.join(', ')}, or a custom reporter's path or package`, collectReporters)
     .option('--project <name>', 'Only run this project from the config (repeatable; dependencies run too)', collectProject)
     .option('--force-install', 'Reinstall the app even if it is already installed', false)
     .addOption(new Option(TSX_REEXEC_FLAG).hideHelp().default(false))
@@ -409,7 +430,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
         tsxReexec: opts.__tsxReexec as boolean,
         grep: (opts.grep as RegExp | '' | undefined) || undefined,
         grepInvert: (opts.grepInvert as RegExp | '' | undefined) || undefined,
-        reporter: (opts.reporter as string | undefined) || undefined,
+        reporter: (opts.reporter as string[] | '' | undefined) || undefined,
         project: opts.project as string[] | undefined,
       };
       await act('test', handlers.test)(args);
@@ -433,7 +454,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .description('Merge blob reports from sharded runs')
     .argument('[dir]', 'Blob report directory (default: blob-report)')
     .addOption(configOption())
-    .option('--reporter <names>', 'Reporters to use, comma-separated, in place of the config\'s (default: the config\'s, or list,html when it sets none besides blob)')
+    .option('--reporter <names>', 'Reporters to use, comma-separated, in place of the config\'s (default: the config\'s, or list,html when it sets none besides blob)', joinReporters)
     .action((dir: string | undefined, opts: { config?: string; reporter?: string }) =>
       act('merge-reports', handlers.mergeReports)({ dir, config: opts.config, reporter: opts.reporter }));
 

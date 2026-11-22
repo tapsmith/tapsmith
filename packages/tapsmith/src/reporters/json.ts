@@ -89,6 +89,7 @@ export class JsonReporter implements TapsmithReporter {
     const outputPath = path.resolve(this._config?.rootDir ?? process.cwd(), this._outputFile);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
+    process.stderr.write(`JSON report written to ${outputPath}\n`);
   }
 }
 

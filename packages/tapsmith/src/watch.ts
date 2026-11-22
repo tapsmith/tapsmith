@@ -913,7 +913,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     const allResults: TestResult[] = [];
     const allSuites: SuiteResult[] = [];
 
-    const reporters = await createReporters(ctx.config.reporter);
+    const reporters = await createReporters(ctx.config.reporter, { rootDir: ctx.config.rootDir });
     const reporter = new ReporterDispatcher(reporters);
 
     const totalFiles = [...state.knownFiles].length;
@@ -1129,7 +1129,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     const allResults: TestResult[] = [];
     const allSuites: SuiteResult[] = [];
 
-    const reporters = await createReporters(ctx.config.reporter);
+    const reporters = await createReporters(ctx.config.reporter, { rootDir: ctx.config.rootDir });
     const reporter = new ReporterDispatcher(reporters);
 
     // Expand each file into one TaggedFile per matching project. A single
