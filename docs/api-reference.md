@@ -2499,13 +2499,9 @@ Configure reporters in `tapsmith.config.ts`:
 import { defineConfig } from "tapsmith";
 
 export default defineConfig({
-  // Single reporter
-  reporter: "list",
-
-  // Reporter with options
-  reporter: ["json", { outputFile: "results.json" }],
-
-  // Multiple reporters
+  // One reporter:              reporter: "list",
+  // One reporter with options: reporter: ["json", { outputFile: "results.json" }],
+  // Several reporters:
   reporter: ["list", ["json", { outputFile: "results.json" }]],
 });
 ```
@@ -2572,11 +2568,10 @@ another's blob. Playwright behaves the same way.
 Implement the `TapsmithReporter` interface:
 
 ```typescript
-import type { TapsmithReporter, FullResult, RunStartInfo } from "tapsmith";
-import type { TestResult } from "tapsmith";
+import type { TapsmithReporter, TapsmithConfig, FullResult, RunStartInfo, TestResult } from "tapsmith";
 
 class MyReporter implements TapsmithReporter {
-  onRunStart(config, fileCount, info?: RunStartInfo) {
+  onRunStart(config: TapsmithConfig, fileCount: number, info?: RunStartInfo) {
     // `tapsmith merge-reports` runs no tests, so it has no file count.
     if (!info?.merge) console.log(`Running ${fileCount} test files`);
   }

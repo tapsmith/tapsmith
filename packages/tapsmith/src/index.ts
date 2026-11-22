@@ -12,7 +12,7 @@ import './module-format-guard.js';
 export { Device, type SwipeOptions, type AppResetOptions, type AppResetResult } from './device.js';
 
 // Device management types
-export type { LaunchAppOptions, OpenDeepLinkOptions, AppState, Orientation, ColorScheme } from './grpc-client.js';
+export type { LaunchAppOptions, OpenDeepLinkOptions, AppState, Orientation, ColorScheme, ElementInfo, ScreenshotResponse } from './grpc-client.js';
 
 // ElementHandle
 export {
@@ -72,6 +72,7 @@ export {
 
 // Config
 export { defineConfig, loadConfig, type TapsmithConfig, type ProjectConfig, type ScreenshotMode, type TraceMode, type TraceConfig, type AppResetMode, type AppResetScope, type EmulatorLaunchOptions, type ReducedMotion } from './config.js';
+export type { VideoMode, VideoConfig } from './video/types.js';
 
 // Reporters
 export {

@@ -157,6 +157,7 @@ const API_MISMATCH = new Map<number, string>([
   [2445, 'protected member'],
   [2322, 'value is not assignable (a wrong option value)'],
   [2820, 'value is not assignable (did you mean …)'],
+  [1117, 'an object literal repeats a key (only the last one counts)'],
 ]);
 
 /**
