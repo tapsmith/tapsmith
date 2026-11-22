@@ -1296,7 +1296,7 @@ async function openStartRoute(
     throw new Error(
       `appResetRoute '${route}' is a path, which Tapsmith resolves against the URL prefix that `
         + '@tapsmith/react-native publishes in its hooks marker, but the app shows no hooks marker. '
-        + `Mount <TapsmithTestHooks /> in the app, or give the full deep link instead (e.g. appResetRoute: '${example}').`,
+        + `Wrap the app's root navigator in <TapsmithTestHooks>, or give the full deep link instead (e.g. appResetRoute: '${example}').`,
     );
   }
   const link = url;
