@@ -232,6 +232,15 @@ describe('resetKeptScreens', () => {
     ])).toBe(true);
   });
 
+  it('answers for a reset satisfied by a preparation that says how it left the app', () => {
+    const prepared = (inAppReset: boolean) => report({
+      origin: 'prepared', satisfiedBy: { policy: { mode: 'warm', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'background preparation', inAppReset },
+    });
+    expect(resetKeptScreens([{ report: prepared(true) }])).toBe(true);
+    expect(resetKeptScreens([{ report: prepared(true), capabilities: { hooksRemount: true } }])).toBe(false);
+    expect(resetKeptScreens([{ report: prepared(false) }])).toBe(false);
+  });
+
   it('says nothing when no reset ran (a prepared device, or none)', () => {
     expect(resetKeptScreens([{ report: report({ origin: 'prepared' }) }])).toBeUndefined();
     expect(resetKeptScreens([{ report: report({ origin: 'skipped', modeUsed: 'none' }) }])).toBeUndefined();

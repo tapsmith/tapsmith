@@ -114,6 +114,13 @@ export interface PreparedState {
   durationMs: number;
   /** Human-readable source, e.g. "startup launch" or "background preparation". */
   source: string;
+  /**
+   * Whether the preparation was an in-app reset that kept the app's process
+   * ({@link AppResetReport.inAppReset}). Set by preparations that may run
+   * warm (UI mode's background preparation); left out by cold launches, and
+   * then a reset this satisfies says nothing about kept screens.
+   */
+  inAppReset?: boolean;
 }
 
 /** Where the work behind a recorded reset step happened. */
@@ -362,13 +369,20 @@ export const KEPT_SCREENS_HINT =
 /**
  * Whether a scope's reset left any device's app on screens that kept their
  * React state: an in-app reset (the process kept) on a device whose hooks do
- * not remount the app. `undefined` when no reset ran here (every device's
- * reset was satisfied by an earlier preparation or skipped), which says
- * nothing about the app the next test starts on.
+ * not remount the app. `undefined` when no reset ran here and no preparation
+ * that did says how it left the app (a cold launch, a skipped reset), which
+ * says nothing about the app the next test starts on.
  */
 export function resetKeptScreens(
   reports: ReadonlyArray<{ report: AppResetReport; capabilities?: ResetCapabilities }>,
 ): boolean | undefined {
-  if (!reports.some(({ report }) => report.origin === 'inline')) return undefined;
-  return reports.some(({ report, capabilities }) => report.inAppReset === true && capabilities?.hooksRemount !== true);
+  // A reset satisfied by a preparation that ran warm (UI mode's background
+  // preparation) left the app as that preparation did.
+  const inApp = ({ report }: { report: AppResetReport }): boolean | undefined =>
+    report.origin === 'inline' ? report.inAppReset === true
+      : report.origin === 'prepared' ? report.satisfiedBy?.inAppReset
+        : undefined;
+  const known = reports.filter((r) => inApp(r) !== undefined);
+  if (known.length === 0) return undefined;
+  return known.some((r) => inApp(r) === true && r.capabilities?.hooksRemount !== true);
 }

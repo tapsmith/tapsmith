@@ -67,6 +67,10 @@ export interface TapsmithTestHooksProps {
    * navigator keeps every visited tab's screen mounted, and a reset that
    * lands on the screen already showing keeps that one — so the app starts
    * each test as a fresh launch would, on the route the reset asked for.
+   * The navigation container must sit above the hooks, since it holds the
+   * route that the remounted navigator picks back up: expo-router's root
+   * layout already renders inside its container; a bare React Navigation app
+   * puts the hooks inside `<NavigationContainer>`, never around it.
    * Rendered as-is, never remounted, when the hooks are disabled.
    */
   children?: ReactNode;
@@ -202,8 +206,8 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
   // same commit that acknowledges the reset, so Tapsmith never sees the ack
   // before the fresh screens, and they read the already-cleared stores. A
   // remounted React Navigation navigator picks its state back up from the
-  // navigation container, so the app stays on the route the reset link
-  // opened; only the screens' own state starts over.
+  // navigation container above it (see `children`), so the app stays on the
+  // route the reset link opened; only the screens' own state starts over.
   return (
     <>
       {wraps ? <Fragment key={epoch}>{children}</Fragment> : null}

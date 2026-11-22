@@ -1970,6 +1970,24 @@ describe('runner app reset (declared isolation)', () => {
         expect(two.warnings).toBeUndefined();
       });
 
+      it('hints after a file reset satisfied by a background preparation that reset in-app (UI mode)', async () => {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => { throw new Error('not visible'); });
+        const ctx = popContext();
+        const config = makeConfig({ appReset: 'warm', appResetScope: 'file' });
+        const prepared = (inAppReset: boolean): PreparedState => ({
+          policy: { mode: 'warm', scope: 'file' }, preparedAt: Date.now(), durationMs: 5, source: 'background preparation', inAppReset,
+        });
+        const opts = makeOpts(d, config, { _prepared: new Map([['device-1', prepared(true)]]) });
+        warmHooks(d, opts);
+
+        const [one] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(d.device._resetApp).not.toHaveBeenCalled();
+        expect(one.warnings).toEqual([KEPT_SCREENS_HINT]);
+      });
+
       it('keeps the hint on a flaky pass whose first attempt failed, not on a cold retry\'s own failure', async () => {
         const d = makeDevice();
         pushContext();

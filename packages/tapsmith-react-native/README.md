@@ -22,12 +22,12 @@ export default function RootLayout() {
 
 Wrap your root navigator (`<Stack />`, `<Tabs />`, or the default template's `<AppTabs />`): the hooks remount it after every reset, so no screen keeps React state from the previous test. Mounted beside the navigator instead, they remount nothing, and a screen that stays mounted — every visited tab of a tab navigator — keeps its state into the next test.
 
-- `children` — your root navigator, remounted after every reset (rendered as-is when the hooks are disabled).
+- `children` — your root navigator, remounted after every reset (rendered as-is when the hooks are disabled). Keep the navigation container above the hooks: expo-router's root layout already renders inside it; in a bare React Navigation app, put the hooks inside `<NavigationContainer>`, never around it.
 - `clear` — stores to wipe on every reset (anything with `clear()` or `clearAll()`, e.g. `[AsyncStorage]` from `@react-native-async-storage/async-storage`, which the stock Expo template does not include, or an MMKV instance).
 - `onReset` — your own reset (sign out, drop in-memory state, reset navigation).
 - `onReload` + `track` — keep a restored `appState` between tests: `track` lists the stores the app persists data in (counted writes), and `onReload` drops in-memory state and reads it back from storage. While a test writes nothing, the next test's reset runs `onReload` instead of restoring the archive and relaunching. Report writes the hooks cannot see with `markTapsmithWrite()`. See [Keeping restored app state between tests](https://tapsmith.dev/guides/warm-reset/#keeping-restored-app-state-between-tests).
 - `urlPrefix` / `scheme` — how Tapsmith should build reset links into your app. Expo: `Linking.createURL('/')`; bare React Native: `scheme="myapp"`.
-- `enabled` — whether the hooks are on. Pass it from your app's own code as shown: `__DEV__` covers dev builds, and `EXPO_PUBLIC_TAPSMITH_HOOKS=1` at build time covers Release builds made for e2e. The check has to be in your app, because Expo inlines `EXPO_PUBLIC_*` variables only in app code, never inside `node_modules`. When off, the component renders nothing.
+- `enabled` — whether the hooks are on. Pass it from your app's own code as shown: `__DEV__` covers dev builds, and `EXPO_PUBLIC_TAPSMITH_HOOKS=1` at build time covers Release builds made for e2e. The check has to be in your app, because Expo inlines `EXPO_PUBLIC_*` variables only in app code, never inside `node_modules`. When off, the component renders only its children.
 
 Tapsmith detects the hooks automatically — no config changes. See the [Warm app reset guide](https://tapsmith.dev/guides/warm-reset/).
 

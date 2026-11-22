@@ -260,7 +260,8 @@ Tapsmith resets your app between test files by wiping its data and cold-launchin
 import * as Linking from "expo-linking"
 import { TapsmithTestHooks } from "@tapsmith/react-native"
 // in your root layout, around the navigator it renders
-// (<Stack />, <Tabs />, or the default template's <AppTabs />):
+// (<Stack />, <Tabs />, or the default template's <AppTabs />;
+// a bare React Navigation app: inside <NavigationContainer>, not around it):
 <TapsmithTestHooks
   urlPrefix={Linking.createURL("/")}
   enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
