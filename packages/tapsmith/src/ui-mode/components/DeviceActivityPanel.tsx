@@ -220,6 +220,7 @@ const ACTIVITY_KIND_LABEL: Record<DeviceActivityMessage['kind'], string> = {
   recycle: 'recycle',
   mirror: 'mirror',
   respawn: 'respawn',
+  install: 'install',
 };
 
 function ActivityEntry({ entry }: { entry: DeviceActivityMessage }) {

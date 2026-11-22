@@ -1,5 +1,6 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
+import { TextMatchingScreen } from "../screens/text-matching.screen.js"
 
 // getByText reads text content (PILOT-794), as Playwright does: a control's
 // accessible name or value is not text, and an element that holds a matching
@@ -29,6 +30,19 @@ describe("getByText matches text content", () => {
     await accessibilityScreen.uploadProgress.scrollIntoView()
     await expect(accessibilityScreen.uploadProgress).toBeVisible()
     await expect(device.getByText("65%", { exact: true })).toHaveCount(0)
+  })
+
+  test("an image labelled like the caption under it isn't that text", async ({ device }) => {
+    // On iOS an image's label is its name, as Android's content description
+    // is (PILOT-1366): only the caption is text.
+    await openScreen(device, "/text-matching")
+    const screen = new TextMatchingScreen(device)
+    await expect(screen.flowerGirlCaption).toBeVisible()
+    await expect(screen.flowerGirlCaption).toHaveCount(1)
+    await expect(screen.flowerGirlCaption).toHaveRole("text")
+    await expect(device.getByText("flower girl")).toHaveCount(1)
+    await expect(device.getByText(/^The Flower Girl$/)).toHaveCount(1)
+    await expect(screen.flowerGirlImage).toHaveCount(1)
   })
 
   test("a native alert gives way to its title text", async ({ device, dialogsScreen }) => {

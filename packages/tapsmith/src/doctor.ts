@@ -17,7 +17,7 @@ import { findDaemonBin } from './daemon-bin.js';
 import { findAgentApk, findAgentTestApk, missingAndroidAgentAdvice, type AndroidAgentAdvice } from './agent-resolve.js';
 import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js';
 import { PLAY_IMAGE_CAPTURE_EFFECT, avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
-import { parseSimctlDevicesJson, simulatorChoices, tryExec } from './env-scan.js';
+import { parseSimctlDevicesJson, runningAvds, scanAndroidDevices, simulatorChoices, tryExec } from './env-scan.js';
 import { androidUnusableDeviceFix, parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
 import { isTapsmithNotInstalledError, resolveDeviceGroup, type TapsmithConfig } from './config.js';
 import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
@@ -414,7 +414,7 @@ export interface AvdImageSummary {
  * Play-image AVD produces a warning since Tapsmith may pick up a matching
  * running emulator.
  */
-export function summarizeAvdImages(avds: AvdImageInfo[], configuredAvd?: string | string[]): AvdImageSummary | undefined {
+export function summarizeAvdImages(avds: AvdImageInfo[], configuredAvd?: string | string[], running: readonly string[] = []): AvdImageSummary | undefined {
   const playStore = avds.filter((a) => avdCaptureSupport(a) === 'play-image');
   const unreadable = avds.filter((a) => avdCaptureSupport(a) === 'unknown');
 
@@ -469,7 +469,10 @@ export function summarizeAvdImages(avds: AvdImageInfo[], configuredAvd?: string 
       status: 'warn',
       label: `${playStore.length} of ${avds.length} AVD${avds.length === 1 ? '' : 's'} use${playStore.length === 1 ? 's' : ''} a Google Play system image — ${PLAY_IMAGE_CAPTURE_EFFECT}`,
       detail: `${playStore.map((a) => a.name).join(', ')}${context}`,
-      fix: captureAvdFix(avds, { apiLevel: playStore[0].apiLevel }),
+      // The AVD `init` would write (PILOT-1201): a running one, else the
+      // newest capable one. The Play image's API level only names the AVD
+      // to create when none is capable.
+      fix: captureAvdFix(avds, avds.some((a) => avdCaptureSupport(a) === 'capable') ? { running } : { apiLevel: playStore[0].apiLevel }),
     };
   }
 
@@ -480,9 +483,15 @@ export function summarizeAvdImages(avds: AvdImageInfo[], configuredAvd?: string 
   return { status: 'pass', label: 'AVD system images support HTTPS capture', detail };
 }
 
+/** The AVDs of the running emulators no other Tapsmith session holds, as init reads them. */
+function runningAvdNames(report: Reporter): string[] {
+  const devices = run(report, 'adb', ['devices']);
+  return devices ? runningAvds(scanAndroidDevices(devices)) : [];
+}
+
 function checkAvdImages(report: Reporter, configuredAvd?: string | string[]): void {
   try {
-    const summary = summarizeAvdImages(scanAvdImageTags(), configuredAvd);
+    const summary = summarizeAvdImages(scanAvdImageTags(), configuredAvd, runningAvdNames(report));
     if (!summary) return;
     if (summary.status === 'pass') {
       pass(report, 'avd-images', summary.label, summary.detail);

@@ -10,4 +10,8 @@ export class TextMatchingScreen {
   get fullNameField() { return this.device.getByLabel("Full name") }
   /** The field with no accessibility label, only its placeholder "Nickname". */
   get nicknameField() { return this.device.getByPlaceholder("Nickname") }
+  /** The gallery card's image, labelled like the caption under it. */
+  get flowerGirlImage() { return this.device.getByRole("image", { name: "The Flower Girl", exact: true }) }
+  /** The caption under that image. */
+  get flowerGirlCaption() { return this.device.getByText("The Flower Girl", { exact: true }) }
 }

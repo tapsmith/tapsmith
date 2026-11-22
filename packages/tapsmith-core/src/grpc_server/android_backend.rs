@@ -393,17 +393,50 @@ impl DeviceBackend for AndroidBackend<'_> {
             .map(|c| c.target_package.clone())
             .filter(|p| !p.is_empty());
 
-        let cmd = format!("am start -a android.intent.action.VIEW -d '{}'", uri);
-        if let Err(e) = adb::shell(&serial, &cmd).await {
-            let screenshot = self.svc.error_screenshot().await;
-            return Ok(Response::new(proto::ActionResponse {
-                request_id,
-                success: false,
-                error_type: "ADB_COMMAND_FAILED".to_string(),
-                error_message: e.to_string(),
-                screenshot,
-                app_launched_fresh: false,
-            }));
+        // Deliver to the app under test, not to whichever app Android's
+        // resolver prefers: an `https` link whose intent filter is not
+        // domain-verified (usually a debug build's) otherwise opens in the
+        // browser, and the run reports success on a page it never reached.
+        let cmd = deep_link_view_command(uri, target_package.as_deref());
+        let output = match adb::shell(&serial, &cmd).await {
+            Ok(out) => out,
+            Err(e) => {
+                let screenshot = self.svc.error_screenshot().await;
+                return Ok(Response::new(proto::ActionResponse {
+                    request_id,
+                    success: false,
+                    error_type: "ADB_COMMAND_FAILED".to_string(),
+                    error_message: e.to_string(),
+                    screenshot,
+                    app_launched_fresh: false,
+                }));
+            }
+        };
+        match (am_start_outcome(&output), target_package.as_deref()) {
+            (AmStartOutcome::Started, _) => {}
+            (AmStartOutcome::Unresolved, Some(target)) => {
+                // The app has no activity for this link. Opening it anyway
+                // would hand it to another app and leave that app in front;
+                // say which one instead, without launching it.
+                let handler = adb::shell(&serial, &deep_link_resolve_command(uri))
+                    .await
+                    .map(|out| parse_resolved_handler(&out))
+                    .unwrap_or(LinkHandler::Unknown);
+                return Ok(self
+                    .svc
+                    .action_error(
+                        request_id,
+                        "ACTION_FAILED",
+                        unhandled_link_message(uri, target, &handler),
+                    )
+                    .await);
+            }
+            (AmStartOutcome::Unresolved | AmStartOutcome::Failed, _) => {
+                return Ok(self
+                    .svc
+                    .action_error(request_id, "ADB_COMMAND_FAILED", output.trim().to_string())
+                    .await);
+            }
         }
 
         // Settle: with an epoch ack, wait for the in-app hook to
@@ -563,8 +596,8 @@ impl DeviceBackend for AndroidBackend<'_> {
             // the Bundle even after pm clear wiped AsyncStorage.
             // --activity-clear-task ensures a fresh task stack.
             let cmd = format!(
-                "am start -S --activity-clear-task -n {}/{}",
-                req.package_name, req.activity,
+                "am start -S --activity-clear-task -n {}",
+                android_component_arg(&req.package_name, &req.activity),
             );
             self.svc
                 .launch_and_idle(
@@ -1226,7 +1259,15 @@ impl DeviceBackend for AndroidBackend<'_> {
         // load. `pm clear` wipes app data but NOT the ActivityManager
         // task record, so a relaunch that can't clear the task brings
         // back the old route and scroll position.
-        if !target_package.is_empty() {
+        // A configured activity (StartAgentRequest.launch_activity) needs no
+        // resolving: `launcher_activity` answers it first.
+        if !target_package.is_empty()
+            && self
+                .svc
+                .configured_launch_activity(target_package)
+                .await
+                .is_none()
+        {
             if let Ok(serial) = self.svc.active_serial().await {
                 let activity = self
                     .svc
@@ -1928,10 +1969,216 @@ async fn rotation_map(serial: &str) -> Result<RotationMap, Status> {
     }))
 }
 
+/// `am start` for a VIEW intent on `uri`, restricted to `package` when the
+/// session has a target app. `uri` is already free of single quotes.
+///
+/// `am` reports a failure on stderr, and only from API 34 does it also exit
+/// non-zero; through API 33 it exits 0. So its stderr is folded into stdout and
+/// its exit status ignored: [`am_start_outcome`] judges the text, the same on
+/// every API level, and a non-zero exit from `adb` itself (a transport
+/// failure) still fails the call.
+fn deep_link_view_command(uri: &str, package: Option<&str>) -> String {
+    let restrict = package.map(|pkg| format!(" -p {pkg}")).unwrap_or_default();
+    format!("am start -a android.intent.action.VIEW -d '{uri}'{restrict} 2>&1 || true")
+}
+
+/// Which activity Android would pick for `uri` with no package restriction.
+fn deep_link_resolve_command(uri: &str) -> String {
+    format!("cmd package resolve-activity --brief -a android.intent.action.VIEW -d '{uri}'")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AmStartOutcome {
+    Started,
+    /// No activity matches the intent.
+    Unresolved,
+    /// Any other error `am` printed, or an exception it threw (a
+    /// `SecurityException` for an activity that is not exported, say).
+    Failed,
+}
+
+/// Judge `am start`'s combined stdout and stderr (see [`deep_link_view_command`]).
+fn am_start_outcome(output: &str) -> AmStartOutcome {
+    let threw = output.lines().map(str::trim_start).any(|line| {
+        line.starts_with("Exception occurred while executing")
+            || line.starts_with("Security exception")
+            || line.starts_with("java.lang.")
+    });
+    if output.contains("unable to resolve Intent") {
+        AmStartOutcome::Unresolved
+    } else if threw || am_start_error(output).is_some() {
+        AmStartOutcome::Failed
+    } else {
+        AmStartOutcome::Started
+    }
+}
+
+/// Who would take a link the app under test cannot handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LinkHandler {
+    App(String),
+    /// Several apps match and none is the default: Android asks the user.
+    Chooser,
+    Nothing,
+    Unknown,
+}
+
+/// Parse `cmd package resolve-activity --brief`: its last line is
+/// `<package>/<activity>`, or `No activity found`.
+fn parse_resolved_handler(output: &str) -> LinkHandler {
+    let Some(last) = output.lines().map(str::trim).rfind(|l| !l.is_empty()) else {
+        return LinkHandler::Unknown;
+    };
+    if last.starts_with("No activity found") {
+        return LinkHandler::Nothing;
+    }
+    match last.split_once('/') {
+        Some((pkg, activity)) if !pkg.is_empty() && !pkg.contains(char::is_whitespace) => {
+            if pkg == "android" && activity.contains("ResolverActivity") {
+                LinkHandler::Chooser
+            } else {
+                LinkHandler::App(pkg.to_string())
+            }
+        }
+        _ => LinkHandler::Unknown,
+    }
+}
+
+fn unhandled_link_message(uri: &str, target: &str, handler: &LinkHandler) -> String {
+    let elsewhere = match handler {
+        LinkHandler::App(pkg) => format!(" Android would open it in {pkg} instead."),
+        LinkHandler::Chooser => " Android would ask which app to open it with instead.".to_string(),
+        LinkHandler::Nothing => " No other app on the device handles it either.".to_string(),
+        LinkHandler::Unknown => String::new(),
+    };
+    format!(
+        "openDeepLink: {target} has no activity that handles {uri}, so the link was not \
+         opened.{elsewhere} Tapsmith delivers deep links to the app under test only. Check the \
+         link's scheme, host and path against the app's intent filters \
+         (`adb shell dumpsys package {target}` lists them)."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn deep_links_go_to_the_target_package_when_there_is_one() {
+        assert_eq!(
+            deep_link_view_command("https://en.wikipedia.org/wiki/Moon", Some("org.wikipedia.dev")),
+            "am start -a android.intent.action.VIEW -d 'https://en.wikipedia.org/wiki/Moon' -p org.wikipedia.dev 2>&1 || true"
+        );
+        assert_eq!(
+            deep_link_view_command("myapp://x", None),
+            "am start -a android.intent.action.VIEW -d 'myapp://x' 2>&1 || true"
+        );
+    }
+
+    #[test]
+    fn am_start_output_is_judged_by_its_text_on_every_api_level() {
+        // What `am` prints, stderr folded into stdout (through API 33 it exits
+        // 0 on these errors, so the text is all there is).
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=https://example.com/... pkg=org.x }\n\
+                 Error: Activity not started, unable to resolve Intent { act=android.intent.action.VIEW \
+                 dat=https://example.com/... flg=0x10000000 pkg=org.x }\n"
+            ),
+            AmStartOutcome::Unresolved
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Error type 3\nError: Activity class {org.x/org.x.Gone} does not exist.\n"
+            ),
+            AmStartOutcome::Failed
+        );
+        // An activity that is not exported: `am` throws rather than printing
+        // an `Error` line, and only its exit status (folded away) said so.
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Exception occurred while executing 'start':\n\
+                 java.lang.SecurityException: Permission Denial: starting Intent { act=android.intent.action.VIEW \
+                 dat=myapp://x/... pkg=org.x cmp=org.x/.Hidden } from null (pid=1, uid=2000) not exported from uid 10190\n\
+                 \tat com.android.server.wm.ActivityTaskSupervisor.checkStartAnyActivityPermission(ActivityTaskSupervisor.java:1210)\n"
+            ),
+            AmStartOutcome::Failed
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Security exception: Permission Denial: starting Intent { cmp=org.x/.Hidden } not exported from uid 10190\n"
+            ),
+            AmStartOutcome::Failed
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n"
+            ),
+            AmStartOutcome::Started
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Warning: Activity not started, intent has been delivered to currently running top-most instance.\n"
+            ),
+            AmStartOutcome::Started
+        );
+    }
+
+    #[test]
+    fn resolve_activity_output_names_the_handler() {
+        assert_eq!(
+            parse_resolved_handler(
+                "priority=0 preferredOrder=0 match=0x208000 specificIndex=-1 isDefault=true\n\
+                 com.android.chrome/com.google.android.apps.chrome.IntentDispatcher\n"
+            ),
+            LinkHandler::App("com.android.chrome".into())
+        );
+        assert_eq!(
+            parse_resolved_handler(
+                "priority=0 preferredOrder=0 match=0x0 specificIndex=-1 isDefault=false\n\
+                 android/com.android.internal.app.ResolverActivity\n"
+            ),
+            LinkHandler::Chooser
+        );
+        assert_eq!(
+            parse_resolved_handler("No activity found\n"),
+            LinkHandler::Nothing
+        );
+        assert_eq!(parse_resolved_handler(""), LinkHandler::Unknown);
+        assert_eq!(
+            parse_resolved_handler("Error: unknown command 'resolve-activity'"),
+            LinkHandler::Unknown
+        );
+    }
+
+    #[test]
+    fn an_unhandled_link_names_the_app_and_who_would_take_it() {
+        let msg = unhandled_link_message(
+            "https://example.com/x",
+            "org.wikipedia.dev",
+            &LinkHandler::App("com.android.chrome".into()),
+        );
+        assert!(
+            msg.contains("org.wikipedia.dev has no activity that handles https://example.com/x")
+        );
+        assert!(msg.contains("Android would open it in com.android.chrome instead."));
+        assert!(msg.contains("adb shell dumpsys package org.wikipedia.dev"));
+        assert!(
+            unhandled_link_message("nosuch://x", "org.x", &LinkHandler::Nothing)
+                .contains("No other app on the device handles it either.")
+        );
+        assert!(
+            unhandled_link_message("https://a.b", "org.x", &LinkHandler::Chooser)
+                .contains("ask which app to open it with")
+        );
+        let unknown = unhandled_link_message("https://a.b", "org.x", &LinkHandler::Unknown);
+        assert!(unknown.contains("so the link was not opened. Tapsmith delivers"));
+    }
 
     #[test]
     fn unlock_skips_everything_only_when_awake_and_unlocked() {

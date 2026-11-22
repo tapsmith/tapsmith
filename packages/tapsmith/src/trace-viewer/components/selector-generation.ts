@@ -6,7 +6,7 @@ import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
 import { webViewRolesFor } from '../../webview-dom-js.js';
 import { isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { resourceIdEntryName } from './resource-id.js';
-import { placeholderName } from './selector-matching.js';
+import { placeholderName, textIsFieldValue } from './selector-matching.js';
 import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
 
 // ─── Attribute Helpers ───
@@ -388,8 +388,9 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   }
 
   // 6. Text — Testing Library getByText (visible text content). An iOS
-  // switch's, slider's or stepper's label is only its name (PILOT-794).
-  if (text && !(ios && IOS_NAME_ONLY_TYPES.has(node.attributes.get('type') ?? node.tagName))) {
+  // switch's, slider's or stepper's label is only its name (PILOT-794), and
+  // an Android text field's typed value is not text (PILOT-1404).
+  if (text && !textIsFieldValue(node) && !(ios && IOS_NAME_ONLY_TYPES.has(node.attributes.get('type') ?? node.tagName))) {
     selectors.push({
       code: `device.getByText("${escapeJsString(text)}")`,
       label: 'Text',

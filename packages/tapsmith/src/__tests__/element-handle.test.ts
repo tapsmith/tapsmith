@@ -1267,6 +1267,16 @@ describe('tap()', () => {
     expect(err.message).not.toContain('name: "a@b.c"');
   });
 
+  it("never suggests getByText for an Android text field's typed value (PILOT-1404)", () => {
+    // getByText doesn't match a field by what was typed into it.
+    const err = buildStrictModeViolationError('getByRole("textbox")', [
+      makeElementInfo({ role: '', className: 'android.widget.EditText', text: 'Apollo 11', hint: '', contentDescription: '' }),
+      makeElementInfo({ role: '', className: 'android.widget.TextView', text: 'Apollo 12' }),
+    ]);
+    expect(err.message).not.toContain('getByText("Apollo 11"');
+    expect(err.message).toContain('aka device.getByText("Apollo 12", { exact: true })');
+  });
+
   it('suggests getByTestId only for an RN testID, never the name part of a native id (PILOT-659)', () => {
     const err = buildStrictModeViolationError('getByRole("image")', [
       makeElementInfo({ role: 'image', resourceId: 'avatar' }),
@@ -1296,6 +1306,156 @@ describe('tap()', () => {
       makeElementInfo({ role: 'menuitem', text: 'Open recent' }),
     ]);
     expect(err.message).toContain('getByRole("menuitem"');
+  });
+
+  describe("checks each aka with the agent (PILOT-1366)", () => {
+    const image = makeElementInfo({
+      elementId: 'img', className: 'XCUIElementTypeImage', role: 'image', text: 'The Flower Girl',
+      contentDescription: 'The Flower Girl', bounds: { left: 20, top: 100, right: 380, bottom: 400 },
+    });
+    const caption = makeElementInfo({
+      elementId: 'cap', className: 'XCUIElementTypeStaticText', role: 'text', text: 'The Flower Girl',
+      contentDescription: 'The Flower Girl', bounds: { left: 20, top: 410, right: 380, bottom: 440 },
+    });
+    /** An agent answering each locator from `answers`, by its formatted selector (none: no match). */
+    const agent = (answers: Record<string, ElementInfo[]>) => vi.fn(async (selectors: Selector[]) => ({
+      requestId: '1',
+      errorMessage: '',
+      results: selectors.map((sel) => ({ elements: answers[formatSelector(sel)] ?? [], errorMessage: '' })),
+    }));
+    const strictError = async (overrides: Partial<TapsmithGrpcClient>, selector: Selector, elements: ElementInfo[]) => {
+      const findElements = vi.fn(async () => makeFindElementsResponse(elements));
+      const handle = new ElementHandle(makeMockClient({ ...overrides, findElements }), selector, 5000);
+      return (await handle.tap().then(() => { throw new Error('expected tap to reject'); }, (e: unknown) => e)) as Error;
+    };
+
+    it("lists an aka that resolves to exactly that element", async () => {
+      const evaluateSelectors = agent({
+        'getByRole("image", { name: "The Flower Girl", exact: true })': [image],
+        'getByText("The Flower Girl", { exact: true })': [caption],
+      });
+      const err = await strictError({ evaluateSelectors }, _textContains('Flower'), [image, caption]);
+      expect(err.message).toContain('1) image "The Flower Girl" [20,100][380,400] aka device.getByRole("image", { name: "The Flower Girl", exact: true })');
+      expect(err.message).toContain('2) text "The Flower Girl" [20,410][380,440] aka device.getByText("The Flower Girl", { exact: true })');
+      // One read for every element's candidates.
+      expect(evaluateSelectors).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves out an aka that also matches another element, as an image's label did on iOS", async () => {
+      const err = await strictError({
+        evaluateSelectors: agent({
+          'getByRole("image", { name: "The Flower Girl", exact: true })': [image],
+          'getByText("The Flower Girl", { exact: true })': [image, caption],
+        }),
+      }, _textContains('Flower'), [image, caption]);
+      expect(err.message).toContain('aka device.getByRole("image"');
+      expect(err.message).not.toContain('getByText("The Flower Girl", { exact: true })');
+      expect(err.message).toMatch(/2\) text "The Flower Girl" \[20,410\]\[380,440\]\n/);
+    });
+
+    it("falls back to the next candidate when the first is shared", async () => {
+      const row = (text: string, top: number) => makeElementInfo({
+        role: 'button', text, resourceId: 'row', bounds: { left: 0, top, right: 400, bottom: top + 40 },
+      });
+      const [first, second] = [row('Edit', 0), row('Edit later', 50)];
+      const err = await strictError({
+        evaluateSelectors: agent({
+          'getByTestId("row")': [first, second],
+          'getByRole("button", { name: "Edit", exact: true })': [first],
+          'getByRole("button", { name: "Edit later", exact: true })': [second],
+        }),
+      }, _textContains('Edit'), [first, second]);
+      expect(err.message).not.toContain('getByTestId("row")');
+      expect(err.message).toContain('1) button "Edit" [0,0][400,40] aka device.getByRole("button", { name: "Edit", exact: true })');
+      expect(err.message).toContain('aka device.getByRole("button", { name: "Edit later", exact: true })');
+    });
+
+    it("never lists an aka that finds a different element", async () => {
+      const elsewhere = { ...caption, bounds: { left: 20, top: 600, right: 380, bottom: 630 } };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("The Flower Girl", { exact: true })': [elsewhere] }),
+      }, _textContains('Flower'), [image, caption]);
+      expect(err.message).not.toContain(' aka ');
+    });
+
+    it("matches an element with no usable bounds by what it is, not where", async () => {
+      // Android reports a row scrolled out of view at 0,0,0,0.
+      const offScreen = { ...caption, elementId: 'a', bounds: { left: 0, top: 0, right: 0, bottom: 0 } };
+      const other = makeElementInfo({ elementId: 'b', className: 'XCUIElementTypeStaticText', role: 'text', text: 'The Flower Girl, 1890' });
+      const again = { ...offScreen, elementId: 'a2' };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("The Flower Girl", { exact: true })': [again] }),
+      }, _textContains('Flower'), [offScreen, other]);
+      expect(err.message).toContain('1) text "The Flower Girl" [0,0][0,0] aka device.getByText("The Flower Girl", { exact: true })');
+      expect(err.message).toMatch(/2\) text "The Flower Girl, 1890"\n/);
+    });
+
+    it("lists the first candidate unchecked when the agent can't answer", async () => {
+      const evaluateSelectors = vi.fn(async () => { throw new Error('agent gone'); });
+      const err = await strictError({ evaluateSelectors }, _textContains('Flower'), [image, caption]);
+      expect(evaluateSelectors).toHaveBeenCalled();
+      expect(err.message).toContain('aka device.getByRole("image", { name: "The Flower Girl", exact: true })');
+      expect(err.message).toContain('aka device.getByText("The Flower Girl", { exact: true })');
+    });
+
+    it("never names the failing locator itself as an aka, even unchecked", async () => {
+      // UIKit's edit-mode "Remove …" button matched the same exact text (PILOT-1374).
+      const row = makeElementInfo({
+        className: 'XCUIElementTypeStaticText', role: 'text', text: 'GitHub Enterprise',
+        bounds: { left: 60, top: 100, right: 300, bottom: 140 },
+      });
+      const remove = makeElementInfo({
+        className: 'XCUIElementTypeButton', role: 'button', text: 'Remove GitHub Enterprise', resourceId: 'remove',
+        bounds: { left: 10, top: 100, right: 50, bottom: 140 },
+      });
+      const evaluateSelectors = vi.fn(async () => { throw new Error('agent gone'); });
+      const err = await strictError({ evaluateSelectors }, _text('GitHub Enterprise'), [row, remove]);
+      expect(err.message).not.toContain('aka device.getByText("GitHub Enterprise", { exact: true })');
+      expect(err.message).toMatch(/1\) text "GitHub Enterprise" \[60,100\]\[300,140\]\n/);
+    });
+
+    it("doesn't hint { exact: true } to a locator that already has it", async () => {
+      const evaluateSelectors = agent({});
+      const text = await strictError({ evaluateSelectors }, _text('The Flower Girl'), [image, caption]);
+      expect(text.message).toMatch(/\nHint: use getByRole\(role, \{ name, exact: true \}\), getByTestId\(\), or \.first\(\)\/\.nth\(\)\/\.last\(\) to target a single element\.$/);
+      const role = await strictError({ evaluateSelectors }, _role('image', { name: 'The Flower Girl', exact: true }), [image, caption]);
+      expect(role.message).toMatch(/\nHint: use getByTestId\(\) or \.first\(\)\/\.nth\(\)\/\.last\(\) to target a single element\.$/);
+      // A substring role name can still be made exact.
+      const loose = await strictError({ evaluateSelectors }, _role('image', { name: 'Flower' }), [image, caption]);
+      expect(loose.message).toContain('Hint: use { exact: true }, getByRole(role, { name, exact: true }), getByTestId()');
+    });
+
+    it("stops with the run when the user stops it while the akas are checked", async () => {
+      const stop = new AbortController();
+      const evaluateSelectors = vi.fn(() => {
+        stop.abort();
+        return new Promise<never>(() => {});
+      });
+      const err = await strictError(
+        { evaluateSelectors, _getAbortSignal: () => stop.signal } as Partial<TapsmithGrpcClient>,
+        _textContains('Flower'), [image, caption],
+      );
+      expect(isAbortError(err)).toBe(true);
+    });
+
+    it("doesn't take a different kind of element in the same place for the listed one", async () => {
+      const button = makeElementInfo({
+        elementId: 'b1', className: 'android.widget.Button', role: 'button', text: 'Edit',
+        bounds: { left: 300, top: 40, right: 380, bottom: 80 },
+      });
+      const label = makeElementInfo({ elementId: 'l1', className: 'android.widget.TextView', role: 'text', text: 'Edit mode' });
+      const replaced = { ...button, elementId: 'b2', className: 'android.widget.TextView', role: 'text' };
+      const err = await strictError({
+        evaluateSelectors: agent({ 'getByText("Edit", { exact: true })': [replaced] }),
+      }, _textContains('Edit'), [button, label]);
+      expect(err.message).toMatch(/1\) button "Edit" \[300,40\]\[380,80\]\n/);
+    });
+
+    it("suggests an iOS image by its description, never by getByText", () => {
+      const nameless = { ...image, role: '' };
+      const err = buildStrictModeViolationError('getByText("Flower")', [nameless, caption]);
+      expect(err.message).toContain('1) XCUIElementTypeImage "The Flower Girl" [20,100][380,400] aka device.getByDescription("The Flower Girl")');
+    });
   });
 
   it('.first() disambiguates an ambiguous selector', async () => {
@@ -3062,6 +3222,28 @@ describe('count()/all()/allTextContents() re-read a stale snapshot until it sett
     const handle = new ElementHandle(makeMockClient({ findElements }), _role('listitem'), 5000);
     expect(await withFakeClock(5000, () => handle.count())).toBe(3);
     expect(calls).toBe(2);
+  });
+});
+
+// ─── filter({ hasText }) skips a text field's typed value (PILOT-1404) ───
+
+describe("filter({ hasText }) on an Android text field", () => {
+  const fieldAndRow = () => new ElementHandle(makeMockClient({
+    findElements: vi.fn(async () => makeFindElementsResponse([
+      makeElementInfo({ elementId: 'f', className: 'android.widget.EditText', text: 'Apollo 11', hint: 'Search', bounds: { left: 0, top: 0, right: 100, bottom: 50 } }),
+      makeElementInfo({ elementId: 'r', className: 'android.widget.TextView', text: 'Apollo 11', bounds: { left: 0, top: 50, right: 100, bottom: 100 } }),
+    ])),
+  }), _className('android.view.View'), 5000);
+
+  it("doesn't read the typed value as text, by a string or a RegExp", async () => {
+    for (const hasText of ['Apollo', /^Apollo 11$/]) {
+      expect((await fieldAndRow().filter({ hasText }).all()).length).toBe(1);
+      expect((await fieldAndRow().filter({ hasText }).find()).elementId).toBe('r');
+    }
+  });
+
+  it('hasNotText keeps the field', async () => {
+    expect((await fieldAndRow().filter({ hasNotText: 'Apollo' }).find()).elementId).toBe('f');
   });
 });
 
@@ -6736,10 +6918,11 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
     await handle(client).scrollIntoView();
 
     expect(stepArgs(scrollStep)).toEqual([{ direction: 'up', distance: 0.8, findFirst: true }]);
-    // No probe, no idle wait, no screen read, no swipe: the step did all of it.
+    // No probe, no idle wait, no swipe: the step did all of it. One screen
+    // read checks the element is not under a bar over its list (PILOT-1370).
     expect(findElements).not.toHaveBeenCalled();
     expect(waitForIdle).not.toHaveBeenCalled();
-    expect(getUiHierarchy).not.toHaveBeenCalled();
+    expect(getUiHierarchy).toHaveBeenCalledTimes(1);
     expect(swipe).not.toHaveBeenCalled();
   });
 
@@ -6761,7 +6944,9 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
       { direction: 'up', distance: 0.8, region: listRegion },
       { direction: 'up', distance: 0.8, region: listRegion },
     ]);
-    expect(getUiHierarchy).not.toHaveBeenCalled();
+    // No read while the list moves; one once the row shows, to check that
+    // no bar over the list hides it (PILOT-1370).
+    expect(getUiHierarchy).toHaveBeenCalledTimes(1);
     expect(swipe).not.toHaveBeenCalled();
     // One equal read settles a row a step found: nothing flings after a step.
     expect(findElements).toHaveBeenCalledTimes(1);
@@ -6795,7 +6980,8 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
 
     await handle(client).scrollIntoView();
 
-    expect(getUiHierarchy).toHaveBeenCalledTimes(1);
+    // The screen read that picks the container, and the in-view check (PILOT-1370).
+    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
     expect(stepArgs(scrollStep)[1]).toEqual({ direction: 'up', distance: 0.8, region: listRegion });
   });
 
@@ -6897,7 +7083,8 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
 
     await handle(client, 'ios').scrollIntoView();
 
-    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
+    // Two reads to pick containers, and the in-view check once it shows (PILOT-1370).
+    expect(getUiHierarchy).toHaveBeenCalledTimes(3);
     expect(stepArgs(scrollStep)).toEqual([
       { direction: 'up', distance: 0.8, region: tableRegion },
       { direction: 'right', distance: 0.8, region: { left: 0, top: 300, right: 402, bottom: 500 } },
@@ -7413,6 +7600,146 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 1 });
 
     expect(swipe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('scrollIntoView() scrolls in an element on screen but out of its list\'s view (PILOT-1370)', () => {
+  // A React Native screen on an iPad: the list ends at 1307, above a bottom
+  // tab bar. iOS frames are not clipped, so the "+" button just below the
+  // list, behind the tab bar, is "visible". Full-screen wrappers and an
+  // empty toolbar host are drawn after the list, as React Native's are.
+  const screen = (plus: string, overBar = '') =>
+    `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][1032,1376]">` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,0][1032,1307]">` +
+    `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,70][1032,1307]">` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,70][1032,2400]">` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" identifier="counter plus button" bounds="${plus}"/>` +
+    `</XCUIElementTypeOther></XCUIElementTypeScrollView>` +
+    `<XCUIElementTypeToolbar type="XCUIElementTypeToolbar" label="Toolbar" tapsmith-empty-bar-host="true" bounds="[0,0][1032,1307]"/>` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,0][1032,1376]"/>` +
+    overBar +
+    `</XCUIElementTypeOther>` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,1307][1032,1376]">` +
+    `<XCUIElementTypeButton type="XCUIElementTypeButton" label="Catalog, tab, 1 of 3" bounds="[0,1307][344,1356]"/>` +
+    `</XCUIElementTypeOther></XCUIElementTypeApplication></hierarchy>`;
+  const plusAt = (top: number) =>
+    makeElementInfo({ resourceId: 'counter plus button', visible: true, bounds: { left: 100, top, right: 140, bottom: top + 40 } });
+  const frame = (top: number) => `[100,${top}][140,${top + 40}]`;
+  /** findElements answers from `script` in order, repeating the last entry. */
+  function scripted(script: ElementInfo[]) {
+    let i = 0;
+    return vi.fn(async () => makeFindElementsResponse([script[Math.min(i++, script.length - 1)]]));
+  }
+  const swipeCalls = (swipe: ReturnType<typeof vi.fn>) =>
+    swipe.mock.calls.map((c) => {
+      const o = (c as unknown[])[1] as { distance: number; region?: unknown };
+      return [c[0], o.distance, o.region];
+    });
+  const list = { left: 0, top: 70, right: 1032, bottom: 1307 };
+
+  it('scrolls down, gently, for an element just below its list, behind a tab bar', async () => {
+    const findElements = scripted([plusAt(1307), plusAt(936)]);
+    const swipe = vi.fn(async () => successResponse());
+    const getUiHierarchy = vi.fn(hierarchySequence([screen(frame(1307)), screen(frame(936))]));
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([['up', 0.3, list]]);
+  });
+
+  it('scrolls up for an element above its list, under a header', async () => {
+    const findElements = scripted([plusAt(30), plusAt(400)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(30))])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([['down', 0.3, list]]);
+  });
+
+  it('scrolls in an element inside its list that a bar laid over the list covers', async () => {
+    const bar = '<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,1247][1032,1307]">' +
+      '<XCUIElementTypeButton type="XCUIElementTypeButton" label="Add to cart" bounds="[0,1247][1032,1307]"/></XCUIElementTypeOther>';
+    const findElements = scripted([plusAt(1255), plusAt(900)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(1255), bar)])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([['up', 0.3, { ...list, bottom: 1247 }]]);
+  });
+
+  it('does not swipe sideways for an element reaching past the side of a list that scrolls only up and down', async () => {
+    const chip = makeElementInfo({ resourceId: 'counter plus button', visible: true, bounds: { left: 1000, top: 600, right: 1080, bottom: 640 } });
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: scripted([chip]),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([screen('[1000,600][1080,640]')])),
+    });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('nudges in a row a search swipe left under a bar laid over the list', async () => {
+    const bar = '<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,1247][1032,1307]">' +
+      '<XCUIElementTypeButton type="XCUIElementTypeButton" label="Add to cart" bounds="[0,1247][1032,1307]"/></XCUIElementTypeOther>';
+    const offScreen = makeElementInfo({ resourceId: 'counter plus button', visible: false, bounds: { left: 100, top: 1600, right: 140, bottom: 1640 } });
+    // Off screen below, then (after the search swipe) under the bar, then above it.
+    const findElements = scripted([offScreen, offScreen, plusAt(1255), plusAt(1255), plusAt(1255), plusAt(1255), plusAt(900)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements,
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([screen(frame(1600), bar), screen(frame(1255), bar), screen(frame(900), bar)])),
+    });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([
+      ['up', 0.6, list],
+      ['up', 0.3, { ...list, bottom: 1247 }],
+    ]);
+  });
+
+  it('does not swipe for an element inside its list, with nothing over it', async () => {
+    const findElements = scripted([plusAt(600)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(600))])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('stops after one swipe when the list cannot move it further (the end of the content)', async () => {
+    const findElements = scripted([plusAt(1307)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([screen(frame(1307))])) });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the check with maxScrolls 0, and returns as before when the screen cannot be read', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const getUiHierarchy = vi.fn(hierarchySequence([screen(frame(1307))]));
+    const client = makeMockClient({ findElements: scripted([plusAt(1307)]), swipe, getUiHierarchy });
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView({ maxScrolls: 0 });
+    expect(swipe).not.toHaveBeenCalled();
+    expect(getUiHierarchy).not.toHaveBeenCalled();
+
+    const failing = makeMockClient({
+      findElements: scripted([plusAt(1307)]),
+      swipe,
+      getUiHierarchy: vi.fn(async (): Promise<UiHierarchyResponse> => ({ requestId: '1', hierarchyXml: '', errorMessage: 'dump failed' })),
+    });
+    await new ElementHandle(failing, _testId('counter plus button'), 5000).scrollIntoView();
+    expect(swipe).not.toHaveBeenCalled();
   });
 });
 

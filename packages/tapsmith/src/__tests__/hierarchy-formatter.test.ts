@@ -116,4 +116,21 @@ describe('WebView content (PILOT-1329)', () => {
   it('offers no WebView node for suggestions', () => {
     expect(semanticNodes([screen])).toEqual([heading, email, signIn]);
   });
+
+  it("does not mark an in-app browser's page, which device.webview() cannot reach (PILOT-1384)", () => {
+    // SFSafariViewController's page is SafariViewService's, not the app's:
+    // its content is matched with native locators only.
+    const done = ios('XCUIElementTypeButton', { label: 'Done', identifier: 'Close', 'tapsmith-role': 'button' });
+    const browser = ios('XCUIElementTypeOther', { identifier: 'BrowserView?IsPageLoaded=true&WebViewProcessID=1' }, [
+      ios('XCUIElementTypeOther', { identifier: 'TopBrowserBar' }, [done]),
+      web,
+    ]);
+    const { tree, hasWebView } = formatHierarchy([ios('XCUIElementTypeOther', {}, [browser])], new Map());
+    expect(tree).toBe([
+      '- button "Done"',
+      '- textfield "Email"',
+      '- button "Sign in"',
+    ].join('\n'));
+    expect(hasWebView).toBe(false);
+  });
 });

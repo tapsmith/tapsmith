@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mirrorPointToLogical, logicalBoundsToMirrorCss } from '../ui-mode/components/mirror-coords.js';
-import { parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
+import { hierarchyShowsAppWebView, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import { handleHoverFromScreenshot, handlePickFromScreenshot, isWebViewOverlayPending } from '../trace-viewer/components/selector-pick.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
@@ -85,6 +85,20 @@ describe('isWebViewOverlayPending', () => {
   it('true for a point inside a WebView with no DOM overlay in the tree', () => {
     const roots = parseHierarchyXml(withoutOverlay);
     expect(isWebViewOverlayPending(roots, 196, 324)).toBe(true);
+  });
+
+  it("false inside an in-app browser's page, which never gets a DOM overlay (PILOT-1384)", () => {
+    const inBrowser = `<hierarchy>
+      <XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][393,852]">
+        <XCUIElementTypeOther identifier="BrowserView?IsPageLoaded=true&amp;WebViewProcessID=1" bounds="[0,69][393,852]">
+          <XCUIElementTypeButton label="Done" identifier="Close" bounds="[14,80][55,113]" />
+          <XCUIElementTypeWebView type="XCUIElementTypeWebView" bounds="[0,120][393,852]">
+            <XCUIElementTypeTextField placeholderValue="Search" bounds="[24,300][369,348]" />
+          </XCUIElementTypeWebView>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeApplication>
+    </hierarchy>`;
+    expect(isWebViewOverlayPending(parseHierarchyXml(inBrowser), 196, 324)).toBe(false);
   });
 
   it('false outside the WebView container', () => {
@@ -195,5 +209,32 @@ describe('handleHoverFromScreenshot', () => {
 
   it('outlines nothing off every element', () => {
     expect(handleHoverFromScreenshot(roots, 239, 300)).toBeNull();
+  });
+});
+
+describe('hierarchyShowsAppWebView (PILOT-1384)', () => {
+  const browser = (inner: string) => `<XCUIElementTypeOther identifier="BrowserView?IsPageLoaded=true&amp;WebViewProcessID=1" bounds="[0,69][393,852]">
+    <XCUIElementTypeButton label="Done" identifier="Close" bounds="[14,80][55,113]" />${inner}</XCUIElementTypeOther>`;
+  const webView = '<XCUIElementTypeWebView type="XCUIElementTypeWebView" bounds="[0,120][393,852]"><XCUIElementTypeWebView bounds="[0,120][393,852]" /></XCUIElementTypeWebView>';
+  const app = (inner: string) => `<hierarchy><XCUIElementTypeApplication bounds="[0,0][393,852]"><XCUIElementTypeWindow bounds="[0,0][393,852]">${inner}</XCUIElementTypeWindow></XCUIElementTypeApplication></hierarchy>`;
+
+  it("true for the app's own WebView", () => {
+    expect(hierarchyShowsAppWebView(app(webView))).toBe(true);
+  });
+
+  it('false when the only WebView is an in-app browser page, which device.webview() cannot reach', () => {
+    expect(hierarchyShowsAppWebView(app(browser(webView)))).toBe(false);
+  });
+
+  it("true when the app's WebView sits beside an in-app browser", () => {
+    expect(hierarchyShowsAppWebView(app(webView + browser(webView)))).toBe(true);
+  });
+
+  it('false with no WebView', () => {
+    expect(hierarchyShowsAppWebView(app('<XCUIElementTypeButton label="Done" bounds="[0,0][1,1]" />'))).toBe(false);
+  });
+
+  it('true for an Android WebView', () => {
+    expect(hierarchyShowsAppWebView('<hierarchy><node class="android.webkit.WebView" bounds="[0,0][1,1]" /></hierarchy>')).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeResetCapabilities, nextCandidate, policyForFile, type CandidateInput, type CandidateProject } from '../ui-mode/readiness-candidate.js';
+import { capabilitiesAfterRespawn, mergeResetCapabilities, nextCandidate, policyForFile, type CandidateInput, type CandidateProject } from '../ui-mode/readiness-candidate.js';
 import type { TapsmithConfig } from '../config.js';
 
 function config(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
@@ -109,5 +109,15 @@ describe('mergeResetCapabilities', () => {
     mergeResetCapabilities(previous, next);
     expect(previous).toEqual({ hooksDetected: false });
     expect(next).toEqual({ hooksDetected: true });
+  });
+});
+
+describe('capabilitiesAfterRespawn', () => {
+  it('carries the old worker\'s capabilities forward, upgrade-only, when the device kept its build', () => {
+    expect(capabilitiesAfterRespawn({ hooksDetected: true }, { hooksDetected: false }, false)).toEqual({ hooksDetected: true });
+  });
+
+  it('takes the new worker\'s own when it reinstalled a rebuilt app on the way up: the old ones describe a build that is gone', () => {
+    expect(capabilitiesAfterRespawn({ hooksDetected: true, hooksUrlPrefix: 'old:///' }, { hooksDetected: false }, true)).toEqual({ hooksDetected: false });
   });
 });

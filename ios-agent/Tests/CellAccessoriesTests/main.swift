@@ -165,6 +165,11 @@ do {
         node(.stepper, label: "Count", [node(.button, label: "Count, Increment")]), node(.toggle, value: "1"),
     ])
     check("sliders, steppers and toggles add no text", DescendantText.collect(controls), "Volume")
+    // An image's label is no getByText text (TextContent.nameOnlyTypes), but
+    // a container's text still reads it, as Android's reads a content
+    // description (PILOT-1366): hasText finds a card by its image's label.
+    let card = node(.other, [node(.image, label: "The Flower Girl"), node(.staticText, label: "1890")])
+    check("an image's label is part of its container's text", DescendantText.collect(card), "The Flower Girl 1890")
     // A SwiftUI Form Toggle row: the row-sized switch holds the label's text
     // and the knob (measured on an iOS 26 simulator).
     let toggleRow = node(.cell, [node(.other, [node(.other, [

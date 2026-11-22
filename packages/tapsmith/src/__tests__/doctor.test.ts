@@ -292,6 +292,14 @@ describe('summarizeAvdImages()', () => {
       expect(summary?.fix).toBe("Use Tapsmith_Phone_API_36, which supports HTTPS capture: set avd: 'Tapsmith_Phone_API_36' in your Tapsmith config");
     });
 
+    it('names the AVD init would write: a running one, else the newest capable one (PILOT-1201)', () => {
+      const old28: AvdImageInfo = { name: 'A_Probe_API_28', tagId: 'google_apis', apiLevel: 28 };
+      const new36: AvdImageInfo = { name: 'Z_Phone_API_36', tagId: 'google_apis', apiLevel: 36 };
+      const play34: AvdImageInfo = { name: 'Play_34', tagId: 'google_apis_playstore', apiLevel: 34 };
+      expect(summarizeAvdImages([old28, new36, play34])?.fix).toContain("set avd: 'Z_Phone_API_36'");
+      expect(summarizeAvdImages([old28, new36, play34], undefined, ['A_Probe_API_28'])?.fix).toContain("set avd: 'A_Probe_API_28'");
+    });
+
     it('suggests a new AVD under a free name when only Play images exist', () => {
       // The default name is taken by a (Play-image) AVD, so the suggestion must not collide with it.
       const takenDefault: AvdImageInfo = { name: 'Tapsmith_Phone_API_36', tagId: 'google_apis_playstore', apiLevel: 36 };

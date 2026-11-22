@@ -15,7 +15,7 @@ import {
 } from '../runner.js';
 import type { TapsmithConfig } from '../config.js';
 import type { SessionPreflightContext } from '../session-preflight.js';
-import type { PreparedState } from '../app-reset.js';
+import { KEPT_SCREENS_HINT, type PreparedState } from '../app-reset.js';
 import { Tracing } from '../trace/tracing.js';
 import { getActiveTraceCollector, screenshotFileName, screenshotArchivePath } from '../trace/trace-collector.js';
 
@@ -106,6 +106,7 @@ function makeOpts(d: ReturnType<typeof makeDevice>, config: TapsmithConfig, extr
     // runTestFile creates this per file; these tests drive runSuiteContext directly.
     _applied: {},
     _startRoute: {},
+    _keptScreens: {},
     ...extra,
   };
 }
@@ -1767,6 +1768,29 @@ describe('runner app reset (declared isolation)', () => {
     expect(onTestEnd).not.toHaveBeenCalled();
   });
 
+  it('on the embedder\'s last attempt, a recoverable file-entry reset error fails every test of the file (PILOT-1383)', async () => {
+    // The retry after a session recovery is the last attempt: propagating the
+    // error there left the file's tests out of every report.
+    const d = makeDevice();
+    d.device._resetApp.mockRejectedValue(new Error('UNAVAILABLE: agent socket closed'));
+    pushContext();
+    tapsmithTest('one', async () => {});
+    tapsmithTest('two', async () => {});
+    const ctx = popContext();
+    const onTestEnd = vi.fn();
+
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig(), {
+      abortFileOnError: (err) => err.message.includes('UNAVAILABLE'),
+      finalFileAttempt: true,
+      reporter: { onTestEnd },
+    }));
+
+    const flat = collectResults(result);
+    expect(flat.map((t) => [t.fullName, t.status])).toEqual([['one', 'failed'], ['two', 'failed']]);
+    expect(flat[1].error?.message).toContain('agent socket closed');
+    expect(onTestEnd).toHaveBeenCalledTimes(2);
+  });
+
   it('a non-recoverable file-entry reset error still fails the scope even when the embedder opted into recovery', async () => {
     const d = makeDevice();
     d.device._resetApp.mockRejectedValue(new Error('pm clear failed'));
@@ -1911,6 +1935,140 @@ describe('runner app reset (declared isolation)', () => {
       const [one, two] = collectResults(result);
       expect(one.warnings).toEqual(['hooks never showed up']);
       expect(two.warnings).toBeUndefined();
+    });
+
+    it('warns the next test once about an app the session reinstalled, with no dialog row (PILOT-1397)', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-reinstall-'));
+      try {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => {});
+        tapsmithTest('two', async () => {});
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({
+          rootDir: tempRoot,
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        }));
+        opts.devices[0].sessionContext!.notices.push({
+          kind: 'app-reinstalled', title: 'app-release.apk',
+          message: 'Reinstalled app-release.apk (build changed since the last run).', timestamp: Date.now(),
+        });
+
+        const result = await runSuiteContext(ctx, '', [], [], opts);
+
+        const [one, two] = collectResults(result);
+        expect(one.warnings).toEqual(['Reinstalled app-release.apk (build changed since the last run).']);
+        expect(two.warnings).toBeUndefined();
+        const zip = unzipSync(fs.readFileSync(one.tracePath!));
+        const rows = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+          .filter((e) => e.type === 'action' && e.action === 'systemDialog');
+        expect(rows).toEqual([]);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    describe('a failure after a warm reset that kept the app\'s screens (PILOT-922)', () => {
+      function warmHooks(d: ReturnType<typeof makeDevice>, opts: RunOptions, caps: { hooksRemount?: boolean } = {}) {
+        opts.devices[0].sessionContext!.capabilities = { hooksDetected: true, ...caps };
+        d.device._resetApp.mockImplementation(async (_pkg, o) => ({
+          modeRequested: 'warm', modeUsed: 'warm', fellBack: false, coldLaunch: !!o.forceCold,
+          durationMs: 5, hooksDetected: true, steps: [],
+        }));
+      }
+
+      it('hints at the kept screens on each test that fails after its own in-app reset', async () => {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => { throw new Error('not visible'); });
+        tapsmithTest('two', async () => {});
+        tapsmithTest('three', async () => { throw new Error('not visible'); });
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({ appReset: 'warm', appResetScope: 'test' }));
+        warmHooks(d, opts);
+
+        const [one, two, three] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(one).toMatchObject({ status: 'failed', warnings: [KEPT_SCREENS_HINT] });
+        expect(two.warnings).toBeUndefined();
+        expect(three).toMatchObject({ status: 'failed', warnings: [KEPT_SCREENS_HINT] });
+      });
+
+      it('says nothing when the hooks remount the app on every reset', async () => {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => { throw new Error('not visible'); });
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({ appReset: 'warm', appResetScope: 'test' }));
+        warmHooks(d, opts, { hooksRemount: true });
+
+        const [one] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(one.status).toBe('failed');
+        expect(one.warnings).toBeUndefined();
+      });
+
+      it('with a file-scoped reset, hints only on the test the reset ran before', async () => {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => { throw new Error('not visible'); });
+        tapsmithTest('two', async () => { throw new Error('not visible'); });
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({ appReset: 'warm', appResetScope: 'file' }));
+        warmHooks(d, opts);
+
+        const [one, two] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(one.warnings).toEqual([KEPT_SCREENS_HINT]);
+        // The fresh start after a failure relaunches cold: nothing was kept.
+        expect(two.warnings).toBeUndefined();
+      });
+
+      it('hints after a file reset satisfied by a background preparation that reset in-app (UI mode)', async () => {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => { throw new Error('not visible'); });
+        const ctx = popContext();
+        const config = makeConfig({ appReset: 'warm', appResetScope: 'file' });
+        const prepared = (inAppReset: boolean): PreparedState => ({
+          policy: { mode: 'warm', scope: 'file' }, preparedAt: Date.now(), durationMs: 5, source: 'background preparation', inAppReset,
+        });
+        const opts = makeOpts(d, config, { _prepared: new Map([['device-1', prepared(true)]]) });
+        warmHooks(d, opts);
+
+        const [one] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(d.device._resetApp).not.toHaveBeenCalled();
+        expect(one.warnings).toEqual([KEPT_SCREENS_HINT]);
+      });
+
+      it('keeps the hint on a flaky pass whose first attempt failed, not on a cold retry\'s own failure', async () => {
+        const d = makeDevice();
+        pushContext();
+        let runs = 0;
+        tapsmithTest('flaky', async () => { if (runs++ === 0) throw new Error('not visible'); });
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({ appReset: 'warm', appResetScope: 'test', retries: 1 }));
+        warmHooks(d, opts);
+
+        const [flaky] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(flaky).toMatchObject({ status: 'passed', warnings: [KEPT_SCREENS_HINT] });
+      });
+
+      it('says nothing when a cold retry failed the same way, since its error is the one reported', async () => {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('broken', async () => { throw new Error('not visible'); });
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({ appReset: 'warm', appResetScope: 'test', retries: 1 }));
+        warmHooks(d, opts);
+
+        const [broken] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(broken.status).toBe('failed');
+        expect(broken.warnings).toBeUndefined();
+      });
     });
 
     it('drops a missing-hooks notice once the session has since detected the hooks (PILOT-774)', async () => {

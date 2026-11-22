@@ -37,6 +37,8 @@ import {
   appResetAction,
   appResetPolicyEquals,
   describeAction,
+  KEPT_SCREENS_HINT,
+  resetKeptScreens,
   resolveAppResetPolicy,
   type AppResetPolicy,
   type AppResetReport,
@@ -55,6 +57,7 @@ import { telemetry, runEventFromResults, type RunMode } from './telemetry.js';
 import { isRecoverableInfrastructureError } from './worker-protocol.js';
 import { filterEntriesByHosts } from './trace/filter-hosts.js';
 import { TlsRejectWarnings, osServiceTlsRejectNote, tlsRejectWarning } from './tls-reject-warning.js';
+import { loopbackCaptureWarning, loopbackUnfiredRouteReason } from './loopback-capture-warning.js';
 import { defineStandIns, notSupportedYet } from './not-supported.js';
 
 // ─── Trace Device Info ───
@@ -163,8 +166,9 @@ function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | nul
         const pending = (opts._preflightWarnings ??= []);
         if (!pending.includes(message)) pending.push(message);
       }
-      // Not a dialog: the reset row already shows the clear it caused.
-      if (notice.kind === 'hooks-missing') continue;
+      // Not a dialog: the reset row already shows the clear (or the
+      // relaunch of the reinstalled app) it caused.
+      if (notice.kind === 'hooks-missing' || notice.kind === 'app-reinstalled') continue;
       // Stamped now, not when the dialog was handled (possibly before this
       // trace began): rows keep their order on the timeline. The handling
       // time goes in the log.
@@ -205,6 +209,12 @@ function resettableDevices(opts: RunOptions): Array<RunDevice & { sessionContext
 const _printedCaptureWarnings = new Set<string>();
 /** Rejected-certificate hosts already reported on the terminal this run (PILOT-712). */
 const _tlsRejectWarnings = new TlsRejectWarnings();
+/**
+ * Loopback servers already warned about in this test file's run, per device
+ * (PILOT-320). Reset as each file starts: a UI-mode worker runs file after
+ * file in one process, and each run must show the warning again.
+ */
+let _loopbackWarnings = new TlsRejectWarnings();
 
 type RawNetworkEntries = Awaited<ReturnType<Device['_stopNetworkCapture']>>['entries'];
 type DeviceNetworkEntries = Array<{ deviceId?: string; entries: RawNetworkEntries }>;
@@ -422,9 +432,14 @@ function _warnUnfiredRoutes(
     earlyRequests: EarlyRouteRequest[];
     /** Whether the proxy saw any request from the app; undefined when this test drained no capture. */
     appTrafficSeen: boolean | undefined;
+    /** Loopback servers the app connected to, which capture cannot see (PILOT-320). */
+    loopbackDestinations: string[];
   },
 ): void {
   const possible: string[] = [];
+  if (reasons.loopbackDestinations.length > 0) {
+    possible.push(loopbackUnfiredRouteReason(reasons.loopbackDestinations));
+  }
   if (reasons.earlyRequests.length > 0) {
     const shown = reasons.earlyRequests.slice(0, 3).map((r) =>
       `${r.method ? `${r.method} ` : ''}${r.url} ${formatLeadTime(r.msBefore)} before the route for ${r.pattern} was registered`,
@@ -510,9 +525,10 @@ interface CapturedAppRequest {
 }
 
 /**
- * The captured requests (not passed through: those carry only a host) that
- * matched one of the test's routes before it was registered, oldest first,
- * each named once against the first route it matches.
+ * The captured requests (not passed through: those carry only a host; not
+ * WebSockets, which routes never see) that matched one of the test's routes
+ * before it was registered, oldest first, each named once against the first
+ * route it matches.
  */
 function earlyRouteRequests(
   requests: CapturedAppRequest[],
@@ -521,6 +537,8 @@ function earlyRouteRequests(
   const early: EarlyRouteRequest[] = [];
   for (const req of [...requests].sort((a, b) => a.startTimeMs - b.startTimeMs)) {
     if (req.routeAction === 'passthrough') continue;
+    // Routes never apply to a WebSocket (PILOT-246), as in Playwright.
+    if (/^wss?:/i.test(req.url)) continue;
     const route = registrations.find((r) => req.startTimeMs < r.registeredAtMs && r.matches(req.url));
     if (route) {
       early.push({ method: req.method, url: req.url, pattern: route.pattern, msBefore: route.registeredAtMs - req.startTimeMs });
@@ -1408,8 +1426,18 @@ export interface RunOptions {
    */
   beforeEachTest?: (fullName: string) => Promise<void>;
   abortFileOnError?: (error: Error) => boolean;
-  /** @internal — controller whose signal is wired to abortSignal; aborted by abortFileOnError. */
-  _abortFileController?: AbortController;
+  /**
+   * This is the embedder's last attempt at the file: it will not re-run the
+   * file after an `abortFileOnError` abort. The tests the abort leaves unrun
+   * are then reported as failed ("Did not run: …") instead of being left out
+   * of the results, and a recoverable error in the file-entry reset fails
+   * every test of the file instead of propagating. Without it, a
+   * file abort holds those results back for the embedder's retry
+   * ({@link takeDeferredNotRunResults}).
+   */
+  finalFileAttempt?: boolean;
+  /** @internal — the file's abort state: set up by runTestFile when abortFileOnError is. */
+  _fileAbort?: FileAbortState;
   /** Pre-resolved worker-scoped fixture values (set by worker-runner). */
   workerFixtures?: Record<string, unknown>;
   /** Test file path — used by trace packager for testFile metadata and source inclusion. */
@@ -1471,6 +1499,13 @@ export interface RunOptions {
    * on its launch screen; the runner then opens the route again.
    */
   _startRoute?: { pending?: string };
+  /**
+   * @internal — the most recent reset left the app on screens that kept their
+   * React state (an in-app reset in an app whose hooks do not remount it),
+   * until the next test attempt starts. That attempt, if it fails, gets
+   * {@link KEPT_SCREENS_HINT}.
+   */
+  _keptScreens?: { pending?: boolean };
   /** @internal Warnings from preflight notices, waiting for the next test result. */
   _preflightWarnings?: string[];
   /**
@@ -2263,6 +2298,14 @@ async function runTracedAppReset(
     if (opts._startRoute) {
       opts._startRoute.pending = policy.route !== undefined && appResetAction(policy).kind !== 'none' ? policy.route : undefined;
     }
+    if (opts._keptScreens) {
+      const kept = resetKeptScreens(resettableDevices(opts).flatMap((rd) => {
+        const report = reports.get(rd.name);
+        return report ? [{ report, capabilities: rd.sessionContext.capabilities }] : [];
+      }));
+      // A reset satisfied by an earlier one leaves that one's answer standing.
+      if (kept !== undefined) opts._keptScreens.pending = kept;
+    }
     return reports;
   } finally {
     collector?.endGroup();
@@ -2352,7 +2395,10 @@ async function runSuiteContext(
   const defaultTestTimeoutMs = opts.config.timeout * 3;
   const testTimeoutMs = scopeTimeout ? Math.max(defaultTestTimeoutMs, scopeTimeout) : defaultTestTimeoutMs;
   const isRoot = parentPrefix === '';
-  if (isRoot) _fileRunStartedAtMs = Date.now();
+  if (isRoot) {
+    _fileRunStartedAtMs = Date.now();
+    _loopbackWarnings = new TlsRejectWarnings();
+  }
   // A serial scope inside another serial group stays part of that group.
   const serialGroup = inherited.serialGroup ?? (ctx.mode === 'serial' ? { failed: false } : undefined);
   const canReset = !!opts.config.package && resettableDevices(opts).length > 0;
@@ -2600,7 +2646,10 @@ async function runSuiteContext(
     // surfacing it as failed results here would record a failed attempt and
     // then flag every test in the file as flaky — main's between-file reset
     // recovered transparently, and so does this.
-    if (fileEntryResetError && opts.abortFileOnError?.(fileEntryResetError)) {
+    // On the embedder's last attempt nothing re-runs the file: the reset
+    // error fails every test below, as any failed scope setup does
+    // (PILOT-1383).
+    if (fileEntryResetError && opts.abortFileOnError?.(fileEntryResetError) && !opts.finalFileAttempt) {
       beforeAllCollector?.cleanup();
       throw fileEntryResetError;
     }
@@ -2714,13 +2763,21 @@ async function runSuiteContext(
 
   // Run tests
   for (const entry of ctx.tests) {
-    // Abort: stop running remaining tests but don't record them as
-    // 'skipped' — a user-initiated stop should leave untouched tests with
-    // whatever prior status they had, not overwrite them with a synthetic
-    // skipped result.
-    if (opts.abortSignal?.aborted) break;
-
     const fullName = parentPrefix ? `${parentPrefix} > ${entry.name}` : entry.name;
+
+    // Abort: stop running remaining tests. A user-initiated stop leaves
+    // untouched tests with whatever prior status they had, not overwritten
+    // with a synthetic result. A file abort reports each of them as not run
+    // (PILOT-1383): they would otherwise drop out of every report.
+    if (opts.abortSignal?.aborted) {
+      const notRunError = fileAbortNotRunError(opts);
+      if (!notRunError) break;
+      if (passesTestFilter(fullName, opts)) {
+        const skipped = entry.skip || !!ctx.skipped || skippedByBeforeAll || (focused && !entry.only);
+        recordNotRun(result, { tests: [notRunResult(entry.name, fullName, skipped ? undefined : notRunError, opts)], suites: [] }, opts);
+      }
+      continue;
+    }
 
     // A test the selection filters exclude is not part of the run at all —
     // neither reported nor counted as skipped, as Playwright filters it out
@@ -2765,12 +2822,19 @@ async function runSuiteContext(
       screenshotPath?: string;
       videoPath?: string;
     } | undefined;
+    // Whether the attempts whose errors the result can report started on
+    // screens a warm reset left holding their React state: the first failed
+    // attempt (a flaky pass reports it) and the last attempt (a hard failure
+    // reports its error). The result says so (KEPT_SCREENS_HINT).
+    let firstFailureOnKeptScreens: boolean | undefined;
+    let lastAttemptOnKeptScreens = false;
     const traceConfig = runTraceConfig(opts);
     const videoConfig = resolveVideoConfig(opts.config.video);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0 && opts.abortSignal?.aborted) break;
       attemptStart = Date.now();
+      let onKeptScreens = false;
       // Retry attempts force every deep link cold. The first attempt failed
       // for an unknown reason — a cold terminate + relaunch is the recovery
       // path for simulator states that warm in-process delivery would carry
@@ -2860,11 +2924,32 @@ async function runSuiteContext(
       // or gRPC stream opened at launch) with its original start time.
       const capturedAppRequests = new Map<Device, CapturedAppRequest[]>();
       const appTrafficInTest = new Map<Device, boolean>();
+      // Loopback servers each device's app connected to, which its capture
+      // cannot see (PILOT-320: an iOS simulator app calling localhost).
+      const loopbackDestinations = new Map<Device, Set<string>>();
+      // The reported servers, minus the hosts the trace's host filters
+      // scope out — so `trace.networkIgnoreHosts: ['127.0.0.1']` silences
+      // a local helper the user knows about, as it does TLS rejects.
+      const scopedLoopback = (res: { loopbackDestinations?: string[] }): string[] =>
+        filterEntriesByHosts(
+          (res.loopbackDestinations ?? []).map((dest) => ({ dest, url: `http://${dest}/` })),
+          { allow: traceConfig.networkHosts, deny: traceConfig.networkIgnoreHosts },
+        ).map((e) => e.dest);
       const attemptStartedAtMs = Date.now();
       const noteCapture = (
         d: Device,
-        res: { entries: RawNetworkEntries; entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }> },
+        res: {
+          entries: RawNetworkEntries;
+          entriesBeforeStart?: Array<CapturedAppRequest & { osService?: boolean }>;
+          loopbackDestinations?: string[];
+        },
       ): void => {
+        const loopback = scopedLoopback(res);
+        if (loopback.length > 0) {
+          const dests = loopbackDestinations.get(d) ?? new Set<string>();
+          for (const dest of loopback) dests.add(dest);
+          loopbackDestinations.set(d, dests);
+        }
         const seen = capturedAppRequests.get(d) ?? [];
         const since = _fileRunStartedAtMs ?? 0;
         let inTest = appTrafficInTest.get(d) ?? false;
@@ -3183,6 +3268,10 @@ async function runSuiteContext(
           }
           // The test now owns the screen: a later relaunch is not the reset's.
           if (opts._startRoute) opts._startRoute.pending = undefined;
+          if (opts._keptScreens) {
+            onKeptScreens = opts._keptScreens.pending === true;
+            opts._keptScreens.pending = undefined;
+          }
 
           // Give the device a moment to go idle before each test, so the
           // previous test's toasts, animations and async work settle before
@@ -3514,6 +3603,14 @@ async function runSuiteContext(
                 }
                 snapshotsFor(d).update(res.entries);
                 noteCapture(d, res);
+                const loopback = scopedLoopback(res);
+                if (loopback.length > 0) {
+                  traceCollector.addDaemonLogEntry(
+                    'warn',
+                    `Network capture warning: ${loopbackCaptureWarning(loopback)}`,
+                    d._traceDeviceId,
+                  );
+                }
               } else {
                 console.warn(`[tapsmith] Network capture stopped with error: ${res.errorMessage}`);
               }
@@ -3644,6 +3741,17 @@ async function runSuiteContext(
         }
       }
 
+      // The app talked to a server on the Mac's loopback interface, which
+      // its capture cannot see (PILOT-320): a test-result warning, once per test
+      // file per device and server, so every run path shows it.
+      for (const [d, dests] of loopbackDestinations) {
+        const fresh = _loopbackWarnings.takeNew(d._traceDeviceId ?? '', [...dests].sort());
+        if (fresh.length === 0) continue;
+        const who = devices.length > 1 && d._traceDeviceId ? `[${d._traceDeviceId}] ` : '';
+        const pending = (opts._preflightWarnings ??= []);
+        pending.push(`Network capture warning: ${who}${loopbackCaptureWarning(fresh)}`);
+      }
+
       // A failed test whose routes were live on a running proxy and still
       // never fired: say why when the capture shows a likely reason
       // (PILOT-775). A passing test's unfired route is just a mock the app
@@ -3657,6 +3765,7 @@ async function runSuiteContext(
           earlyRequests,
           // An early request already explains an empty test capture.
           appTrafficSeen: captured ? earlyRequests.length > 0 || appTrafficInTest.get(d) === true : undefined,
+          loopbackDestinations: [...(loopbackDestinations.get(d) ?? [])].sort(),
         });
       }
 
@@ -3720,6 +3829,8 @@ async function runSuiteContext(
       // back fails nothing here.
       await forEachDeviceBestEffort(opts, (d) => d._restoreTestOrientation?.());
 
+      lastAttemptOnKeptScreens = onKeptScreens;
+      if (status === 'failed' && firstFailureOnKeptScreens === undefined) firstFailureOnKeptScreens = onKeptScreens;
       if (status !== 'failed' || attempt === maxRetries || opts.abortSignal?.aborted) break;
 
       // A file-abort-worthy failure (e.g. "session recovered during before
@@ -3756,6 +3867,13 @@ async function runSuiteContext(
       });
     }
 
+    // The attempt whose error the result reports: a hard failure's last one,
+    // or the first failed one when a retry passed or skipped. A cold retry
+    // that failed the same way rules the kept screens out.
+    const reportedOnKeptScreens = status === 'failed'
+      ? lastAttemptOnKeptScreens
+      : firstFailure !== undefined && firstFailureOnKeptScreens === true;
+
     // Skipped on a retry after a failed attempt: reported as the failure, so a
     // skip never hides it. (Stricter than Playwright, which calls it flaky;
     // Tapsmith's flaky result is a pass, and this retry did not pass.)
@@ -3788,6 +3906,7 @@ async function runSuiteContext(
     // launch, a scope-entry reset, this test's own preflight) belongs here.
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
+    if (reportedOnKeptScreens && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
     const testResult: TestResult = {
       name: entry.name,
       fullName,
@@ -3812,16 +3931,26 @@ async function runSuiteContext(
     if (status === 'failed' && canReset) retryState.freshStartPending = true;
 
     if (status === 'failed' && error && opts.abortFileOnError?.(error)) {
-      opts._abortFileController?.abort();
-      break;
+      // The rest of the file is reported as not run (the loop's abort check
+      // above, and the child suites' below).
+      opts._fileAbort?.abort(fullName, error);
+      if (!opts.abortSignal?.aborted) break;
     }
   }
 
   // Run child suites
   for (const suiteEntry of ctx.suites) {
-    // Abort: same semantics as the test loop — stop here without recording
-    // the remaining suites' tests as 'skipped'.
-    if (opts.abortSignal?.aborted) break;
+    // Abort: same semantics as the test loop — a user stop records nothing
+    // for the remaining suites, a file abort reports their tests as not run.
+    if (opts.abortSignal?.aborted) {
+      const notRunError = fileAbortNotRunError(opts);
+      if (!notRunError) break;
+      const prefix = parentPrefix ? `${parentPrefix} > ${suiteEntry.name}` : suiteEntry.name;
+      const scopeSkipped = suiteEntry.skip || (focused && !suiteFocused(suiteEntry)) || !!ctx.skipped || skippedByBeforeAll;
+      const unrun = notRunAll(materializeSuiteEntry(suiteEntry), prefix, opts, scopeSkipped ? undefined : notRunError);
+      recordNotRun(result, { tests: [], suites: [unrun] }, opts);
+      continue;
+    }
 
     if (suiteEntry.skip || (focused && !suiteFocused(suiteEntry))
       || serialGroup?.failed || ctx.skipped || skippedByBeforeAll) {
@@ -3877,7 +4006,7 @@ async function runSuiteContext(
     // a suite whose direct tests were all filtered out can still have run
     // tests in nested describes, and those are the right attribution target.
     const lastRunTest = shouldRecord(traceConfig.mode, 0)
-      ? [...collectResults(result)].reverse().find((r) => r.status !== 'skipped')
+      ? [...collectResults(result)].reverse().find((r) => r.status !== 'skipped' && !notRunResults.has(r))
       : undefined;
     // When no test ran at all, skip traced streaming entirely: there is no
     // test to attach the events to, and streaming them anyway would pollute
@@ -4045,6 +4174,119 @@ function failAll(ctx: SuiteContext, prefix: string, error: Error, opts: RunOptio
     result.suites.push(failAll(childCtx, childPrefix, error, opts, screenshotPath, tracePath));
   }
   return result;
+}
+
+// ─── Tests a file abort left unrun (PILOT-1383) ───
+
+/**
+ * A file's abort state when its embedder recovers from infrastructure errors
+ * (`abortFileOnError`): the signal that stops the rest of the file, and what
+ * its unrun tests are reported with.
+ */
+class FileAbortState {
+  private readonly _controller = new AbortController();
+  /** The error each test the abort left unrun fails with. */
+  notRunError?: Error;
+  /** Not-run results held back on an attempt the embedder will retry. */
+  readonly deferred: TestResult[] = [];
+
+  /** `userSignal`: the embedder's own signal, a user stop. */
+  constructor(readonly userSignal: AbortSignal | undefined) {}
+
+  get signal(): AbortSignal {
+    return this._controller.signal;
+  }
+
+  abort(fullName: string, error: Error): void {
+    if (!this.notRunError) {
+      const notRun = new Error(
+        `Did not run: the file was stopped by an infrastructure error in "${fullName}" that Tapsmith could not recover from: ${error.message}`,
+      );
+      // Its stack would point at whatever code built it, not at the test:
+      // reporters show the message alone.
+      notRun.stack = `Error: ${notRun.message}`;
+      this.notRunError = notRun;
+    }
+    this._controller.abort();
+  }
+}
+
+/** Results standing in for tests a file abort left unrun: not tests that ran. */
+const notRunResults = new WeakSet<TestResult>();
+
+/** Not-run results a non-final attempt held back, by the suite it returned. */
+const deferredNotRun = new WeakMap<SuiteResult, TestResult[]>();
+
+/**
+ * The error a test left unrun by a file abort is failed with — undefined when
+ * nothing aborted the file or the user stopped the run (a stop leaves
+ * untouched tests unreported, PILOT-222).
+ */
+function fileAbortNotRunError(opts: RunOptions): Error | undefined {
+  const fileAbort = opts._fileAbort;
+  if (!fileAbort?.notRunError || fileAbort.userSignal?.aborted) return undefined;
+  return fileAbort.notRunError;
+}
+
+/** A not-run result: failed with `error`, or skipped (no error) when the test would have been skipped anyway. */
+function notRunResult(name: string, fullName: string, error: Error | undefined, opts: RunOptions): TestResult {
+  const result: TestResult = {
+    name,
+    fullName,
+    status: error ? 'failed' : 'skipped',
+    durationMs: 0,
+    ...(error ? { error } : {}),
+    project: opts.projectName,
+    filePath: opts.testFilePath,
+  };
+  notRunResults.add(result);
+  return result;
+}
+
+/** {@link notRunResult} for every test of a scope the file abort never reached. */
+function notRunAll(ctx: SuiteContext, prefix: string, opts: RunOptions, error: Error | undefined): SuiteResult {
+  const result: SuiteResult = { name: prefix, tests: [], suites: [], durationMs: 0 };
+  const focused = holdsFocus(ctx);
+  const scopeError = ctx.skipped ? undefined : error;
+  for (const t of ctx.tests) {
+    const fullName = prefix ? `${prefix} > ${t.name}` : t.name;
+    if (!passesTestFilter(fullName, opts)) continue;
+    result.tests.push(notRunResult(t.name, fullName, t.skip || (focused && !t.only) ? undefined : scopeError, opts));
+  }
+  for (const s of ctx.suites) {
+    const childPrefix = prefix ? `${prefix} > ${s.name}` : s.name;
+    const childError = s.skip || (focused && !suiteFocused(s)) ? undefined : scopeError;
+    result.suites.push(notRunAll(materializeSuiteEntry(s), childPrefix, opts, childError));
+  }
+  return result;
+}
+
+/**
+ * Record not-run results in the scope's result and report them — on the
+ * embedder's last attempt. On an attempt it will retry they are held back:
+ * the retry re-runs them, and the embedder takes them only when it falls
+ * back to this attempt's results.
+ */
+function recordNotRun(result: SuiteResult, unrun: Pick<SuiteResult, 'tests' | 'suites'>, opts: RunOptions): void {
+  const flat = collectResults({ name: '', durationMs: 0, ...unrun });
+  if (!opts.finalFileAttempt) {
+    opts._fileAbort?.deferred.push(...flat);
+    return;
+  }
+  result.tests.push(...unrun.tests);
+  result.suites.push(...unrun.suites);
+  for (const tr of flat) opts.reporter?.onTestEnd?.(tr);
+}
+
+/**
+ * The not-run results a file abort held back on an attempt that was not the
+ * embedder's last (`finalFileAttempt` unset): for an embedder that ends up
+ * reporting that attempt after all. Each suite's results are handed out once.
+ */
+export function takeDeferredNotRunResults(suite: SuiteResult): TestResult[] {
+  const results = deferredNotRun.get(suite) ?? [];
+  deferredNotRun.delete(suite);
+  return results;
 }
 
 /**
@@ -4285,7 +4527,7 @@ async function runTestFileOwned(
     }
   }
 
-  const abortFileController = opts.abortFileOnError ? new AbortController() : undefined;
+  const fileAbort = opts.abortFileOnError ? new FileAbortState(opts.abortSignal) : undefined;
   const fileOpts: RunOptions = {
     ...opts,
     workerFixtures,
@@ -4293,11 +4535,12 @@ async function runTestFileOwned(
     _prepared: new Map(opts.devices.flatMap((d) => (d.prepared ? [[d.name, d.prepared] as const] : []))),
     _applied: {},
     _startRoute: {},
-    _abortFileController: abortFileController,
-    abortSignal: abortFileController
+    _keptScreens: {},
+    _fileAbort: fileAbort,
+    abortSignal: fileAbort
       ? (opts.abortSignal
-        ? AbortSignal.any([abortFileController.signal, opts.abortSignal])
-        : abortFileController.signal)
+        ? AbortSignal.any([fileAbort.signal, opts.abortSignal])
+        : fileAbort.signal)
       : opts.abortSignal,
   };
 
@@ -4310,6 +4553,7 @@ async function runTestFileOwned(
   const fileStartedAt = Date.now();
   try {
     const suite = await runSuiteContext(rootCtx, '', [], [], fileOpts);
+    if (fileAbort && fileAbort.deferred.length > 0) deferredNotRun.set(suite, fileAbort.deferred);
     reportRunTelemetry(fileOpts, suite, Date.now() - fileStartedAt);
     return suite;
   } finally {
@@ -4427,7 +4671,8 @@ function reportRunTelemetry(opts: RunOptions, suite: SuiteResult, durationMs: nu
     // which loop on `isRecoverableInfrastructureError`); watch and MCP run a
     // file exactly once with in-place recovery, so their single infra-degraded
     // run is the real outcome and must still be counted (PILOT-330 review 2).
-    if (opts.abortFileOnError
+    // The embedder's last attempt (`finalFileAttempt`) is the real outcome.
+    if (opts.abortFileOnError && !opts.finalFileAttempt
       && results.some((r) => r.status === 'failed' && isRecoverableInfrastructureError(r.error))) {
       return;
     }
@@ -4552,4 +4797,4 @@ function discoverSuiteContext(
 
 /** @internal — exposed for unit testing only. */
 function resetFixtureRegistry(): void { setActiveFixtureRegistry(new FixtureRegistry()); }
-export const _internal = { pushContext, popContext, runSuiteContext, resolvePlatformFixture, resetFixtureRegistry };
+export const _internal = { pushContext, popContext, runSuiteContext, resolvePlatformFixture, resetFixtureRegistry, FileAbortState };

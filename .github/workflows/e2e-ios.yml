@@ -132,7 +132,7 @@ jobs:
         env:
           DAEMON: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
           AGENT_PREFIX: ios-agent-products-${{ hashFiles('ios-agent/**') }}-
-          TEST_APP: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
+          TEST_APP: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/components/**', 'test-app/assets/**',
             'test-app/plugins/**', 'test-app/package-lock.json', 'test-app/app.json',
             'test-app/metro.config.js',
             'packages/tapsmith-react-native/src/**',
@@ -143,7 +143,7 @@ jobs:
             'ios-agent/create-xcode-project.sh', 'ios-agent/Package.swift') }}
           # Exact-key match only (see the shard's "Restore cached auth state").
           AUTH_STATE: auth-state-ios-${{ env.AUTH_STATE_CACHE_VERSION }}-${{
-            hashFiles('test-app/app/**', 'test-app/assets/**',
+            hashFiles('test-app/app/**', 'test-app/components/**', 'test-app/assets/**',
             'test-app/plugins/**', 'test-app/package-lock.json', 'test-app/app.json',
             'test-app/metro.config.js', 'packages/tapsmith-react-native/src/**',
             'packages/tapsmith-react-native/package.json',

@@ -10,11 +10,12 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { claimBanner, printsBanner, runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
-import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
+import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
-import { runTestFile, loadFailureResult, collectResults, markFileRetryFlakes, type RunDevice, type TestResult, type SuiteResult } from './runner.js';
+import { runTestFile, loadFailureResult, collectResults, type RunDevice, type TestResult, type SuiteResult } from './runner.js';
+import { runFileWithSessionRecovery } from './file-recovery.js';
 import { runnerClaimsUnhandledRejection } from './unhandled-errors.js';
 import { telemetry, readSdkVersion, ensureSessionEnv } from './telemetry.js';
 import { createReporters, ReporterDispatcher, type FullResult } from './reporter.js';
@@ -54,6 +55,7 @@ import {
   cleanupStaleEmulators,
   resolveEmulatorLaunchSettings,
   prefilterDevicesForStrategy,
+  resolveAndroidDeviceTarget,
   probeDeviceHealth,
   probeDeviceHealthIfSettled,
   provisionEmulators,
@@ -643,7 +645,7 @@ async function setupSequentialDeviceClaimed(
     progress?.fail('primary-device', 'no online device found');
     // Devices that are there but held by other sessions are named: the user
     // stops one, rather than looking for a device problem they do not have.
-    throw new Error(noOnlineDeviceMessage(cfg, listAdbDevices(), androidToolchainBlocker()) + heldDevicesNote(withoutHeldDevices(listConnectedDeviceSerials()).held));
+    throw new Error(noOnlineDeviceMessage({ ...cfg, avdMissingOnCi: target.avdMissingOnCi }, listAdbDevices(), androidToolchainBlocker()) + heldDevicesNote(withoutHeldDevices(listConnectedDeviceSerials()).held));
   }
 
   cfg.device = target.selectedSerial;
@@ -1087,6 +1089,8 @@ async function ensureSequentialTargetDevice(
   launched: LaunchedEmulator[]
   /** The iOS simulator was booted here and the app installed onto it fresh. */
   appInstalledFresh?: boolean
+  /** On CI the configured AVD is not on the machine, so nothing was booted. */
+  avdMissingOnCi?: true
 }> {
   // The first `use.devices` member's pin, or root `device` — not `config.device`
   // alone, which left a group pinning both members with its primary auto-picked.
@@ -1209,7 +1213,6 @@ async function ensureSequentialTargetDevice(
     else process.stderr.write(`${DIM}${message}${RESET}\n`);
   }
 
-  const deviceStrategy = resolveDeviceStrategy(config);
   const onlineSerials = listConnectedDeviceSerials();
   // Devices another live Tapsmith session holds are skipped, not taken
   // (PILOT-381). They stay "occupied" for the emulator launch below.
@@ -1217,6 +1220,11 @@ async function ensureSequentialTargetDevice(
   for (const claim of unheldOnline.held) {
     if (progress) progress.note(skippedHeldDeviceMessage(claim));
     else process.stderr.write(`${DIM}${skippedHeldDeviceMessage(claim)}${RESET}\n`);
+  }
+  const { strategy: deviceStrategy, launchEmulators, notice: ciTargetNotice, avdMissingOnCi } = resolveAndroidDeviceTarget(config, unheldOnline.free);
+  if (ciTargetNotice) {
+    if (progress) progress.note(ciTargetNotice);
+    else process.stderr.write(`${YELLOW}${ciTargetNotice}${RESET}\n`);
   }
   const prefilteredOnline = prefilterDevicesForStrategy(
     unheldOnline.free,
@@ -1245,8 +1253,8 @@ async function ensureSequentialTargetDevice(
     return { selectedSerial: pickedOnline, launched: [] };
   }
 
-  if (!config.launchEmulators) {
-    return { selectedSerial: undefined, launched: [] };
+  if (!launchEmulators) {
+    return { selectedSerial: undefined, launched: [], ...(avdMissingOnCi ? { avdMissingOnCi } : {}) };
   }
 
   assertAdbForEmulatorLaunch();
@@ -1628,13 +1636,17 @@ async function provisionDevicesForBucketUnclaimed(
 
   // Android
   const allConnected = listConnectedDeviceSerials();
-  const deviceStrategy = resolveDeviceStrategy(effectiveConfig);
   // Devices another live Tapsmith session holds are skipped (PILOT-381), but
   // stay "occupied" for the emulator launch below.
   const unheld = withoutHeldDevices(allConnected);
   for (const claim of unheld.held) {
     if (progress) progress.note(skippedHeldDeviceMessage(claim));
     else process.stderr.write(`${DIM}${skippedHeldDeviceMessage(claim)}${RESET}\n`);
+  }
+  const { strategy: deviceStrategy, launchEmulators, notice: ciTargetNotice } = resolveAndroidDeviceTarget(effectiveConfig, unheld.free);
+  if (ciTargetNotice) {
+    if (progress) progress.note(ciTargetNotice);
+    else process.stderr.write(`${YELLOW}${ciTargetNotice}${RESET}\n`);
   }
   const prefiltered = prefilterDevicesForStrategy(
     unheld.free,
@@ -1653,7 +1665,7 @@ async function provisionDevicesForBucketUnclaimed(
     return { serials, launched: [], reusedSimulatorCount: 0 };
   }
 
-  if (!effectiveConfig.launchEmulators) {
+  if (!launchEmulators) {
     return { serials, launched: [], reusedSimulatorCount: 0 };
   }
 
@@ -3256,102 +3268,63 @@ async function runTestFileWithRecovery(
   const grep = normalizeGrep(opts.config.grep);
   const grepInvert = normalizeGrep(opts.config.grepInvert);
   const { sessions } = opts;
-  let firstAttemptSuite: SuiteResult | undefined;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const suite = await runTestFile(file, {
-        config: opts.config,
-        // Each session's prepared state (the startup launch on the first
-        // file, a recovery relaunch on a retry — itself a fresh `clear`) is
-        // consumed here, exactly once.
-        devices: sessions.map((s): RunDevice => ({
-          name: s.name,
-          device: s.device,
-          serial: s.serial,
-          sessionContext: { ...s.context, config: { ...opts.config, device: s.serial } },
-          prepared: consumePrepared(s),
-        })),
-        screenshotDir: opts.screenshotDir,
-        reporter: opts.reporter,
-        beforeEachTest: async (fullName) => {
-          // Mirror the worker path: a recovery here relaunched the app, so any
-          // beforeAll-established state (navigation, auth) is gone. Throw the
-          // infra-shaped error so the file retries and beforeAll re-runs —
-          // otherwise the test runs against the recovered app's home screen
-          // and fails with a misleading assertion error. Every device of the
-          // group is checked; a recovery on any of them retries the file.
-          const recoveries: string[] = [];
-          await Promise.all(sessions.map((s) => ensureSessionReady(
-            { ...s.context, config: { ...opts.config, device: s.serial } },
-            `before test ${fullName}`,
-            undefined,
-            {
-              onRecovery: (err) => {
-                const reason = err instanceof Error ? err.message : String(err);
-                recoveries.push(sessions.length > 1 ? `${s.name}: ${reason}` : reason);
-              },
+  return runFileWithSessionRecovery({
+    fileName: path.basename(file),
+    runAttempt: (finalFileAttempt) => runTestFile(file, {
+      config: opts.config,
+      // Each session's prepared state (the startup launch on the first
+      // file, a recovery relaunch on a retry — itself a fresh `clear`) is
+      // consumed here, exactly once.
+      devices: sessions.map((s): RunDevice => ({
+        name: s.name,
+        device: s.device,
+        serial: s.serial,
+        sessionContext: { ...s.context, config: { ...opts.config, device: s.serial } },
+        prepared: consumePrepared(s),
+      })),
+      screenshotDir: opts.screenshotDir,
+      reporter: opts.reporter,
+      beforeEachTest: async (fullName) => {
+        // Mirror the worker path: a recovery here relaunched the app, so any
+        // beforeAll-established state (navigation, auth) is gone. Throw the
+        // infra-shaped error so the file retries and beforeAll re-runs —
+        // otherwise the test runs against the recovered app's home screen
+        // and fails with a misleading assertion error. Every device of the
+        // group is checked; a recovery on any of them retries the file.
+        const recoveries: string[] = [];
+        await Promise.all(sessions.map((s) => ensureSessionReady(
+          { ...s.context, config: { ...opts.config, device: s.serial } },
+          `before test ${fullName}`,
+          undefined,
+          {
+            onRecovery: (err) => {
+              const reason = err instanceof Error ? err.message : String(err);
+              recoveries.push(sessions.length > 1 ? `${s.name}: ${reason}` : reason);
             },
-          )));
-          if (recoveries.length > 0) {
-            throw new Error(
-              `session recovered during before test ${fullName}; retrying file so beforeAll hooks run against the recovered app: ${recoveries.join('; ')}`,
-            );
-          }
-        },
-        abortFileOnError: isRecoverableInfrastructureError,
-        resetCapabilities: sessions[0].capabilities,
-        runMode: 'test',
-        networkApisInRun: opts.networkApisInRun,
-        projectUseOptions: opts.projectUseOptions,
-        projectName: opts.projectName,
-        grep: grep.length > 0 ? grep : undefined,
-        grepInvert: grepInvert.length > 0 ? grepInvert : undefined,
-        projectGrep: opts.projectGrep,
-        projectGrepInvert: opts.projectGrepInvert,
-      });
-      const fileResults = collectResults(suite);
-      const infraFailure = fileResults.find(
-        (r) => r.status === 'failed' && r.error && isRecoverableInfrastructureError(r.error),
-      );
-      if (!infraFailure) {
-        // If this is a retry that produced fewer results than the first
-        // attempt (e.g. crashed before running any tests), prefer the
-        // first attempt's results so the original failure is visible.
-        if (attempt === 2 && firstAttemptSuite) {
-          const firstResults = collectResults(firstAttemptSuite);
-          if (fileResults.length < firstResults.length) {
-            return firstAttemptSuite;
-          }
-          // Tests that failed on the discarded first attempt must surface as
-          // flaky, not as clean passes — the summary would otherwise hide
-          // that the file was re-run at all.
-          markFileRetryFlakes(firstAttemptSuite, suite);
+          },
+        )));
+        if (recoveries.length > 0) {
+          throw new Error(
+            `session recovered during before test ${fullName}; retrying file so beforeAll hooks run against the recovered app: ${recoveries.join('; ')}`,
+          );
         }
-        return suite;
-      }
-      if (attempt === 2) {
-        return suite;
-      }
-      firstAttemptSuite = suite;
-      process.stderr.write(
-        dim(`Recovering session after infrastructure error in ${path.basename(file)}: ${infraFailure.error?.message ?? 'unknown'}\n`),
-      );
-      await recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`);
-    } catch (err) {
-      if (!isRecoverableInfrastructureError(err) || attempt === 2) {
-        // If the retry itself crashed, return the first attempt's results
-        // (which contain the original failure) so it's counted in the summary.
-        if (firstAttemptSuite) return firstAttemptSuite;
-        throw err;
-      }
-      process.stderr.write(
-        dim(`Recovering session after infrastructure error in ${path.basename(file)}: ${err instanceof Error ? err.message : err}\n`),
-      );
-      await recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`);
-    }
-  }
-  // Unreachable — loop always returns or throws
-  throw new Error(`Exhausted recovery attempts for ${path.basename(file)}`);
+      },
+      abortFileOnError: isRecoverableInfrastructureError,
+      finalFileAttempt,
+      resetCapabilities: sessions[0].capabilities,
+      runMode: 'test',
+      networkApisInRun: opts.networkApisInRun,
+      projectUseOptions: opts.projectUseOptions,
+      projectName: opts.projectName,
+      grep: grep.length > 0 ? grep : undefined,
+      grepInvert: grepInvert.length > 0 ? grepInvert : undefined,
+      projectGrep: opts.projectGrep,
+      projectGrepInvert: opts.projectGrepInvert,
+    }),
+    recover: () => recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`),
+    onTestEnd: (result) => opts.reporter.onTestEnd(result),
+    log: (message) => process.stderr.write(dim(`${message}\n`)),
+  });
 }
 
 main().catch(async (err) => {

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
+import { parseHierarchyXml, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from '../ios-text-content.js';
 import { escapeJsString } from '../js-string-escape.js';
@@ -37,6 +37,8 @@ interface Case {
   value?: string
   /** The nearest labelled ancestor's label. */
   container?: string
+  /** iOS: the node is in a table row (a cell) beside static texts with these labels. */
+  row?: string[]
   /** Android: the node's text (an empty EditText reports its hint here). */
   text?: string
   contentDesc?: string
@@ -63,6 +65,7 @@ const T = {
   cell: 'XCUIElementTypeCell',
   link: 'XCUIElementTypeLink',
   progress: 'XCUIElementTypeProgressIndicator',
+  image: 'XCUIElementTypeImage',
   wheel: 'XCUIElementTypePickerWheel',
 } as const;
 
@@ -71,6 +74,7 @@ const A = {
   button: 'android.widget.Button',
   imageButton: 'android.widget.ImageButton',
   editText: 'android.widget.EditText',
+  materialEditText: 'com.google.android.material.textfield.TextInputEditText',
   viewGroup: 'android.view.ViewGroup',
 } as const;
 
@@ -90,6 +94,17 @@ const CASES: Case[] = [
   { why: 'nor by substring', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
   { why: 'nor by RegExp', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { source: '^Quantity: \\d+$', flags: '' }, matches: false },
   { why: 'nor a control by its title', platform: 'ios', type: T.switch, label: '', title: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
+  // An image's label is its alt text, a name (getByRole('image', { name }),
+  // getByLabel), never getByText's text: Playwright matches an <img alt> with
+  // getByAltText, and Android a content description with getByText not at all
+  // (PILOT-1366). A caption under a labelled image is one match.
+  { why: 'an image is not text by its label', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { exact: 'The Flower Girl' }, matches: false },
+  { why: 'nor by substring', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { substring: 'flower' }, matches: false },
+  { why: 'nor by RegExp', platform: 'ios', type: T.image, label: 'The Flower Girl', query: { source: 'Flower', flags: '' }, matches: false },
+  { why: 'nor an image by its title', platform: 'ios', type: T.image, label: '', title: 'The Flower Girl', query: { exact: 'The Flower Girl' }, matches: false },
+  // A button's label is the only text it has, drawn or not: an icon button
+  // can't be told from a text button, so both stay text.
+  { why: 'an icon button by its label', platform: 'ios', type: T.button, label: 'Close', query: { exact: 'Close' }, matches: true },
   // Values are text content only where they are the text on screen.
   { why: "a switch's value is not text", platform: 'ios', type: T.switch, label: '', value: '1', query: { exact: '1' }, matches: false },
   { why: "a stepper's value is not text", platform: 'ios', type: T.stepper, label: 'Quantity: 1', value: '1', query: { exact: '1' }, matches: false },
@@ -120,6 +135,19 @@ const CASES: Case[] = [
   { why: 'a joined middle child', platform: 'ios', type: T.other, label: 'A, B, C', query: { exact: 'B' }, matches: true },
   { why: 'a joined last child', platform: 'ios', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: true },
   { why: 'part of a child is no exact match', platform: 'ios', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Login' }, matches: false },
+  // UIKit labels a row's edit-mode Remove and Reorder controls with the row's
+  // texts joined after a verb: a part the row shows as a text of its own is
+  // the row's text, not the control's (PILOT-1374).
+  { why: "an edit-mode Remove button by its row's text", platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: 'Alpha (a@example.com)' }, matches: false },
+  { why: "an edit-mode Remove button by its row's middle text", platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: '981 195' }, matches: false },
+  { why: "an edit-mode Reorder button by its row's text", platform: 'ios', type: T.button, label: 'Reorder A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: 'Alpha (a@example.com)' }, matches: false },
+  { why: 'a part the row shows compares whitespace-normalized', platform: 'ios', type: T.button, label: 'Remove A, Alpha (a@example.com)', row: ['A', 'Alpha\u00a0(a@example.com)'], query: { exact: 'Alpha (a@example.com)' }, matches: false },
+  { why: "a title's part the row shows", platform: 'ios', type: T.button, label: '', title: 'Remove A, Alpha', row: ['A', 'Alpha'], query: { exact: 'Alpha' }, matches: false },
+  { why: "an edit-mode button's own words still match", platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { exact: 'Remove A' }, matches: true },
+  { why: 'a part its row does not show matches', platform: 'ios', type: T.other, label: 'Intro, Welcome to Expo', row: ['Intro'], query: { exact: 'Welcome to Expo' }, matches: true },
+  { why: 'outside a row, every joined part matches', platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', query: { exact: 'Alpha (a@example.com)' }, matches: true },
+  { why: 'a whole label matches in a row that shows it', platform: 'ios', type: T.button, label: 'Buy', row: ['Buy'], query: { exact: 'Buy' }, matches: true },
+  { why: 'by substring, an edit-mode button still matches', platform: 'ios', type: T.button, label: 'Remove A, 981 195, Alpha (a@example.com)', row: ['A', '981 195', 'Alpha (a@example.com)'], query: { substring: 'alpha' }, matches: true },
   // A label that lacks the text's trailing punctuation is not that text
   // (PILOT-880): a React Native touchable's accessibilityLabel hides the text
   // it wraps, and an alert's "Log out" button is not its "Log out?" title.
@@ -161,9 +189,22 @@ const CASES: Case[] = [
   { why: 'padding in the query is ignored', platform: 'android', type: A.textView, text: 'Sign In', query: { exact: ' Sign  In ' }, matches: true },
   { why: 'substring across a whitespace run', platform: 'android', type: A.textView, text: 'Welcome  to\u00a0Expo', query: { substring: 'to expo' }, matches: true },
   { why: 'a button by its text', platform: 'android', type: A.button, text: 'Save', query: { exact: 'Save' }, matches: true },
-  { why: "a text field's typed value is text", platform: 'android', type: A.editText, text: 'ada@example.com', placeholder: 'Email', query: { exact: 'ada@example.com' }, matches: true },
+  // A text field's typed value is no getByText text, as an <input>'s value is
+  // not in Playwright (PILOT-1404): a search result's text typed into the
+  // search field must not find the field.
+  { why: "a text field's typed value is not text", platform: 'android', type: A.editText, text: 'ada@example.com', placeholder: 'Email', query: { exact: 'ada@example.com' }, matches: false },
+  { why: 'nor by substring', platform: 'android', type: A.editText, text: 'Apollo 11', placeholder: 'Search Wikipedia', query: { substring: 'apollo' }, matches: false },
+  { why: 'nor by RegExp', platform: 'android', type: A.editText, text: 'Apollo 11', placeholder: 'Search Wikipedia', query: { source: '^Apollo', flags: '' }, matches: false },
+  { why: 'nor with no hint', platform: 'android', type: A.editText, text: 'Apollo 11', query: { exact: 'Apollo 11' }, matches: false },
+  { why: "nor a Material field's", platform: 'android', type: A.materialEditText, text: 'Apollo 11', placeholder: 'Search', query: { exact: 'Apollo 11' }, matches: false },
+  { why: 'an empty field with no hint is no text, as any empty node', platform: 'android', type: A.editText, query: { source: '^$', flags: '' }, matches: true },
   // An empty EditText reports its hint as its text, and the walk compares that.
   { why: "an empty text field's hint is its text", platform: 'android', type: A.editText, text: 'Email', placeholder: 'Email', query: { exact: 'Email' }, matches: true },
+  { why: 'by substring too', platform: 'android', type: A.editText, text: 'Search Wikipedia', placeholder: 'Search Wikipedia', query: { substring: 'search' }, matches: true },
+  // A value equal to the hint reads as the hint, as getByRole's name reads it.
+  { why: 'a typed value equal to the hint reads as the hint', platform: 'android', type: A.editText, text: 'Email', placeholder: 'Email', query: { substring: 'mail' }, matches: true },
+  // The text of a view that only looks like a field is still text.
+  { why: "a TextView's text is text", platform: 'android', type: A.textView, text: 'Apollo 11', placeholder: 'Search', query: { exact: 'Apollo 11' }, matches: true },
   // Unlike an iOS label, a content description is no getByText text on Android.
   { why: 'a content description is not text', platform: 'android', type: A.imageButton, contentDesc: 'Close', query: { exact: 'Close' }, matches: false },
   { why: 'nor by substring', platform: 'android', type: A.viewGroup, contentDesc: 'Login Form', query: { substring: 'login' }, matches: false },
@@ -204,14 +245,31 @@ function nodeFor(c: Case): HierarchyNode {
   return { tagName: c.type, attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
 }
 
-/** The node inside a container labelled `c.container`, when it has one. */
+/**
+ * The node in a table row beside `c.row`'s static texts, when it has them,
+ * inside a container labelled `c.container`, when it has one.
+ */
 function treeFor(c: Case): HierarchyNode {
-  const node = nodeFor(c);
-  if (c.container === undefined) return node;
+  let tree = nodeFor(c);
+  if (c.row !== undefined) {
+    const texts = c.row.map((label): HierarchyNode => ({
+      tagName: T.text,
+      attributes: new Map(Object.entries({ type: T.text, label, identifier: '', value: '' })),
+      children: [],
+      depth: 0,
+    }));
+    tree = {
+      tagName: T.cell,
+      attributes: new Map(Object.entries({ type: T.cell, label: '', identifier: '', value: '' })),
+      children: [tree, ...texts],
+      depth: 0,
+    };
+  }
+  if (c.container === undefined) return tree;
   return {
     tagName: T.other,
     attributes: new Map(Object.entries({ type: T.other, label: c.container, identifier: '', value: '' })),
-    children: [{ ...node, depth: 1 }],
+    children: [tree],
     depth: 0,
   };
 }
@@ -228,7 +286,7 @@ function buildFixture() {
   return {
     comment:
       'Generated by packages/tapsmith/src/__tests__/text-content-conformance.test.ts (PILOT-794, PILOT-707). One node ' +
-      '(on iOS with its container\'s label) and one getByText query per case, with the agent\'s answer; a RegExp query ' +
+      '(on iOS with its container\'s label and the static texts beside it in its table row) and one getByText query per case, with the agent\'s answer; a RegExp query ' +
       'carries the SDK translation the agents compile. Replayed by the TypeScript playground matcher, the iOS agent\'s ' +
       'TextContentTests and the Android agent\'s LocatorConformanceTest.',
     cases: CASES.map((c) => ({
@@ -333,6 +391,35 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
     expect(matchTypes(row, 'device.getByText("Test Screens", { exact: true })')).toEqual([`${T.text}:Test Screens`]);
   });
 
+  it("a generic wrapper echoing an image's or a switch's name gives way to it (PILOT-1366)", () => {
+    // React Native's <Image accessibilityLabel>: an Other over the Image, same label and bounds.
+    const bounds = { bounds: '[16,518][64,566]' };
+    const card = node(T.other, '', [
+      node(T.other, 'The Flower Girl', [node(T.image, 'The Flower Girl', [], bounds)], bounds),
+      node(T.text, 'The Flower Girl', [], { bounds: '[16,570][125,589]' }),
+    ]);
+    expect(matchTypes(card, 'device.getByText("The Flower Girl", { exact: true })')).toEqual([`${T.text}:The Flower Girl`]);
+    expect(matchTypes(card, 'device.getByText("flower")')).toEqual([`${T.text}:The Flower Girl`]);
+    expect(matchTypes(card, 'device.getByText(/^The Flower Girl$/)')).toEqual([`${T.text}:The Flower Girl`]);
+    const sw = node(T.other, 'Wi-Fi', [node(T.switch, 'Wi-Fi', [], { ...bounds, value: '1' })], bounds);
+    expect(matchTypes(sw, 'device.getByText("Wi-Fi", { exact: true })')).toEqual([]);
+    // Other bounds: a container, still text.
+    const container = node(T.other, 'The Flower Girl', [node(T.image, 'The Flower Girl', [], bounds)], { bounds: '[0,500][400,600]' });
+    expect(matchTypes(container, 'device.getByText("The Flower Girl", { exact: true })')).toEqual([`${T.other}:The Flower Girl`]);
+    // A labelled container around the echoing wrapper keeps its match: the
+    // echo is no match, so it never takes the container's place.
+    const echo = () => node(T.other, 'Avatar', [node(T.image, 'Avatar', [], bounds)], bounds);
+    const padded = { bounds: '[0,500][400,600]' };
+    expect(matchTypes(node(T.button, 'Avatar', [echo()], padded), 'device.getByText("Avatar", { exact: true })')).toEqual([`${T.button}:Avatar`]);
+    expect(matchTypes(node(T.other, 'Avatar', [echo()], padded), 'device.getByText("Avatar", { exact: true })')).toEqual([`${T.other}:Avatar`]);
+    expect(matchTypes(node(T.other, 'Gallery, Avatar', [echo()], padded), 'device.getByText("Avatar")')).toEqual([`${T.other}:Gallery, Avatar`]);
+    // A button over its icon keeps its label as text.
+    const button = node(T.button, 'Share', [node(T.image, 'Share', [], bounds)], bounds);
+    expect(matchTypes(button, 'device.getByText("Share", { exact: true })')).toEqual([`${T.button}:Share`]);
+    // getByRole still finds the image.
+    expect(matchTypes(card, 'device.getByRole("image", { name: "The Flower Girl" })')).toEqual([`${T.image}:The Flower Girl`]);
+  });
+
   it('siblings are both kept', () => {
     const siblings = node(T.other, '', [node(T.text, 'Save'), node(T.button, 'Save')]);
     expect(matchTypes(siblings, 'device.getByText("Save", { exact: true })')).toEqual([`${T.text}:Save`, `${T.button}:Save`]);
@@ -345,6 +432,51 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
   it("the application's name is no container label", () => {
     const app = node('XCUIElementTypeApplication', 'Notes', [node(T.button, 'Notes, Add')]);
     expect(matchTypes(app, 'device.getByText("Notes", { exact: true })')).toEqual([`${T.button}:Notes, Add`]);
+  });
+});
+
+describe("iOS getByText of a table row's text in edit mode (PILOT-1374)", () => {
+  // A recorded UIKit table in edit mode: each row's Remove and Reorder
+  // controls are labelled with the row's texts ("Remove A, 981 195, Alpha
+  // (a@example.com)"), the same dump the agent's host tests replay.
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const table = parseHierarchyXml(readFileSync(
+    path.join(repoRoot, 'ios-agent/Tests/Fixtures/iphone-se-18.2/edit-mode-table.xml'), 'utf8',
+  ));
+  const matchesIn = (code: string) => findMatchingNodes(table, parseSelectorString(code)!)
+    .map((n) => `${n.attributes.get('type')}:${n.attributes.get('label')}`);
+
+  it("finds the row's static text, not the controls named by it", () => {
+    expect(matchesIn('device.getByText("Alpha (a@example.com)", { exact: true })')).toEqual([`${T.text}:Alpha (a@example.com)`]);
+    expect(matchesIn('device.getByText("981 195", { exact: true })')).toEqual(Array(3).fill(`${T.text}:981 195`));
+    expect(matchesIn('device.getByText("A", { exact: true })')).toEqual([`${T.text}:A`]);
+  });
+
+  it('getByRole still finds the controls by their names', () => {
+    expect(matchesIn('device.getByRole("button", { name: "Alpha (a@example.com)", exact: true })'))
+      .toEqual([`${T.button}:Remove A, 981 195, Alpha (a@example.com)`, `${T.button}:Reorder A, 981 195, Alpha (a@example.com)`]);
+  });
+
+  it("a row's control holding the texts it joins gives way to them, as before", () => {
+    const row = node(T.cell, '', [node(T.button, 'Alpha, Beta', [node(T.text, 'Alpha'), node(T.text, 'Beta')])]);
+    expect(matchTypes(row, 'device.getByText("Alpha", { exact: true })')).toEqual([`${T.text}:Alpha`]);
+    // Its own text inside it is no row text outside it.
+    const merged = node(T.cell, '', [node(T.other, 'Alpha, Beta', [node(T.text, 'Alpha')])]);
+    expect(matchTypes(merged, 'device.getByText("Beta", { exact: true })')).toEqual([`${T.other}:Alpha, Beta`]);
+  });
+
+  it('the nearest row decides', () => {
+    // An outer row's text is not the inner row's.
+    const nested = node(T.cell, '', [node(T.text, 'Alpha'), node(T.cell, '', [node(T.button, 'Remove Alpha, Alpha')])]);
+    expect(matchTypes(nested, 'device.getByText("Alpha", { exact: true })'))
+      .toEqual([`${T.text}:Alpha`, `${T.button}:Remove Alpha, Alpha`]);
+    const inner = node(T.cell, '', [node(T.cell, '', [node(T.text, 'Alpha'), node(T.button, 'Remove Alpha, Alpha')])]);
+    expect(matchTypes(inner, 'device.getByText("Alpha", { exact: true })')).toEqual([`${T.text}:Alpha`]);
+  });
+
+  it('outside a table row, a joined part still matches (React Native)', () => {
+    const screen = node(T.other, '', [node(T.text, 'Welcome'), node(T.other, 'Intro, Welcome')]);
+    expect(matchTypes(screen, 'device.getByText("Welcome", { exact: true })')).toEqual([`${T.text}:Welcome`, `${T.other}:Intro, Welcome`]);
   });
 });
 

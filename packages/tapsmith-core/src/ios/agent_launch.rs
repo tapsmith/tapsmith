@@ -1549,9 +1549,14 @@ fn device_in_listener_command(command: &str) -> Option<&str> {
     None
 }
 
-/// The command lines of the processes listening on `127.0.0.1:port`. Empty
-/// when they cannot be read (no `lsof`, nothing listening).
+/// The processes listening on `127.0.0.1:port`, for telling whose agent it is.
 async fn agent_port_listeners(port: u16) -> AgentPortListeners {
+    AgentPortListeners(port_listener_commands(port).await)
+}
+
+/// The command lines of the processes listening on TCP `port`. Empty when
+/// they cannot be read (no `lsof`, nothing listening).
+pub(crate) async fn port_listener_commands(port: u16) -> Vec<String> {
     let pids = match Command::new("lsof")
         .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
         .output()
@@ -1562,7 +1567,7 @@ async fn agent_port_listeners(port: u16) -> AgentPortListeners {
             .filter_map(|l| l.trim().parse::<u32>().ok())
             .collect::<Vec<_>>(),
         Err(e) => {
-            debug!(port, error = %e, "lsof unavailable; cannot tell whose agent is on the port");
+            debug!(port, error = %e, "lsof unavailable; cannot tell who listens on the port");
             Vec::new()
         }
     };
@@ -1579,7 +1584,7 @@ async fn agent_port_listeners(port: u16) -> AgentPortListeners {
             }
         }
     }
-    AgentPortListeners(commands)
+    commands
 }
 
 /// The start failure for an iOS agent build from before agent authentication,

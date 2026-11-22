@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage"
 import { TapsmithTestHooks } from "@tapsmith/react-native"
 import * as Linking from "expo-linking"
 import { Stack } from "expo-router"
+import type { ReactNode } from "react"
 import { StyleSheet, View } from "react-native"
 import { AuthProvider, useAuth } from "./auth-context"
 
@@ -18,9 +19,11 @@ import { AuthProvider, useAuth } from "./auth-context"
  * passed from app code exactly as the docs say: Expo inlines `EXPO_PUBLIC_*`
  * only in app code, never inside node_modules, so a stock app that installs
  * the package from npm cannot rely on the package reading the flag itself
- * (this app links it with `file:`, which would hide that).
+ * (this app links it with `file:`, which would hide that). It wraps the
+ * navigator, as the docs say, so every reset remounts the app and no screen
+ * keeps one test's React state into the next.
  */
-function TapsmithHooks() {
+function TapsmithHooks({ children }: { children: ReactNode }) {
   const { resetAppState, reloadFromStorage } = useAuth()
   return (
     <TapsmithTestHooks
@@ -32,7 +35,9 @@ function TapsmithHooks() {
       // reload the session from it instead of clearing it.
       track={TRACKED_STORES}
       onReload={reloadFromStorage}
-    />
+    >
+      {children}
+    </TapsmithTestHooks>
   )
 }
 
@@ -42,50 +47,52 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <View style={styles.container}>
-        <Stack
-          screenOptions={{
-            headerBackTitle: "Back",
-          }}
-        >
-          <Stack.Screen name="index" options={{ title: "Tapsmith Test App" }} />
-          <Stack.Screen name="__reset" options={{ headerShown: false }} />
-          <Stack.Screen name="login" options={{ title: "Login Form" }} />
-          <Stack.Screen name="profile" options={{ title: "Profile" }} />
-          <Stack.Screen name="list" options={{ title: "List" }} />
-          <Stack.Screen name="toggles" options={{ title: "Toggles" }} />
-          <Stack.Screen name="spinner" options={{ title: "Spinner" }} />
-          <Stack.Screen name="gestures" options={{ title: "Gestures", gestureEnabled: false }} />
-          <Stack.Screen name="drag" options={{ title: "Drag and Drop", gestureEnabled: false }} />
-          <Stack.Screen
-            name="turned"
-            options={{ title: "Turned Gestures", gestureEnabled: false }}
-          />
-          <Stack.Screen name="dialogs" options={{ title: "Dialogs" }} />
-          <Stack.Screen name="visibility" options={{ title: "Visibility" }} />
-          <Stack.Screen name="accessibility" options={{ title: "Accessibility" }} />
-          <Stack.Screen name="permissions" options={{ title: "Permissions" }} />
-          <Stack.Screen name="clipboard" options={{ title: "Clipboard" }} />
-          <Stack.Screen name="keychain" options={{ title: "Keychain" }} />
-          <Stack.Screen name="preferences" options={{ title: "Preferences" }} />
-          <Stack.Screen name="slow-load" options={{ title: "Slow Load" }} />
-          <Stack.Screen name="delayed-list" options={{ title: "Delayed List" }} />
-          <Stack.Screen name="animating" options={{ title: "Animating" }} />
-          <Stack.Screen name="carousel" options={{ title: "Carousel" }} />
-          <Stack.Screen name="scroll" options={{ title: "Scroll" }} />
-          <Stack.Screen name="api-calls" options={{ title: "API Calls" }} />
-          <Stack.Screen name="chat" options={{ title: "Chat" }} />
-          <Stack.Screen name="occlusion" options={{ title: "Occlusion" }} />
-          <Stack.Screen name="covers" options={{ title: "Covers" }} />
-          <Stack.Screen name="keyboard" options={{ title: "Keyboard" }} />
-          <Stack.Screen name="typing" options={{ title: "Typing" }} />
-          <Stack.Screen name="text-matching" options={{ title: "Text Matching" }} />
-          <Stack.Screen name="webview" options={{ title: "WebView" }} />
-          <Stack.Screen name="tabs" options={{ title: "Tabs" }} />
-          <Stack.Screen name="native-tabs" options={{ title: "Native Tabs" }} />
-          <Stack.Screen name="roles" options={{ title: "Roles" }} />
-          <Stack.Screen name="stack/[level]" options={{ title: "Stack" }} />
-        </Stack>
-        <TapsmithHooks />
+        <TapsmithHooks>
+          <Stack
+            screenOptions={{
+              headerBackTitle: "Back",
+            }}
+          >
+            <Stack.Screen name="index" options={{ title: "Tapsmith Test App" }} />
+            <Stack.Screen name="__reset" options={{ headerShown: false }} />
+            <Stack.Screen name="login" options={{ title: "Login Form" }} />
+            <Stack.Screen name="profile" options={{ title: "Profile" }} />
+            <Stack.Screen name="list" options={{ title: "List" }} />
+            <Stack.Screen name="toggles" options={{ title: "Toggles" }} />
+            <Stack.Screen name="spinner" options={{ title: "Spinner" }} />
+            <Stack.Screen name="gestures" options={{ title: "Gestures", gestureEnabled: false }} />
+            <Stack.Screen name="drag" options={{ title: "Drag and Drop", gestureEnabled: false }} />
+            <Stack.Screen
+              name="turned"
+              options={{ title: "Turned Gestures", gestureEnabled: false }}
+            />
+            <Stack.Screen name="dialogs" options={{ title: "Dialogs" }} />
+            <Stack.Screen name="visibility" options={{ title: "Visibility" }} />
+            <Stack.Screen name="accessibility" options={{ title: "Accessibility" }} />
+            <Stack.Screen name="permissions" options={{ title: "Permissions" }} />
+            <Stack.Screen name="clipboard" options={{ title: "Clipboard" }} />
+            <Stack.Screen name="keychain" options={{ title: "Keychain" }} />
+            <Stack.Screen name="preferences" options={{ title: "Preferences" }} />
+            <Stack.Screen name="slow-load" options={{ title: "Slow Load" }} />
+            <Stack.Screen name="delayed-list" options={{ title: "Delayed List" }} />
+            <Stack.Screen name="animating" options={{ title: "Animating" }} />
+            <Stack.Screen name="carousel" options={{ title: "Carousel" }} />
+            <Stack.Screen name="scroll" options={{ title: "Scroll" }} />
+            <Stack.Screen name="api-calls" options={{ title: "API Calls" }} />
+            <Stack.Screen name="chat" options={{ title: "Chat" }} />
+            <Stack.Screen name="occlusion" options={{ title: "Occlusion" }} />
+            <Stack.Screen name="covers" options={{ title: "Covers" }} />
+            <Stack.Screen name="keyboard" options={{ title: "Keyboard" }} />
+            <Stack.Screen name="typing" options={{ title: "Typing" }} />
+            <Stack.Screen name="text-matching" options={{ title: "Text Matching" }} />
+            <Stack.Screen name="webview" options={{ title: "WebView" }} />
+            <Stack.Screen name="tabs" options={{ title: "Tabs" }} />
+            <Stack.Screen name="tab-bar-scroll" options={{ title: "Tab Bar Scroll" }} />
+            <Stack.Screen name="native-tabs" options={{ title: "Native Tabs" }} />
+            <Stack.Screen name="roles" options={{ title: "Roles" }} />
+            <Stack.Screen name="stack/[level]" options={{ title: "Stack" }} />
+          </Stack>
+        </TapsmithHooks>
       </View>
     </AuthProvider>
   )

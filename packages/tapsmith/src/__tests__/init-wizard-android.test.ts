@@ -61,6 +61,8 @@ const env: EnvScan = {
   simulators: [],
   avds: ['Pixel_API_36'],
   avdImages: [{ name: 'Pixel_API_36', tagId: 'google_apis' }],
+  androidDevices: [],
+  unusableAndroidDevices: [],
   isMacOS: false,
 };
 
@@ -489,5 +491,82 @@ describe('configureAndroid() with no build yet (PILOT-778)', () => {
     }
     expect(question(/package name/)?.choices?.[0]).toMatchObject({ name: 'com.acme.gradle', hint: "the app module's applicationId" });
     expect(android.packageName).toBe('com.acme.gradle');
+  });
+});
+
+describe('configureAndroid() with a running emulator (PILOT-1201)', () => {
+  const withRunning = (androidDevices: EnvScan['androidDevices']): EnvScan => ({
+    ...env,
+    avds: ['Pilot_Probe_API_28', 'Pixel_API_36', 'Tapsmith_Fold_API_36'],
+    avdImages: [
+      { name: 'Pilot_Probe_API_28', tagId: 'google_apis', apiLevel: 28 },
+      { name: 'Pixel_API_36', tagId: 'google_apis', apiLevel: 36 },
+      { name: 'Tapsmith_Fold_API_36', tagId: 'google_apis', apiLevel: 36 },
+    ],
+    androidDevices,
+  });
+
+  beforeEach(() => {
+    answers.clear();
+    questions.length = 0;
+    packages.clear();
+    apkCandidates = [DEBUG_APK];
+    packages.set(DEBUG_APK, 'com.acme.app');
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logged.push(stripAnsi(args.join(' '))); });
+  });
+
+  it('offers the running emulator first and selected, and choosing it writes its AVD without asking for one', async () => {
+    answers.set(/Where is your Android APK/, DEBUG_APK);
+    answers.set(/How will you run Android tests/, (q: Question) => q.choices?.[0]?.name);
+
+    const android = await configureAndroid(withRunning([
+      { serial: 'emulator-5570', avd: 'Tapsmith_Fold_API_36', held: false },
+      { serial: 'emulator-5560', avd: 'Pilot_Probe_API_28', held: true },
+    ]));
+
+    const q = question(/How will you run Android tests/);
+    expect(q?.choices?.map((c) => c.message)).toEqual([
+      'The running emulator, Tapsmith_Fold_API_36 (emulator-5570)', 'Another emulator', 'Physical devices', 'Both',
+    ]);
+    expect(q?.initial ?? 0).toBe(0);
+    // enquirer echoes the name: it must read as the label, not an internal value.
+    expect(q?.choices?.[0]?.name).toBe(q?.choices?.[0]?.message);
+    expect(question(/Which AVD/)).toBeUndefined();
+    expect(android).toMatchObject({ avd: 'Tapsmith_Fold_API_36', useEmulators: true, usePhysicalDevices: false });
+    expect(android.device).toBeUndefined();
+  });
+
+  it('pins the serial of a running emulator whose AVD name cannot be read, and says so', async () => {
+    answers.set(/Where is your Android APK/, DEBUG_APK);
+    answers.set(/How will you run Android tests/, 'The running emulator emulator-5570');
+
+    const android = await configureAndroid(withRunning([{ serial: 'emulator-5570', held: false }]));
+
+    expect(android).toMatchObject({ device: 'emulator-5570', useEmulators: false });
+    expect(logged.join('\n')).toContain("Pinned device: 'emulator-5570'");
+  });
+
+  it('marks and pre-selects the running AVD in the picker when the user picks another emulator', async () => {
+    answers.set(/Where is your Android APK/, DEBUG_APK);
+    answers.set(/How will you run Android tests/, 'emulators');
+    answers.set(/Which AVD/, (q: Question) => q.choices?.[q.initial as number]?.name);
+
+    const android = await configureAndroid(withRunning([{ serial: 'emulator-5570', avd: 'Tapsmith_Fold_API_36', held: false }]));
+
+    const choices = question(/Which AVD/)?.choices as Array<{ name: string; hint?: string }> | undefined;
+    expect(choices?.find((c) => c.name === 'Tapsmith_Fold_API_36')?.hint).toBe('running');
+    expect(android.avd).toBe('Tapsmith_Fold_API_36');
+  });
+
+  it('with nothing running, offers Emulators and pre-selects the newest capture-capable AVD, not the first', async () => {
+    answers.set(/Where is your Android APK/, DEBUG_APK);
+    answers.set(/How will you run Android tests/, 'emulators');
+    answers.set(/Which AVD/, (q: Question) => q.choices?.[q.initial as number]?.name);
+
+    const android = await configureAndroid(withRunning([]));
+
+    expect(question(/How will you run Android tests/)?.choices?.[0]?.message).toBe('Emulators');
+    expect(android.avd).toBe('Pixel_API_36');
   });
 });

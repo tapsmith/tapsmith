@@ -22,6 +22,7 @@ import {
   type SerializedGrepFilters,
 } from './worker-protocol.js';
 import { closeDeviceSession, consumePrepared, openDeviceGroup, sessionsForRun } from './device-session.js';
+import { knownInstalledBuilds, rememberInstalledBuilds } from './installed-builds.js';
 import { currentSession } from './device-claims.js';
 
 // ─── IPC protocol ───
@@ -115,6 +116,14 @@ export interface WatchRunMessage {
    * daemons across runs). Omitted for single-device runs.
    */
   groupMembers?: WatchRunGroupMember[]
+  /**
+   * The parent's record of the build each device was last proven to hold
+   * (`knownInstalledBuilds`). The child re-checks the build before it runs
+   * and reinstalls a rebuilt app; with this record the check is
+   * a stat and one device query unless something changed. Required: a parent
+   * that dropped it would pay for the full comparison on every run.
+   */
+  installedBuilds: Record<string, string>
 }
 
 export interface WatchRunTestEndMessage {
@@ -138,6 +147,8 @@ export interface WatchRunFileDoneMessage {
    * `proxyStartedBeforeLaunch`. Omitted when this run never started the proxy.
    */
   appBehindProxy?: boolean
+  /** The child's `installedBuilds` after its build check, for the parent's next run. */
+  installedBuilds: Record<string, string>
 }
 
 export interface WatchRunErrorMessage {
@@ -182,6 +193,7 @@ function sendEmptyFileDone(filePath: string): void {
     filePath,
     results: [],
     suite: serializeSuiteResult(emptySuite, 0),
+    installedBuilds: knownInstalledBuilds(),
   });
 }
 
@@ -190,6 +202,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
   config.device = msg.deviceSerial;
   const label = msg.label ?? 'Watch';
   const members = msg.groupMembers ?? [];
+  rememberInstalledBuilds(msg.installedBuilds);
 
   // Every daemon already holds its device with the agent running (the CLI's
   // startup, or a previous run): attach rather than provision. Without a
@@ -216,6 +229,12 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       label,
       adoptVerify: !config.package,
       connectTimeoutMs: 5_000,
+      // The rebuilt app's line for the watch terminal (this child's stdout
+      // is the user's); every path also gets it as a warning on the first
+      // test. Not for MCP, whose children's output reaches no user.
+      ...(msg.runMode === 'watch' ? { onReinstalled: (_serial: string, build: { message?: string }) => {
+        if (build.message) process.stdout.write(`  ${build.message}\n`);
+      } } : {}),
     },
   );
 
@@ -291,6 +310,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       resetCapabilities: sessions[0].capabilities,
       groupResetCapabilities: Object.fromEntries(sessions.map((s) => [s.serial, s.capabilities])),
       ...(sessions[0].device._appBehindProxy === undefined ? {} : { appBehindProxy: sessions[0].device._appBehindProxy }),
+      installedBuilds: knownInstalledBuilds(),
     });
   } finally {
     disposeActionProgressPrinter();

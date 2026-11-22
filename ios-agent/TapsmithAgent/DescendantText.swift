@@ -49,8 +49,10 @@ enum DescendantText {
                 // static text (and its unlabelled knob), so its children
                 // still count. A stepper's are its "<label>, Increment"
                 // buttons and a slider has none: neither is text on screen.
+                // An image's label does count: a container's text reads it,
+                // as Android's reads a content description (PILOT-1366).
                 let type = elementType(of: child)
-                if TextContent.nameOnlyTypes.contains(type) {
+                if TextContent.nameOnlyTypes.contains(type) && type != .image {
                     if type == .switch || type == .toggle {
                         let nested = collect(child, depth: depth + 1)
                         if !nested.isEmpty { parts.append(nested) }

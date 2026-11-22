@@ -80,6 +80,21 @@ data class Box(
  *   touches though nothing in it is clickable. This is the one plain view
  *   that is named: a spinner over the point says "wait", whether or not the
  *   overlay passes touches through. Kind [CoverKind.LOADING].
+ * - **A bar laid over a scroll view** (PILOT-1424), in an app whose plain
+ *   views take touches ([analyze]'s `plainViewsTakeTouches`: React Native,
+ *   where every view the JS hit test lands on is the touch's target unless
+ *   it is `pointerEvents="none"`). A checkout bar, mini player or tab bar
+ *   the screen lays over the bottom (or top) of a list: painted after the
+ *   scroll view the target is in, outside it, across its bottom or top
+ *   edge, at least half its width, at most a third of its height, with
+ *   something named in it (text, a description or an id) — the same shape
+ *   the SDK's scrollIntoView() trims off a list's view (PILOT-1370). Such a
+ *   bar clips the target like a window does: a row partly under it is
+ *   touched on the part left showing, one wholly under it is covered by it.
+ *   A nameless view over the list (a pointerEvents="none" fade) is still not
+ *   a cover, nor is anything inside the scroll view's own content, nor a
+ *   plain view in a native, Compose or Flutter app, where a touch passes
+ *   through a view that takes none. Kind [CoverKind.BAR].
  *
  * No Android dependencies — the tree and the windows come in through
  * [HitNode] and [WindowSpec] so the JVM unit tests can build them by hand.
@@ -101,6 +116,11 @@ object OcclusionAnalyzer {
     const val MAX_PATH_NODES_VISITED = 10_000
 
     private const val MAX_LABEL_LENGTH = 40
+
+    /** Least height (px) of a scroll view's view that a bar may leave; a
+     *  "bar" that would leave less is the list's content, not over it. The
+     *  SDK's scrollIntoView() trims with the same bound (MIN_REGION). */
+    const val MIN_VIEW = 48
 
     sealed class Verdict {
         /** Nothing covers ([x], [y]) — touch there. [visible] is the part of
@@ -130,7 +150,7 @@ object OcclusionAnalyzer {
     /** What a cover is. A focused field under the keyboard or a control on
      *  its own screen still gets the input; under another window it does
      *  not — that window has the input focus. */
-    enum class CoverKind { KEYBOARD, WINDOW, CONTROL, LOADING }
+    enum class CoverKind { KEYBOARD, WINDOW, CONTROL, LOADING, BAR }
 
     data class WindowSpec(
         val id: Int,
@@ -157,6 +177,13 @@ object OcclusionAnalyzer {
         /** A spinner or a progress bar (Android's ProgressBar and its
          *  subclasses, Compose's progress indicators). */
         val isProgressIndicator: Boolean get() = false
+
+        /** A scroll view: content scrolls inside it, and bars are laid over it. */
+        val isScrollContainer: Boolean get() = false
+
+        /** Has text, a content description or a resource id of its own (not
+         *  the test hooks marker): something drawn, not an empty wrapper. */
+        val isNamed: Boolean get() = false
 
         fun parent(): HitNode?
 
@@ -185,6 +212,7 @@ object OcclusionAnalyzer {
         targetWindowId: Int?,
         windows: List<WindowSpec>,
         screen: Box,
+        plainViewsTakeTouches: Boolean = false,
     ): Verdict {
         val onScreen = targetBounds.intersect(screen)
         if (!isTouchable(onScreen)) return Verdict.OffScreen
@@ -213,15 +241,33 @@ object OcclusionAnalyzer {
             pieces = pieces.flatMap { if (it.intersects(window.bounds)) remainders(it, window.bounds) else listOf(it) }
             if (pieces.isEmpty()) return covered(window)
         }
+        val path = target?.let(::pathOf).orEmpty()
+
+        // Bars laid over the target's list clip it like a window (PILOT-1424).
+        // Every scroll view on the way up: a carousel row can sit under a bar
+        // laid over the feed that holds the carousel.
+        if (target != null && plainViewsTakeTouches) {
+            for (clip in path.indices.filter { path[it].branch.isScrollContainer }.mapNotNull { barsOver(path, it) }) {
+                val left = pieces.map { it.intersect(clip.view) }.filter(::isTouchable)
+                if (left.isEmpty()) {
+                    // A control in the bar over the point is named before the bar.
+                    val whole = pieces.maxBy { it.area }
+                    findCoverInWindow(path, center(whole).first, center(whole).second)?.let { return it }
+                    return Verdict.Covered(clip.nameOver(onScreen), CoverKind.BAR)
+                }
+                pieces = left
+            }
+        }
         val visible = pieces.maxBy { it.area }
 
-        val x = (visible.left + visible.right) / 2
-        val y = (visible.top + visible.bottom) / 2
+        val (x, y) = center(visible)
         if (target != null) {
-            findCoverInWindow(target, x, y)?.let { return it }
+            findCoverInWindow(path, x, y)?.let { return it }
         }
         return Verdict.Clear(x, y, visible)
     }
+
+    private fun center(box: Box) = (box.left + box.right) / 2 to (box.top + box.bottom) / 2
 
     /**
      * Name a node for a "covered by …" message: its role from the class name
@@ -309,39 +355,17 @@ object OcclusionAnalyzer {
      * first — what they paint is on top.
      */
     private fun findCoverInWindow(
-        target: HitNode,
+        levels: List<Level>,
         x: Int,
         y: Int,
     ): Verdict.Covered? {
-        val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
         val reader = BudgetedReader(MAX_NODES_VISITED)
         // The loading-overlay check walks more widely; its own allowance
         // keeps it from starving the touchable-cover search.
         val loadingReader = BudgetedReader(MAX_NODES_VISITED)
-        // (parent, the target's branch, its index among the parent's
-        // children), from the target's parent up to the root.
-        val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
-        var child = target
-        var parent = child.parent()
-        while (parent != null) {
-            val level = parent
-            val index =
-                (0 until level.childCount()).firstOrNull { i -> pathReader.child(level, i)?.sameAs(child) == true }
-                    ?: break
-            levels.add(Triple(level, child, index))
-            child = level
-            parent = child.parent()
-        }
 
-        for ((node, branch, branchIndex) in levels.asReversed()) {
-            val branchKey = drawKey(branch, branchIndex)
-            val later =
-                (0 until node.childCount())
-                    .filter { it != branchIndex }
-                    .mapNotNull { i -> reader.child(node, i)?.let { it to drawKey(it, i) } }
-                    .filter { (sibling, key) -> compareKeys(key, branchKey) > 0 && !isModalBarrierBehind(sibling, key, branchKey) }
-                    .sortedWith { a, b -> compareKeys(b.second, a.second) }
-            for ((sibling, _) in later) {
+        for (level in levels.asReversed()) {
+            for (sibling in paintedOver(level, reader)) {
                 // A control in a loading overlay (its Cancel button) is named
                 // as the cover; the overlay is named when nothing in it is.
                 searchSubtree(sibling, x, y, reader)?.let { return Verdict.Covered(it.describe(), CoverKind.CONTROL) }
@@ -352,6 +376,144 @@ object OcclusionAnalyzer {
             if (reader.exhausted) return null
         }
         return null
+    }
+
+    /** One step of the target's path to the root: [parent], the child of it
+     *  that holds the target ([branch]), and that child's index. */
+    private class Level(
+        val parent: HitNode,
+        val branch: HitNode,
+        val index: Int,
+    )
+
+    /** The target's ancestors with its branch at each, from its parent up to
+     *  the root (or as far as the branch can be placed). */
+    private fun pathOf(target: HitNode): List<Level> {
+        val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
+        val levels = mutableListOf<Level>()
+        var child = target
+        var parent = child.parent()
+        while (parent != null) {
+            val level = parent
+            val index =
+                (0 until level.childCount()).firstOrNull { i -> pathReader.child(level, i)?.sameAs(child) == true }
+                    ?: break
+            levels.add(Level(level, child, index))
+            child = level
+            parent = child.parent()
+        }
+        return levels
+    }
+
+    /** [level]'s children painted after the target's branch, topmost first. */
+    private fun paintedOver(
+        level: Level,
+        reader: BudgetedReader,
+    ): List<HitNode> {
+        val branchKey = drawKey(level.branch, level.index)
+        return (0 until level.parent.childCount())
+            .filter { it != level.index }
+            .mapNotNull { i -> reader.child(level.parent, i)?.let { it to drawKey(it, i) } }
+            .filter { (sibling, key) -> compareKeys(key, branchKey) > 0 && !isModalBarrierBehind(sibling, key, branchKey) }
+            .sortedWith { a, b -> compareKeys(b.second, a.second) }
+            .map { it.first }
+    }
+
+    // ─── Bars laid over the target's scroll view (PILOT-1424) ───
+
+    /** The part of the target's scroll view no bar covers ([view]), and the
+     *  bars that were cut off it. */
+    private class BarClip(
+        val view: Box,
+        val bars: List<HitNode>,
+        val nameOf: (HitNode) -> String,
+    ) {
+        /** The bar over most of [target]. */
+        fun nameOver(target: Box): String = nameOf(bars.maxBy { it.bounds.intersect(target).area })
+    }
+
+    /**
+     * The bars laid over the scroll view `path[at].branch`, cut off its
+     * bounds the way the SDK's scrollIntoView() trims them (PILOT-1370), or
+     * null when nothing is cut.
+     */
+    private fun barsOver(
+        path: List<Level>,
+        at: Int,
+    ): BarClip? {
+        val list = path[at].branch.bounds
+        if (list.isEmpty) return null
+        val reader = BudgetedReader(MAX_NODES_VISITED)
+        val named = HashMap<HitNode, HitNode?>()
+        val candidates = mutableListOf<HitNode>()
+        // Painted over the scroll view: later siblings of it or of an ancestor.
+        for (level in path.subList(at, path.size)) {
+            for (sibling in paintedOver(level, reader)) collectBars(sibling, list, reader, candidates, named)
+        }
+        if (candidates.isEmpty()) return null
+
+        // Trimmed until nothing more trims it: a bar stacked on another (a
+        // mini player above a tab bar) reaches the edge only once the outer
+        // one is cut off.
+        val middle = list.top + list.height / 2
+        var r = list
+        val cut = mutableListOf<HitNode>()
+        for (pass in 0..candidates.size) {
+            val before = r
+            for (bar in candidates) {
+                val b = bar.bounds
+                val across = b.intersect(r)
+                if (across.isEmpty || across.width * 2 < list.width) continue
+                val h = b.height
+                if (b.top > middle && b.bottom >= r.bottom - h) {
+                    if (b.top - r.top >= MIN_VIEW && b.top < r.bottom) {
+                        r = Box(r.left, r.top, r.right, b.top)
+                        cut.add(bar)
+                    }
+                } else if (b.bottom < middle && b.top <= r.top + h) {
+                    if (r.bottom - b.bottom >= MIN_VIEW && b.bottom > r.top) {
+                        r = Box(r.left, b.bottom, r.right, r.bottom)
+                        cut.add(bar)
+                    }
+                }
+            }
+            if (r == before) break
+        }
+        if (cut.isEmpty()) return null
+        return BarClip(r, cut) { bar ->
+            val label = named[bar]
+            when {
+                label == null || label === bar -> bar.describe()
+                else -> "a bar holding ${label.describe()}"
+            }
+        }
+    }
+
+    /**
+     * Every node in [root]'s subtree shaped like a bar over [list] (see the
+     * class doc), into [into]; [named] records, for each node visited, the
+     * first named node in its subtree (itself first), or null.
+     */
+    private fun collectBars(
+        root: HitNode,
+        list: Box,
+        reader: BudgetedReader,
+        into: MutableList<HitNode>,
+        named: MutableMap<HitNode, HitNode?>,
+    ): HitNode? {
+        // Invisible, or nowhere over the list (Android clips a child's bounds
+        // to its parent's, so nothing inside it is either).
+        if (!root.isVisible || !root.bounds.intersects(list)) return null
+        var label: HitNode? = if (root.isNamed) root else null
+        for (i in 0 until root.childCount()) {
+            val child = reader.child(root, i) ?: continue
+            val inChild = collectBars(child, list, reader, into, named)
+            if (label == null) label = inChild
+        }
+        named[root] = label
+        val b = root.bounds
+        if (label != null && b.height * 3 <= list.height && b.intersect(list).width * 2 >= list.width) into.add(root)
+        return label
     }
 
     /** Whether [branch], painted over the target, is a loading overlay over

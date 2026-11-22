@@ -51,6 +51,7 @@ import {
   currentRouteScope,
 } from './network.js';
 import { WebViewHandle } from './webview-handle.js';
+import { hierarchyShowsAppWebView } from './trace-viewer/components/hierarchy-utils.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
 import type { Platform } from './config.js';
 
@@ -362,10 +363,17 @@ export class Device {
   private _doubleTapIntervalMs: number;
   /** The config's `reducedMotion`, sent with every device selection. */
   private _reducedMotion: TapsmithConfig['reducedMotion'];
+  /**
+   * The config's Android `activity`, sent with every agent start so the
+   * daemon launches it on every path: resets, restarts and recovery
+   * relaunches, not only the session's first launch.
+   */
+  private _launchActivity: string;
 
-  constructor(client: TapsmithGrpcClient, config?: Partial<Pick<TapsmithConfig, 'timeout' | 'package' | 'platform' | 'simulator' | 'typingDelay' | 'doubleTapInterval' | 'appResetColdEvery' | 'reducedMotion'>>) {
+  constructor(client: TapsmithGrpcClient, config?: Partial<Pick<TapsmithConfig, 'timeout' | 'package' | 'platform' | 'simulator' | 'typingDelay' | 'doubleTapInterval' | 'appResetColdEvery' | 'reducedMotion' | 'activity'>>) {
     this._client = client;
     this._reducedMotion = config?.reducedMotion;
+    this._launchActivity = config?.activity ?? '';
     this._defaultTimeoutMs = config?.timeout ?? 30_000;
     this._appResetColdEvery = config?.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY;
     this._typingDelayMs = config?.typingDelay ?? 0;
@@ -468,8 +476,8 @@ export class Device {
    * connect attempt spins until the configured timeout).
    */
   async _dumpWebViewDomForInspection(hierarchyXml: string): Promise<string | null | undefined> {
-    const marker = this._platform === 'ios' ? 'XCUIElementTypeWebView' : 'android.webkit.WebView';
-    if (!hierarchyXml.includes(marker)) return undefined;
+    // An in-app browser's page is not the app's to connect to (PILOT-1384).
+    if (!hierarchyShowsAppWebView(hierarchyXml)) return undefined;
     // _establishWebView (unlike _connectWebView) never writes _activeWebView,
     // so a poll cannot clobber a handle a concurrent test session activated.
     // Captured outside attempt() so the connected handle stays disposable even
@@ -847,6 +855,7 @@ export class Device {
         opts.iosAppPath,
         opts.networkTracingEnabled ?? false,
         opts.clearAppDataFirst ?? false,
+        this._launchActivity,
       );
       if (!res.success) {
         throw new Error(res.errorMessage || 'Start agent failed');

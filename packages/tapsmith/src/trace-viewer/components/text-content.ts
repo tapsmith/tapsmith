@@ -14,8 +14,12 @@ import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from '../../ios-text-conten
 //   (IOS_VALUE_TEXT_TYPES).
 // - A label that starts with its nearest labelled ancestor's label and ", " is
 //   read without that prefix (a SwiftUI Stepper's "Quantity: 1, Increment").
+// - An exact match on one ", "-joined part of a label isn't one when the
+//   node's table row shows that part as a static text outside the node
+//   (UIKit's edit-mode Remove/Reorder controls, PILOT-1374).
 // - Innermost: a getByText match that contains another match is dropped
-//   (findMatchingNodes).
+//   (findMatchingNodes), and so is a generic wrapper that only echoes a
+//   name-only descendant's label on its bounds (an RN image, PILOT-1366).
 
 /** An iOS node's label, title and value as text content: each empty when it isn't. */
 export interface IosTexts {
@@ -56,11 +60,26 @@ function containsChildText(label: string, query: string): boolean {
   return l === q || l.startsWith(`${q}, `) || l.endsWith(`, ${q}`) || l.includes(`, ${q}, `);
 }
 
-/** getByText(string, { exact: true }) on iOS: literal, like the substring form. */
-export function iosTextMatchesExact(texts: IosTexts, query: string): boolean {
+/**
+ * getByText(string, { exact: true }) on iOS: literal, like the substring form.
+ * A ", "-joined part of the label or title matches, except one the node's
+ * table row shows as a static text of its own (`rowShowsQuery`):
+ * UIKit labels a row's edit-mode Remove and Reorder controls with the row's
+ * texts joined after a verb, a name for the row, not their text.
+ */
+export function iosTextMatchesExact(texts: IosTexts, query: string, rowShowsQuery = false): boolean {
   const q = normalize(query);
   if ([texts.label, texts.title, texts.value].some((t) => normalize(t) === q)) return true;
+  if (rowShowsQuery) return false;
   return containsChildText(texts.label, query) || containsChildText(texts.title, query);
+}
+
+/** How many static texts in the subtree at `node` (itself included) have the label `query`, whitespace-normalized. */
+export function iosStaticTextCount(node: HierarchyNode, query: string): number {
+  const q = normalize(query);
+  const own = (node.attributes.get('type') ?? node.tagName) === 'XCUIElementTypeStaticText'
+    && normalize(node.attributes.get('label') ?? '') === q ? 1 : 0;
+  return node.children.reduce((n, child) => n + iosStaticTextCount(child, query), own);
 }
 
 /** getByText(string) on iOS: a case-insensitive substring of the label, title or value. */

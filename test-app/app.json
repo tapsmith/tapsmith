@@ -37,6 +37,19 @@
             "DEFAULT",
             "BROWSABLE"
           ]
+        },
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "https",
+              "host": "links.tapsmith.test"
+            }
+          ],
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ]
         }
       ]
     },
@@ -49,7 +62,9 @@
       "./plugins/with-webview-debugging",
       "./plugins/with-scene-lifecycle",
       "./plugins/with-native-settings-screen",
-      "expo-secure-store"
+      "./plugins/with-leakcanary-launcher",
+      "expo-secure-store",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

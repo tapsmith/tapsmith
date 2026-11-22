@@ -15,7 +15,7 @@ import * as os from 'node:os';
 import { promisify } from 'node:util';
 import { isCI as runningInCi } from 'ci-info';
 import lockfile from 'proper-lockfile';
-import type { DeviceStrategy, EmulatorLaunchOptions } from './config.js';
+import { resolveDeviceStrategy, type DeviceStrategy, type EmulatorLaunchOptions, type TapsmithConfig } from './config.js';
 import { decodeXmlEntities } from './xml-entities.js';
 import { parseAdbDevicesOutput } from './adb-devices.js';
 import { devicesHeldElsewhere } from './device-claims.js';
@@ -528,7 +528,8 @@ export async function waitForPackageIndexed(
  * Whether the APK installed on the device is byte-identical to `apkPath`.
  * `pm` keeps the installed base.apk as-is, so an md5 comparison tells a
  * rebuilt app from the one already on the device. `undefined` when either
- * side cannot be hashed (then callers fall back to "installed is fine").
+ * side cannot be hashed; callers treat that as a mismatch and reinstall,
+ * since a false "matches" would test stale code.
  */
 export function installedApkMatches(serial: string, packageName: string, apkPath: string): boolean | undefined {
   try {
@@ -1799,6 +1800,68 @@ export function filterHealthyDevices(
   return { healthySerials, unhealthyDevices };
 }
 
+// ─── The device target on CI (PILOT-1201) ───
+
+/** How a run picks its Android devices: the strategy, and whether it may boot an emulator. */
+export interface AndroidDeviceTarget {
+  strategy: DeviceStrategy;
+  launchEmulators: boolean;
+  /** Set when, on CI, a connected device stood in for a configured AVD the machine lacks. */
+  notice?: string;
+  /** The configured AVD is not on this CI machine, so nothing is booted: what a no-device error must say. */
+  avdMissingOnCi?: true;
+}
+
+/**
+ * The run's Android device strategy ({@link resolveDeviceStrategy}), with
+ * one CI rule: a config with `avd` that runs on a CI machine without that
+ * AVD — a config `init` wrote on a laptop, in a workflow that boots its own
+ * emulator such as android-emulator-runner (docs/ci-setup.md) — uses the
+ * connected devices and boots nothing, as the AVD cannot be booted there.
+ * With no `deviceStrategy` (so `avd-only` by default) it says so in a
+ * notice; with an explicit `'prefer-connected'` it does so silently, so the
+ * config the notice recommends never tries to boot the missing AVD for an
+ * extra worker. An explicit `'avd-only'` is left alone. Only on CI, where
+ * the machine and its devices are the job's; locally a missing AVD stays
+ * an error (`avdNotFoundMessage`), since a connected device may be someone
+ * else's. `freeSerials` are the connected Android devices no other session
+ * holds; with none, nothing changes.
+ */
+export function resolveAndroidDeviceTarget(
+  config: Pick<TapsmithConfig, 'deviceStrategy' | 'avd' | 'launchEmulators'>,
+  freeSerials: readonly string[],
+  deps: { isCi?: boolean; listAvds?: () => string[] } = {},
+): AndroidDeviceTarget {
+  const strategy = resolveDeviceStrategy(config);
+  const unchanged: AndroidDeviceTarget = { strategy, launchEmulators: config.launchEmulators };
+  const isCi = deps.isCi ?? (runningInCi || !!(process.env.CI && process.env.CI !== 'false'));
+  if (!config.avd || !isCi || freeSerials.length === 0 || config.deviceStrategy === 'avd-only') return unchanged;
+  // Explicit prefer-connected only changes anything when it would boot.
+  if (config.deviceStrategy === 'prefer-connected' && !config.launchEmulators) return unchanged;
+  if ((deps.listAvds ?? listAvds)().includes(config.avd)) return unchanged;
+  if (config.deviceStrategy === 'prefer-connected') return { strategy, launchEmulators: false, avdMissingOnCi: true };
+  const devices = freeSerials.join(', ');
+  return {
+    strategy: 'prefer-connected',
+    launchEmulators: false,
+    avdMissingOnCi: true,
+    notice: `AVD "${config.avd}" (the config's avd) is not on this CI machine, so Tapsmith uses the connected `
+      + `device${freeSerials.length === 1 ? '' : 's'} ${devices} instead. To say so in the config, set `
+      + "deviceStrategy: process.env.CI ? 'prefer-connected' : undefined (or leave avd out on CI)",
+  };
+}
+
+/**
+ * The error for a configured AVD the machine does not have, with the fix
+ * for a CI workflow that boots its own emulator.
+ */
+export function avdNotFoundMessage(requestedAvd: string, avds: readonly string[]): string {
+  return `AVD "${requestedAvd}" not found. Available AVDs: ${avds.join(', ') || '(none)'}. `
+    + `Create it (npx tapsmith create-avd --name ${requestedAvd}) or set avd to one listed. `
+    + 'If something else boots the emulator (a CI workflow using android-emulator-runner, say), '
+    + "set deviceStrategy: 'prefer-connected' so Tapsmith uses it, or leave avd out of that config";
+}
+
 export function prefilterDevicesForStrategy(
   serials: string[],
   strategy: DeviceStrategy,
@@ -2651,9 +2714,7 @@ function resolveLaunchCandidates(
   }
 
   if (!avds.includes(requestedAvd)) {
-    throw new Error(
-      `AVD "${requestedAvd}" not found. Available AVDs: ${avds.join(', ') || '(none)'}`,
-    );
+    throw new Error(avdNotFoundMessage(requestedAvd, avds));
   }
 
   // Same-AVD multi-instance is the normal path — no warning needed.

@@ -27,6 +27,7 @@ When a test fails and its routes were live but none of them fired, Tapsmith name
 - *the network proxy started on demand during this test or its hooks* — the on-demand case above;
 - *the network proxy started at the beginning of this file, after the app was already running* — the mid-session cases above (watch, UI mode, the MCP server); relaunching the app, or restarting watch or UI mode, lets its connections go through the proxy;
 - *the app sent `<method> <url>` … before the route for `<pattern>` was registered* — the app fetched before the test's route existed (at launch, say); see the paragraph above;
+- *the app connected to a server on this Mac's loopback interface (`127.0.0.1:<port>`)* — an iOS simulator app called `localhost`, which no capture route sees; point it at the Mac's LAN address instead (see [Requests to localhost are not captured](ios-network-capture.md#requests-to-localhost-are-not-captured));
 - *the network proxy saw no request from the app during this test* — the test may have failed before the step that sends the request; if it got there, the app may have sent the request over a connection it opened before the proxy started, or its HTTP cache may have answered it;
 - *the app never sent a request matching the route patterns* — check the pattern.
 
@@ -72,6 +73,8 @@ HTTP/2 traffic is intercepted when the client accepts Tapsmith's MITM CA — inc
 ### `device.route(url, handler, options?)`
 
 Register a route handler that intercepts requests matching a URL pattern. The handler receives a `Route` object and must call one of `route.fulfill()`, `route.continue()`, `route.abort()`, or `route.fetch()` to resolve the request.
+
+Routes never intercept WebSocket connections; see [WebSockets](#websockets).
 
 **Parameters:**
 
@@ -877,6 +880,27 @@ Patterns match against the TLS SNI hostname with the same glob syntax as `networ
 
 Because passthrough connections are never decrypted, `device.route()`, `device.waitForRequest()`, and `device.waitForResponse()` can never match traffic on them. If a mock for a host you've added to `networkPassthroughHosts` never fires, or a Firestore/pinned-host request only appears as `CONNECT passthrough`, this is why.
 
+### HTTP/3 (QUIC)
+
+HTTP/3 runs over UDP, where a MITM proxy cannot follow it. Many servers advertise it in an `alt-svc: h3=":443"` response header (Cloudflare, Google and Fastly-fronted APIs do), and clients built on Chromium's network stack — Android WebView (Capacitor, Ionic, Cordova, React Native WebView) and Cronet — switch their later requests to that host over to HTTP/3. Tapsmith therefore keeps HTTP/3 off while capture is active, so those clients stay on HTTP/1.1 or HTTP/2 over TCP, where requests are captured and `device.route()`, `waitForRequest()` and `waitForResponse()` see them:
+
+| Platform | How HTTP/3 is kept off |
+|---|---|
+| **Android, transparent redirect** | Outbound UDP to port 443 is rejected for every app on the device. The client's HTTP/3 attempt fails at once, so it falls back to TCP straight away, including for a host it learned supports HTTP/3 before the test started. Loopback (`127.0.0.1`) and every other UDP port, plain DNS (port 53) included, are untouched. |
+| **Android, HTTP proxy fallback** | Nothing to block: WebView does not use HTTP/3 for requests it sends through an HTTP proxy. |
+| **iOS simulator** | The Network Extension drops every UDP flow from the simulator's processes except DNS, so HTTP/3-capable clients fall back to TCP. |
+| **iOS physical** | Traffic reaches Tapsmith through the Wi-Fi HTTP proxy; HTTP/3 is not blocked separately. |
+
+Responses keep their `alt-svc` header: Tapsmith does not rewrite it, so what the app receives and what the trace shows is what the server sent. The rule on Android covers port 443 only: a server that advertises HTTP/3 on another port (`alt-svc: h3=":8443"`) is still reached over UDP, around the proxy. It is also IPv4-only, like the TCP redirect.
+
+### WebSockets
+
+WebSockets keep working while capture is on. The proxy forwards the opening handshake untouched, and once the server answers `101 Switching Protocols` it passes the connection's bytes through in both directions until either side closes. This applies to `ws://` (including ports added with `networkHttpPorts` on Android) and to `wss://` on Android and iOS. Idle sockets are never timed out by the proxy. One case is not covered yet: a client that opens a plain `ws://` socket through an HTTP proxy `CONNECT` tunnel, which a physical iOS device (captured through its Wi-Fi proxy) may do. `wss://` is not affected.
+
+Each WebSocket appears in the Network tab as one `GET` row with a `ws://` or `wss://` URL and status `101`. While the socket is open the row is marked **Streaming** and shows the bytes sent each way so far. Once it closes, its duration covers the whole connection. Frames are not decoded: the row has the handshake's headers but no body.
+
+As in Playwright, where `page.route()` and the request events never see WebSockets, `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` and `device.on('request')` / `device.on('response')` do not apply to WebSocket handshakes, whatever their URL patterns match. Tapsmith does not yet have an equivalent of Playwright's `page.routeWebSocket()` for mocking or inspecting frames.
+
 ### Viewing network data in traces
 
 Open a trace archive:
@@ -958,7 +982,7 @@ iOS simulators are already per-PID filtered by the macOS Network Extension, so s
 
 **Android emulators/devices:** On rootable emulator images, traffic is redirected to the proxy transparently with `iptables`. Where root is unavailable, the HTTP proxy is instead set globally via `adb shell settings put global http_proxy`. Either way, every app and system service on the device routes through it -- use `networkHosts` or `networkIgnoreHosts` to reduce noise in traces. HTTPS decryption additionally requires a rootable (non-Play) emulator image; see [Android emulator image requirements](#android-emulator-image-requirements).
 
-**iOS simulators:** The macOS Network Extension intercepts traffic per-PID, filtering to only the simulator's process tree. Parallel iOS workers each get their own isolated capture session. Host browser traffic is never affected. See [iOS Network Capture](ios-network-capture.md) for first-run setup (a one-time System Extension approval).
+**iOS simulators:** The macOS Network Extension intercepts traffic per-PID, filtering to only the simulator's process tree. Parallel iOS workers each get their own isolated capture session. Host browser traffic is never affected. Requests to a server on the Mac's `localhost` are never captured — macOS keeps loopback traffic away from the Network Extension — so address the Mac by its LAN address instead; Tapsmith warns when it sees the app connected to a loopback server (see [Requests to localhost are not captured](ios-network-capture.md#requests-to-localhost-are-not-captured)). See [iOS Network Capture](ios-network-capture.md) for first-run setup (a one-time System Extension approval).
 
 **iOS physical devices:** A Wi-Fi proxy configuration profile (`.mobileconfig`) routes the device's traffic through the host Mac. This is system-wide -- there is no per-app filtering at the OS level. Use `networkHosts` to scope what appears in the trace. See [iOS Network Capture](ios-network-capture.md#physical-ios-devices) for the device-specific setup flow.
 

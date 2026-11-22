@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -25,6 +25,8 @@ let devices: Device[];
 let calls: string[];
 let agentConnected: boolean;
 let startAgentResponse: () => Promise<{ success?: boolean; errorMessage?: string }>;
+/** The arguments of the last agent start. */
+let startAgentArgs: unknown[];
 let installApkResponse: () => Promise<{ success: boolean; errorMessage?: string }>;
 /** What each agent round trip after a start answers, in turn (then the last one forever). */
 let hierarchyAnswers: Array<() => Promise<{ hierarchyXml: string; errorMessage: string }>>;
@@ -35,8 +37,9 @@ vi.mock('../grpc-client.js', () => ({
     ping(): Promise<{ version: string; agentConnected: boolean }> { return Promise.resolve({ version: 'test', agentConnected }); }
     listDevices(): Promise<{ devices: Device[] }> { return Promise.resolve({ devices }); }
     setDevice(): Promise<{ success: boolean }> { return Promise.resolve({ success: true }); }
-    startAgent(): Promise<unknown> {
+    startAgent(...args: unknown[]): Promise<unknown> {
       calls.push('startAgent');
+      startAgentArgs = args;
       return startAgentResponse();
     }
     getUiHierarchy(): Promise<unknown> {
@@ -120,9 +123,15 @@ class FakeDaemon extends EventEmitter {
   unref(): void {}
 }
 
+// The builds the configs name exist, as the install path requires (PILOT-1381).
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-mcp-root-'));
+fs.mkdirSync(path.join(ROOT, 'build', 'ShopNotes.app'), { recursive: true });
+fs.writeFileSync(path.join(ROOT, 'build', 'app.apk'), 'apk');
+afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
+
 const iosConfig: Partial<TapsmithConfig> = {
   platform: 'ios', package: 'com.example.ShopNotes', app: 'build/ShopNotes.app',
-  timeout: 1000, retries: 0, screenshot: 'never', testMatch: [], rootDir: '/p', outputDir: 'out',
+  timeout: 1000, retries: 0, screenshot: 'never', testMatch: [], rootDir: ROOT, outputDir: 'out',
   workers: 1, launchEmulators: false, daemonAddress: 'localhost:1',
 };
 const sim: Device = { serial: 'SIM-1', state: 'Active', platform: 'ios' };
@@ -204,6 +213,22 @@ describe('the app under test, on a headless session\'s device', () => {
     devices = [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }];
     await target({ ...iosConfig, platform: 'android', app: undefined, apk: 'build/app.apk', package: 'com.x' });
     expect(calls).toEqual(['installApk app.apk', 'startAgent', 'getUiHierarchy']);
+  });
+
+  it("starts the agent with the config's Android `activity`, so every launch of the app uses it (PILOT-1402)", async () => {
+    devices = [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }];
+    apkInstalled = true;
+    await target({ ...iosConfig, platform: 'android', app: undefined, package: 'org.wikipedia.dev', activity: 'org.wikipedia.main.MainActivity' });
+    expect(calls[0]).toBe('startAgent');
+    expect(startAgentArgs[0]).toBe('org.wikipedia.dev');
+    expect(startAgentArgs[startAgentArgs.length - 1]).toBe('org.wikipedia.main.MainActivity');
+  });
+
+  it('that is missing fails the target before the install check, naming the config key, and no agent is started', async () => {
+    simApp = 'matching';
+    await expect(target({ ...iosConfig, app: 'build/Gone.app' }))
+      .rejects.toThrow(`iOS app not found at ${path.join(ROOT, 'build', 'Gone.app')} (from config \`app\`: "build/Gone.app"`);
+    expect(calls).toEqual([]);
   });
 
   it('that fails to install fails the target with the reason, and no agent is started', async () => {

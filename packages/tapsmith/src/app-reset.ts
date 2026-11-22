@@ -58,6 +58,13 @@ export interface ResetCapabilities {
    */
   hooksUrlPrefix?: string;
   /**
+   * The hooks marker says the hooks wrap the app and remount it on every
+   * reset (`remount=1`), read with the URL prefix. Without it, a warm reset
+   * leaves mounted screens holding their React state, and a test that fails
+   * right after one gets a hint saying so.
+   */
+  hooksRemount?: boolean;
+  /**
    * The saved app state the last cold restore put on the device, with the
    * hooks marker's `boot` token and `writes` count read right after it. While
    * the app is still that process and its write count has not moved, the data
@@ -75,6 +82,35 @@ export interface ResetCapabilities {
    * daemon cannot pass a keep request on (one older than the SDK).
    */
   appStateKeep?: { noWrites?: boolean; writingKeeps?: number; daemonCannotKeep?: boolean };
+}
+
+/**
+ * Forget, in place, what `caps` learnt about the app build: after a reinstall
+ * those facts describe a build that is gone, and they never downgrade on their
+ * own (a probe only upgrades `hooksDetected`; `appStateKeep` only learns
+ * reasons to stop trying). What describes the device or the daemon stays.
+ */
+export function forgetBuildCapabilities(caps: ResetCapabilities): void {
+  delete caps.hooksDetected;
+  delete caps.hooksUrlPrefix;
+  delete caps.hooksRemount;
+  if (caps.appStateKeep) {
+    delete caps.appStateKeep.noWrites;
+    delete caps.appStateKeep.writingKeeps;
+    if (Object.keys(caps.appStateKeep).length === 0) delete caps.appStateKeep;
+  }
+}
+
+/**
+ * Fold a watch-mode or MCP child's capabilities back into the parent's
+ * per-device store. The child was seeded from that store and its probes only
+ * upgrade, so its capabilities as they ended are the store's new contents —
+ * replaced, not merged, so whatever a reinstall in the child forgot
+ * ({@link forgetBuildCapabilities}) does not come back with the next child.
+ */
+export function foldBackCapabilities(store: ResetCapabilities, child: ResetCapabilities): void {
+  for (const key of Object.keys(store) as Array<keyof ResetCapabilities>) delete store[key];
+  Object.assign(store, structuredClone(child));
 }
 
 export interface AppStateBaseline {
@@ -107,6 +143,13 @@ export interface PreparedState {
   durationMs: number;
   /** Human-readable source, e.g. "startup launch" or "background preparation". */
   source: string;
+  /**
+   * Whether the preparation was an in-app reset that kept the app's process
+   * ({@link AppResetReport.inAppReset}). Set by preparations that may run
+   * warm (UI mode's background preparation); left out by cold launches, and
+   * then a reset this satisfies says nothing about kept screens.
+   */
+  inAppReset?: boolean;
 }
 
 /** Where the work behind a recorded reset step happened. */
@@ -131,6 +174,12 @@ export interface AppResetReport {
   reason?: string;
   durationMs: number;
   steps: AppResetStep[];
+  /**
+   * An acknowledged in-app reset through the `@tapsmith/react-native` hooks
+   * that kept the app's process (no relaunch): screens that stayed mounted
+   * keep their React state unless the hooks remount the app.
+   */
+  inAppReset?: boolean;
 }
 
 /**
@@ -275,6 +324,11 @@ export interface HooksMarker {
    * the app can reset while keeping its data (`onReload` + `track`).
    */
   writes?: number;
+  /**
+   * The hooks wrap the app and remount it on every reset (`remount=1`), so
+   * no screen keeps React state across one.
+   */
+  remount?: boolean;
   error?: string;
 }
 
@@ -300,6 +354,7 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
   let urlPrefix = '';
   let boot: string | undefined;
   let writes: number | undefined;
+  let remount = false;
   let error: string | undefined;
   for (const field of fields) {
     const eq = field.indexOf('=');
@@ -311,6 +366,7 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
     else if (key === 'url') urlPrefix = value;
     else if (key === 'boot' && value) boot = value;
     else if (key === 'writes' && /^\d+$/.test(value)) writes = Number.parseInt(value, 10);
+    else if (key === 'remount') remount = value === '1';
     else if (key === 'err' && value) {
       try { error = decodeURIComponent(value); } catch { error = value; }
     }
@@ -321,6 +377,42 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
     ...(nav !== undefined && Number.isFinite(nav) ? { nav } : {}),
     ...(boot ? { boot } : {}),
     ...(writes !== undefined ? { writes } : {}),
+    ...(remount ? { remount } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+/**
+ * The warning a test gets when it fails after a warm in-app reset in an app
+ * whose hooks do not remount it: the reset re-navigated and cleared storage,
+ * but screens that stayed mounted kept the previous test's React state, and
+ * the failure itself reads as an ordinary locator timeout. Kept under 500
+ * characters: MCP clips each warning line there.
+ */
+export const KEPT_SCREENS_HINT =
+  'This test started after a warm in-app reset, which keeps the app running: a screen that stayed mounted '
+  + '(a visited tab, or the screen the reset landed on) still had the previous test\'s React state. '
+  + 'If the screen showed an earlier test\'s data, update @tapsmith/react-native to the same version as Tapsmith and wrap your root '
+  + 'navigator in <TapsmithTestHooks>, so every reset remounts the app: '
+  + 'https://tapsmith.dev/guides/warm-reset/#what-a-warm-reset-does-not-clear';
+
+/**
+ * Whether a scope's reset left any device's app on screens that kept their
+ * React state: an in-app reset (the process kept) on a device whose hooks do
+ * not remount the app. `undefined` when no reset ran here and no preparation
+ * that did says how it left the app (a cold launch, a skipped reset), which
+ * says nothing about the app the next test starts on.
+ */
+export function resetKeptScreens(
+  reports: ReadonlyArray<{ report: AppResetReport; capabilities?: ResetCapabilities }>,
+): boolean | undefined {
+  // A reset satisfied by a preparation that ran warm (UI mode's background
+  // preparation) left the app as that preparation did.
+  const inApp = ({ report }: { report: AppResetReport }): boolean | undefined =>
+    report.origin === 'inline' ? report.inAppReset === true
+      : report.origin === 'prepared' ? report.satisfiedBy?.inAppReset
+        : undefined;
+  const known = reports.filter((r) => inApp(r) !== undefined);
+  if (known.length === 0) return undefined;
+  return known.some((r) => inApp(r) === true && r.capabilities?.hooksRemount !== true);
 }
