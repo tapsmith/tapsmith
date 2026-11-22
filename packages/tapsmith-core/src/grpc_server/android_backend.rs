@@ -398,38 +398,45 @@ impl DeviceBackend for AndroidBackend<'_> {
         // domain-verified (usually a debug build's) otherwise opens in the
         // browser, and the run reports success on a page it never reached.
         let cmd = deep_link_view_command(uri, target_package.as_deref());
-        let delivered = adb::shell(&serial, &cmd).await;
-        let unresolved = match &delivered {
-            Ok(out) => intent_unresolved(out),
-            Err(e) => intent_unresolved(&e.to_string()),
-        };
-        if let (true, Some(target)) = (unresolved, target_package.as_deref()) {
-            // The app has no activity for this link. Opening it anyway would
-            // hand it to another app and leave that app in front; say which
-            // one instead, without launching it.
-            let handler = adb::shell(&serial, &deep_link_resolve_command(uri))
-                .await
-                .map(|out| parse_resolved_handler(&out))
-                .unwrap_or(LinkHandler::Unknown);
-            return Ok(self
-                .svc
-                .action_error(
+        let output = match adb::shell(&serial, &cmd).await {
+            Ok(out) => out,
+            Err(e) => {
+                let screenshot = self.svc.error_screenshot().await;
+                return Ok(Response::new(proto::ActionResponse {
                     request_id,
-                    "ACTION_FAILED",
-                    unhandled_link_message(uri, target, &handler),
-                )
-                .await);
-        }
-        if let Err(e) = delivered {
-            let screenshot = self.svc.error_screenshot().await;
-            return Ok(Response::new(proto::ActionResponse {
-                request_id,
-                success: false,
-                error_type: "ADB_COMMAND_FAILED".to_string(),
-                error_message: e.to_string(),
-                screenshot,
-                app_launched_fresh: false,
-            }));
+                    success: false,
+                    error_type: "ADB_COMMAND_FAILED".to_string(),
+                    error_message: e.to_string(),
+                    screenshot,
+                    app_launched_fresh: false,
+                }));
+            }
+        };
+        match (am_start_outcome(&output), target_package.as_deref()) {
+            (AmStartOutcome::Started, _) => {}
+            (AmStartOutcome::Unresolved, Some(target)) => {
+                // The app has no activity for this link. Opening it anyway
+                // would hand it to another app and leave that app in front;
+                // say which one instead, without launching it.
+                let handler = adb::shell(&serial, &deep_link_resolve_command(uri))
+                    .await
+                    .map(|out| parse_resolved_handler(&out))
+                    .unwrap_or(LinkHandler::Unknown);
+                return Ok(self
+                    .svc
+                    .action_error(
+                        request_id,
+                        "ACTION_FAILED",
+                        unhandled_link_message(uri, target, &handler),
+                    )
+                    .await);
+            }
+            (AmStartOutcome::Unresolved | AmStartOutcome::Failed, _) => {
+                return Ok(self
+                    .svc
+                    .action_error(request_id, "ADB_COMMAND_FAILED", output.trim().to_string())
+                    .await);
+            }
         }
 
         // Settle: with an epoch ack, wait for the in-app hook to
@@ -1956,11 +1963,15 @@ async fn rotation_map(serial: &str) -> Result<RotationMap, Status> {
 
 /// `am start` for a VIEW intent on `uri`, restricted to `package` when the
 /// session has a target app. `uri` is already free of single quotes.
+///
+/// `am` reports a failure on stderr, and only from API 34 does it also exit
+/// non-zero; through API 33 it exits 0. So its stderr is folded into stdout and
+/// its exit status ignored: [`am_start_outcome`] judges the text, the same on
+/// every API level, and a non-zero exit from `adb` itself (a transport
+/// failure) still fails the call.
 fn deep_link_view_command(uri: &str, package: Option<&str>) -> String {
-    match package {
-        Some(pkg) => format!("am start -a android.intent.action.VIEW -d '{uri}' -p {pkg}"),
-        None => format!("am start -a android.intent.action.VIEW -d '{uri}'"),
-    }
+    let restrict = package.map(|pkg| format!(" -p {pkg}")).unwrap_or_default();
+    format!("am start -a android.intent.action.VIEW -d '{uri}'{restrict} 2>&1 || true")
 }
 
 /// Which activity Android would pick for `uri` with no package restriction.
@@ -1968,11 +1979,24 @@ fn deep_link_resolve_command(uri: &str) -> String {
     format!("cmd package resolve-activity --brief -a android.intent.action.VIEW -d '{uri}'")
 }
 
-/// Whether `am start` said no activity matches the intent. A device whose adb
-/// forwards exit codes reports it on stderr (the error's message); an older
-/// one prints it to stdout and exits 0.
-fn intent_unresolved(output: &str) -> bool {
-    output.contains("unable to resolve Intent")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AmStartOutcome {
+    Started,
+    /// No activity matches the intent.
+    Unresolved,
+    /// Any other error `am` printed.
+    Failed,
+}
+
+/// Judge `am start`'s combined stdout and stderr (see [`deep_link_view_command`]).
+fn am_start_outcome(output: &str) -> AmStartOutcome {
+    if output.contains("unable to resolve Intent") {
+        AmStartOutcome::Unresolved
+    } else if am_start_reported_error(output) {
+        AmStartOutcome::Failed
+    } else {
+        AmStartOutcome::Started
+    }
 }
 
 /// Who would take a link the app under test cannot handle.
@@ -2030,32 +2054,46 @@ mod tests {
     fn deep_links_go_to_the_target_package_when_there_is_one() {
         assert_eq!(
             deep_link_view_command("https://en.wikipedia.org/wiki/Moon", Some("org.wikipedia.dev")),
-            "am start -a android.intent.action.VIEW -d 'https://en.wikipedia.org/wiki/Moon' -p org.wikipedia.dev"
+            "am start -a android.intent.action.VIEW -d 'https://en.wikipedia.org/wiki/Moon' -p org.wikipedia.dev 2>&1 || true"
         );
         assert_eq!(
             deep_link_view_command("myapp://x", None),
-            "am start -a android.intent.action.VIEW -d 'myapp://x'"
+            "am start -a android.intent.action.VIEW -d 'myapp://x' 2>&1 || true"
         );
     }
 
     #[test]
-    fn an_unresolved_intent_is_recognised_on_stderr_and_stdout() {
-        // adb with exit codes: the error carries am's stderr.
-        assert!(intent_unresolved(
-            "adb command failed (exit exit status: 1): Error: Activity not started, unable to resolve \
-             Intent { act=android.intent.action.VIEW dat=https://example.com/... pkg=org.x }"
-        ));
-        // Older adb: everything on stdout.
-        assert!(intent_unresolved(
-            "Starting: Intent { act=android.intent.action.VIEW dat=https://example.com/... pkg=org.x }\n\
-             Error: Activity not started, unable to resolve Intent { act=android.intent.action.VIEW }"
-        ));
-        assert!(!intent_unresolved(
-            "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }"
-        ));
-        assert!(!intent_unresolved(
-            "Warning: Activity not started, intent has been delivered to currently running top-most instance."
-        ));
+    fn am_start_output_is_judged_by_its_text_on_every_api_level() {
+        // What `am` prints, stderr folded into stdout (through API 33 it exits
+        // 0 on these errors, so the text is all there is).
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=https://example.com/... pkg=org.x }\n\
+                 Error: Activity not started, unable to resolve Intent { act=android.intent.action.VIEW \
+                 dat=https://example.com/... flg=0x10000000 pkg=org.x }\n"
+            ),
+            AmStartOutcome::Unresolved
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Error type 3\nError: Activity class {org.x/org.x.Gone} does not exist.\n"
+            ),
+            AmStartOutcome::Failed
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n"
+            ),
+            AmStartOutcome::Started
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Warning: Activity not started, intent has been delivered to currently running top-most instance.\n"
+            ),
+            AmStartOutcome::Started
+        );
     }
 
     #[test]
