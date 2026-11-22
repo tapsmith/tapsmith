@@ -86,10 +86,12 @@ describe("Login screen", () => {
 
   // The field is found by the text the clear removes: the daemon clears and
   // types as two agent commands, which must both reach this field (PILOT-848).
+  // getByText no longer reads a field's typed value (PILOT-1404); getByRole's
+  // name still matches it whole.
   test("clearAndType() replaces a field found by its own text", async ({ device, loginScreen, platform }) => {
     test.skip(platform !== "android", "PILOT-852: the iOS agent's clear re-reads the field by its selector, which stops matching once the text shrinks")
     await loginScreen.emailField.clearAndType("old@value.com")
-    await device.getByText("old@value.com").clearAndType("new@value.com")
+    await device.getByRole("textfield", { name: "old@value.com", exact: true }).clearAndType("new@value.com")
     await expect(loginScreen.emailField).toContainText("new@value.com")
     await expect(loginScreen.emailField).not.toContainText("old@value.com")
   })

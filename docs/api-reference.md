@@ -22,6 +22,8 @@ Whitespace is normalized on both sides before comparing a string, exact or not, 
 
 Without `exact`, a string `getByText` also ignores case, as `getByRole`'s `name` does. Case is folded with Unicode case mappings that don't depend on the device's locale, so `getByText("login")` finds `LOGIN` on a Turkish device too. A few special characters (such as `ß`) may fold differently per platform. The software keyboard's keys never match, so `getByText("Delete")` does not find the keyboard's `delete` key ([what locators never match](locators.md#what-locators-never-match)). `{ exact: true }`, `getByLabel`, `getByPlaceholder` and `getByDescription` are case-sensitive.
 
+On Android, a text field's typed value is not text, as an `<input>`'s value is not in Playwright: after `type("Apollo 11")` into a search field, `getByText("Apollo 11")` waits for the result showing that text instead of matching the field (nor does `filter({ hasText })` read a field's value). Find a field with `getByRole("textfield", { name })`, `getByLabel()`, `getByPlaceholder()` or `getByTestId()`. An empty field still shows its placeholder as its text, so `getByText("Search…")` finds an empty field with that placeholder; a value typed to equal the placeholder reads as the placeholder. A container's text (`filter({ hasText })`, `toHaveText()` on a row) still includes a field inside it. On iOS `getByText` still reads a text field's value (below).
+
 On iOS, `getByText` returns the innermost element holding the text, as Playwright does: an element whose descendant also matches is left out, so `getByText("Dark Mode")` finds the label of a SwiftUI `Toggle` row, not the row and its label, and a list row or an alert gives way to the text inside it. Since an iOS element has an accessibility label and value rather than text content, `getByText` reads:
 
 - **the label (and title)**, except on a switch, slider or stepper, whose label is only its accessible name: find those with `getByLabel()` or `getByRole("switch", { name })`. SwiftUI draws a `Toggle`'s or `Stepper`'s label as separate text, which `getByText` finds.
@@ -903,7 +905,7 @@ const count = await premiumItems.count();
 
 | Option | Type | Description |
 |---|---|---|
-| `hasText` | `string \| RegExp` | Keep elements whose text contains this string or matches this RegExp. An element with no text of its own, such as a list row, has its descendants' text, as for `toContainText` |
+| `hasText` | `string \| RegExp` | Keep elements whose text contains this string or matches this RegExp. An element with no text of its own, such as a list row, has its descendants' text, as for `toContainText`. An Android text field's typed value is not its text here, as for `getByText` |
 | `hasNotText` | `string \| RegExp` | Exclude elements whose text contains this string or matches this RegExp |
 | `has` | `ElementHandle` | Keep elements that have a descendant matching this locator |
 | `hasNot` | `ElementHandle` | Exclude elements that have a descendant matching this locator |
