@@ -214,11 +214,18 @@ async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?:
     if (options.strict && (h.errorMessage || !h.hierarchyXml)) return undefined;
     const marker = parseHooksMarker(h.hierarchyXml);
     if (!marker?.urlPrefix) return false;
-    (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
+    recordMarkerCapabilities(ctx, marker);
     return true;
   } catch {
     return undefined;
   }
+}
+
+/** What a usable hooks marker tells the session about the app's build. */
+function recordMarkerCapabilities(ctx: SessionPreflightContext, marker: NonNullable<ReturnType<typeof parseHooksMarker>>): void {
+  const caps = (ctx.capabilities ??= {});
+  caps.hooksUrlPrefix = marker.urlPrefix;
+  caps.hooksRemount = marker.remount === true;
 }
 
 /**
@@ -233,7 +240,7 @@ async function readHooksMarkerAndContent(ctx: SessionPreflightContext): Promise<
     return undefined;
   }
   const marker = parseHooksMarker(xml);
-  if (marker?.urlPrefix) (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
+  if (marker?.urlPrefix) recordMarkerCapabilities(ctx, marker);
   const rendered = ctx.config.platform === 'ios'
     ? iosHierarchyHasRenderedContent(xml)
     : !!ctx.config.package && androidHierarchyHasRenderedContent(xml, ctx.config.package);
@@ -859,6 +866,8 @@ export async function executeAppReset(
   // Whether the reset itself left the app on the declared start route (only
   // an acknowledged in-app reset can carry it).
   let routeReached = false;
+  // An acknowledged hooks reset that kept the app's process.
+  let inApp = false;
 
   // Set after a cold restore that may let the next restore of the same
   // archive keep the data: read the write count once the app is ready.
@@ -905,6 +914,7 @@ export async function executeAppReset(
         modeUsed = result.modeUsed;
         processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
         routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
+        inApp = result.modeUsed === 'warm' && !processRecreated;
         reason = `kept ${archiveName}: no persisted writes since the restore`;
         // A process the reset recreated (a cold delivery: the warm-window
         // valve, or a warm delivery that relaunched) took its count with it:
@@ -964,6 +974,7 @@ export async function executeAppReset(
       modeUsed = 'restore';
       processRecreated = true;
       routeReached = false;
+      inApp = false;
       if (ctx.capabilities) delete ctx.capabilities.appStateBaseline;
       await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
       await step('restartApp', () => ctx.device.restartApp(pkg));
@@ -1013,6 +1024,7 @@ export async function executeAppReset(
           : undefined);
       processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
       routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
+      inApp = result.modeUsed === 'warm' && result.hooksDetected && !processRecreated;
       // The daemon seeing the marker is fresh proof of hooks. The reverse is
       // not: a missed read under load plans a fallback without disproving the
       // hooks, so detection only ever upgrades (sticky, like the probe).
@@ -1097,7 +1109,8 @@ export async function executeAppReset(
   if (policy.route !== undefined && (!routeReached || relaunched)) {
     await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
   }
-  return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
+  // A relaunch by the readiness checks gave the app a fresh process after all.
+  return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}), ...(inApp && !relaunched ? { inAppReset: true } : {}) });
 }
 
 // ─── Keeping a restored appState between tests ───

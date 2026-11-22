@@ -37,6 +37,8 @@ import {
   appResetAction,
   appResetPolicyEquals,
   describeAction,
+  KEPT_SCREENS_HINT,
+  resetKeptScreens,
   resolveAppResetPolicy,
   type AppResetPolicy,
   type AppResetReport,
@@ -1486,6 +1488,13 @@ export interface RunOptions {
    * on its launch screen; the runner then opens the route again.
    */
   _startRoute?: { pending?: string };
+  /**
+   * @internal — the most recent reset left the app on screens that kept their
+   * React state (an in-app reset in an app whose hooks do not remount it),
+   * until the next test attempt starts. That attempt, if it fails, gets
+   * {@link KEPT_SCREENS_HINT}.
+   */
+  _keptScreens?: { pending?: boolean };
   /** @internal Warnings from preflight notices, waiting for the next test result. */
   _preflightWarnings?: string[];
   /**
@@ -2278,6 +2287,14 @@ async function runTracedAppReset(
     if (opts._startRoute) {
       opts._startRoute.pending = policy.route !== undefined && appResetAction(policy).kind !== 'none' ? policy.route : undefined;
     }
+    if (opts._keptScreens) {
+      const kept = resetKeptScreens(resettableDevices(opts).flatMap((rd) => {
+        const report = reports.get(rd.name);
+        return report ? [{ report, capabilities: rd.sessionContext.capabilities }] : [];
+      }));
+      // A reset satisfied by an earlier one leaves that one's answer standing.
+      if (kept !== undefined) opts._keptScreens.pending = kept;
+    }
     return reports;
   } finally {
     collector?.endGroup();
@@ -2783,12 +2800,16 @@ async function runSuiteContext(
       screenshotPath?: string;
       videoPath?: string;
     } | undefined;
+    // An attempt that started on screens a warm reset left holding their
+    // React state failed: the result says so (KEPT_SCREENS_HINT).
+    let failedOnKeptScreens = false;
     const traceConfig = runTraceConfig(opts);
     const videoConfig = resolveVideoConfig(opts.config.video);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0 && opts.abortSignal?.aborted) break;
       attemptStart = Date.now();
+      let onKeptScreens = false;
       // Retry attempts force every deep link cold. The first attempt failed
       // for an unknown reason — a cold terminate + relaunch is the recovery
       // path for simulator states that warm in-process delivery would carry
@@ -3222,6 +3243,10 @@ async function runSuiteContext(
           }
           // The test now owns the screen: a later relaunch is not the reset's.
           if (opts._startRoute) opts._startRoute.pending = undefined;
+          if (opts._keptScreens) {
+            onKeptScreens = opts._keptScreens.pending === true;
+            opts._keptScreens.pending = undefined;
+          }
 
           // Give the device a moment to go idle before each test, so the
           // previous test's toasts, animations and async work settle before
@@ -3779,6 +3804,7 @@ async function runSuiteContext(
       // back fails nothing here.
       await forEachDeviceBestEffort(opts, (d) => d._restoreTestOrientation?.());
 
+      if (status === 'failed' && onKeptScreens) failedOnKeptScreens = true;
       if (status !== 'failed' || attempt === maxRetries || opts.abortSignal?.aborted) break;
 
       // A file-abort-worthy failure (e.g. "session recovered during before
@@ -3847,6 +3873,8 @@ async function runSuiteContext(
     // launch, a scope-entry reset, this test's own preflight) belongs here.
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
+    // A flaky pass too: its failed attempt is the one worth explaining.
+    if (failedOnKeptScreens && status !== 'skipped' && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
     const testResult: TestResult = {
       name: entry.name,
       fullName,
@@ -4352,6 +4380,7 @@ async function runTestFileOwned(
     _prepared: new Map(opts.devices.flatMap((d) => (d.prepared ? [[d.name, d.prepared] as const] : []))),
     _applied: {},
     _startRoute: {},
+    _keptScreens: {},
     _abortFileController: abortFileController,
     abortSignal: abortFileController
       ? (opts.abortSignal

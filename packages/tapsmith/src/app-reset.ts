@@ -58,6 +58,13 @@ export interface ResetCapabilities {
    */
   hooksUrlPrefix?: string;
   /**
+   * The hooks marker says the hooks wrap the app and remount it on every
+   * reset (`remount=1`), read with the URL prefix. Without it, a warm reset
+   * leaves mounted screens holding their React state, and a test that fails
+   * right after one gets a hint saying so.
+   */
+  hooksRemount?: boolean;
+  /**
    * The saved app state the last cold restore put on the device, with the
    * hooks marker's `boot` token and `writes` count read right after it. While
    * the app is still that process and its write count has not moved, the data
@@ -131,6 +138,12 @@ export interface AppResetReport {
   reason?: string;
   durationMs: number;
   steps: AppResetStep[];
+  /**
+   * An acknowledged in-app reset through the `@tapsmith/react-native` hooks
+   * that kept the app's process (no relaunch): screens that stayed mounted
+   * keep their React state unless the hooks remount the app.
+   */
+  inAppReset?: boolean;
 }
 
 /**
@@ -275,6 +288,11 @@ export interface HooksMarker {
    * the app can reset while keeping its data (`onReload` + `track`).
    */
   writes?: number;
+  /**
+   * The hooks wrap the app and remount it on every reset (`remount=1`), so
+   * no screen keeps React state across one.
+   */
+  remount?: boolean;
   error?: string;
 }
 
@@ -300,6 +318,7 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
   let urlPrefix = '';
   let boot: string | undefined;
   let writes: number | undefined;
+  let remount = false;
   let error: string | undefined;
   for (const field of fields) {
     const eq = field.indexOf('=');
@@ -311,6 +330,7 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
     else if (key === 'url') urlPrefix = value;
     else if (key === 'boot' && value) boot = value;
     else if (key === 'writes' && /^\d+$/.test(value)) writes = Number.parseInt(value, 10);
+    else if (key === 'remount') remount = value === '1';
     else if (key === 'err' && value) {
       try { error = decodeURIComponent(value); } catch { error = value; }
     }
@@ -321,6 +341,34 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
     ...(nav !== undefined && Number.isFinite(nav) ? { nav } : {}),
     ...(boot ? { boot } : {}),
     ...(writes !== undefined ? { writes } : {}),
+    ...(remount ? { remount } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+/**
+ * The warning a test gets when it fails after a warm in-app reset in an app
+ * whose hooks do not remount it: the reset re-navigated and cleared storage,
+ * but screens that stayed mounted kept the previous test's React state, and
+ * the failure itself reads as an ordinary locator timeout. Kept under 500
+ * characters: MCP clips each warning line there.
+ */
+export const KEPT_SCREENS_HINT =
+  'This test started after a warm in-app reset, which keeps the app running: a screen that stayed mounted '
+  + '(every visited tab of a tab navigator, or the screen the reset landed on) still had the previous test\'s React state. '
+  + 'If the screen showed an earlier test\'s data, wrap your root navigator in <TapsmithTestHooks> so every reset remounts the app: '
+  + 'https://tapsmith.dev/guides/warm-reset/#what-a-warm-reset-does-not-clear';
+
+/**
+ * Whether a scope's reset left any device's app on screens that kept their
+ * React state: an in-app reset (the process kept) on a device whose hooks do
+ * not remount the app. `undefined` when no reset ran here (every device's
+ * reset was satisfied by an earlier preparation or skipped), which says
+ * nothing about the app the next test starts on.
+ */
+export function resetKeptScreens(
+  reports: ReadonlyArray<{ report: AppResetReport; capabilities?: ResetCapabilities }>,
+): boolean | undefined {
+  if (!reports.some(({ report }) => report.origin === 'inline')) return undefined;
+  return reports.some(({ report, capabilities }) => report.inAppReset === true && capabilities?.hooksRemount !== true);
 }
