@@ -66,7 +66,7 @@ describe("Deep links (Android)", () => {
   })
 
   // The test app's https filter is for a domain that can never be verified,
-  // like any debug build's, so Android's resolver would hand the link to the
+  // like most debug builds', so Android's resolver would hand the link to the
   // browser unless Tapsmith delivers it to the app (PILOT-1403).
   test("an https link with an unverified intent filter opens the app, not the browser", async ({ device }) => {
     await launchAppReady(device)

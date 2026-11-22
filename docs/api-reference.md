@@ -410,11 +410,12 @@ back to a cold relaunch with the URL.
 
 On Android the link goes to the app under test (the config's `package`), not to
 whichever app Android would pick. So an `https` link opens your app even when
-its app links are not verified, which is the case for every debug build: Android
-verifies an `autoVerify` intent filter only against the release signing key, and
-otherwise opens the link in the browser. If the app has no intent filter that
-matches the link, `openDeepLink` throws without opening it, and the error names
-the app that would have taken it instead (for example `com.android.chrome`).
+its app links are not verified. That is usually the case for a debug build: the
+site's `assetlinks.json` normally lists only the release certificate, and
+Android opens an unverified link in the browser. If the app has no intent filter
+that matches the link, `openDeepLink` throws without opening it, and the error
+says what Android would have done instead, such as the app that would have taken
+it (for example `com.android.chrome`).
 
 ### `device.currentPackage(): Promise<string>`
 

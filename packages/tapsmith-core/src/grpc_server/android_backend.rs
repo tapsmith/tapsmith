@@ -395,7 +395,7 @@ impl DeviceBackend for AndroidBackend<'_> {
 
         // Deliver to the app under test, not to whichever app Android's
         // resolver prefers: an `https` link whose intent filter is not
-        // domain-verified (every debug build's) otherwise opens in the
+        // domain-verified (usually a debug build's) otherwise opens in the
         // browser, and the run reports success on a page it never reached.
         let cmd = deep_link_view_command(uri, target_package.as_deref());
         let delivered = adb::shell(&serial, &cmd).await;
