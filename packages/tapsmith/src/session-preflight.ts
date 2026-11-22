@@ -225,7 +225,8 @@ async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?:
 function recordMarkerCapabilities(ctx: SessionPreflightContext, marker: NonNullable<ReturnType<typeof parseHooksMarker>>): void {
   const caps = (ctx.capabilities ??= {});
   caps.hooksUrlPrefix = marker.urlPrefix;
-  caps.hooksRemount = marker.remount === true;
+  if (marker.remount) caps.hooksRemount = true;
+  else delete caps.hooksRemount;
 }
 
 /**
