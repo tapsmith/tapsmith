@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react"
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native"
+import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 
 export const ROW_HEIGHT = 48
 
@@ -12,12 +13,21 @@ export const ROW_HEIGHT = 48
  * is at its starting offset, so a test that waits for it acts on the screen
  * as it will stay.
  */
-export function TabBarScrollList(props: {
+type TabBarScrollListProps = {
   targetLabel: string
   targetTop: (listHeight: number) => number
   initialOffset?: (listHeight: number) => number
   overlay?: ReactNode
-}) {
+}
+
+export function TabBarScrollList(props: TabBarScrollListProps) {
+  // A warm reset navigates here rather than remounting: remount on each one,
+  // so the tap count, the ready flag and the list's offset start afresh.
+  const resetEpoch = useTapsmithResetEpoch()
+  return <List key={resetEpoch} {...props} />
+}
+
+function List(props: TabBarScrollListProps) {
   const [listHeight, setListHeight] = useState(0)
   const [taps, setTaps] = useState(0)
   const [ready, setReady] = useState(false)
