@@ -36,7 +36,7 @@ export interface InitArgs {
   app?: string;
   bundleId?: string;
   avd?: string;
-  /** `--device <serial>`: the Android device to use (PILOT-1201). */
+  /** `--device <serial>`: the Android device to use. */
   device?: string;
   simulator?: string;
   deviceType?: DeviceType;
@@ -393,7 +393,7 @@ export function resolveInitPlan(
   return { platforms, android, ios, networkCapture, warnings, captureAvdStep };
 }
 
-/** What `--device <serial>` sets up (PILOT-1201): see {@link connectedDeviceTarget}. */
+/** What `--device <serial>` sets up: see {@link connectedDeviceTarget}. */
 function deviceFlagTarget(
   serial: string,
   env: EnvScan,

@@ -290,7 +290,7 @@ export interface AndroidConfig {
   useEmulators: boolean;
   usePhysicalDevices: boolean;
   avd?: string;
-  /** A pinned device serial (`--device`, or the wizard's connected device): only this machine has it (PILOT-1201). */
+  /** A pinned device serial (`--device`, or the wizard's connected device): only this machine has it. */
   device?: string;
 }
 

@@ -120,7 +120,7 @@ export function avdCaptureSupport(avd: AvdImageInfo | undefined): AvdCaptureSupp
 }
 
 /**
- * The one AVD ordering init and doctor share (PILOT-1201), best first:
+ * The one AVD ordering init and doctor share, best first:
  * a running AVD (`running`: the AVD names of emulators already up), since
  * choosing it boots nothing; then a capture-capable image, then one whose
  * image could not be read (it may well be capable), then a Google Play image

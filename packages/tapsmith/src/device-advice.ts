@@ -10,8 +10,7 @@ import { androidStateBlocker, type AdbDevice } from './adb-devices.js';
 type AdviceConfig = Pick<TapsmithConfig, 'avd' | 'launchEmulators'> & {
   /**
    * On CI the configured AVD is not on the machine, so Tapsmith used only
-   * the connected devices and booted nothing (`resolveAndroidDeviceTarget`,
-   * PILOT-1201).
+   * the connected devices and booted nothing (`resolveAndroidDeviceTarget`).
    */
   avdMissingOnCi?: boolean;
 };

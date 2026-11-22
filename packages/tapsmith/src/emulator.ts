@@ -1853,7 +1853,7 @@ export function resolveAndroidDeviceTarget(
 
 /**
  * The error for a configured AVD the machine does not have, with the fix
- * for a CI workflow that boots its own emulator (PILOT-1201).
+ * for a CI workflow that boots its own emulator.
  */
 export function avdNotFoundMessage(requestedAvd: string, avds: readonly string[]): string {
   return `AVD "${requestedAvd}" not found. Available AVDs: ${avds.join(', ') || '(none)'}. `

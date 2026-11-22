@@ -45,19 +45,19 @@ export interface EnvScan {
   avds: string[];
   /** Each AVD's system image, for judging HTTPS capture (`avdCaptureSupport`). */
   avdImages: AvdImageInfo[];
-  /** Android devices adb can use now (`adb devices` state `device`), in its order (PILOT-1201). */
+  /** Android devices adb can use now (`adb devices` state `device`), in its order. */
   androidDevices: ConnectedAndroidDevice[];
   /** Android devices adb lists but cannot use (unauthorized, offline, …), for init's `--device` errors. */
   unusableAndroidDevices: AdbDevice[];
   isMacOS: boolean;
 }
 
-/** A connected Android device, as init offers it (PILOT-1201). */
+/** A connected Android device, as init offers it. */
 export interface ConnectedAndroidDevice {
   serial: string;
   /** An emulator's AVD name; undefined for a physical device, or when it could not be read. */
   avd?: string;
-  /** Another live Tapsmith session drives it (PILOT-381): init never picks it. */
+  /** Another live Tapsmith session drives it: init never picks it. */
   held: boolean;
 }
 

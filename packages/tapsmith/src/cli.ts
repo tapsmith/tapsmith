@@ -1088,7 +1088,7 @@ async function ensureSequentialTargetDevice(
   launched: LaunchedEmulator[]
   /** The iOS simulator was booted here and the app installed onto it fresh. */
   appInstalledFresh?: boolean
-  /** On CI the configured AVD is not on the machine, so nothing was booted (PILOT-1201). */
+  /** On CI the configured AVD is not on the machine, so nothing was booted. */
   avdMissingOnCi?: true
 }> {
   // The first `use.devices` member's pin, or root `device` — not `config.device`
