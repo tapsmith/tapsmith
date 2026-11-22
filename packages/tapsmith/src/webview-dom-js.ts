@@ -103,17 +103,11 @@ const HELPERS_JS = `(() => {
   // No element children. Not el.children: Stencil's scoped components
   // (ion-input) patch it to list only their slotted content.
   function isLeaf(el) { return el.firstElementChild === null; }
-  // Hidden from assistive technology, which getByRole skips as Playwright's
-  // does: aria-hidden on it or a shadow-including ancestor, no box (display:
-  // none on it or an ancestor; display: contents has none but is shown), or
-  // visibility: hidden.
+  // Hidden from assistive technology, which getByRole skips: Playwright's
+  // isElementHiddenForAria (hiddenForAria below). An <option> of a dropdown
+  // <select> has no box but is not hidden.
   function a11yHidden(el) {
-    for (let n = el; n; n = n.parentElement || n.getRootNode().host || null) {
-      if ((n.getAttribute('aria-hidden') || '').toLowerCase() === 'true') return true;
-    }
-    const style = getComputedStyle(el);
-    if (el.getClientRects().length === 0 && style.display !== 'contents') return true;
-    return style.visibility === 'hidden';
+    return hiddenForAria(el);
   }
   // ─── Roles, accessible names and labels, as Playwright computes them ───
   // Derived from Playwright v1.62.0's packages/injected/src/roleUtils.ts and
@@ -288,6 +282,14 @@ const HELPERS_JS = `(() => {
     hiddenCache.set(el, hidden);
     return hidden;
   }
+  // A text node with a box of its own, as Playwright's isVisibleTextNode.
+  function visibleText(node) {
+    const range = node.ownerDocument.createRange();
+    if (typeof range.getBoundingClientRect !== 'function') return !!(node.data || '').trim();
+    range.selectNode(node);
+    const rect = range.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
   function hiddenForAria(el) {
     if (skipText(el)) return true;
     const style = styleOf(el);
@@ -295,7 +297,7 @@ const HELPERS_JS = `(() => {
     if (style && style.display === 'contents' && !isSlot) {
       for (let c = el.firstChild; c; c = c.nextSibling) {
         if (c.nodeType === 1 && !hiddenForAria(c)) return false;
-        if (c.nodeType === 3 && (c.data || '').trim()) return false;
+        if (c.nodeType === 3 && visibleText(c)) return false;
       }
       return true;
     }
@@ -370,10 +372,15 @@ const HELPERS_JS = `(() => {
     if (o.label || o.labelledBy || o.inTarget === 'descendant') {
       // A control inside a label or name contributes its value.
       if (!(by || []).includes(el)) {
+        // Never a password's value, whatever role it is given: names go into
+        // the hierarchy dump and traces.
+        if (t === 'INPUT' && String(el.type || '').toLowerCase() === 'password'
+          && ['textbox', 'combobox', 'listbox', 'progressbar', 'scrollbar', 'slider', 'spinbutton', 'meter'].includes(r)) {
+          o.visited.add(el);
+          return '';
+        }
         if (r === 'textbox') {
           o.visited.add(el);
-          // Never a password: names go into the hierarchy dump and traces.
-          if (t === 'INPUT' && String(el.type || '').toLowerCase() === 'password') return '';
           return t === 'INPUT' || t === 'TEXTAREA' ? (el.value || '') : (el.textContent || '');
         }
         if (r === 'combobox' || r === 'listbox') {

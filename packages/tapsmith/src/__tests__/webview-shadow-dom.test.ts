@@ -610,6 +610,32 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
     expect(await idsOf(handle, handle.getByRole('button', { name: 'Qty 3', exact: true })._finderAllJs)).toEqual(['buy']);
     expect(await idsOf(handle, handle.getByRole('textbox', { name: 'PIN' })._finderAllJs)).toEqual(['pin']);
     expect(await handle._dumpDomHierarchy()).not.toContain('hunter2');
+    // Nor through another role a password field is given.
+    for (const role of ['combobox', 'spinbutton', 'slider']) {
+      const page = handleOn(`<!DOCTYPE html><body><label id="l">PIN <input type="password" role="${role}" value="hunter2"></label>`
+        + '<button aria-labelledby="l">Go</button></body>').handle;
+      expect(await page._dumpDomHierarchy(), role).not.toContain('hunter2');
+    }
+  });
+
+  it('finds a dropdown <select>\'s options by role, which have no box but are not hidden', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><select id="s"><option id="r">Red</option><option id="b">Blue</option></select>'
+      + '<div style="display:none"><div id="dc" style="display:contents" role="button">X</div></div></body>', (doc) => {
+      // A dropdown's options have no client rects in a browser.
+      for (const o of doc.querySelectorAll('option')) o.getClientRects = () => [] as unknown as DOMRectList;
+      // Text has a box unless an ancestor is display: none.
+      const win = doc.defaultView!;
+      win.Range.prototype.getBoundingClientRect = function (this: Range) {
+        const hidden = !!this.startContainer && !!(this.startContainer as Element).closest?.('[style*="display:none"]');
+        const size = hidden ? 0 : 10;
+        return { left: 0, top: 0, right: size, bottom: size, width: size, height: size, x: 0, y: 0 } as DOMRect;
+      };
+    });
+    expect(await idsOf(handle, handle.getByRole('option', { name: 'Red' })._finderAllJs)).toEqual(['r']);
+    expect(await handle.getByRole('option').count()).toBe(2);
+    // Inside a display: none ancestor, display: contents is hidden too.
+    expect(await handle.getByRole('button').count()).toBe(0);
+    expect(await handle.getByRole('button', { includeHidden: true }).count()).toBe(1);
   });
 
   it('strips soft hyphens and zero-width spaces before trimming, as Playwright normalises text', async () => {
