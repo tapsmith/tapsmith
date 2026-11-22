@@ -271,7 +271,7 @@ export interface AndroidDevicesSummary {
  * offline, no permissions) is named with its state and the fix, never
  * counted as "no devices" — the inventory lists it, so doctor must too.
  */
-export function summarizeAndroidDevices(devices: AdbDevice[]): AndroidDevicesSummary {
+export function summarizeAndroidDevices(devices: AdbDevice[], selfLaunchedAvds: readonly string[] = []): AndroidDevicesSummary {
   const ready = devices.filter((d) => d.state === 'device');
   const unusable = devices.filter((d) => d.state !== 'device');
   const unusableList = unusable.map((d) => `${d.serial} (${d.state})`).join(', ');
@@ -292,16 +292,31 @@ export function summarizeAndroidDevices(devices: AdbDevice[]): AndroidDevicesSum
         fix,
       };
   }
+  // Nothing to start by hand when Tapsmith boots the configured AVD itself.
+  if (selfLaunchedAvds.length > 0) {
+    return { status: 'pass', label: `No Android device running — Tapsmith launches ${selfLaunchedAvds.join(', ')} when a run needs it` };
+  }
   return { status: 'warn', label: 'No Android devices connected', fix: 'Start an emulator or connect a device with USB debugging enabled' };
 }
 
-function checkConnectedDevices(report: Reporter): void {
+/**
+ * The AVDs Tapsmith boots itself, when that covers every Android scope (each
+ * names an `avd` with `launchEmulators` on); empty when any Android scope
+ * needs a device someone else starts.
+ */
+function selfLaunchedAvds(scopes: readonly TapsmithConfig[]): string[] {
+  const android = scopes.filter((scope) => scopePlatform(scope) === 'android');
+  if (android.length === 0 || android.some((scope) => !scope.avd || scope.launchEmulators === false)) return [];
+  return [...new Set(android.map((scope) => scope.avd as string))];
+}
+
+function checkConnectedDevices(report: Reporter, launchedAvds: readonly string[]): void {
   const output = run(report, 'adb', ['devices']);
   if (output === undefined) {
     warn(report, 'android-devices', 'Could not list Android devices', 'Run `adb devices` to see the error; `adb kill-server` restarts a stuck adb server');
     return;
   }
-  const summary = summarizeAndroidDevices(parseAdbDevicesOutput(output));
+  const summary = summarizeAndroidDevices(parseAdbDevicesOutput(output), launchedAvds);
   if (summary.status === 'pass') pass(report, 'android-devices', summary.label, summary.detail);
   else warn(report, 'android-devices', summary.label, summary.fix, summary.detail);
 }
@@ -1494,7 +1509,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
     androidChecked = adbOk || !!targets;
     if (androidChecked) {
       checkAndroidHome(report);
-      if (adbOk) checkConnectedDevices(report);
+      if (adbOk) checkConnectedDevices(report, selfLaunchedAvds(scopes));
       await checkAgentApks(report, config?.rootDir ?? process.cwd());
       // With adb here, Android runs on this machine, so its APK must exist.
       checkAppApk(report, config, androidPlan.required || (adbOk && !!targets));

@@ -1037,6 +1037,37 @@ describe('doctor Android devices (PILOT-263 item 4)', () => {
     expect(check(json, 'android-devices')).toMatchObject({ status: 'warn', label: 'No Android devices connected' });
   });
 
+  it('nothing attached passes when Tapsmith launches every Android scope\'s AVD itself', async () => {
+    withAdb('List of devices attached\n\n');
+    writeConfig("export default { avd: 'Pixel_9' }\n");
+    const { json } = await doctorJson();
+    const c = check(json, 'android-devices');
+    expect(c).toMatchObject({ status: 'pass', label: expect.stringContaining('Tapsmith launches Pixel_9') });
+    expect(c?.label).not.toMatch(/Start an emulator/);
+    expect(c?.fix).toBeUndefined();
+  });
+
+  it('nothing attached still warns when an Android scope has no AVD to launch', async () => {
+    withAdb('List of devices attached\n\n');
+    writeConfig("export default { projects: [{ name: 'a', use: { avd: 'Pixel_9' } }, { name: 'b' }] }\n");
+    const { json } = await doctorJson();
+    expect(check(json, 'android-devices')).toMatchObject({ status: 'warn', label: 'No Android devices connected' });
+  });
+
+  it('nothing attached still warns with launchEmulators: false', async () => {
+    withAdb('List of devices attached\n\n');
+    writeConfig("export default { avd: 'Pixel_9', launchEmulators: false }\n");
+    const { json } = await doctorJson();
+    expect(check(json, 'android-devices')).toMatchObject({ status: 'warn', label: 'No Android devices connected' });
+  });
+
+  it('an unusable device is still named when Tapsmith would launch the AVD', async () => {
+    withAdb('List of devices attached\nR58N123\tunauthorized\n');
+    writeConfig("export default { avd: 'Pixel_9' }\n");
+    const { json } = await doctorJson();
+    expect(check(json, 'android-devices')).toMatchObject({ status: 'warn', detail: 'R58N123 (unauthorized)' });
+  });
+
   it('the inventory reuses the adb and simctl output the checks read', async () => {
     withAdb();
     withXcode();
