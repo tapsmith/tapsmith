@@ -503,7 +503,7 @@ describe('visibleRegionOf', () => {
   });
 
   it.each(['CollectionView', 'ScrollView'])(
-    'nudges up a row behind the tab bar of an iOS %s that runs under it, with content ending there',
+    'scrolls down for a row behind the tab bar of an iOS %s that runs under it, with content ending there',
     (type) => {
       const xml = ios(el('Other', '[0,0][402,874]', '',
         el(type, '[0,0][402,874]', '',

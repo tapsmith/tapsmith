@@ -7693,12 +7693,13 @@ describe('scrollIntoView() scrolls in an element on screen but out of its list\'
     expect(swipe).toHaveBeenCalledTimes(1);
   });
 
-  it('only checks with maxScrolls 0, and returns as before when the screen cannot be read', async () => {
+  it('skips the check with maxScrolls 0, and returns as before when the screen cannot be read', async () => {
     const swipe = vi.fn(async () => successResponse());
     const getUiHierarchy = vi.fn(hierarchySequence([screen(frame(1307))]));
     const client = makeMockClient({ findElements: scripted([plusAt(1307)]), swipe, getUiHierarchy });
     await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView({ maxScrolls: 0 });
     expect(swipe).not.toHaveBeenCalled();
+    expect(getUiHierarchy).not.toHaveBeenCalled();
 
     const failing = makeMockClient({
       findElements: scripted([plusAt(1307)]),
