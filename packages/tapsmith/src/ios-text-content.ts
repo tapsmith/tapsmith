@@ -40,7 +40,7 @@ export const IOS_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
  * Whether an iOS element is a text input, by its type and its role (the
  * dump's `tapsmith-role`, a found element's `role`): a text view that can't
  * be edited is text on screen, which the agent reports by a role other than
- * `textfield` (PILOT-697).
+ * `textfield`.
  */
 export function isIosTextInput(type: string, role: string | undefined): boolean {
   return IOS_TEXT_INPUT_TYPES.has(type) && (type !== 'XCUIElementTypeTextView' || role === 'textfield');
