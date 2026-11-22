@@ -6,6 +6,7 @@ import {
   ReporterDispatcher,
   ReporterLoadError,
   createReporters,
+  reporterExportOf,
   type TapsmithReporter,
   type FullResult,
 } from '../reporter.js';
@@ -375,6 +376,29 @@ describe('createReporters: unknown and custom reporters', () => {
     const reporters = await createReporters([['./my-reporter.mjs', { flag: 1 }]], { rootDir: dir });
     expect(reporters.map((r) => r.constructor.name)).toEqual(['MyReporter']);
     expect((reporters[0] as unknown as { options: unknown }).options).toEqual({ flag: 1 });
+  });
+
+  // `exports.__esModule = true; exports.default = class …` (tsc's CommonJS
+  // output): under plain Node, import() hands back the whole module.exports
+  // as `default`. Vitest unwraps it itself, so the namespace is built here.
+  it('takes the default class of a reporter compiled to CommonJS', () => {
+    class CompiledReporter {}
+    const namespace = { default: { __esModule: true, default: CompiledReporter } };
+    expect(reporterExportOf(namespace)).toBe(CompiledReporter);
+  });
+
+  it('takes an ES module\'s default export, or its named hooks as the reporter', () => {
+    class EsmReporter {}
+    expect(reporterExportOf({ default: EsmReporter })).toBe(EsmReporter);
+    const hooks = { onRunEnd: () => {} };
+    expect(reporterExportOf(hooks)).toBe(hooks);
+    expect(reporterExportOf({ x: 1 })).toBeUndefined();
+  });
+
+  it('constructs a reporter class assigned to module.exports', async () => {
+    fs.writeFileSync(path.join(dir, 'plain.cjs'), 'module.exports = class PlainReporter { onRunEnd() {} };\n');
+    const reporters = await createReporters('./plain.cjs', { rootDir: dir });
+    expect(reporters.map((r) => r.constructor.name)).toEqual(['PlainReporter']);
   });
 
   it('loads a custom reporter by an absolute path, and one exported as an object', async () => {

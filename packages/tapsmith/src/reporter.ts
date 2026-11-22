@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { suggestFrom, type TapsmithConfig } from './config.js';
+import { suggestFrom, unwrapCommonJsModule, type TapsmithConfig } from './config.js';
 import { BUILT_IN_REPORTERS, parseReporterList } from './reporter-names.js';
 import type { TestResult, SuiteResult } from './runner.js';
 
@@ -375,8 +375,7 @@ async function loadCustomReporter(
     throw loadFailed(name, err);
   }
 
-  // A module whose named exports are the hooks is a reporter object too.
-  const exported = mod.default ?? (REPORTER_HOOKS.some((hook) => typeof mod[hook] === 'function') ? mod : undefined);
+  const exported = reporterExportOf(mod);
   if (exported === undefined || exported === null) {
     throw new ReporterLoadError(
       `Reporter "${name}" failed to load: its module has no default export (a reporter class or object).`,
@@ -389,6 +388,16 @@ async function loadCustomReporter(
   } catch (err) {
     throw loadFailed(name, err);
   }
+}
+
+/**
+ * What a custom reporter's module exports as the reporter: its default export
+ * (unwrapped from a CommonJS `module.exports` compiled with `__esModule`), or,
+ * without one, the module itself when its named exports are hooks.
+ */
+export function reporterExportOf(namespace: Record<string, unknown>): unknown {
+  const mod = unwrapCommonJsModule(namespace);
+  return mod.default ?? (REPORTER_HOOKS.some((hook) => typeof mod[hook] === 'function') ? mod : undefined);
 }
 
 function loadFailed(name: string, err: unknown): ReporterLoadError {
