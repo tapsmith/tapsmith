@@ -1,4 +1,5 @@
 import { test, expect, describe, Device } from "tapsmith"
+import { LoginScreen } from "../screens/login.screen.js"
 
 const PKG = "dev.tapsmith.testapp"
 const CAMERA_PERMISSION = "android.permission.CAMERA"
@@ -61,6 +62,27 @@ describe("Deep links (Android)", () => {
     await expect(device.getByText("Sign In", { exact: true })).toBeVisible()
 
     await device.pressBack()
+    await expectAppReady(device)
+  })
+
+  // The test app's https filter is for a domain that can never be verified,
+  // like any debug build's, so Android's resolver would hand the link to the
+  // browser unless Tapsmith delivers it to the app (PILOT-1403).
+  test("an https link with an unverified intent filter opens the app, not the browser", async ({ device }) => {
+    await launchAppReady(device)
+    await device.openDeepLink("https://links.tapsmith.test/login")
+    await expect(new LoginScreen(device).heading).toBeVisible()
+    expect(await device.currentPackage()).toBe(PKG)
+  })
+
+  test("a link the app cannot handle fails, naming the app that would take it", async ({ device }) => {
+    await launchAppReady(device)
+    const error = await device.openDeepLink("https://example.com/not-the-test-app").then(() => null, (e: unknown) => e)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toMatch(
+      /dev\.tapsmith\.testapp has no activity that handles https:\/\/example\.com\/not-the-test-app, so the link was not opened\. Android would (open it in \S+|ask which app to open it with) instead\./,
+    )
+    // Nothing was launched: the app is still in front.
     await expectAppReady(device)
   })
 })

@@ -408,6 +408,14 @@ delivery) whenever possible. On iOS simulators, if warm delivery does not
 reach its destination within a bounded window, Tapsmith automatically falls
 back to a cold relaunch with the URL.
 
+On Android the link goes to the app under test (the config's `package`), not to
+whichever app Android would pick. So an `https` link opens your app even when
+its app links are not verified, which is the case for every debug build: Android
+verifies an `autoVerify` intent filter only against the release signing key, and
+otherwise opens the link in the browser. If the app has no intent filter that
+matches the link, `openDeepLink` throws without opening it, and the error names
+the app that would have taken it instead (for example `com.android.chrome`).
+
 ### `device.currentPackage(): Promise<string>`
 
 Returns the package name of the foreground app. On iOS it always returns the configured app's bundle ID, whichever app is in front.

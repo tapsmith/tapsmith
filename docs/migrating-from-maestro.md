@@ -30,7 +30,7 @@ This guide is for teams with a Maestro suite who want to move it to Tapsmith. It
 | `scrollUntilVisible` | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number-timeout-number--promisevoid) |
 | `hideKeyboard` | [`device.hideKeyboard()`](api-reference.md#devicehidekeyboard-promisevoid) |
 | `back` / `pressKey` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid) / [`device.pressKey(key)`](api-reference.md#devicepresskeykey-devicekey-promisevoid) |
-| `openLink` | [`device.openDeepLink(url)`](api-reference.md#deviceopendeeplinkuri-string-options-opendeeplinkoptions-promisevoid) |
+| `openLink` | [`device.openDeepLink(url)`](api-reference.md#deviceopendeeplinkuri-string-options-opendeeplinkoptions-promisevoid). On Android it always opens the link in your app, as `openLink` with `browser: false` does, so an `https` link works on a debug build whose app links are not verified |
 | `launchApp` | Automatic before each test file; [`device.launchApp(pkg)`](api-reference.md#devicelaunchapppackagename-string-options-launchappoptions-promisevoid) when you need it mid-test |
 | `launchApp: { clearState: true }` / `clearState` | The default [`appReset`](writing-tests.md#test-isolation) policy; [`device.resetApp({ mode: "clear" })`](api-reference.md#deviceresetappoptions-promiseappresetresult) mid-test |
 | `stopApp` / `killApp` | [`device.terminateApp()`](api-reference.md#deviceterminateapppackagename-string-promisevoid); add [`device.clearAppData(pkg)`](api-reference.md#deviceclearappdatapackagename-string-promisevoid) to clear its data too |
