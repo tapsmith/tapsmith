@@ -6912,7 +6912,9 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
       { direction: 'up', distance: 0.8, region: listRegion },
       { direction: 'up', distance: 0.8, region: listRegion },
     ]);
-    expect(getUiHierarchy).not.toHaveBeenCalled();
+    // No read while the list moves; one once the row shows, to check that
+    // no bar over the list hides it (PILOT-1370).
+    expect(getUiHierarchy).toHaveBeenCalledTimes(1);
     expect(swipe).not.toHaveBeenCalled();
     // One equal read settles a row a step found: nothing flings after a step.
     expect(findElements).toHaveBeenCalledTimes(1);
@@ -6946,7 +6948,8 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
 
     await handle(client).scrollIntoView();
 
-    expect(getUiHierarchy).toHaveBeenCalledTimes(1);
+    // The screen read that picks the container, and the in-view check (PILOT-1370).
+    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
     expect(stepArgs(scrollStep)[1]).toEqual({ direction: 'up', distance: 0.8, region: listRegion });
   });
 
@@ -7048,7 +7051,8 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
 
     await handle(client, 'ios').scrollIntoView();
 
-    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
+    // Two reads to pick containers, and the in-view check once it shows (PILOT-1370).
+    expect(getUiHierarchy).toHaveBeenCalledTimes(3);
     expect(stepArgs(scrollStep)).toEqual([
       { direction: 'up', distance: 0.8, region: tableRegion },
       { direction: 'right', distance: 0.8, region: { left: 0, top: 300, right: 402, bottom: 500 } },
@@ -7646,6 +7650,27 @@ describe('scrollIntoView() scrolls in an element on screen but out of its list\'
     await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
 
     expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('nudges in a row a search swipe left under a bar laid over the list', async () => {
+    const bar = '<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,1247][1032,1307]">' +
+      '<XCUIElementTypeButton type="XCUIElementTypeButton" label="Add to cart" bounds="[0,1247][1032,1307]"/></XCUIElementTypeOther>';
+    const offScreen = makeElementInfo({ resourceId: 'counter plus button', visible: false, bounds: { left: 100, top: 1600, right: 140, bottom: 1640 } });
+    // Off screen below, then (after the search swipe) under the bar, then above it.
+    const findElements = scripted([offScreen, offScreen, plusAt(1255), plusAt(1255), plusAt(1255), plusAt(1255), plusAt(900)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements,
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([screen(frame(1600), bar), screen(frame(1255), bar), screen(frame(900), bar)])),
+    });
+
+    await new ElementHandle(client, _testId('counter plus button'), 5000).scrollIntoView();
+
+    expect(swipeCalls(swipe)).toEqual([
+      ['up', 0.6, list],
+      ['up', 0.3, { ...list, bottom: 1247 }],
+    ]);
   });
 
   it('does not swipe for an element inside its list, with nothing over it', async () => {

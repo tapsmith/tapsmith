@@ -446,6 +446,32 @@ describe('visibleRegionOf', () => {
     expect(view).toMatchObject({ vertical: true, horizontal: false });
   });
 
+  it('counts a UIKit table as scrolling up and down when the target is the only cell past its edge', () => {
+    const xml = ios(el('Other', '[0,0][402,874]', '',
+      el('Table', '[0,100][402,700]', '',
+        el('Cell', '[0,100][402,650]', 'label="Row 1"') + el('Cell', '[0,650][402,750]', 'label="Row 2"')) +
+      el('TabBar', '[0,700][402,874]', '', el('Button', '[0,700][201,874]', 'label="Home"')),
+    ));
+    const row = { left: 0, top: 650, right: 402, bottom: 750 };
+    const view = visibleRegionOf(xml, row);
+    expect(view?.region).toEqual({ left: 0, top: 100, right: 402, bottom: 700 });
+    expect(outsideRegion(row, view!.region, view)).toBe('down');
+  });
+
+  it("on Android, leaves out a bar in another window: the activity's bottom navigation under a sheet", () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,1200][1080,2400]', '',
+        node('androidx.recyclerview.widget.RecyclerView', '[0,1200][1080,2400]', scrollable,
+          node('android.widget.TextView', '[0,2250][1080,2400]', 'text="Last row"'))),
+      node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+        node('com.google.android.material.bottomnavigation.BottomNavigationView', '[0,2200][1080,2400]', '',
+          node('android.widget.TextView', '[0,2200][540,2400]', 'text="Home"'))),
+      statusBar,
+    );
+    expect(visibleRegionOf(xml, { left: 0, top: 2250, right: 1080, bottom: 2400 })?.region)
+      .toEqual({ left: 0, top: 1200, right: 1080, bottom: 2400 });
+  });
+
   it('on Android, leaves out a bottom bar laid over the list', () => {
     const xml = android(
       node('android.widget.FrameLayout', '[0,0][1080,2400]', '',

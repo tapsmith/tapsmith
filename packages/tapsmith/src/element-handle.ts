@@ -4558,34 +4558,6 @@ export class ElementHandle {
               }
             }
           }
-          // On screen is not in view (PILOT-1370): before any swipe, the
-          // element must also lie inside the part of its scroll container
-          // where content shows. iOS frames are not clipped, so a row just
-          // below its list, behind a tab bar, is "visible"; and a bar the app
-          // lays over the list hides the rows under it on both platforms.
-          // Either way the tap would not reach it: scroll it in, gently, as a
-          // nudge (a nudge that moves nothing met the end of the content).
-          // Not with no budget: `maxScrolls: 0` asks for a check only, and
-          // a cut element is in view once the budget is spent, as below.
-          if (swipes === 0 && maxScrolls > 0) {
-            const frame = usableFrame(el);
-            const read = frame ? await readScreen() : undefined;
-            const view = frame && read ? visibleRegionOf(read.xml, frame) : undefined;
-            const toward = frame && view ? outsideRegion(frame, view.region, view) : undefined;
-            if (toward) {
-              region = view!.region;
-              regionHolds = true;
-              direction = toward;
-              positioned = true;
-              if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
-              nudgedFrom = frameKey(el);
-              lastNudge = toward;
-              gentle = true;
-              screenBeforeSwipe = undefined;
-              await swipe();
-              continue;
-            }
-          }
           // Where the list stopped (PILOT-935). Gone from the screen: the
           // momentum carried it past, so scroll back (below). Cut by an edge
           // of the container the last swipe ran in: nudge it inside, so a
@@ -4597,7 +4569,30 @@ export class ElementHandle {
             swipes > 0 && last === 'visible' && region && settled.bounds && settledFrame !== nudgedFrom
               ? cutByEdge(settled.bounds, region, direction, direction === 'up' || direction === 'down' ? fullHeight : fullWidth)
               : undefined;
-          const nudge = cut && lastNudge && cut === OPPOSITE_DIRECTION[lastNudge] ? undefined : cut;
+          let nudge = cut && lastNudge && cut === OPPOSITE_DIRECTION[lastNudge] ? undefined : cut;
+          // On screen is not in view (PILOT-1370): before it is called in
+          // view, the element must also lie inside the part of its scroll
+          // container where content shows. iOS frames are not clipped, so a
+          // row just below its list, behind a tab bar, is "visible"; and a bar
+          // the app lays over the list hides the rows under it on both
+          // platforms, whether the row was there from the start or a swipe
+          // left it there. Either way a tap would not reach it: nudge it in,
+          // in the container that can bring it in. Not when the last nudge
+          // left it where it was (the end of the content), nor back the way
+          // the last one went, nor with the budget spent (`maxScrolls: 0`
+          // asks for a check only): it is in view as far as it goes.
+          if (!lost && !nudge && swipes < maxScrolls && settledFrame !== nudgedFrom) {
+            const frame = usableFrame(settled);
+            const read = frame ? await readScreen() : undefined;
+            const view = frame && read ? visibleRegionOf(read.xml, frame) : undefined;
+            const toward = frame && view ? outsideRegion(frame, view.region, view) : undefined;
+            if (toward && !(lastNudge && toward === OPPOSITE_DIRECTION[lastNudge])) {
+              region = view!.region;
+              regionHolds = true;
+              positioned = true;
+              nudge = toward;
+            }
+          }
           if (!lost && (!nudge || swipes >= maxScrolls)) {
             await this._traceQuery(
               'scrollIntoView',
