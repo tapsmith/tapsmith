@@ -26,6 +26,8 @@ class OcclusionAnalyzerTest {
         override val takesTouches: Boolean = false,
         override val offersDismiss: Boolean = false,
         override val isProgressIndicator: Boolean = false,
+        override val isScrollContainer: Boolean = false,
+        override val isNamed: Boolean = false,
         private val name: String = "node",
         val children: MutableList<FakeNode> = mutableListOf(),
     ) : OcclusionAnalyzer.HitNode {
@@ -64,6 +66,7 @@ class OcclusionAnalyzerTest {
         bounds: Box = target!!.bounds,
         windows: List<WindowSpec> = listOf(appWindow),
         targetWindowId: Int? = 1,
+        plainViewsTakeTouches: Boolean = false,
     ): Verdict =
         OcclusionAnalyzer.analyze(
             target = target,
@@ -71,6 +74,7 @@ class OcclusionAnalyzerTest {
             targetWindowId = targetWindowId,
             windows = windows,
             screen = screen,
+            plainViewsTakeTouches = plainViewsTakeTouches,
         )
 
     private fun assertClearAt(
@@ -566,6 +570,175 @@ class OcclusionAnalyzerTest {
         chain.add(FakeNode(Box(40, 780, 1040, 930), takesTouches = true, name = "too deep"))
         root(FakeNode(screen).add(target, later))
         assertClearAt(analyze(target), 540, 855)
+    }
+
+    // ─── Bars laid over a scroll view (PILOT-1424) ───
+
+    // A React Native screen: a status line, a list from y=200 to y=2000, and a
+    // checkout bar the screen lays over the list's bottom 160 px.
+    private val listBounds = Box(0, 200, 1080, 2000)
+
+    private fun row(
+        top: Int,
+        height: Int = 120,
+    ) = FakeNode(Box(40, top, 1040, top + height), takesTouches = true, isNamed = true, name = "button \"Row\"")
+
+    private fun list(vararg rows: FakeNode) =
+        FakeNode(listBounds, isScrollContainer = true, name = "list").add(FakeNode(listBounds).add(*rows))
+
+    private fun checkoutBar(vararg content: FakeNode) =
+        FakeNode(Box(0, 1840, 1080, 2000), isNamed = true, name = "element \"checkout-bar\"").add(*content)
+
+    private fun screenOf(vararg children: FakeNode) =
+        root(FakeNode(screen).add(FakeNode(Box(0, 63, 1080, 200), isNamed = true, name = "status"), *children))
+
+    @Test
+    fun `a row wholly under a bar laid over its list is covered by the bar`() {
+        val target = row(1860)
+        screenOf(list(target), checkoutBar())
+        val verdict = analyze(target, plainViewsTakeTouches = true)
+        assertCoveredBy(verdict, "element \"checkout-bar\"")
+        assertEquals(OcclusionAnalyzer.CoverKind.BAR, coverKind(verdict))
+    }
+
+    @Test
+    fun `a row partly under the bar is touched on the part left showing`() {
+        val target = row(1780)
+        screenOf(list(target), checkoutBar())
+        // 1780..1840 shows above the bar.
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1810)
+    }
+
+    @Test
+    fun `a row clear of the bar is touched at its center`() {
+        val target = row(1000)
+        screenOf(list(target), checkoutBar())
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1060)
+    }
+
+    @Test
+    fun `in an app where plain views let touches through the bar is no cover`() {
+        // Native, Compose and Flutter views that take no touches pass them on.
+        val target = row(1860)
+        screenOf(list(target), checkoutBar())
+        assertClearAt(analyze(target), 540, 1920)
+    }
+
+    @Test
+    fun `a bar named only by its text is named by what it holds`() {
+        val target = row(1860)
+        val text = FakeNode(Box(40, 1890, 1040, 1950), isNamed = true, name = "text \"Checkout\"")
+        screenOf(list(target), FakeNode(Box(0, 1840, 1080, 2000), name = "an unlabelled ViewGroup").add(text))
+        assertCoveredBy(analyze(target, plainViewsTakeTouches = true), "a bar holding text \"Checkout\"")
+    }
+
+    @Test
+    fun `a nameless view over the list is no cover`() {
+        // A pointerEvents="none" fade over the list's foot looks like this.
+        val target = row(1860)
+        screenOf(list(target), FakeNode(Box(0, 1840, 1080, 2000), name = "fade"))
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1920)
+    }
+
+    @Test
+    fun `a view over most of the list is no bar`() {
+        // A screen-sized wrapper (a toast host, the test hooks marker's).
+        val target = row(1860)
+        val toast = FakeNode(Box(100, 300, 980, 400), isNamed = true, name = "toast")
+        screenOf(list(target), FakeNode(Box(0, 200, 1080, 2000)).add(toast))
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1920)
+    }
+
+    @Test
+    fun `a narrow badge over the list's edge is no bar`() {
+        val target = row(1860)
+        screenOf(list(target), FakeNode(Box(900, 1840, 1080, 2000), isNamed = true, name = "badge"))
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1920)
+    }
+
+    @Test
+    fun `a banner across the middle of the list is no bar`() {
+        val target = row(1000)
+        screenOf(list(target), FakeNode(Box(0, 960, 1080, 1120), isNamed = true, name = "banner"))
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1060)
+    }
+
+    @Test
+    fun `a bar painted before the list is under it`() {
+        val target = row(1860)
+        screenOf(checkoutBar(), list(target))
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1920)
+    }
+
+    @Test
+    fun `a view inside the list's own content is no bar`() {
+        // A floating label or a sticky header scrolls with the list.
+        val target = row(1860)
+        val inside = FakeNode(Box(0, 1840, 1080, 2000), isNamed = true, name = "label")
+        val content = FakeNode(listBounds).add(target, inside)
+        screenOf(FakeNode(listBounds, isScrollContainer = true).add(content))
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1920)
+    }
+
+    @Test
+    fun `a named view over a target in no scroll view is no bar`() {
+        val target = row(1860)
+        screenOf(FakeNode(listBounds).add(target), checkoutBar())
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1920)
+    }
+
+    @Test
+    fun `a bar over the top of the list covers the rows under it`() {
+        val target = row(210)
+        screenOf(list(target), FakeNode(Box(0, 200, 1080, 360), isNamed = true, name = "header"))
+        assertCoveredBy(analyze(target, plainViewsTakeTouches = true), "header")
+    }
+
+    @Test
+    fun `a mini player stacked on a tab bar covers the rows under it`() {
+        val target = row(1700)
+        val tabBar = FakeNode(Box(0, 1840, 1080, 2000), isNamed = true, name = "tab bar")
+        val player = FakeNode(Box(0, 1680, 1080, 1840), isNamed = true, name = "mini player")
+        screenOf(list(target), player, tabBar)
+        assertCoveredBy(analyze(target, plainViewsTakeTouches = true), "mini player")
+    }
+
+    @Test
+    fun `a bar nested in a later full-screen wrapper still covers`() {
+        val target = row(1860)
+        screenOf(list(target), FakeNode(screen).add(checkoutBar()))
+        assertCoveredBy(analyze(target, plainViewsTakeTouches = true), "element \"checkout-bar\"")
+    }
+
+    @Test
+    fun `a button in the bar over the row is named before the bar`() {
+        val target = row(1860)
+        val pay = FakeNode(Box(300, 1850, 780, 1990), takesTouches = true, name = "button \"Pay\"")
+        screenOf(list(target), checkoutBar(pay))
+        assertCoveredBy(analyze(target, plainViewsTakeTouches = true), "button \"Pay\"")
+    }
+
+    @Test
+    fun `a text inside a row under the bar is covered too`() {
+        val label = FakeNode(Box(60, 1880, 600, 1960), isNamed = true, name = "text")
+        val target = row(1860).add(label)
+        screenOf(list(target), checkoutBar())
+        assertCoveredBy(analyze(label, plainViewsTakeTouches = true), "element \"checkout-bar\"")
+    }
+
+    @Test
+    fun `an invisible bar is no cover`() {
+        val target = row(1860)
+        screenOf(list(target), FakeNode(Box(0, 1840, 1080, 2000), isVisible = false, isNamed = true, name = "bar"))
+        assertClearAt(analyze(target, plainViewsTakeTouches = true), 540, 1920)
+    }
+
+    @Test
+    fun `a row in a carousel under a bar laid over the feed is covered`() {
+        val target = FakeNode(Box(40, 1860, 400, 1980), takesTouches = true, name = "card")
+        val carousel = FakeNode(Box(0, 1850, 1080, 1990), isScrollContainer = true).add(FakeNode(Box(0, 1850, 1080, 1990)).add(target))
+        screenOf(list(carousel), checkoutBar())
+        assertCoveredBy(analyze(target, plainViewsTakeTouches = true), "element \"checkout-bar\"")
     }
 
     // ─── Naming covers ───

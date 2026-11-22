@@ -56,6 +56,12 @@ class OcclusionGuard(
 
     private val planner = TouchPlanner(screen, SystemGuardClock) { Log.d(TAG, it) }
 
+    private val reactNativeApps =
+        ReactNativeApps(
+            apkPathsOf = { pkg -> ReactNativeApps.parsePmPath(device.executeShellCommand("pm path $pkg")) },
+            log = { message, e -> Log.w(TAG, message, e) },
+        )
+
     private val keyboard =
         object : GuardKeyboard {
             // The same check the daemon's isKeyboardShown/hideKeyboard use.
@@ -121,6 +127,7 @@ class OcclusionGuard(
                     text = node.text?.toString(),
                     isEditable = node.isEditable,
                     readContent = { contentOf(node) },
+                    plainViewsTakeTouches = reactNativeApps.isReactNative(node.packageName?.toString()),
                 )
             }
 
@@ -200,6 +207,13 @@ class OcclusionGuard(
         override val takesTouches: Boolean by lazy { node.isClickable || node.isLongClickable }
         override val offersDismiss: Boolean by lazy { node.isDismissable }
         override val isProgressIndicator: Boolean by lazy { node.className?.toString()?.endsWith("ProgressBar") == true }
+        override val isScrollContainer: Boolean by lazy {
+            node.isScrollable || KeyboardFirst.isScrollContainer(node.className?.toString())
+        }
+        override val isNamed: Boolean by lazy {
+            !NonAppNodes.isHooksMarker(node.text, node.contentDescription) &&
+                listOf(node.text, node.contentDescription, node.viewIdResourceName).any { !it.isNullOrEmpty() }
+        }
         private val childCount: Int by lazy { node.childCount }
         private val children = HashMap<Int, A11yHitNode?>()
 

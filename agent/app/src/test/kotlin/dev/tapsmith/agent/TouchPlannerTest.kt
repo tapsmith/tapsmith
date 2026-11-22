@@ -56,6 +56,8 @@ class TouchPlannerTest {
         override val takesTouches: Boolean = false,
         private val name: String = "node",
         override val isProgressIndicator: Boolean = false,
+        override val isScrollContainer: Boolean = false,
+        override val isNamed: Boolean = false,
     ) : OcclusionAnalyzer.HitNode {
         override val isVisible = true
         var parentNode: Node? = null
@@ -117,6 +119,7 @@ class TouchPlannerTest {
             contentDescription: String? = "Save",
             className: String = "android.widget.Button",
             content: String = "",
+            plainViewsTakeTouches: Boolean = false,
         ) = TargetSnapshot(
             node = node,
             windowId = 1,
@@ -127,6 +130,7 @@ class TouchPlannerTest {
             text = null,
             isEditable = false,
             readContent = { content },
+            plainViewsTakeTouches = plainViewsTakeTouches,
         )
     }
 
@@ -205,6 +209,25 @@ class TouchPlannerTest {
         val e = assertThrows<ElementCoveredException> { planner.plan(target, BUTTON, budget().noWait(), LABELLED) }
         assertEquals(CoverKind.CONTROL, e.kind)
         assertTrue(e.message, e.message!!.contains("button \"Overlay\""))
+    }
+
+    @Test
+    fun `a row under a bar laid over its list is refused, with the way out`() {
+        // PILOT-1424: in a React Native app the bar takes the touch.
+        val row = Node(LOW, takesTouches = true)
+        val list = Node(Box(0, 200, 1080, 2340), isScrollContainer = true).add(Node(Box(0, 200, 1080, 2340)).add(row))
+        val bar = Node(Box(0, 2180, 1080, 2340), isNamed = true, name = "element \"checkout-bar\"")
+        Node(SCREEN).add(list, bar)
+        target.readAt = { snapshot(LOW, node = row, plainViewsTakeTouches = true) }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, LOW, budget(timeoutMs = 1_000), LABELLED) }
+        assertEquals(CoverKind.BAR, e.kind)
+        assertTrue(e.message, e.message!!.contains("covered by element \"checkout-bar\", a bar laid over its list,"))
+        assertTrue(e.message, e.message!!.contains("still covered after waiting"))
+        assertTrue(e.message, e.message!!.contains("scrollIntoView()"))
+
+        // An app whose plain views let touches through is touched as before.
+        target.readAt = { snapshot(LOW, node = row) }
+        assertEquals(TouchPlan.Point(540, 2270), planner.plan(target, LOW, budget(), LABELLED))
     }
 
     // ─── plan: too late ───
