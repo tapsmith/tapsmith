@@ -115,13 +115,13 @@ export default defineConfig({
 workflow has no such AVD: `android-emulator-runner` creates its own (named `test`) and boots it
 before `script` runs. So on CI, when the configured AVD is not on the machine, `deviceStrategy`
 is not set and a device is connected, Tapsmith uses the connected emulator, boots nothing, and
-prints a warning:
+prints a note:
 
 ```
 AVD "Pixel_8_API_36" (the config's avd) is not on this CI machine, so Tapsmith uses the connected device emulator-5554 instead. …
 ```
 
-The config works as committed. To make the choice explicit (and silence the warning), set
+The config works as committed. To make the choice explicit (and drop the note), set
 `deviceStrategy` on CI, keeping `avd` for your machine:
 
 ```typescript

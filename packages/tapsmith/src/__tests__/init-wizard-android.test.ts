@@ -527,9 +527,11 @@ describe('configureAndroid() with a running emulator (PILOT-1201)', () => {
 
     const q = question(/How will you run Android tests/);
     expect(q?.choices?.map((c) => c.message)).toEqual([
-      'The running emulator, Tapsmith_Fold_API_36', 'Another emulator', 'Physical devices', 'Both',
+      'The running emulator, Tapsmith_Fold_API_36 (emulator-5570)', 'Another emulator', 'Physical devices', 'Both',
     ]);
     expect(q?.initial ?? 0).toBe(0);
+    // enquirer echoes the name: it must read as the label, not an internal value.
+    expect(q?.choices?.[0]?.name).toBe(q?.choices?.[0]?.message);
     expect(question(/Which AVD/)).toBeUndefined();
     expect(android).toMatchObject({ avd: 'Tapsmith_Fold_API_36', useEmulators: true, usePhysicalDevices: false });
     expect(android.device).toBeUndefined();
@@ -537,7 +539,7 @@ describe('configureAndroid() with a running emulator (PILOT-1201)', () => {
 
   it('pins the serial of a running emulator whose AVD name cannot be read, and says so', async () => {
     answers.set(/Where is your Android APK/, DEBUG_APK);
-    answers.set(/How will you run Android tests/, 'running:emulator-5570');
+    answers.set(/How will you run Android tests/, 'The running emulator emulator-5570');
 
     const android = await configureAndroid(withRunning([{ serial: 'emulator-5570', held: false }]));
 

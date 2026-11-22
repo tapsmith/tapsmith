@@ -341,7 +341,7 @@ export function connectedDeviceTarget(
 /** A running emulator's wizard label: its AVD, else its serial. */
 function runningEmulatorLabel(d: ConnectedAndroidDevice): { message: string; hint: string } {
   return d.avd !== undefined
-    ? { message: `The running emulator, ${d.avd}`, hint: d.serial }
+    ? { message: `The running emulator, ${d.avd} (${d.serial})`, hint: 'boots nothing' }
     : { message: `The running emulator ${d.serial}`, hint: "its AVD name can't be read, so the config pins this serial" };
 }
 
@@ -496,19 +496,21 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
   // Running emulators first, the first selected (PILOT-1201): choosing one
   // boots nothing. Not one another Tapsmith session drives.
   const running = env.androidDevices.filter((d) => !d.held && d.serial.startsWith('emulator-'));
-  const RUNNING = 'running:';
+  // enquirer echoes the chosen choice's name, so each running emulator's
+  // name is its label, which names its serial and so is unique.
+  const runningChoices = running.map((d) => ({ device: d, ...runningEmulatorLabel(d) }));
   const deviceType = await ask<string>({
     type: 'select',
     message: 'How will you run Android tests?',
     choices: [
-      ...running.map((d) => ({ name: `${RUNNING}${d.serial}`, ...runningEmulatorLabel(d) })),
+      ...runningChoices.map((c) => ({ name: c.message, message: c.message, hint: c.hint })),
       { name: 'emulators', message: running.length > 0 ? 'Another emulator' : 'Emulators', hint: 'Tapsmith launches the AVD you pick next, unless it is running' },
       { name: 'physical', message: 'Physical devices', hint: 'USB-connected devices' },
       { name: 'both', message: 'Both' },
     ],
   });
 
-  const chosen = deviceType.startsWith(RUNNING) ? running.find((d) => `${RUNNING}${d.serial}` === deviceType) : undefined;
+  const chosen = runningChoices.find((c) => c.message === deviceType)?.device;
   if (chosen) {
     const target = connectedDeviceTarget(chosen);
     if (target.warning) console.log(`  ${YELLOW}⚠${RESET} ${target.warning}`);
