@@ -1393,6 +1393,19 @@ describe('a rebuilt app in a long-lived session', () => {
     expect(reinstalled).toEqual([['emulator-5554', 'Reinstalled app.apk (the device had a different build)']]);
   });
 
+  it('says a simulator reinstall happened only once the install has landed', async () => {
+    const { installAppAsync } = await import('../ios-simulator.js');
+    vi.mocked(installAppAsync).mockRejectedValueOnce(new Error('simctl install failed'));
+    mocks.simAppMatches = false;
+    const reinstalled: string[] = [];
+    await expect(openDeviceSession(
+      { name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50052' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1', onReinstalled: (_s, b) => { reinstalled.push(b.message ?? ''); } },
+    )).rejects.toThrow(/simctl install failed/);
+    expect(reinstalled).toEqual([]);
+  });
+
   it('says nothing when a session it opens itself finds the build matching, or reinstalls only because it was forced', async () => {
     const reinstalled: string[] = [];
     const onReinstalled = (_serial: string, build: { message?: string }) => { reinstalled.push(build.message ?? ''); };

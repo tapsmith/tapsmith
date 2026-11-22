@@ -216,6 +216,7 @@ describe('forgetBuildCapabilities', () => {
     const caps: ResetCapabilities = {
       hooksDetected: true,
       hooksUrlPrefix: 'old:///',
+      hooksRemount: true,
       daemonWaitsForRender: true,
       isPhysical: false,
       appStateKeep: { noWrites: true, writingKeeps: 3, daemonCannotKeep: true },

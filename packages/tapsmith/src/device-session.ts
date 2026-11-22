@@ -986,18 +986,6 @@ export async function openDeviceSession(
       onProgress: progress,
       onPhase: phase,
     });
-    // A long-lived parent that opens sessions itself (a UI worker respawned
-    // on its own daemon) learns of a replaced build the same way as after an
-    // adopt: it says so, and drops what it knew about the old build. A fresh
-    // install onto a device without the app, or a forced one, is no news.
-    if (opts.onReinstalled && install.installed && !install.freshInstall && !opts.forceInstall) {
-      opts.onReinstalled(spec.serial, {
-        reinstalled: true,
-        message: `Reinstalled ${path.basename((config.platform === 'ios' ? config.app : config.apk) ?? 'the app')} (the device had a different build)`,
-        durationMs: Date.now() - checkStarted,
-      });
-    }
-
     // Resolving the agent artifacts may build the simulator agent; a pending
     // simulator install runs alongside it, and is awaited before the agent
     // starts because the iOS agent launches the app as soon as it is up.
@@ -1012,6 +1000,19 @@ export async function openDeviceSession(
     }
     Object.assign(session.context, artifacts);
     if (install.pending) await install.pending;
+    // A long-lived parent that opens sessions itself (a UI worker respawned
+    // on its own daemon) learns of a replaced build the same way as after an
+    // adopt: it says so, and drops what it knew about the old build — once
+    // the install has landed (a simulator's runs alongside the agent build).
+    // A fresh install onto a device without the app, or a forced one, is no
+    // news.
+    if (opts.onReinstalled && install.installed && !install.freshInstall && !opts.forceInstall) {
+      opts.onReinstalled(spec.serial, {
+        reinstalled: true,
+        message: `Reinstalled ${path.basename((config.platform === 'ios' ? config.app : config.apk) ?? 'the app')} (the device had a different build)`,
+        durationMs: Date.now() - checkStarted,
+      });
+    }
     let freshInstall = install.freshInstall;
     // The iOS agent launches the app itself as it starts. Unless the app was
     // just installed (no data to clear), it is asked to wipe the app's data

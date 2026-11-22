@@ -93,6 +93,7 @@ export interface ResetCapabilities {
 export function forgetBuildCapabilities(caps: ResetCapabilities): void {
   delete caps.hooksDetected;
   delete caps.hooksUrlPrefix;
+  delete caps.hooksRemount;
   if (caps.appStateKeep) {
     delete caps.appStateKeep.noWrites;
     delete caps.appStateKeep.writingKeeps;
