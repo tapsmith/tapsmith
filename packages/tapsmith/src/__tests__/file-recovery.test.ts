@@ -157,6 +157,26 @@ describe('runFileWithSessionRecovery (PILOT-1383)', () => {
     expect(statuses(collectResults(suite))).toEqual([['one', 'failed'], ['two', 'failed'], ['three', 'failed']]);
   });
 
+  it('keeps the first attempt over a retry that fails to load the file, counting the tests it left unrun', async () => {
+    // One result (the load failure) is fewer than the first attempt's three
+    // tests, even though that attempt ran only one of them.
+    const file = writeFile({ one: ['infra'], two: ['pass'], three: ['pass'] });
+    const base = recoveryRun(file);
+    let attempt = 0;
+    const loadFailure: SuiteResult = {
+      name: '', durationMs: 0, suites: [],
+      tests: [{ name: 'loop.test.mjs', fullName: 'loop.test.mjs', status: 'failed', durationMs: 0, error: new Error('SyntaxError: boom'), fileLevelFailure: true }],
+    };
+    const { run } = recoveryRun(file, {
+      runAttempt: async (finalFileAttempt) => (++attempt === 2 ? loadFailure : base.run.runAttempt(finalFileAttempt)),
+    });
+
+    const suite = await runFileWithSessionRecovery(run);
+
+    expect(statuses(collectResults(suite))).toEqual([['one', 'failed'], ['two', 'failed'], ['three', 'failed']]);
+    expect(collectResults(suite)[0].error?.message).toContain('Agent connection dropped');
+  });
+
   it('rethrows a non-infrastructure error from the first attempt without retrying', async () => {
     const recover = vi.fn(async () => {});
     await expect(runFileWithSessionRecovery({

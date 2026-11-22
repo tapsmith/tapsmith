@@ -31,6 +31,8 @@ export interface FileRecoveryRun {
  */
 export async function runFileWithSessionRecovery(run: FileRecoveryRun): Promise<SuiteResult> {
   let firstAttemptSuite: SuiteResult | undefined;
+  // The tests the first attempt's abort left unrun, held back by the runner.
+  let firstAttemptNotRun: TestResult[] = [];
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const suite = await run.runAttempt(attempt === 2);
@@ -43,9 +45,11 @@ export async function runFileWithSessionRecovery(run: FileRecoveryRun): Promise<
         // attempt (e.g. crashed before running any tests), prefer the
         // first attempt's results so the original failure is visible.
         if (attempt === 2 && firstAttemptSuite) {
-          const firstResults = collectResults(firstAttemptSuite);
-          if (fileResults.length < firstResults.length) {
-            return withDeferredNotRun(firstAttemptSuite, run);
+          // The first attempt's file has as many tests as it ran plus the
+          // ones its abort left unrun.
+          const firstCount = collectResults(firstAttemptSuite).length + firstAttemptNotRun.length;
+          if (fileResults.length < firstCount) {
+            return withNotRun(firstAttemptSuite, firstAttemptNotRun, run);
           }
           // Tests that failed on the discarded first attempt must surface as
           // flaky, not as clean passes — the summary would otherwise hide
@@ -58,13 +62,14 @@ export async function runFileWithSessionRecovery(run: FileRecoveryRun): Promise<
         return suite;
       }
       firstAttemptSuite = suite;
+      firstAttemptNotRun = takeDeferredNotRunResults(suite);
       run.log(`Recovering session after infrastructure error in ${run.fileName}: ${infraFailure.error?.message ?? 'unknown'}`);
       await run.recover();
     } catch (err) {
       if (!isRecoverableInfrastructureError(err) || attempt === 2) {
         // If the retry itself crashed, return the first attempt's results
         // (which contain the original failure) so it's counted in the summary.
-        if (firstAttemptSuite) return withDeferredNotRun(firstAttemptSuite, run);
+        if (firstAttemptSuite) return withNotRun(firstAttemptSuite, firstAttemptNotRun, run);
         throw err;
       }
       run.log(`Recovering session after infrastructure error in ${run.fileName}: ${err instanceof Error ? err.message : err}`);
@@ -76,8 +81,7 @@ export async function runFileWithSessionRecovery(run: FileRecoveryRun): Promise<
 }
 
 /** The first attempt's suite with the not-run results it held back, now reported. */
-function withDeferredNotRun(suite: SuiteResult, run: FileRecoveryRun): SuiteResult {
-  const notRun = takeDeferredNotRunResults(suite);
+function withNotRun(suite: SuiteResult, notRun: TestResult[], run: FileRecoveryRun): SuiteResult {
   for (const result of notRun) {
     suite.tests.push(result);
     run.onTestEnd(result);
