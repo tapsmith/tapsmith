@@ -905,7 +905,7 @@ const count = await premiumItems.count();
 
 | Option | Type | Description |
 |---|---|---|
-| `hasText` | `string \| RegExp` | Keep elements whose text contains this string or matches this RegExp. An element with no text of its own, such as a list row, has its descendants' text, as for `toContainText`. An Android text field's typed value is not its text here, as for `getByText` |
+| `hasText` | `string \| RegExp` | Keep elements whose text contains this string or matches this RegExp. An element with no text of its own, such as a list row, has its descendants' text, as for `toContainText`. An Android text field's typed value is not its text here, nor is an empty field's placeholder |
 | `hasNotText` | `string \| RegExp` | Exclude elements whose text contains this string or matches this RegExp |
 | `has` | `ElementHandle` | Keep elements that have a descendant matching this locator |
 | `hasNot` | `ElementHandle` | Exclude elements that have a descendant matching this locator |
