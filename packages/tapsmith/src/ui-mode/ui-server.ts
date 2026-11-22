@@ -78,7 +78,7 @@ import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
 import { DeviceReadiness, holdReason, McpCallsInFlight, mcpToolWorkers, MUTATING_MCP_TOOLS, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
-import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
+import { capabilitiesAfterRespawn, mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
 import { knownInstalledBuilds, rememberInstalledBuilds } from '../installed-builds.js';
@@ -337,6 +337,8 @@ interface UIWorkerHandle {
   initialPolicy?: AppResetPolicy
   /** Runtime reset capabilities the worker probed (in-app hooks detected?). */
   capabilities?: ResetCapabilities
+  /** The worker reinstalled a rebuilt app: a respawn takes its fresh capabilities, not the old worker's. */
+  reinstalledBuild?: boolean
   /** Last file this worker ran — the edit → rerun loop's best guess for what runs next. */
   lastRun?: { file: string; projectName?: string }
   /** Activity-feed id of the in-flight preparation. */
@@ -646,6 +648,13 @@ export async function startUIServer(
       label: 'Reinstalled app', detail: msg.message, timestamp: msg.startedAt, durationMs: msg.durationMs,
     });
     console.log(`  ${msg.message} on ${msg.deviceSerial}`);
+    // Replace, not merge: the server's copy only ever upgrades, and the old
+    // build's hooks would keep background preparation trying warm resets
+    // that the new build cannot acknowledge.
+    worker.reinstalledBuild = true;
+    if (JSON.stringify(msg.capabilities) === JSON.stringify(worker.capabilities)) return;
+    worker.capabilities = msg.capabilities;
+    if (!worker.retired) readinessEvent(worker, { type: 'candidate-changed' });
   }
 
   /**
@@ -3684,7 +3693,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // startup probe upgrade them, never downgrade (a probe that misses the
       // marker on a slow relaunch must not turn a verified hooks app into a
       // clear+relaunch one for the rest of the session).
-      newWorker.capabilities = mergeResetCapabilities(worker.capabilities, newWorker.capabilities);
+      newWorker.capabilities = capabilitiesAfterRespawn(worker.capabilities, newWorker.capabilities, newWorker.reinstalledBuild === true);
       uiWorkers[index] = newWorker;
     } finally {
       // The respawn is over either way. On failure the old handle stays in

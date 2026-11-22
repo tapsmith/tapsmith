@@ -132,6 +132,19 @@ describe('ui-worker build check before each run', () => {
     });
   });
 
+  it('sends the new build\'s capabilities with the reinstall, so the server stops resolving the old build\'s hooks', async () => {
+    const s = fakeSession('emulator-5554');
+    s.capabilities.hooksDetected = true;
+    await init([s]);
+    mocks.reinstallChangedBuild.mockImplementationOnce(async () => {
+      // The reinstall forgot the old build's hooks and the relaunch probed the new one.
+      s.capabilities.hooksDetected = false;
+      return { reinstalled: true, message: 'Reinstalled app.apk (build changed since the last run)', durationMs: 3_000 };
+    });
+    await runFile();
+    expect(sent.find((m) => m.type === 'app-reinstalled')).toMatchObject({ capabilities: { hooksDetected: false } });
+  });
+
   it('fails the file with the check\'s error, without running it, and keeps the worker', async () => {
     const s = fakeSession('emulator-5554');
     await init([s]);

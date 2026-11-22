@@ -1121,6 +1121,12 @@ export interface UIWorkerAppReinstalledMessage {
   message: string
   startedAt: number
   durationMs: number
+  /**
+   * The worker's capabilities after the reinstall. They replace the server's
+   * copy, which otherwise only upgrades: the old ones describe a build that
+   * is gone (hooks the new build may not have).
+   */
+  capabilities: import('../app-reset.js').ResetCapabilities
 }
 
 /** UI worker → server: a background preparation finished. */

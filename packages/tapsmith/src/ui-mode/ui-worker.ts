@@ -81,7 +81,8 @@ function sendProgress(message: string): void {
 function sendReinstalled(deviceSerial: string, outcome: BuildCheckOutcome): void {
   if (!outcome.message) return;
   const durationMs = outcome.durationMs ?? 0;
-  send({ type: 'app-reinstalled', workerId, deviceSerial, message: outcome.message, startedAt: Date.now() - durationMs, durationMs });
+  publishedCapabilities = { ...sharedCapabilities() };
+  send({ type: 'app-reinstalled', workerId, deviceSerial, message: outcome.message, startedAt: Date.now() - durationMs, durationMs, capabilities: { ...publishedCapabilities } });
 }
 
 /**

@@ -120,6 +120,16 @@ export function nextCandidate(input: CandidateInput): Candidate | undefined {
  * rendered) must not downgrade a capability an earlier reset positively
  * verified — the same never-downgrade rule the worker applies locally.
  */
+export function capabilitiesAfterRespawn(
+  previous: ResetCapabilities | undefined,
+  fresh: ResetCapabilities | undefined,
+  reinstalled: boolean,
+): ResetCapabilities | undefined {
+  // A respawn that reinstalled a rebuilt app on the way up probed the new
+  // build: what the old worker knew describes one that is gone.
+  return reinstalled ? fresh : mergeResetCapabilities(previous, fresh);
+}
+
 export function mergeResetCapabilities(
   previous: ResetCapabilities | undefined,
   next: ResetCapabilities | undefined,
