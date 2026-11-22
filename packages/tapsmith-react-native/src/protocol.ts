@@ -4,7 +4,7 @@
  * Kotlin or Swift implementation follows the same three rules.
  *
  *   marker (always-present a11y text):
- *     tapsmith-hooks:<version>;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>[;writes=<n>][;err=<urlencoded>]
+ *     tapsmith-hooks:<version>;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>[;writes=<n>][;remount=1][;err=<urlencoded>]
  *
  *   `boot` is a random token generated once per app process. The epoch counter
  *   lives in memory and restarts at 0 after a cold relaunch, so a reset that
@@ -14,8 +14,11 @@
  *   `writes` counts the persisted writes the hooks saw in this process (see
  *   writes.ts). It is present only when the app can reset while keeping its
  *   data (`onReload`), and lets Tapsmith keep a restored `appState` between
- *   tests instead of restoring it again. Unknown fields are ignored by every
- *   reader, so it needs no protocol version bump.
+ *   tests instead of restoring it again. `remount=1` says the hooks wrap the
+ *   app and remount it on every reset, so no screen keeps React state across
+ *   one; without it, screens that stay mounted keep theirs (Tapsmith points at
+ *   that when a test fails after such a reset). Unknown fields are ignored by
+ *   every reader, so neither needs a protocol version bump.
  *   request (deep link the daemon opens):
  *     <prefix><target>?__tapsmith_reset=1&nonce=<opaque>[&__tapsmith_keep=1]
  *   `__tapsmith_keep=1`: reset in-memory state only (`onReload`), keeping the
@@ -48,6 +51,11 @@ export interface MarkerFields {
    * tracked.
    */
   writes?: number;
+  /**
+   * The hooks wrap the app (`<TapsmithTestHooks>{app}</TapsmithTestHooks>`)
+   * and remount it on every reset. Omitted (never `false`) otherwise.
+   */
+  remount?: boolean;
   /** Last reset error, if the handler threw. */
   error?: string;
 }
@@ -70,6 +78,7 @@ export function formatMarker(fields: MarkerFields): string {
     ...(fields.boot ? [`boot=${fields.boot}`] : []),
     `url=${fields.urlPrefix}`,
     ...(fields.writes !== undefined ? [`writes=${fields.writes}`] : []),
+    ...(fields.remount ? ['remount=1'] : []),
   ];
   if (fields.error) {
     // Truncate by code point, not UTF-16 unit: a cut through a surrogate pair
@@ -97,6 +106,7 @@ export function parseMarker(text: string): (MarkerFields & { version: number }) 
   let urlPrefix = '';
   let boot: string | undefined;
   let writes: number | undefined;
+  let remount = false;
   let error: string | undefined;
   for (const field of rest) {
     const eq = field.indexOf('=');
@@ -108,6 +118,7 @@ export function parseMarker(text: string): (MarkerFields & { version: number }) 
     else if (key === 'url') urlPrefix = value;
     else if (key === 'boot' && value) boot = value;
     else if (key === 'writes') writes = Number.parseInt(value, 10);
+    else if (key === 'remount') remount = value === '1';
     else if (key === 'err' && value) {
       try { error = decodeURIComponent(value); } catch { error = value; }
     }
@@ -118,6 +129,7 @@ export function parseMarker(text: string): (MarkerFields & { version: number }) 
     ...(nav !== undefined && Number.isFinite(nav) ? { nav } : {}),
     ...(boot ? { boot } : {}),
     ...(writes !== undefined && Number.isFinite(writes) ? { writes } : {}),
+    ...(remount ? { remount } : {}),
   };
 }
 
