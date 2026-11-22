@@ -1984,15 +1984,21 @@ enum AmStartOutcome {
     Started,
     /// No activity matches the intent.
     Unresolved,
-    /// Any other error `am` printed.
+    /// Any other error `am` printed, or an exception it threw (a
+    /// `SecurityException` for an activity that is not exported, say).
     Failed,
 }
 
 /// Judge `am start`'s combined stdout and stderr (see [`deep_link_view_command`]).
 fn am_start_outcome(output: &str) -> AmStartOutcome {
+    let threw = output.lines().map(str::trim_start).any(|line| {
+        line.starts_with("Exception occurred while executing")
+            || line.starts_with("Security exception")
+            || line.starts_with("java.lang.")
+    });
     if output.contains("unable to resolve Intent") {
         AmStartOutcome::Unresolved
-    } else if am_start_reported_error(output) {
+    } else if threw || am_start_reported_error(output) {
         AmStartOutcome::Failed
     } else {
         AmStartOutcome::Started
@@ -2078,6 +2084,25 @@ mod tests {
             am_start_outcome(
                 "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
                  Error type 3\nError: Activity class {org.x/org.x.Gone} does not exist.\n"
+            ),
+            AmStartOutcome::Failed
+        );
+        // An activity that is not exported: `am` throws rather than printing
+        // an `Error` line, and only its exit status (folded away) said so.
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Exception occurred while executing 'start':\n\
+                 java.lang.SecurityException: Permission Denial: starting Intent { act=android.intent.action.VIEW \
+                 dat=myapp://x/... pkg=org.x cmp=org.x/.Hidden } from null (pid=1, uid=2000) not exported from uid 10190\n\
+                 \tat com.android.server.wm.ActivityTaskSupervisor.checkStartAnyActivityPermission(ActivityTaskSupervisor.java:1210)\n"
+            ),
+            AmStartOutcome::Failed
+        );
+        assert_eq!(
+            am_start_outcome(
+                "Starting: Intent { act=android.intent.action.VIEW dat=myapp://x pkg=org.x }\n\
+                 Security exception: Permission Denial: starting Intent { cmp=org.x/.Hidden } not exported from uid 10190\n"
             ),
             AmStartOutcome::Failed
         );
