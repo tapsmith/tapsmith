@@ -891,6 +891,46 @@ describe('executeInitPlan()', () => {
     }
   });
 
+  it('points the AGENTS.md and the Cursor step at the docs a workspace hoisted to its root', () => {
+    const root = fs.realpathSync(makeTmp());
+    try {
+      fs.mkdirSync(path.join(root, 'node_modules', 'tapsmith'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'node_modules', 'tapsmith', 'package.json'), '{"name":"tapsmith"}');
+      const pkg = path.join(root, 'packages', 'e2e');
+      fs.mkdirSync(pkg, { recursive: true });
+      const args = initArgs({ yes: true, platform: 'android', exampleTest: false, agentsMd: true });
+      const result = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, pkg), args, pkg, undefined, 'npx tapsmith', ['cursor']);
+      expect(result.nextSteps.some((step) => step.includes('see "Install the plugin" in ../../node_modules/tapsmith/docs/mcp-server.md'))).toBe(true);
+      const agentsMd = fs.readFileSync(path.join(pkg, 'AGENTS.md'), 'utf8');
+      expect(agentsMd).toContain('`../../node_modules/tapsmith/docs/<page>.md`');
+      expect(agentsMd).not.toMatch(/[^/]node_modules\/tapsmith\/docs/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('notes that the example test sits beside a Playwright project\'s tests', () => {
+    const tmp = makeTmp();
+    try {
+      fs.writeFileSync(path.join(tmp, 'playwright.config.ts'), 'export default {};\n');
+      const args = initArgs({ yes: true, platform: 'android', agentsMd: false });
+      const result = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), args, tmp);
+      expect(result.warnings).toContain(
+        'tests/example.tapsmith.ts is in tests/ beside the tests of Playwright (playwright.config.ts). That\'s fine: Playwright\'s default testMatch '
+          + 'doesn\'t run *.tapsmith.ts files, and tapsmith.config.ts runs only those, so neither picks up the other\'s tests.',
+      );
+      // No note without the example test, or without Playwright.
+      const noExample = executeInitPlan(resolveInitPlan({ ...args, exampleTest: false }, baseEnv, detectStubs, tmp), { ...args, exampleTest: false, force: true }, tmp);
+      expect(noExample.warnings.join('\n')).not.toContain('Playwright');
+      fs.rmSync(path.join(tmp, 'playwright.config.ts'));
+      fs.rmSync(path.join(tmp, 'tests'), { recursive: true });
+      const plain = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), { ...args, force: true }, tmp);
+      expect(plain.warnings.join('\n')).not.toContain('Playwright');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   // PILOT-631: no package.json in the project directory.
   it('says why the install step creates a package.json first', () => {
     const tmp = makeTmp();

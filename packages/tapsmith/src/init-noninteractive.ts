@@ -8,8 +8,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { runningAvds, simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
-import { EXAMPLE_TEST_PATH, connectedDeviceTarget, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
-import { writeAgentsMd } from './agents-md.js';
+import { EXAMPLE_TEST_PATH, connectedDeviceTarget, playwrightNeighbourNote, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
+import { installedDocsDir, writeAgentsMd } from './agents-md.js';
 import { pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
@@ -681,6 +681,10 @@ export function executeInitPlan(
   }
 
   if (exampleTestExisted) warnings.push(`${EXAMPLE_TEST_PATH} already exists — left untouched`);
+  else if (written.includes(EXAMPLE_TEST_PATH)) {
+    const note = playwrightNeighbourNote(cwd);
+    if (note) warnings.push(note);
+  }
   filesCreated.push(...written.filter((f) => f !== 'tapsmith.config.ts'));
 
   // For the documented ESLint setup's type information (PILOT-838).
@@ -707,7 +711,7 @@ export function executeInitPlan(
     // agent found, the manual registration of the server the plugin uses
     // (docs/mcp-server.md).
     ...(codingAgents.length > 0
-      ? pluginInstallSteps(codingAgents).map(([label, how]) => `Install the ${label} (the Tapsmith MCP server and a test-writing skill): ${how}`)
+      ? pluginInstallSteps(codingAgents, installedDocsDir(cwd)).map(([label, how]) => `Install the ${label} (the Tapsmith MCP server and a test-writing skill): ${how}`)
       : ['Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui']),
     ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];

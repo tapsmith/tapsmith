@@ -42,6 +42,7 @@ import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitigno
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 import { detectCodingAgents, pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
+import { installedDocsDir } from './agents-md.js';
 import { appIdProblem, appIdWarning, type AppIdPlatform } from './app-id.js';
 
 const DIM = '\x1b[2m';
@@ -1308,6 +1309,21 @@ export function testsOutsideGeneratedMatchWarning(files: string[]): string | und
     + 'Rename each to end in .tapsmith.ts (Jest and Vitest also run *.test.ts and *.spec.ts files), or add its pattern to testMatch in tapsmith.config.ts';
 }
 
+const PLAYWRIGHT_CONFIGS = ['ts', 'js', 'mts', 'mjs', 'cts', 'cjs'].map((ext) => `playwright.config.${ext}`);
+
+/**
+ * A note for a project that has a Playwright config, when init has just
+ * written the example test into `tests/`, Playwright's usual test folder:
+ * it is fine there, since neither runner picks up the other's files by
+ * default, but a Playwright user may wonder. Undefined otherwise.
+ */
+export function playwrightNeighbourNote(cwd: string): string | undefined {
+  const config = PLAYWRIGHT_CONFIGS.find((name) => fs.existsSync(path.join(cwd, name)));
+  if (!config) return undefined;
+  return `${EXAMPLE_TEST_PATH} is in tests/ beside the tests of Playwright (${config}). That's fine: Playwright's default testMatch `
+    + 'doesn\'t run *.tapsmith.ts files, and tapsmith.config.ts runs only those, so neither picks up the other\'s tests.';
+}
+
 // ─── Main wizard ───
 
 /** The next step for a config with placeholders, or undefined when it has none. */
@@ -1336,9 +1352,11 @@ export function wizardNextSteps(
     yarnPnp?: boolean;
     /** The coding agents the project uses: each gets its plugin install. */
     agents?: readonly CodingAgent[];
+    /** Where the installed docs are, from the project (`installedDocsDir`). */
+    docsDir?: string;
   } = {},
 ): Array<[string, string]> {
-  const { install: installStep, capture: captureStep, app: appStep, yarnPnp, agents = [] } = steps;
+  const { install: installStep, capture: captureStep, app: appStep, yarnPnp, agents = [], docsDir } = steps;
   // A Play-image AVD (PILOT-711): the AVD to switch to — before the first
   // run when capture is on, else last, as an option.
   const capture = captureStep ? [[captureStep.label, withTapsmithCommand(captureStep.action, cli)] as [string, string]] : [];
@@ -1352,7 +1370,7 @@ export function wizardNextSteps(
     ['Run your tests', `${cli} test`],
     ['List devices', `${cli} list-devices`],
     ['Health check', `${cli} doctor`],
-    ...pluginInstallSteps(agents),
+    ...pluginInstallSteps(agents, docsDir),
     ...(captureStep?.optional ? capture : []),
   ];
 }
@@ -1621,7 +1639,11 @@ async function runInitInner(): Promise<void> {
   else if (typeof depsIgnored === 'object') console.log(`  ${YELLOW}⚠${RESET} ${depsIgnored.warning}`);
 
   if (exampleTestExisted) console.log(`  ${YELLOW}⚠${RESET} ${EXAMPLE_TEST_PATH} already exists, skipping.`);
-  else if (written.includes(EXAMPLE_TEST_PATH)) console.log(`  ${green('✓')} ${EXAMPLE_TEST_PATH} created`);
+  else if (written.includes(EXAMPLE_TEST_PATH)) {
+    console.log(`  ${green('✓')} ${EXAMPLE_TEST_PATH} created`);
+    const note = playwrightNeighbourNote(process.cwd());
+    if (note) console.log(`    ${dim(note)}`);
+  }
   if (written.includes('AGENTS.md')) console.log(`  ${green('✓')} AGENTS.md updated`);
   // For the documented ESLint setup's type information (PILOT-838).
   const tsconfig = writeTsconfigOrWarn(process.cwd());
@@ -1643,6 +1665,7 @@ async function runInitInner(): Promise<void> {
     app: placeholderNextStep(placeholders),
     yarnPnp,
     agents: detectCodingAgents(process.cwd()),
+    docsDir: installedDocsDir(process.cwd()),
   });
   const width = Math.max(...[...steps.map(([l]) => l), ...projects.map((p) => p.label)].map((l) => l.length)) + 3;
   const step = (label: string, cmd: string): void => console.log(`  ${`${label}:`.padEnd(width)}${green(cmd)}`);

@@ -797,6 +797,11 @@ describe('wizardNextSteps() (PILOT-562)', () => {
     ]);
   });
 
+  it('points the Cursor step at the installed docs', () => {
+    const steps = wizardNextSteps('npx tapsmith', { agents: ['cursor'], docsDir: '../node_modules/tapsmith/docs' });
+    expect(steps.at(-1)).toEqual(['Cursor plugin', 'see "Install the plugin" in ../node_modules/tapsmith/docs/mcp-server.md']);
+  });
+
   it('puts a declined install first (PILOT-551)', () => {
     const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith' });
     expect(steps[0]).toEqual(['Install Tapsmith', 'npm i -D tapsmith']);

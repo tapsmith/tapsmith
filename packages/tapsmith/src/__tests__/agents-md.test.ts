@@ -1,5 +1,8 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { renderAgentsSection, mergeAgentsMd, AGENTS_BEGIN, AGENTS_END } from '../agents-md.js';
+import { renderAgentsSection, mergeAgentsMd, installedDocsDir, writeAgentsMd, AGENTS_BEGIN, AGENTS_END } from '../agents-md.js';
 
 describe('renderAgentsSection()', () => {
   it('renders fenced section with run/debug/MCP guidance', () => {
@@ -101,5 +104,66 @@ describe('mergeAgentsMd()', () => {
     expect(merged).toContain('# Top');
     expect(merged).toContain('# Bottom');
     expect(merged).not.toContain('old stuff');
+  });
+});
+
+describe('the docs path init writes', () => {
+  const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-docs-dir-')));
+  const install = (dir: string) => {
+    fs.mkdirSync(path.join(dir, 'node_modules', 'tapsmith'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'node_modules', 'tapsmith', 'package.json'), '{"name":"tapsmith"}');
+  };
+
+  it('points at the project\'s own install', () => {
+    const root = tmp();
+    install(root);
+    expect(installedDocsDir(root)).toBe('node_modules/tapsmith/docs');
+  });
+
+  it('points at the install a workspace hoisted to its root', () => {
+    const root = tmp();
+    install(root);
+    const pkg = path.join(root, 'packages', 'e2e');
+    fs.mkdirSync(pkg, { recursive: true });
+    expect(installedDocsDir(pkg)).toBe('../../node_modules/tapsmith/docs');
+  });
+
+  it('prefers the nearest install, as Node resolves it', () => {
+    const root = tmp();
+    install(root);
+    const pkg = path.join(root, 'e2e');
+    install(pkg);
+    expect(installedDocsDir(pkg)).toBe('node_modules/tapsmith/docs');
+  });
+
+  it('keeps the node_modules path of a symlinked (pnpm) install', () => {
+    const root = tmp();
+    const store = path.join(root, 'node_modules', '.pnpm', 'tapsmith@1.0.0', 'node_modules', 'tapsmith');
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'package.json'), '{"name":"tapsmith"}');
+    fs.symlinkSync(store, path.join(root, 'node_modules', 'tapsmith'), 'dir');
+    const pkg = path.join(root, 'e2e');
+    fs.mkdirSync(pkg);
+    expect(installedDocsDir(pkg)).toBe('../node_modules/tapsmith/docs');
+  });
+
+  it('falls back to the project\'s node_modules when Tapsmith is not installed yet', () => {
+    expect(installedDocsDir(tmp())).toBe('node_modules/tapsmith/docs');
+  });
+
+  it('writes that path into the AGENTS.md section, and only that path', () => {
+    const section = renderAgentsSection('../../node_modules/tapsmith/docs');
+    expect(section).toContain('`../../node_modules/tapsmith/docs/<page>.md`');
+    expect(section).toContain('`../../node_modules/tapsmith/docs/mcp-server.md`');
+    expect(section.replaceAll('../../node_modules/tapsmith/docs/', '')).not.toContain('node_modules/tapsmith/docs');
+  });
+
+  it('writeAgentsMd() resolves the path from the folder it writes to', () => {
+    const root = tmp();
+    install(root);
+    const pkg = path.join(root, 'packages', 'e2e');
+    fs.mkdirSync(pkg, { recursive: true });
+    const written = fs.readFileSync(writeAgentsMd(pkg), 'utf8');
+    expect(written).toContain('`../../node_modules/tapsmith/docs/<page>.md`');
   });
 });
