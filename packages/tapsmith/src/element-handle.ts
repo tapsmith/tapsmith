@@ -47,7 +47,7 @@ import {
   systemAlertHint,
   withinBudget,
 } from './locator-miss-hint.js';
-import { elementAccessibleName } from './accessible-name.js';
+import { ANDROID_EDIT_TEXT_CLASSES, elementAccessibleName } from './accessible-name.js';
 import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 
 // ─── Public types ───
@@ -667,7 +667,7 @@ function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
   } else {
     const text = isIos && !IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription
       ? el.contentDescription
-      : el.text;
+      : textContentOf(el);
     if (text) {
       // Like the role name above: an exact match needs the whole text, so a
       // long one is suggested as its leading part, matched as a substring.
@@ -681,6 +681,16 @@ function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
   }
   if (nativeId) candidates.push({ code: `device.locator({ id: "${escapeJsString(nativeId)}" })`, selector: _id(nativeId) });
   return candidates;
+}
+
+/**
+ * The text getByText and `filter({ hasText })` read of a resolved element: its
+ * text, except that an Android text field's is its typed value, which is no
+ * text, as an `<input>`'s value is not in Playwright (PILOT-1404). The agent
+ * reports an empty field's text as "" (not its hint).
+ */
+function textContentOf(el: ElementInfo): string {
+  return ANDROID_EDIT_TEXT_CLASSES.has(el.className) ? '' : el.text;
 }
 
 /** Best-effort unambiguous locator suggestion for one resolved element, unchecked. */
@@ -1546,15 +1556,17 @@ export class ElementHandle {
 
     if (filter.hasText !== undefined) {
       result = result.filter((el) => {
-        if (filter.hasText instanceof RegExp) return filter.hasText.test(el.text);
-        return el.text.includes(filter.hasText as string);
+        const text = textContentOf(el);
+        if (filter.hasText instanceof RegExp) return filter.hasText.test(text);
+        return text.includes(filter.hasText as string);
       });
     }
 
     if (filter.hasNotText !== undefined) {
       result = result.filter((el) => {
-        if (filter.hasNotText instanceof RegExp) return !filter.hasNotText.test(el.text);
-        return !el.text.includes(filter.hasNotText as string);
+        const text = textContentOf(el);
+        if (filter.hasNotText instanceof RegExp) return !filter.hasNotText.test(text);
+        return !text.includes(filter.hasNotText as string);
       });
     }
 
