@@ -142,14 +142,18 @@ export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | unde
     if (!isScrollable(a.node) || a.nonApp) continue;
     const container = region(a);
     if (!container) continue;
+    // Judged without the element itself: one sticking out past the side of
+    // a list that scrolls up and down does not make it scroll sideways.
+    const horizontal = scrollsAlong(a, entries, 'horizontal', self);
     const view: VisibleRegion = {
       region: trimBars(a, container, self, entries),
-      // Judged without the element itself: one sticking out past the side of
-      // a list that scrolls up and down does not make it scroll sideways.
-      // A UIKit table scrolls up and down by type: it lists only the cells
-      // that show, so the row reaching past its edge may be the only one.
-      vertical: scrollsAlong(a, entries, 'vertical', self) || (a.node.attributes.get('type') ?? a.node.tagName) === 'XCUIElementTypeTable',
-      horizontal: scrollsAlong(a, entries, 'horizontal', self),
+      horizontal,
+      // An iOS scroll view, table or collection view scrolls up and down
+      // unless what is in it shows it scrolls only sideways (a carousel): it
+      // lists only what shows, so the row reaching past its edge may be the
+      // only one, and content that ends behind a tab bar the list runs under
+      // reaches past nothing. A sideways nudge still needs content past a side.
+      vertical: scrollsAlong(a, entries, 'vertical', self) || (a.node.attributes.get('scrollable') !== 'true' && !horizontal),
     };
     if (outsideRegion(target, view.region, view) || !outsideRegion(target, view.region)) return view;
   }

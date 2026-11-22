@@ -446,17 +446,35 @@ describe('visibleRegionOf', () => {
     expect(view).toMatchObject({ vertical: true, horizontal: false });
   });
 
-  it('counts a UIKit table as scrolling up and down when the target is the only cell past its edge', () => {
-    const xml = ios(el('Other', '[0,0][402,874]', '',
-      el('Table', '[0,100][402,700]', '',
-        el('Cell', '[0,100][402,650]', 'label="Row 1"') + el('Cell', '[0,650][402,750]', 'label="Row 2"')) +
-      el('TabBar', '[0,700][402,874]', '', el('Button', '[0,700][201,874]', 'label="Home"')),
-    ));
-    const row = { left: 0, top: 650, right: 402, bottom: 750 };
-    const view = visibleRegionOf(xml, row);
-    expect(view?.region).toEqual({ left: 0, top: 100, right: 402, bottom: 700 });
-    expect(outsideRegion(row, view!.region, view)).toBe('down');
-  });
+  it.each(['Table', 'CollectionView', 'ScrollView'])(
+    'counts an iOS %s as scrolling up and down when the target is the only element past its edge',
+    (type) => {
+      const xml = ios(el('Other', '[0,0][402,874]', '',
+        el(type, '[0,100][402,700]', '',
+          el('Cell', '[0,100][402,650]', 'label="Row 1"') + el('Cell', '[0,650][402,750]', 'label="Row 2"')) +
+        el('TabBar', '[0,700][402,874]', '', el('Button', '[0,700][201,874]', 'label="Home"')),
+      ));
+      const row = { left: 0, top: 650, right: 402, bottom: 750 };
+      const view = visibleRegionOf(xml, row);
+      expect(view?.region).toEqual({ left: 0, top: 100, right: 402, bottom: 700 });
+      expect(outsideRegion(row, view!.region, view)).toBe('down');
+    },
+  );
+
+  it.each(['CollectionView', 'ScrollView'])(
+    'nudges up a row behind the tab bar of an iOS %s that runs under it, with content ending there',
+    (type) => {
+      const xml = ios(el('Other', '[0,0][402,874]', '',
+        el(type, '[0,0][402,874]', '',
+          el('StaticText', '[16,732][386,772]', 'label="Item 13"') + el('StaticText', '[16,772][386,812]', 'label="Item 14"')) +
+        el('TabBar', '[0,790][402,874]', '', el('Button', '[0,790][201,874]', 'label="Home"')),
+      ));
+      const item = { left: 16, top: 772, right: 386, bottom: 812 };
+      const view = visibleRegionOf(xml, item);
+      expect(view?.region).toEqual({ left: 0, top: 0, right: 402, bottom: 790 });
+      expect(outsideRegion(item, view!.region, view)).toBe('down');
+    },
+  );
 
   it("on Android, leaves out a bar in another window: the activity's bottom navigation under a sheet", () => {
     const xml = android(
