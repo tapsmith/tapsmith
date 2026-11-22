@@ -272,7 +272,7 @@ import { TapsmithTestHooks } from "@tapsmith/react-native"
 
 A warm reset keeps the app running, so two things decide how fresh the next test's app is:
 
-- **Wrap the navigator, don't mount the hooks beside it.** The hooks remount what they wrap after every reset. Mounted beside the navigator, they remount nothing, and a screen that stays mounted keeps the previous test's React state — every visited tab of a tab navigator does, including in the default `create-expo-app` template. The reset still reports success, and the next test fails on data it never created.
+- **Wrap the navigator, don't mount the hooks beside it.** The hooks remount what they wrap after every reset (keep `@tapsmith/react-native` on the same version as `tapsmith`: earlier versions render nothing inside the hooks). Mounted beside the navigator, they remount nothing, and a screen that stays mounted keeps the previous test's React state — every visited tab of a tab navigator does, including in the default `create-expo-app` template. The reset still reports success, and the next test fails on data it never created.
 - **Pass your stores to `clear`**, such as `clear={[AsyncStorage]}`. Without it, stored data survives the reset.
 
 See the [Warm app reset guide](warm-reset.md) for both, and for why the hooks must only ever be compiled into test builds, never a store release.
