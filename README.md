@@ -190,4 +190,4 @@ you have the right to submit the patch. It is not a CLA, and you keep your copyr
 
 ## License
 
-[Apache-2.0](LICENSE). Contributions are accepted under the same licence.
+[Apache-2.0](LICENSE). Contributions are accepted under the same licence. The SDK includes code derived from Playwright, listed in [`packages/tapsmith/THIRD_PARTY_NOTICES`](packages/tapsmith/THIRD_PARTY_NOTICES).

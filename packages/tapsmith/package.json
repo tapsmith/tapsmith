@@ -25,7 +25,8 @@
   },
   "files": [
     "dist/",
-    "docs/"
+    "docs/",
+    "THIRD_PARTY_NOTICES"
   ],
   "homepage": "https://tapsmith.dev",
   "bugs": {

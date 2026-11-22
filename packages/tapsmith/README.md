@@ -83,4 +83,4 @@ Plug'n'Play each need one setting first: see [Package manager notes](https://tap
 
 ## License
 
-Apache-2.0
+Apache-2.0 (`LICENSE`). Includes code derived from [Playwright](https://github.com/microsoft/playwright), also Apache-2.0: see `THIRD_PARTY_NOTICES`.

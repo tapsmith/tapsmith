@@ -20,7 +20,8 @@
 const SKIP_TEXT_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'];
 
 /**
- * The ARIA roles an element can have (Playwright's `validRoles`): what a
+ * The ARIA roles an element can have (Playwright's `validRoles`, Copyright
+ * (c) Microsoft Corporation, Apache License 2.0; see THIRD_PARTY_NOTICES): what a
  * `role` attribute token must be to count, and the names webview.getByRole takes.
  */
 export const ARIA_ROLES: readonly string[] = [
@@ -113,11 +114,13 @@ const HELPERS_JS = `(() => {
     return style.visibility === 'hidden';
   }
   // ─── Roles, accessible names and labels, as Playwright computes them ───
-  // Ported from Playwright's injected roleUtils.ts and selectorUtils.ts
-  // (Copyright (c) Microsoft Corporation, Apache License 2.0), so
-  // webview.getByRole and webview.getByLabel find what page.getByRole and
-  // page.getByLabel find. Left out: CSS ::before/::after content, aria-owns,
-  // and aria-describedby (no description matching).
+  // Derived from Playwright v1.62.0's packages/injected/src/roleUtils.ts and
+  // selectorUtils.ts (Copyright (c) Microsoft Corporation, Apache License
+  // 2.0; see THIRD_PARTY_NOTICES), so webview.getByRole and webview.getByLabel
+  // find what page.getByRole and page.getByLabel find. Modified by the
+  // Tapsmith contributors: translated into this in-page script and adapted to
+  // Tapsmith's locator options. Left out: CSS ::before/::after content,
+  // aria-owns, and aria-describedby (no description matching).
   const tagOf = (el) => (el.localName || '').toUpperCase();
   const parentOrHost = (el) => el.parentElement || (el.parentNode && el.parentNode.nodeType === 11 ? el.parentNode.host : null);
   function closestCrossShadow(el, css) {

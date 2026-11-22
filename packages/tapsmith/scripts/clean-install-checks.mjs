@@ -134,6 +134,21 @@ export function bundledDocsProblems(files, pages) {
   return problems;
 }
 
+// ─── License files ───
+
+/**
+ * The license files the tarball must carry, each missing one in `npm pack
+ * --json` files named. Apache-2.0 §4 (a) and (d): whoever gets the package
+ * gets a copy of the License and the NOTICE text of the Playwright code it
+ * contains (THIRD_PARTY_NOTICES).
+ */
+export const LICENSE_FILES = ['LICENSE', 'THIRD_PARTY_NOTICES'];
+
+export function missingLicenseFiles(files) {
+  const shipped = new Set(files.map((f) => f.path));
+  return LICENSE_FILES.filter((name) => !shipped.has(name));
+}
+
 // ─── Platform fields pnpm infers from a name (PILOT-709) ───
 
 // pnpm 11+ gives an optional dependency that leaves `os`, `cpu` or `libc`
