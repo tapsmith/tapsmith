@@ -866,8 +866,9 @@ pub const NE_RETRY_AFTER: Duration = Duration::from_secs(60);
 pub struct NeFailure {
     pub message: String,
     pub at: Instant,
-    /// The extension did not dial back in time (`ios_redirect::ControlChannelTimeout`):
-    /// it is installed and enabled, so `tapsmith doctor` reports nothing wrong.
+    /// An enabled extension did not dial back in time
+    /// (`ios_redirect::StartError::is_connect_timeout`): `tapsmith doctor`
+    /// reports nothing wrong, so its advice is left out.
     pub connect_timeout: bool,
 }
 

@@ -320,10 +320,26 @@ pub(crate) fn full_dial_back_wait() -> Duration {
 #[derive(Debug)]
 pub struct ControlChannelTimeout {
     pub socket: PathBuf,
+    /// `systemextensionsctl` reported the extension `[activated enabled]`
+    /// before the launch. Otherwise (never registered, as on a first run
+    /// whose approval prompt was dismissed, or a state it could not read)
+    /// the likelier cause is approval, not load, and the message says so.
+    pub extension_enabled: bool,
 }
 
 impl std::fmt::Display for ControlChannelTimeout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.extension_enabled {
+            return write!(
+                f,
+                "Mitmproxy Redirector System Extension did not connect within {}–{} s, and it \
+                 was not enabled yet: approve it when macOS asks (System Settings → General → \
+                 Login Items & Extensions → Network Extensions → Mitmproxy Redirector), then \
+                 Tapsmith picks it up on a later test",
+                CONTROL_CHANNEL_TIMEOUT.as_secs(),
+                CONTROL_CHANNEL_MAX_TIMEOUT.as_secs(),
+            );
+        }
         write!(
             f,
             "Mitmproxy Redirector System Extension did not connect within {}–{} s (the wait \
@@ -353,6 +369,8 @@ pub struct PendingRedirect {
     launcher: Option<JoinHandle<()>>,
     udid: String,
     since: Instant,
+    /// See [`ControlChannelTimeout::extension_enabled`].
+    extension_enabled: bool,
 }
 
 impl PendingRedirect {
@@ -379,6 +397,7 @@ impl PendingRedirect {
     fn timeout_error(&self) -> anyhow::Error {
         ControlChannelTimeout {
             socket: self.listener_path.clone(),
+            extension_enabled: self.extension_enabled,
         }
         .into()
     }
@@ -420,11 +439,14 @@ impl From<anyhow::Error> for StartError {
 }
 
 impl StartError {
-    /// Whether this is a dial-back timeout (which `tapsmith doctor` cannot
-    /// see: the extension is installed and enabled), as opposed to a setup
-    /// problem doctor reports.
+    /// Whether this is a dial-back timeout from an extension that was
+    /// installed and enabled (which `tapsmith doctor` cannot see), as opposed
+    /// to a setup problem doctor reports — including a timeout from an
+    /// extension that was not enabled yet.
     pub fn is_connect_timeout(&self) -> bool {
-        self.error.downcast_ref::<ControlChannelTimeout>().is_some()
+        self.error
+            .downcast_ref::<ControlChannelTimeout>()
+            .is_some_and(|t| t.extension_enabled)
     }
 }
 
@@ -745,7 +767,8 @@ impl IosRedirect {
         // error. Checking up front turns that into an actionable message
         // and saves the 10s wait every single test run until the user
         // approves the extension.
-        match check_se_status().await {
+        let se_status = check_se_status().await;
+        match se_status {
             SeStatus::Enabled => {
                 debug!("Mitmproxy Redirector SE is [activated enabled]");
             }
@@ -889,6 +912,7 @@ impl IosRedirect {
                     launcher: Some(launcher),
                     udid,
                     since: Instant::now(),
+                    extension_enabled: se_status == SeStatus::Enabled,
                 };
                 return Err(StartError {
                     error: pending.timeout_error(),
@@ -1829,6 +1853,7 @@ mod late_connect_tests {
                 launcher: Some(launcher),
                 udid: "SIM-1".into(),
                 since: Instant::now(),
+                extension_enabled: true,
             },
             rx,
         )
@@ -1882,6 +1907,7 @@ mod late_connect_tests {
     fn the_timeout_message_is_one_line_and_scoped_to_this_daemon() {
         let msg = ControlChannelTimeout {
             socket: PathBuf::from("/tmp/tapsmith-redirector-4242.sock"),
+            extension_enabled: true,
         }
         .to_string();
         assert!(!msg.contains('\n'), "{msg}");
@@ -1896,9 +1922,28 @@ mod late_connect_tests {
         assert!(!msg.contains("doctor"), "{msg}");
         let err = StartError::from(anyhow::Error::new(ControlChannelTimeout {
             socket: PathBuf::from("/tmp/x.sock"),
+            extension_enabled: true,
         }));
         assert!(err.is_connect_timeout());
         assert!(!StartError::from(anyhow::anyhow!("not approved")).is_connect_timeout());
+    }
+
+    #[test]
+    fn a_timeout_before_the_extension_was_enabled_points_at_approval_and_doctor() {
+        // First run: the extension was never registered and the approval
+        // prompt was dismissed, so the launch times out.
+        let timeout = ControlChannelTimeout {
+            socket: PathBuf::from("/tmp/tapsmith-redirector-4242.sock"),
+            extension_enabled: false,
+        };
+        let msg = timeout.to_string();
+        assert!(!msg.contains('\n'), "{msg}");
+        assert!(msg.contains("approve it"), "{msg}");
+        assert!(!msg.contains("pkill"), "{msg}");
+        assert!(!msg.contains("load"), "{msg}");
+        // Doctor and setup can see this state, so the refusal suggests them.
+        let err = StartError::from(anyhow::Error::new(timeout));
+        assert!(!err.is_connect_timeout());
     }
 }
 
