@@ -2001,6 +2001,20 @@ describe('runner app reset (declared isolation)', () => {
 
         expect(flaky).toMatchObject({ status: 'passed', warnings: [KEPT_SCREENS_HINT] });
       });
+
+      it('says nothing when a cold retry failed the same way, since its error is the one reported', async () => {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('broken', async () => { throw new Error('not visible'); });
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({ appReset: 'warm', appResetScope: 'test', retries: 1 }));
+        warmHooks(d, opts);
+
+        const [broken] = collectResults(await runSuiteContext(ctx, '', [], [], opts));
+
+        expect(broken.status).toBe('failed');
+        expect(broken.warnings).toBeUndefined();
+      });
     });
 
     it('drops a missing-hooks notice once the session has since detected the hooks (PILOT-774)', async () => {

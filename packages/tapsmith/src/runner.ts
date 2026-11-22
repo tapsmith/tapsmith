@@ -2800,9 +2800,12 @@ async function runSuiteContext(
       screenshotPath?: string;
       videoPath?: string;
     } | undefined;
-    // An attempt that started on screens a warm reset left holding their
-    // React state failed: the result says so (KEPT_SCREENS_HINT).
-    let failedOnKeptScreens = false;
+    // Whether the attempts whose errors the result can report started on
+    // screens a warm reset left holding their React state: the first failed
+    // attempt (a flaky pass reports it) and the last attempt (a hard failure
+    // reports its error). The result says so (KEPT_SCREENS_HINT).
+    let firstFailureOnKeptScreens: boolean | undefined;
+    let lastAttemptOnKeptScreens = false;
     const traceConfig = runTraceConfig(opts);
     const videoConfig = resolveVideoConfig(opts.config.video);
 
@@ -3804,7 +3807,8 @@ async function runSuiteContext(
       // back fails nothing here.
       await forEachDeviceBestEffort(opts, (d) => d._restoreTestOrientation?.());
 
-      if (status === 'failed' && onKeptScreens) failedOnKeptScreens = true;
+      lastAttemptOnKeptScreens = onKeptScreens;
+      if (status === 'failed' && firstFailureOnKeptScreens === undefined) firstFailureOnKeptScreens = onKeptScreens;
       if (status !== 'failed' || attempt === maxRetries || opts.abortSignal?.aborted) break;
 
       // A file-abort-worthy failure (e.g. "session recovered during before
@@ -3841,6 +3845,13 @@ async function runSuiteContext(
       });
     }
 
+    // The attempt whose error the result reports: a hard failure's last one,
+    // or the first failed one when a retry passed or skipped. A cold retry
+    // that failed the same way rules the kept screens out.
+    const reportedOnKeptScreens = status === 'failed'
+      ? lastAttemptOnKeptScreens
+      : firstFailure !== undefined && firstFailureOnKeptScreens === true;
+
     // Skipped on a retry after a failed attempt: reported as the failure, so a
     // skip never hides it. (Stricter than Playwright, which calls it flaky;
     // Tapsmith's flaky result is a pass, and this retry did not pass.)
@@ -3873,8 +3884,7 @@ async function runSuiteContext(
     // launch, a scope-entry reset, this test's own preflight) belongs here.
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
-    // A flaky pass too: its failed attempt is the one worth explaining.
-    if (failedOnKeptScreens && status !== 'skipped' && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
+    if (reportedOnKeptScreens && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
     const testResult: TestResult = {
       name: entry.name,
       fullName,
