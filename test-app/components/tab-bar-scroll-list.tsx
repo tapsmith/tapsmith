@@ -8,7 +8,9 @@ export const ROW_HEIGHT = 48
  * lands outside the part that shows on any screen size. `targetTop(h)` gives
  * the row's offset in the content for a list `h` tall; `initialOffset(h)` the
  * offset the list starts scrolled to. The status line above the list counts
- * the row's taps.
+ * the row's taps, and shows them only once the row is laid out and the list
+ * is at its starting offset, so a test that waits for it acts on the screen
+ * as it will stay.
  */
 export function TabBarScrollList(props: {
   targetLabel: string
@@ -18,6 +20,7 @@ export function TabBarScrollList(props: {
 }) {
   const [listHeight, setListHeight] = useState(0)
   const [taps, setTaps] = useState(0)
+  const [ready, setReady] = useState(false)
   const scrolled = useRef(false)
   const list = useRef<ScrollView>(null)
   const top = listHeight > 0 ? props.targetTop(listHeight) : 0
@@ -25,7 +28,7 @@ export function TabBarScrollList(props: {
   return (
     <View style={styles.screen}>
       <Text style={styles.status} testID="tab-bar-scroll-status">
-        {`${props.targetLabel} taps: ${taps}`}
+        {ready ? `${props.targetLabel} taps: ${taps}` : "Loading"}
       </Text>
       <ScrollView
         ref={list}
@@ -33,9 +36,13 @@ export function TabBarScrollList(props: {
         testID="tab-bar-scroll-list"
         onLayout={(e) => setListHeight(Math.round(e.nativeEvent.layout.height))}
         onContentSizeChange={() => {
-          if (scrolled.current || listHeight === 0 || !props.initialOffset) return
+          if (scrolled.current || listHeight === 0) return
           scrolled.current = true
-          list.current?.scrollTo({ y: props.initialOffset(listHeight), animated: false })
+          if (props.initialOffset) {
+            list.current?.scrollTo({ y: props.initialOffset(listHeight), animated: false })
+          }
+          // A frame later, once the offset has been applied.
+          requestAnimationFrame(() => setReady(true))
         }}
       >
         {listHeight > 0 && (

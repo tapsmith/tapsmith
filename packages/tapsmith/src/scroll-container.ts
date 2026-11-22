@@ -116,8 +116,8 @@ export function pickScrollRegion(xml: string, target?: Rect, previous?: Rect): S
  * dump or no scrollable holds it.
  *
  * The container is the nearest scrollable around the element that can bring
- * it in: one the element lies inside, or one it reaches past along an axis
- * that scrollable scrolls on. A nearer one too small to swipe in, or reached
+ * it in: one it reaches past along an axis that scrollable scrolls on, or,
+ * when no scrollable around it hides it, the nearest one it lies inside. A nearer one too small to swipe in, or reached
  * past only along an axis it does not scroll on (a carousel row below the
  * list that holds it), gives way to the next one out. So a slow sideways drag
  * never runs in a list that scrolls only up and down, where it is the edge
@@ -138,6 +138,7 @@ export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | unde
   const { entries, region } = scan;
   const self = entries.filter((e) => !e.nonApp && e.bounds && sameFrame(e.bounds, target)).at(-1);
   if (!self) return undefined;
+  let inView: VisibleRegion | undefined;
   for (let a = self.parent; a; a = a.parent) {
     if (!isScrollable(a.node) || a.nonApp) continue;
     const container = region(a);
@@ -155,9 +156,15 @@ export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | unde
       // reaches past nothing. A sideways nudge still needs content past a side.
       vertical: scrollsAlong(a, entries, 'vertical', { except: self }) || (a.node.attributes.get('scrollable') !== 'true' && !horizontal),
     };
-    if (outsideRegion(target, view.region, view) || !outsideRegion(target, view.region)) return view;
+    // Out of this one's view along a way it scrolls: it brings the element
+    // in. Inside it: in view here, but an outer scrollable may still hide it
+    // (a carousel row under a tab bar laid over the feed that holds it, a bar
+    // too tall to count against the carousel), so the outer ones are judged
+    // too, and the nearest view stands when none of them hides it.
+    if (outsideRegion(target, view.region, view)) return view;
+    if (!outsideRegion(target, view.region)) inView ??= view;
   }
-  return undefined;
+  return inView;
 }
 
 /** `container`, the region of the scrollable `list`, less the bars drawn over its top or bottom edge. */

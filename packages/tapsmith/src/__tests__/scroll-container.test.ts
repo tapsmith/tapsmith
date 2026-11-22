@@ -475,6 +475,21 @@ describe('visibleRegionOf', () => {
     expect(outsideRegion(row, view!.region, view)).toBe('down');
   });
 
+  it('judges a carousel card under a tab bar laid over the feed by the feed, though the bar is too tall to count against the carousel', () => {
+    const xml = ios(el('Other', '[0,0][402,874]', '',
+      el('ScrollView', '[0,0][402,874]', '',
+        el('Other', '[0,0][402,2000]', '',
+          el('ScrollView', '[0,680][402,860]', '',
+            el('Other', '[0,680][900,860]', '',
+              el('Button', '[16,690][200,850]', 'label="Card 1"') + el('Button', '[216,690][400,850]', 'label="Card 2"'))))) +
+      el('Other', '[0,791][402,874]', '', el('Button', '[0,791][201,874]', 'label="Home"')),
+    ));
+    const card = { left: 16, top: 690, right: 200, bottom: 850 };
+    const view = visibleRegionOf(xml, card);
+    expect(view?.region).toEqual({ left: 0, top: 0, right: 402, bottom: 791 });
+    expect(outsideRegion(card, view!.region, view)).toBe('down');
+  });
+
   it('does not nudge sideways in a list for a chip in a chip bar too small to swipe in, with more chips past the side', () => {
     const xml = ios(
       el('ScrollView', '[0,70][402,800]', '',
