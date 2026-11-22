@@ -749,7 +749,10 @@ export async function reinstallChangedBuild(
   }
 
   const name = path.basename(artifact);
-  const message = install.freshInstall ? `Installed ${name} (the app was no longer on the device)`
+  // "No longer on the device" only when the device's copy could not be
+  // stamped either: a presence lookup that timed out on a busy host also
+  // reads as "not installed", and the stamp before the check saw it there.
+  const message = install.freshInstall && before === undefined ? `Installed ${name} (the app was no longer on the device)`
     : install.uncompared ? `Reinstalled ${name} (could not compare it with the installed build)`
       : `Reinstalled ${name} (build changed since the last run)`;
   opts.onProgress?.(`relaunching ${config.package} after the reinstall`);

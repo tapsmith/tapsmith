@@ -1420,8 +1420,16 @@ describe('a rebuilt app in a long-lived session', () => {
     expect(session.context.notices[0]?.message).toBe('Reinstalled app.apk (could not compare it with the installed build).');
   });
 
+  it('does not call an app missing when its presence lookup failed but its copy was stamped', async () => {
+    mocks.installed = false;
+    const session = await adopt();
+    expect(mocks.devices[0].installApk).toHaveBeenCalled();
+    expect(session.context.notices[0]?.message).toBe('Reinstalled app.apk (build changed since the last run).');
+  });
+
   it('reinstalls an app that is no longer on the device', async () => {
     mocks.installed = false;
+    mocks.deviceStamp = undefined;
     const session = await adopt();
     expect(mocks.devices[0].installApk).toHaveBeenCalled();
     expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(session.context, 'launch after reinstall', { freshInstall: false });
