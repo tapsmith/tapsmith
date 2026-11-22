@@ -2498,6 +2498,19 @@ describe('session-preflight', () => {
       expect(ctx.capabilities).toEqual({ hooksDetected: true, hooksUrlPrefix: 'app:///' });
     });
 
+    it('records that the hooks remount the app they wrap (PILOT-922)', async () => {
+      const ctx = makeContext();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({
+        requestId: '1',
+        hierarchyXml: '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=app:///;remount=1" /></hierarchy>',
+        errorMessage: '',
+      });
+
+      await launchConfiguredApp(ctx, 'startup launch', { freshInstall: true, hooksProbeMs: 0 });
+
+      expect(ctx.capabilities).toEqual({ hooksDetected: true, hooksUrlPrefix: 'app:///', hooksRemount: true });
+    });
+
     it('a marker without a URL prefix does not count as usable hooks', async () => {
       const ctx = makeContext();
       vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({

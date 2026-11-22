@@ -254,19 +254,28 @@ If you'd rather keep `*.test.ts` names, set `testMatch` in `tapsmith.config.ts` 
 
 ## Make runs faster (optional)
 
-Tapsmith resets your app between test files by wiping its data and cold-launching — several seconds per file. React Native / Expo apps can do far better: mount `@tapsmith/react-native` once at the root and Tapsmith resets the app **in-process, in well under a second** — no config changes. Files that need a fresh app before every test opt in with one more line: `test.use({ appResetScope: "test" })` — still warm, still sub-second.
+Tapsmith resets your app between test files by wiping its data and cold-launching — several seconds per file. React Native / Expo apps can do far better: wrap your root navigator in `@tapsmith/react-native`'s `<TapsmithTestHooks>` and Tapsmith resets the app **in-process, in well under a second** — no Tapsmith config changes. Files that need a fresh app before every test opt in with one more line: `test.use({ appResetScope: "test" })` — still warm, still sub-second.
 
 ```tsx
 import * as Linking from "expo-linking"
 import { TapsmithTestHooks } from "@tapsmith/react-native"
-// in your root layout:
+// in your root layout, around the navigator it renders
+// (<Stack />, <Tabs />, or the default template's <AppTabs />;
+// a bare React Navigation app: inside <NavigationContainer>, not around it):
 <TapsmithTestHooks
   urlPrefix={Linking.createURL("/")}
   enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
-/>
+>
+  <Stack />
+</TapsmithTestHooks>
 ```
 
-A warm reset re-navigates and runs your own reset, but it does not wipe stored data unless you pass the stores to `clear`, such as `clear={[AsyncStorage]}`. See the [Warm app reset guide](warm-reset.md) for that, and for why the hooks must only ever be compiled into test builds, never a store release.
+A warm reset keeps the app running, so two things decide how fresh the next test's app is:
+
+- **Wrap the navigator, don't mount the hooks beside it.** The hooks remount what they wrap after every reset (keep `@tapsmith/react-native` on the same version as `tapsmith`: earlier versions render nothing inside the hooks). Mounted beside the navigator, they remount nothing, and a screen that stays mounted keeps the previous test's React state — every visited tab of a tab navigator does, including in the default `create-expo-app` template. The reset still reports success, and the next test fails on data it never created.
+- **Pass your stores to `clear`**, such as `clear={[AsyncStorage]}`. Without it, stored data survives the reset.
+
+See the [Warm app reset guide](warm-reset.md) for both, and for why the hooks must only ever be compiled into test builds, never a store release.
 
 ## Manual Configuration
 
