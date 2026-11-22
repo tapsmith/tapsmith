@@ -3127,6 +3127,11 @@ Open the trace viewer in the default browser to inspect a recorded trace. Traces
 npx tapsmith show-trace tapsmith-results/traces/trace-my_test-1767225600000.zip
 ```
 
+The command prints the viewer's URL (`http://127.0.0.1:<port>/?trace=/trace.zip`), which you can
+open in another browser while it runs, and stays up until Ctrl+C. A file that is not a readable
+Tapsmith trace (a corrupt zip, a zip without the trace's `metadata.json`, or a trace recorded in a
+newer format) is refused in the terminal, with no viewer started.
+
 The trace viewer shows:
 - **Actions panel** — chronological list of actions with icons, locators, and durations
 - **Timeline filmstrip** — screenshot thumbnails for quick navigation
