@@ -363,7 +363,7 @@ export function parseHooksMarker(hierarchyXml: string): HooksMarker | undefined 
 export const KEPT_SCREENS_HINT =
   'This test started after a warm in-app reset, which keeps the app running: a screen that stayed mounted '
   + '(a visited tab, or the screen the reset landed on) still had the previous test\'s React state. '
-  + 'If the screen showed an earlier test\'s data, update @tapsmith/react-native to your tapsmith version and wrap your root '
+  + 'If the screen showed an earlier test\'s data, update @tapsmith/react-native to the same version as Tapsmith and wrap your root '
   + 'navigator in <TapsmithTestHooks>, so every reset remounts the app: '
   + 'https://tapsmith.dev/guides/warm-reset/#what-a-warm-reset-does-not-clear';
 

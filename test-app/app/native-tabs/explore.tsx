@@ -12,7 +12,11 @@ export default function ExploreTab() {
     <View style={styles.container}>
       <Text style={styles.text}>Explore content</Text>
       <Text style={styles.text}>{`Explore count: ${count}`}</Text>
-      <Pressable accessibilityRole="button" onPress={() => setCount((c) => c + 1)} style={styles.button}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => setCount((c) => c + 1)}
+        style={styles.button}
+      >
         <Text style={styles.text}>Count up</Text>
       </Pressable>
     </View>
