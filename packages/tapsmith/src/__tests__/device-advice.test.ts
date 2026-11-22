@@ -32,6 +32,13 @@ describe('noDeviceAdvice()', () => {
     expect(advice).toContain('"Pixel_6"');
     expect(advice).toContain('tapsmith doctor');
   });
+
+  it('on CI with the AVD missing, says nothing was booted and the connected devices were unhealthy (PILOT-1201)', () => {
+    const advice = noDeviceAdvice({ avd: 'Pixel_6', launchEmulators: true, avdMissingOnCi: true }, undefined);
+    expect(advice).toContain('AVD "Pixel_6" is not on this CI machine');
+    expect(advice).not.toContain('tried to boot');
+    expect(advice).not.toContain('Android Studio');
+  });
 });
 
 // A machine without the platform's toolchain can do nothing the config advice

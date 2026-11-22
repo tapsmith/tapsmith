@@ -7,7 +7,14 @@
 import type { TapsmithConfig } from './config.js';
 import { androidStateBlocker, type AdbDevice } from './adb-devices.js';
 
-type AdviceConfig = Pick<TapsmithConfig, 'avd' | 'launchEmulators'>;
+type AdviceConfig = Pick<TapsmithConfig, 'avd' | 'launchEmulators'> & {
+  /**
+   * On CI the configured AVD is not on the machine, so Tapsmith used only
+   * the connected devices and booted nothing (`resolveAndroidDeviceTarget`,
+   * PILOT-1201).
+   */
+  avdMissingOnCi?: boolean;
+};
 
 /**
  * Advice for "no online Android device was found". `toolchainBlocker` is
@@ -18,6 +25,10 @@ export function noDeviceAdvice(config: AdviceConfig, toolchainBlocker: string | 
   if (toolchainBlocker) return `${toolchainBlocker}.`;
   if (!config.avd) {
     return 'Connect a device, start an emulator, or set `avd` in your config to auto-launch emulators.';
+  }
+  if (config.avdMissingOnCi) {
+    return `AVD "${config.avd}" is not on this CI machine, so Tapsmith booted nothing and used only the connected devices, none of them healthy (see the warnings above). `
+      + 'Check that the emulator your workflow starts has finished booting before the tests run.';
   }
   if (!config.launchEmulators) {
     return `\`avd\` is "${config.avd}" but \`launchEmulators\` is false, so Tapsmith does not boot it. `

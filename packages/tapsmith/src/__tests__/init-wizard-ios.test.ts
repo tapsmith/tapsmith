@@ -75,6 +75,7 @@ const env: EnvScan = {
   avds: [],
   avdImages: [],
   androidDevices: [],
+  unusableAndroidDevices: [],
   isMacOS: true,
 };
 

@@ -644,7 +644,7 @@ async function setupSequentialDeviceClaimed(
     progress?.fail('primary-device', 'no online device found');
     // Devices that are there but held by other sessions are named: the user
     // stops one, rather than looking for a device problem they do not have.
-    throw new Error(noOnlineDeviceMessage(cfg, listAdbDevices(), androidToolchainBlocker()) + heldDevicesNote(withoutHeldDevices(listConnectedDeviceSerials()).held));
+    throw new Error(noOnlineDeviceMessage({ ...cfg, avdMissingOnCi: target.avdMissingOnCi }, listAdbDevices(), androidToolchainBlocker()) + heldDevicesNote(withoutHeldDevices(listConnectedDeviceSerials()).held));
   }
 
   cfg.device = target.selectedSerial;
@@ -1088,6 +1088,8 @@ async function ensureSequentialTargetDevice(
   launched: LaunchedEmulator[]
   /** The iOS simulator was booted here and the app installed onto it fresh. */
   appInstalledFresh?: boolean
+  /** On CI the configured AVD is not on the machine, so nothing was booted (PILOT-1201). */
+  avdMissingOnCi?: true
 }> {
   // The first `use.devices` member's pin, or root `device` — not `config.device`
   // alone, which left a group pinning both members with its primary auto-picked.
@@ -1218,7 +1220,7 @@ async function ensureSequentialTargetDevice(
     if (progress) progress.note(skippedHeldDeviceMessage(claim));
     else process.stderr.write(`${DIM}${skippedHeldDeviceMessage(claim)}${RESET}\n`);
   }
-  const { strategy: deviceStrategy, launchEmulators, notice: ciTargetNotice } = resolveAndroidDeviceTarget(config, unheldOnline.free);
+  const { strategy: deviceStrategy, launchEmulators, notice: ciTargetNotice, avdMissingOnCi } = resolveAndroidDeviceTarget(config, unheldOnline.free);
   if (ciTargetNotice) {
     if (progress) progress.note(ciTargetNotice);
     else process.stderr.write(`${YELLOW}${ciTargetNotice}${RESET}\n`);
@@ -1251,7 +1253,7 @@ async function ensureSequentialTargetDevice(
   }
 
   if (!launchEmulators) {
-    return { selectedSerial: undefined, launched: [] };
+    return { selectedSerial: undefined, launched: [], ...(avdMissingOnCi ? { avdMissingOnCi } : {}) };
   }
 
   assertAdbForEmulatorLaunch();

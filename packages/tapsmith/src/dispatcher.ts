@@ -1248,6 +1248,8 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
   );
 
   let launchedEmulators: LaunchedEmulator[] = [];
+  // On CI, the configured AVD is not on the machine: nothing is booted (PILOT-1201).
+  let avdMissingOnCi = false;
   let clonedSimulators: ClonedSimulator[] = [];
   let freshIosUdids = new Set<string>();
   let deviceSerials: string[];
@@ -1442,8 +1444,10 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       const unheldAndroid = withoutHeldDevices(androidDevices.map((d) => d.serial));
       for (const claim of unheldAndroid.held) note(skippedHeldDeviceMessage(claim));
       // On CI a connected emulator stands in for an AVD the machine lacks (PILOT-1201).
-      const { strategy: deviceStrategy, launchEmulators, notice: ciTargetNotice } = resolveAndroidDeviceTarget(config, unheldAndroid.free);
-      if (ciTargetNotice) note(ciTargetNotice);
+      const target = resolveAndroidDeviceTarget(config, unheldAndroid.free);
+      const { strategy: deviceStrategy, launchEmulators } = target;
+      avdMissingOnCi = target.avdMissingOnCi === true;
+      if (target.notice) note(target.notice);
       const prefilteredOnline = prefilterDevicesForStrategy(
         unheldAndroid.free,
         deviceStrategy,
@@ -1531,7 +1535,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
               listBootedSimulators().filter((sim) => sim.name === config.simulator || sim.udid === config.simulator).map((sim) => sim.udid),
             ).held)
           // adb's state now, not at discovery: provisioning may have changed it.
-          : noOnlineDeviceMessage(config, listAdbDevices(), androidToolchainBlocker())
+          : noOnlineDeviceMessage({ ...config, avdMissingOnCi }, listAdbDevices(), androidToolchainBlocker())
             + heldDevicesNote(withoutHeldDevices(listAdbDevices().filter((d) => d.state === 'device').map((d) => d.serial)).held),
       );
     }

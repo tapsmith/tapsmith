@@ -371,7 +371,7 @@ describe('platformPrompt() (PILOT-721)', () => {
     nodeVersion: '22.0.0', rosettaWarning: undefined, daemonBin: '/bin/tapsmith-core', agentApk: true, agentTestApk: true,
     adbVersion: '35.0.1', androidHome: '/sdk', xcodeVersion: '26.0',
     simulators: [{ name: 'iPhone 17', udid: 'A', state: 'Shutdown', runtime: 'iOS 26.0' }],
-    avds: [], avdImages: [], androidDevices: [], isMacOS: true, ...over,
+    avds: [], avdImages: [], androidDevices: [], unusableAndroidDevices: [], isMacOS: true, ...over,
   });
   const none = { hasAndroidProject: false, hasIosProject: false };
   const selected = (p: ReturnType<typeof platformPrompt>): string => p.choices[p.initial].name;

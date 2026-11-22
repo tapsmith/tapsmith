@@ -19,6 +19,8 @@ import type { InitCommandOptions } from './cli-program.js';
 import type { InstallCommand } from './config.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 import { appIdWarning } from './app-id.js';
+import { adbMissingFix } from './toolchain.js';
+import { androidUnusableDeviceFix } from './adb-devices.js';
 
 // ─── Types ───
 
@@ -398,6 +400,16 @@ function deviceFlagTarget(
   warnings: string[],
 ): { useEmulators: boolean; usePhysicalDevices: boolean; avd?: string; device?: string } {
   const connected = env.androidDevices.find((d) => d.serial === serial);
+  if (!connected && !env.adbVersion) {
+    // Without adb on PATH nothing is listed: say that, not "start the emulator".
+    throw new InitError('ADB_NOT_FOUND', `adb is not on PATH, so Tapsmith cannot reach ${serial}`, { fix: adbMissingFix() });
+  }
+  const unusable = connected ? undefined : env.unusableAndroidDevices.find((d) => d.serial === serial);
+  if (unusable) {
+    throw new InitError('DEVICE_UNUSABLE', `${serial} is connected, but adb reports it as "${unusable.state}"`, {
+      fix: `${androidUnusableDeviceFix(unusable.state, serial)}, then re-run`,
+    });
+  }
   if (!connected) {
     const listed = env.androidDevices.map((d) => d.serial);
     throw new InitError('DEVICE_NOT_FOUND', `No connected Android device ${serial}`, {

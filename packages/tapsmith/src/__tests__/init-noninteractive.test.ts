@@ -34,6 +34,7 @@ const baseEnv: EnvScan = {
     { name: 'Pixel_8', tagId: 'google_apis', apiLevel: 36 },
   ],
   androidDevices: [],
+  unusableAndroidDevices: [],
   isMacOS: true,
 };
 
@@ -1639,6 +1640,29 @@ describe('resolveInitPlan() with a running emulator or --device (PILOT-1201)', (
     );
     expect(err.candidates).toEqual(['emulator-5560']);
     expect(err.fix).toContain('adb devices');
+  });
+
+  it('--device on a device adb lists as unauthorized or offline says so, with the fix for that state', () => {
+    const unauthorized = expectInitError(
+      () => resolveInitPlan(android({ device: 'R5CT10ABCDE' }), { ...env([]), unusableAndroidDevices: [{ serial: 'R5CT10ABCDE', state: 'unauthorized' }] }, detectStubs),
+      'DEVICE_UNUSABLE',
+    );
+    expect(unauthorized.message).toContain('"unauthorized"');
+    expect(unauthorized.fix).toContain('Accept the USB debugging prompt');
+    const booting = expectInitError(
+      () => resolveInitPlan(android({ device: 'emulator-5554' }), { ...env([]), unusableAndroidDevices: [{ serial: 'emulator-5554', state: 'offline' }] }, detectStubs),
+      'DEVICE_UNUSABLE',
+    );
+    expect(booting.fix).toContain('finish booting');
+  });
+
+  it('--device with adb off PATH says adb is the problem, not the device', () => {
+    const err = expectInitError(
+      () => resolveInitPlan(android({ device: 'emulator-5554' }), { ...env([]), adbVersion: undefined, adbOffPath: '/sdk/platform-tools' }, detectStubs),
+      'ADB_NOT_FOUND',
+    );
+    expect(err.message).toContain('adb is not on PATH');
+    expect(err.fix).not.toContain('Start the emulator');
   });
 
   it('--device with an iOS-only setup points at --simulator', () => {

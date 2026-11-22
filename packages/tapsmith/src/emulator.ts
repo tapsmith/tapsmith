@@ -1808,6 +1808,8 @@ export interface AndroidDeviceTarget {
   launchEmulators: boolean;
   /** Set when, on CI, a connected device stood in for a configured AVD the machine lacks. */
   notice?: string;
+  /** The configured AVD is not on this CI machine, so nothing is booted: what a no-device error must say. */
+  avdMissingOnCi?: true;
 }
 
 /**
@@ -1837,11 +1839,12 @@ export function resolveAndroidDeviceTarget(
   // Explicit prefer-connected only changes anything when it would boot.
   if (config.deviceStrategy === 'prefer-connected' && !config.launchEmulators) return unchanged;
   if ((deps.listAvds ?? listAvds)().includes(config.avd)) return unchanged;
-  if (config.deviceStrategy === 'prefer-connected') return { strategy, launchEmulators: false };
+  if (config.deviceStrategy === 'prefer-connected') return { strategy, launchEmulators: false, avdMissingOnCi: true };
   const devices = freeSerials.join(', ');
   return {
     strategy: 'prefer-connected',
     launchEmulators: false,
+    avdMissingOnCi: true,
     notice: `AVD "${config.avd}" (the config's avd) is not on this CI machine, so Tapsmith uses the connected `
       + `device${freeSerials.length === 1 ? '' : 's'} ${devices} instead. To say so in the config, set `
       + "deviceStrategy: process.env.CI ? 'prefer-connected' : undefined (or leave avd out on CI)",

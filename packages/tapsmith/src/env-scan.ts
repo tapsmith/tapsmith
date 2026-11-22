@@ -8,7 +8,7 @@ import { rosettaNodeWarning } from './host-arch.js';
 import { findAgentApk, findAgentTestApk } from './agent-resolve.js';
 import { scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { getRunningAvdName, resolveEmulatorBinary } from './emulator.js';
-import { parseAdbDevicesOutput } from './adb-devices.js';
+import { parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
 import { withoutHeldDevices } from './device-claims.js';
 import { adbOffPathDir } from './toolchain.js';
 
@@ -47,6 +47,8 @@ export interface EnvScan {
   avdImages: AvdImageInfo[];
   /** Android devices adb can use now (`adb devices` state `device`), in its order (PILOT-1201). */
   androidDevices: ConnectedAndroidDevice[];
+  /** Android devices adb lists but cannot use (unauthorized, offline, …), for init's `--device` errors. */
+  unusableAndroidDevices: AdbDevice[];
   isMacOS: boolean;
 }
 
@@ -260,6 +262,7 @@ export function scanEnvironment(): EnvScan {
 
   const adbDevicesOut = adbVersion ? tryExec('adb', ['devices']) : undefined;
   const androidDevices = adbDevicesOut ? scanAndroidDevices(adbDevicesOut) : [];
+  const unusableAndroidDevices = adbDevicesOut ? parseAdbDevicesOutput(adbDevicesOut).filter((d) => d.state !== 'device') : [];
 
-  return { nodeVersion, rosettaWarning, daemonBin, agentApk, agentTestApk, adbVersion, ...(adbOffPath ? { adbOffPath } : {}), androidHome, xcodeVersion, simulators, avds, avdImages, androidDevices, isMacOS };
+  return { nodeVersion, rosettaWarning, daemonBin, agentApk, agentTestApk, adbVersion, ...(adbOffPath ? { adbOffPath } : {}), androidHome, xcodeVersion, simulators, avds, avdImages, androidDevices, unusableAndroidDevices, isMacOS };
 }

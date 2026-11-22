@@ -2977,6 +2977,7 @@ describe('resolveAndroidDeviceTarget() — init\'s avd on CI (PILOT-1201)', () =
     const target = resolveAndroidDeviceTarget(config, ['emulator-5554'], ciRunner);
     expect(target.strategy).toBe('prefer-connected');
     expect(target.launchEmulators).toBe(false);
+    expect(target.avdMissingOnCi).toBe(true);
     expect(target.notice).toContain('AVD "Pixel_8_API_36"');
     expect(target.notice).toContain('emulator-5554');
     expect(target.notice).toContain("deviceStrategy: process.env.CI ? 'prefer-connected' : undefined");
@@ -2992,7 +2993,7 @@ describe('resolveAndroidDeviceTarget() — init\'s avd on CI (PILOT-1201)', () =
 
   it('with the explicit prefer-connected the notice recommends, never boots the missing AVD for an extra worker, silently', () => {
     const explicit = { ...config, deviceStrategy: 'prefer-connected' as const };
-    expect(resolveAndroidDeviceTarget(explicit, ['emulator-5554'], ciRunner)).toEqual({ strategy: 'prefer-connected', launchEmulators: false });
+    expect(resolveAndroidDeviceTarget(explicit, ['emulator-5554'], ciRunner)).toEqual({ strategy: 'prefer-connected', launchEmulators: false, avdMissingOnCi: true });
     // The AVD is there: booting more of it is fine.
     expect(resolveAndroidDeviceTarget(explicit, ['emulator-5554'], { isCi: true, listAvds: () => ['Pixel_8_API_36'] }))
       .toEqual({ strategy: 'prefer-connected', launchEmulators: true });
