@@ -27,6 +27,7 @@ When a test fails and its routes were live but none of them fired, Tapsmith name
 - *the network proxy started on demand during this test or its hooks* — the on-demand case above;
 - *the network proxy started at the beginning of this file, after the app was already running* — the mid-session cases above (watch, UI mode, the MCP server); relaunching the app, or restarting watch or UI mode, lets its connections go through the proxy;
 - *the app sent `<method> <url>` … before the route for `<pattern>` was registered* — the app fetched before the test's route existed (at launch, say); see the paragraph above;
+- *the app connected to a server on this Mac's loopback interface (`127.0.0.1:<port>`)* — an iOS simulator app called `localhost`, which no capture route sees; point it at the Mac's LAN address instead (see [Requests to localhost are not captured](ios-network-capture.md#requests-to-localhost-are-not-captured));
 - *the network proxy saw no request from the app during this test* — the test may have failed before the step that sends the request; if it got there, the app may have sent the request over a connection it opened before the proxy started, or its HTTP cache may have answered it;
 - *the app never sent a request matching the route patterns* — check the pattern.
 
@@ -981,7 +982,7 @@ iOS simulators are already per-PID filtered by the macOS Network Extension, so s
 
 **Android emulators/devices:** On rootable emulator images, traffic is redirected to the proxy transparently with `iptables`. Where root is unavailable, the HTTP proxy is instead set globally via `adb shell settings put global http_proxy`. Either way, every app and system service on the device routes through it -- use `networkHosts` or `networkIgnoreHosts` to reduce noise in traces. HTTPS decryption additionally requires a rootable (non-Play) emulator image; see [Android emulator image requirements](#android-emulator-image-requirements).
 
-**iOS simulators:** The macOS Network Extension intercepts traffic per-PID, filtering to only the simulator's process tree. Parallel iOS workers each get their own isolated capture session. Host browser traffic is never affected. See [iOS Network Capture](ios-network-capture.md) for first-run setup (a one-time System Extension approval).
+**iOS simulators:** The macOS Network Extension intercepts traffic per-PID, filtering to only the simulator's process tree. Parallel iOS workers each get their own isolated capture session. Host browser traffic is never affected. Requests to a server on the Mac's `localhost` are never captured — macOS keeps loopback traffic away from the Network Extension — so address the Mac by its LAN address instead; Tapsmith warns when it sees the app connected to a loopback server (see [Requests to localhost are not captured](ios-network-capture.md#requests-to-localhost-are-not-captured)). See [iOS Network Capture](ios-network-capture.md) for first-run setup (a one-time System Extension approval).
 
 **iOS physical devices:** A Wi-Fi proxy configuration profile (`.mobileconfig`) routes the device's traffic through the host Mac. This is system-wide -- there is no per-app filtering at the OS level. Use `networkHosts` to scope what appears in the trace. See [iOS Network Capture](ios-network-capture.md#physical-ios-devices) for the device-specific setup flow.
 

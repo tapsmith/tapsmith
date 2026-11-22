@@ -23,7 +23,9 @@ class HierarchyDumper {
     /// so the caller gets an actionable error instead.
     func dump() throws -> String {
         do {
-            let snapshot = try app.snapshot()
+            // With an in-app browser's content, which iOS 26+ leaves out of
+            // the app's tree (PILOT-1384).
+            let snapshot = InAppBrowser.complete(try app.snapshot(), app: app, deadline: nil)
             return dump(from: snapshot)
         } catch {
             if LaunchAccessibilityCheck.isAccessibilityUnreachable("\(error)") {
