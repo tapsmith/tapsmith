@@ -114,7 +114,7 @@ under a name of its own, for the cases it does not cover:
   ```
 
 The `AGENTS.md` section `tapsmith init` writes tells your agent the same, and
-`init` lists the plugin install for each coding agent it finds in the project.
+`init` lists the plugin install for the coding agent running it, then for each other agent it finds in the project ([`tapsmith init`](api-reference.md#tapsmith-init-options) says how it looks).
 
 Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
 `tapsmith_test_locator`, `tapsmith_run_code` (try assertions and other test statements on the device), `tapsmith_run_tests`, `tapsmith_read_trace`,
