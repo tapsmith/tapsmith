@@ -31,6 +31,7 @@ export const VIDEO_MODES = [
   'retain-on-failure-and-retries',
 ] as const;
 
+/** When to record video of a test: the same modes as `TraceMode`. */
 export type VideoMode = (typeof VIDEO_MODES)[number]
 
 /** Output resolution. Honoured on Android only; iOS records at native res. */
@@ -39,7 +40,9 @@ export interface VideoSize {
   height: number
 }
 
+/** The `video` config's object form. */
 export interface VideoConfig {
+  /** When to record (default `'off'`). */
   mode: VideoMode
   /** Output resolution; Android-only in v1. iOS warns and ignores. */
   size?: VideoSize
