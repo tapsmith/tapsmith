@@ -213,13 +213,14 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/TextContentTests/main.swift \
+  Tests/Support/HierarchyFixture.swift \
   TapsmithAgent/TextContent.swift \
   TapsmithAgent/TextMatch.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/FlutterTab.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/text-content-tests"
-"$OUT/text-content-tests" "../packages/tapsmith/src/__tests__/fixtures/text-content-conformance.json"
+"$OUT/text-content-tests" "../packages/tapsmith/src/__tests__/fixtures/text-content-conformance.json" Tests/Fixtures
 
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
@@ -421,6 +422,14 @@ xcrun swiftc -sdk "$SDK" \
   Tests/SystemAlertTests/main.swift \
   TapsmithAgent/SystemAlert.swift \
   -o "$OUT/system-alert-tests"
+
+# When an in-app browser's content is looked for (PILOT-1384).
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/InAppBrowserTests/main.swift \
+  TapsmithAgent/InAppBrowser.swift \
+  -o "$OUT/in-app-browser-tests"
+"$OUT/in-app-browser-tests"
 "$OUT/system-alert-tests"
 
 # XCTestIssueRelay needs the Objective-C exception catcher it raises into.

@@ -174,3 +174,32 @@ describe("Declared start route (appResetRoute)", () => {
     })
   })
 })
+
+/**
+ * PILOT-922: a tab navigator keeps every visited tab's screen mounted, and a
+ * warm reset onto the tabs only re-navigates — so without the app remounting,
+ * the Explore tab's counter would carry one test's taps into the next. The
+ * test app wraps its navigator in <TapsmithTestHooks>, as the docs say, which
+ * remounts it on every reset.
+ */
+describe("Screens a tab navigator keeps mounted", () => {
+  // No retries: a retry may reset cold (the warm-window valve, a fallback),
+  // and a relaunched app starts the counter at 0 whether or not the hooks
+  // remount anything, so a broken remount could show only as a flaky pass.
+  test.use({ appResetScope: "test", appResetRoute: "/native-tabs", retries: 0 })
+
+  test("a test leaves state on a tab that stays mounted", async ({ nativeTabsScreen }) => {
+    await expect(nativeTabsScreen.homeContent).toBeVisible()
+    await nativeTabsScreen.tab("Explore").tap()
+    await expect(nativeTabsScreen.exploreCount(0)).toBeVisible()
+    await nativeTabsScreen.countUp.tap()
+    await expect(nativeTabsScreen.exploreCount(1)).toBeVisible()
+  })
+
+  test("the next test finds that tab fresh, on the reset's route", async ({ nativeTabsScreen }) => {
+    // The remount keeps the route the reset link opened.
+    await expect(nativeTabsScreen.homeContent).toBeVisible()
+    await nativeTabsScreen.tab("Explore").tap()
+    await expect(nativeTabsScreen.exploreCount(0)).toBeVisible()
+  })
+})

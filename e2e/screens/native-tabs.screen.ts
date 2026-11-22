@@ -14,4 +14,6 @@ export class NativeTabsScreen {
 
   get homeContent() { return this.device.getByText("Home content", { exact: true }) }
   get exploreContent() { return this.device.getByText("Explore content", { exact: true }) }
+  get countUp() { return this.device.getByRole("button", { name: "Count up" }) }
+  exploreCount(n: number) { return this.device.getByText(`Explore count: ${n}`, { exact: true }) }
 }

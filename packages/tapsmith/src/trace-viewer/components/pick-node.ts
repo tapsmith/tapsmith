@@ -6,7 +6,7 @@
  */
 
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
-import { getNodeBounds, getNodeRole, hitTest } from './hierarchy-utils.js';
+import { getNodeBounds, getNodeRole, hitTest, isInAppBrowserRoot } from './hierarchy-utils.js';
 import { findBetterDescendant, hasGoodSelectors } from './selector-generation.js';
 import { isHooksMarkerCarrier, isNonAppSubtree, isSwitchPartNode } from './non-app-nodes.js';
 
@@ -128,6 +128,8 @@ export function isWebViewOverlayPending(roots: HierarchyNode[], x: number, y: nu
   const contains = (bounds: Bounds) =>
     x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
   function walk(node: HierarchyNode) {
+    // An in-app browser's page never gets a DOM overlay to wait for.
+    if (isInAppBrowserRoot(node)) return;
     const bounds = getNodeBounds(node);
     if (node.attributes.get('webview') === 'true') {
       // Only an overlay covering the pick point counts — with multiple

@@ -563,9 +563,13 @@ async function handlePrepare(msg: UIWorkerPrepareMessage): Promise<void> {
     })));
     if (abort.signal.aborted) throw new Error('preparation cancelled');
     const durationMs = Date.now() - startedAt;
-    for (const s of targets) {
-      s.prepared = { policy: msg.policy, preparedAt: startedAt + durationMs, durationMs, source: 'background preparation' };
-    }
+    targets.forEach((s, i) => {
+      s.prepared = {
+        policy: msg.policy, preparedAt: startedAt + durationMs, durationMs, source: 'background preparation',
+        // The test that consumes it starts on screens this reset may have kept.
+        inAppReset: reports[i].inAppReset === true,
+      };
+    });
     const steps = reports.flatMap((report, i) => report.steps.map((step) =>
       `${group.length > 1 ? `${targets[i].name}: ` : ''}${step.name}: ${step.durationMs}ms${step.ok ? '' : ' (failed)'}`));
     send({

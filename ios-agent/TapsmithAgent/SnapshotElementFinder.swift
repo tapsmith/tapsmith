@@ -258,6 +258,11 @@ class SnapshotElementFinder {
         // Check once if keyboard is visible (for focus detection).
         // Keyboard = elementType 19 (XCUIElement.ElementType.keyboard).
         let keyboardVisibleInSnapshot = hasKeyboardInTree(snapshotDict)
+        // An in-app browser over the whole app (PILOT-1384): the app's live
+        // queries also return its covered screen, which the tree leaves out,
+        // so matches are found again from the browser's root, whose
+        // descendants are what the tree's indices count.
+        let queryRoot: XCUIElement = InAppBrowser.coversApp(snapshotDict) ? InAppBrowser.root(in: app) : app
 
         // Number the app's descendants in pre-order (XCUIElementQuery order)
         // so a role+name, RegExp or substring-text match can be re-resolved
@@ -470,7 +475,7 @@ class SnapshotElementFinder {
                 // This is deferred — the query object is created but not evaluated until
                 // a property (like .isHittable) is accessed. Pass the snapshot node so the
                 // query can use element type + identifier for more precise matching.
-                cacheQueryElement(elementId: elementId, selector: selector,
+                cacheQueryElement(elementId: elementId, selector: selector, queryRoot: queryRoot,
                     matchIndex: typeQueryIndices?[matchIndex] ?? matchIndex,
                     idIndex: idIndices[matchIndex],
                     treeIdCount: identifier.isEmpty ? 0 : treeIdCounts()[identifier, default: 0],
@@ -593,8 +598,11 @@ class SnapshotElementFinder {
         var failedAttempts = 0
         repeat {
             do {
-                let s = try app.snapshot()
-                if !s.dictionaryRepresentation.isEmpty {
+                let raw = try app.snapshot()
+                if !raw.dictionaryRepresentation.isEmpty {
+                    // On iOS 26+ the tree stops at an in-app browser
+                    // (PILOT-1384): attach what the browser shows.
+                    let s = InAppBrowser.complete(raw, app: app, deadline: commandDeadline)
                     lock.lock()
                     lastSnapshot = s
                     lastSnapshotPredatesTurn = false
@@ -1539,6 +1547,7 @@ class SnapshotElementFinder {
         insideSwitch: Bool = false,
         inAlert: Bool = false,
         row: RowContext? = nil,
+        rowCell: [String: Any]? = nil,
         listExposesEveryRow: Bool = false,
         rowCounts: [String: Int]? = nil,
         containerLabel: String,
@@ -1653,7 +1662,7 @@ class SnapshotElementFinder {
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
             focusedHint: focusedHint
-        ) {
+        ), !repeatsRowText(nodeDict, rowCell: rowCell, containerLabel: containerLabel, selector: selector) {
             let myId = nodeDict["identifier"] as? String ?? ""
             let myLabel = nodeDict["label"] as? String ?? ""
             let raw = parseUInt(nodeDict["elementType"]) ?? 0
@@ -1757,6 +1766,7 @@ class SnapshotElementFinder {
                     // (RoleMapping.matches, PILOT-919).
                     inAlert: inAlert || nodeType == .alert,
                     row: ownRow ?? row,
+                    rowCell: nodeType == .cell ? nodeDict : rowCell,
                     listExposesEveryRow: nodeType == .table
                         || (nodeType != .collectionView && listExposesEveryRow),
                     rowCounts: rowCounts,
@@ -1958,6 +1968,26 @@ class SnapshotElementFinder {
         return true
     }
 
+    /// Whether an exact getByText match of `node` is only a ", "-joined part
+    /// of its label that its table row (`rowCell`, the nearest enclosing
+    /// cell) shows as a static text outside it: UIKit's edit-mode Remove and
+    /// Reorder controls repeat their row's texts (TextContent.matchesExact,
+    /// PILOT-1374). The row's text is the match.
+    private func repeatsRowText(
+        _ node: [String: Any], rowCell: [String: Any]?, containerLabel: String, selector: ElementSelector
+    ) -> Bool {
+        guard let query = selector.text, rowCell != nil else { return false }
+        let type = XCUIElement.ElementType(rawValue: parseUInt(node["elementType"]) ?? 0) ?? .other
+        let texts = TextContent.texts(
+            elementType: type,
+            label: node["label"] as? String ?? "",
+            title: node["title"] as? String ?? "",
+            value: node["value"] as? String ?? "",
+            containerLabel: containerLabel
+        )
+        return TextContent.rowShows(query, texts: texts, node: node, rowCell: rowCell)
+    }
+
     /// Whether a generic wrapper's label is only a name-only child's name on
     /// the same bounds (React Native's `<Image accessibilityLabel>`, an Other
     /// over the Image): getByText doesn't match it either, so a labelled
@@ -2067,6 +2097,7 @@ class SnapshotElementFinder {
     private func cacheQueryElement(
         elementId: String,
         selector: ElementSelector,
+        queryRoot: XCUIElement,
         matchIndex: Int,
         idIndex: Int,
         treeIdCount: Int,
@@ -2125,6 +2156,11 @@ class SnapshotElementFinder {
         // (LiveQueryPin, PILOT-1065): set wherever it matches an exact label
         // or identifier.
         var pin = LiveQueryPin.none
+        // Positions count the whole tree, and a query from an in-app
+        // browser's root (PILOT-1384) leaves out what is outside it (iOS 18's
+        // backdrop image): bind no live element by position there, so a
+        // touch goes to the frame it was found at.
+        let positionalBindingHolds = queryRoot === app
         func resolve(_ query: XCUIElementQuery) -> XCUIElement? {
             let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
@@ -2136,15 +2172,16 @@ class SnapshotElementFinder {
                 return base.matching(NSPredicate(format: "identifier == %@", nodeIdentifier))
                     .element(boundBy: idIndex)
             }
+            guard positionalBindingHolds else { return nil }
             return base.element(boundBy: matchIndex + keyboardOffsetInScope)
         }
         // A label predicate scoped to the snapshot element's type when it is
         // specific (RN buttons surface as `.other`, so fall back to any type).
         func labelQuery(_ predicate: NSPredicate) -> XCUIElementQuery {
             if let elType = nodeElType, elType != .other, elType != .any {
-                return app.descendants(matching: elType).matching(predicate)
+                return queryRoot.descendants(matching: elType).matching(predicate)
             }
-            return app.descendants(matching: .any).matching(predicate)
+            return queryRoot.descendants(matching: .any).matching(predicate)
         }
 
         // The matched node found again by its own label (and identifier), at
@@ -2173,14 +2210,14 @@ class SnapshotElementFinder {
         } else if let testId = selector.testId {
             uniqueInQuery = treeIdCount == 1 && keyboardOffset == 0
             pin = LiveQueryPin(identifier: testId)
-            element = app.descendants(matching: .any)
+            element = queryRoot.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", testId))
                 .excludingHooksMarker()
                 .element(boundBy: matchIndex + keyboardOffset)
         } else if let id = selector.id {
             uniqueInQuery = treeIdCount == 1 && keyboardOffset == 0
             pin = LiveQueryPin(identifier: id)
-            element = app.descendants(matching: .any)
+            element = queryRoot.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", id))
                 .excludingHooksMarker()
                 .element(boundBy: matchIndex + keyboardOffset)
@@ -2281,7 +2318,7 @@ class SnapshotElementFinder {
             ) != nil {
                 // An unlabelled back button, named "Back" (PILOT-1260): no
                 // label query can find it, its identifier ("BackButton") can.
-                element = resolve(app.descendants(matching: type))
+                element = resolve(queryRoot.descendants(matching: type))
             } else {
                 // Matched through its title with an empty label: no label
                 // query can find this node, and a name query would bind some
@@ -2356,15 +2393,16 @@ class SnapshotElementFinder {
                 // the role's types, not looked for among the first type's.
                 // (A trait-matched `.other` is found by its label, above.)
                 if types.count == 1 {
-                    element = resolve(app.descendants(matching: firstType))
+                    element = resolve(queryRoot.descendants(matching: firstType))
                 } else {
                     let rawValues = types.map { NSNumber(value: $0.rawValue) }
-                    let query = app.descendants(matching: .any)
+                    let query = queryRoot.descendants(matching: .any)
                         .matching(NSPredicate(format: "elementType IN %@", rawValues))
                     if nodeIdentifier.isEmpty {
                         let rawTypes = Set(types.map(\.rawValue))
                         let offset = keyboardTypes.filter { rawTypes.contains($0) }.count
-                        element = query.excludingHooksMarker().element(boundBy: matchIndex + offset)
+                        element = positionalBindingHolds
+                            ? query.excludingHooksMarker().element(boundBy: matchIndex + offset) : nil
                     } else {
                         element = resolve(query)
                     }
@@ -2387,7 +2425,7 @@ class SnapshotElementFinder {
         )
         var anchoredRows: XCUIElementQuery?
         if plan.throughAnchor, let anchor = tags.anchor, let anchorPredicate = RowAnchor.predicate(forAnchor: anchor) {
-            let rows = app.descendants(matching: .cell).containing(anchorPredicate)
+            let rows = queryRoot.descendants(matching: .cell).containing(anchorPredicate)
             anchoredRows = rows
             let row = rows.element(boundBy: 0)
             if let rowIndex = tags.index {

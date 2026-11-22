@@ -55,6 +55,21 @@ describe('persisted writes field', () => {
   });
 });
 
+describe('remount field', () => {
+  it('says the hooks remount the app they wrap on every reset', () => {
+    const marker = formatMarker({ epoch: 3, boot: 'b00710ad', urlPrefix: 'app:///', remount: true });
+    expect(marker).toBe('tapsmith-hooks:1;epoch=3;boot=b00710ad;url=app:///;remount=1');
+    expect(parseMarker(marker)).toMatchObject({ epoch: 3, remount: true });
+  });
+
+  it('is omitted when the hooks wrap nothing (older markers parse the same)', () => {
+    const marker = formatMarker({ epoch: 0, urlPrefix: 'app:///', remount: false });
+    expect(marker).not.toContain('remount');
+    expect(parseMarker(marker)).not.toHaveProperty('remount');
+    expect(parseMarker('tapsmith-hooks:1;epoch=2;url=a:///;remount=0')).not.toHaveProperty('remount');
+  });
+});
+
 describe('reset requests', () => {
   it('recognises a request to keep persisted data', () => {
     expect(parseResetRequest('myapp:///?__tapsmith_reset=1&nonce=n&__tapsmith_keep=1')).toEqual({ target: '/', nonce: 'n', keepData: true });

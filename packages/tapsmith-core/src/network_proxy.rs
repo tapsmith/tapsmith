@@ -547,7 +547,46 @@ pub struct NetworkProxy {
     /// on `stop()`, or when the proxy is dropped.
     shutdown_tx: tokio::sync::watch::Sender<()>,
     capture_session: String,
+    /// Loopback servers (`addr:port`) the device's app was seen connected to
+    /// since the last [`NetworkProxy::take_loopback_destinations`] — traffic
+    /// this capture cannot see (PILOT-320). Filled by
+    /// [`NetworkProxy::watch_loopback`]; bounded by
+    /// [`MAX_LOOPBACK_DESTINATIONS`].
+    loopback_destinations: Arc<StdMutex<BTreeSet<String>>>,
+    /// The sampler [`NetworkProxy::watch_loopback`] runs, kept so each take
+    /// can sample once more: what is open at the drain belongs to the test
+    /// being drained, not the next one.
+    loopback_sampler: StdMutex<Option<LoopbackSampler>>,
 }
+
+/// A loopback sample, as [`NetworkProxy::watch_loopback`] keeps it.
+type LoopbackSampler = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Bound on the sample a take runs itself, so a stalled `lsof` delays a drain
+/// by at most this.
+const LOOPBACK_TAKE_SAMPLE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Add what a sample found to `seen`, up to [`MAX_LOOPBACK_DESTINATIONS`].
+fn record_loopback(seen: &StdMutex<BTreeSet<String>>, found: Vec<String>) {
+    let Ok(mut seen) = seen.lock() else { return };
+    for destination in found {
+        if seen.len() >= MAX_LOOPBACK_DESTINATIONS {
+            break;
+        }
+        if seen.insert(destination.clone()) {
+            debug!(%destination, "app connected to a loopback server capture cannot see");
+        }
+    }
+}
+
+/// Cap on [`NetworkProxy::loopback_destinations`] between takes: an app talks
+/// to a handful of local servers, and a sampler gone wrong must not grow it
+/// without bound.
+const MAX_LOOPBACK_DESTINATIONS: usize = 32;
 
 impl NetworkProxy {
     /// Start the proxy on an ephemeral loopback port (the default for
@@ -637,6 +676,8 @@ impl NetworkProxy {
             mitm_ca,
             shutdown_tx,
             capture_session: uuid::Uuid::new_v4().to_string(),
+            loopback_destinations: Arc::default(),
+            loopback_sampler: StdMutex::new(None),
         })
     }
 
@@ -864,6 +905,65 @@ impl NetworkProxy {
     /// The warning explaining why this proxy tunnels all TLS, if it does.
     pub async fn tunnel_all_tls_warning(&self) -> Option<String> {
         self.state.lock().await.tunnel_all_tls.clone()
+    }
+
+    /// Every `interval` until the proxy stops, run `sample` and record the
+    /// loopback servers it reports as connected to by the device's app
+    /// (PILOT-320: an iOS simulator app's requests to `localhost`, which no
+    /// capture route sees). The first sample runs one `interval` in; each
+    /// [`NetworkProxy::take_loopback_destinations`] also samples once.
+    // Only iOS simulators (macOS hosts) are watched.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn watch_loopback<F, Fut>(&self, interval: Duration, sample: F)
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<String>> + Send + 'static,
+    {
+        let sampler: LoopbackSampler = Arc::new(move || Box::pin(sample()));
+        if let Ok(mut slot) = self.loopback_sampler.lock() {
+            *slot = Some(Arc::clone(&sampler));
+        }
+        let seen = Arc::clone(&self.loopback_destinations);
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(interval);
+            // A slow sample under load delays the next one rather than
+            // bunching them up.
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticks.tick().await;
+            loop {
+                tokio::select! {
+                    _ = ticks.tick() => {}
+                    // A stop sends on the channel; a dropped proxy closes it.
+                    _ = shutdown_rx.changed() => break,
+                }
+                let found = tokio::select! {
+                    found = sampler() => found,
+                    _ = shutdown_rx.changed() => break,
+                };
+                record_loopback(&seen, found);
+            }
+        });
+    }
+
+    /// Sample once more (when a watch runs), then return (sorted) and clear
+    /// the loopback servers recorded since the last call.
+    pub async fn take_loopback_destinations(&self) -> Vec<String> {
+        let sampler = self
+            .loopback_sampler
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone());
+        if let Some(sample) = sampler {
+            match tokio::time::timeout(LOOPBACK_TAKE_SAMPLE_TIMEOUT, sample()).await {
+                Ok(found) => record_loopback(&self.loopback_destinations, found),
+                Err(_) => debug!("loopback sample at drain timed out"),
+            }
+        }
+        self.loopback_destinations
+            .lock()
+            .map(|mut seen| std::mem::take(&mut *seen).into_iter().collect())
+            .unwrap_or_default()
     }
 
     /// Stop the proxy and return all captured entries.
@@ -5987,6 +6087,101 @@ mod tests {
         assert_eq!(entries[0].route_action, "aborted");
     }
 
+    /// PILOT-320: the loopback watch records what each sample reports,
+    /// deduplicated and bounded, hands it out once per take, and stops
+    /// sampling when the proxy stops.
+    #[tokio::test(start_paused = true)]
+    async fn loopback_watch_accumulates_until_taken_and_ends_with_the_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let proxy = NetworkProxy::start(ca).await.unwrap();
+        let samples = Arc::new(AtomicU64::new(0));
+        let reports: Arc<StdMutex<Vec<String>>> = Arc::default();
+        let (counter, reported) = (Arc::clone(&samples), Arc::clone(&reports));
+        proxy.watch_loopback(Duration::from_secs(2), move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let found = reported.lock().unwrap().clone();
+            async move { found }
+        });
+
+        // A connection the timer's sample sees stays recorded after it closes.
+        *reports.lock().unwrap() = vec!["127.0.0.1:4610".to_string()];
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        reports.lock().unwrap().clear();
+        assert_eq!(
+            proxy.take_loopback_destinations().await,
+            vec!["127.0.0.1:4610"]
+        );
+        assert!(
+            proxy.take_loopback_destinations().await.is_empty(),
+            "taken once"
+        );
+
+        *reports.lock().unwrap() = (0..100)
+            .map(|p| format!("127.0.0.1:{}", 20000 + p))
+            .collect();
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        assert_eq!(
+            proxy.take_loopback_destinations().await.len(),
+            MAX_LOOPBACK_DESTINATIONS,
+            "bounded"
+        );
+
+        proxy.stop().await;
+        let after_stop = samples.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert_eq!(
+            samples.load(Ordering::SeqCst),
+            after_stop,
+            "no sampling after stop"
+        );
+    }
+
+    /// PILOT-320: a take samples once more itself, so a connection the app
+    /// opened since the timer's last sample — a request just before the test
+    /// ended — is reported in this drain, not the next one (or lost to a
+    /// file-end drain that nobody reads).
+    #[tokio::test(start_paused = true)]
+    async fn loopback_take_samples_what_is_open_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let proxy = NetworkProxy::start(ca).await.unwrap();
+        let reports: Arc<StdMutex<Vec<String>>> = Arc::default();
+        let reported = Arc::clone(&reports);
+        proxy.watch_loopback(Duration::from_secs(2), move || {
+            let found = reported.lock().unwrap().clone();
+            async move { found }
+        });
+        tokio::time::sleep(Duration::from_millis(2100)).await;
+        // Opened after the last timer sample, still open at the drain.
+        *reports.lock().unwrap() = vec!["127.0.0.1:4610".to_string()];
+        assert_eq!(
+            proxy.take_loopback_destinations().await,
+            vec!["127.0.0.1:4610"]
+        );
+        proxy.stop().await;
+    }
+
+    /// A take on a proxy nobody watches (Android, physical iOS) samples
+    /// nothing and reports nothing.
+    #[tokio::test]
+    async fn loopback_take_without_a_watch_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let proxy = NetworkProxy::start(ca).await.unwrap();
+        assert!(proxy.take_loopback_destinations().await.is_empty());
+        proxy.stop().await;
+    }
+
     #[tokio::test]
     async fn drain_entries_returns_and_clears_without_stopping_proxy() {
         let dir = tempfile::tempdir().unwrap();
@@ -6433,6 +6628,8 @@ mod tests {
             mitm_ca: Arc::new(ca),
             shutdown_tx: tokio::sync::watch::channel(()).0,
             capture_session: uuid::Uuid::new_v4().to_string(),
+            loopback_destinations: Arc::default(),
+            loopback_sampler: StdMutex::new(None),
         }
     }
 

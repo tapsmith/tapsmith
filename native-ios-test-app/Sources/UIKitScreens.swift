@@ -175,6 +175,57 @@ final class UIKitTableViewController: UITableViewController {
     }
 }
 
+// ─── Edit mode ───
+
+/// A UIKit table in edit mode, as an authenticator app's account list: each
+/// row an initial, a code and the account's name. UIKit labels the Remove
+/// and Reorder controls it adds with the row's texts joined after a verb
+/// ("Remove A, 981 195, Alpha (a@example.com)", PILOT-1374).
+final class UIKitEditTableViewController: UITableViewController {
+    private var accounts = ["Alpha (a@example.com)", "Bravo (b@example.com)", "Charlie (c@example.com)"]
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "account")
+        setEditing(true, animated: false)
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { accounts.count }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "account", for: indexPath)
+        cell.contentView.subviews.forEach { $0.removeFromSuperview() }
+        let account = accounts[indexPath.row]
+        let initial = makeLabel(String(account.prefix(1)))
+        let texts = makeStack([makeLabel("981 195"), makeLabel(account)])
+        texts.spacing = 2
+        let stack = makeStack([initial, texts], axis: .horizontal)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        cell.contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.bottomAnchor),
+        ])
+        return cell
+    }
+
+    override func tableView(
+        _ tableView: UITableView,
+        commit editingStyle: UITableViewCell.EditingStyle,
+        forRowAt indexPath: IndexPath
+    ) {
+        guard editingStyle == .delete else { return }
+        accounts.remove(at: indexPath.row)
+        tableView.deleteRows(at: [indexPath], with: .automatic)
+    }
+
+    override func tableView(_ tableView: UITableView, moveRowAt from: IndexPath, to: IndexPath) {
+        accounts.insert(accounts.remove(at: from.row), at: to.row)
+    }
+}
+
 // ─── Settings ───
 
 /// A UIKit settings screen: grouped rows whose switch is the cell's

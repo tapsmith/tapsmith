@@ -5,13 +5,16 @@ import {
   describeAction,
   foldBackCapabilities,
   forgetBuildCapabilities,
+  KEPT_SCREENS_HINT,
   parseHooksMarker,
+  resetKeptScreens,
   resolveAppResetPolicy,
   routeDeepLink,
   satisfies,
   warmResetTarget,
   type AppResetPolicy,
   type ResetCapabilities,
+  type AppResetReport,
 } from '../app-reset.js';
 
 const base = { rootDir: '/proj' };
@@ -170,6 +173,12 @@ describe('parseHooksMarker', () => {
     expect(m).toEqual({ version: 1, epoch: 3, urlPrefix: 'app:///' });
   });
 
+  it('reads whether the hooks remount the app on every reset', () => {
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;url=app:///;remount=1" />'))
+      .toEqual({ version: 1, epoch: 3, urlPrefix: 'app:///', remount: true });
+    expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;url=app:///;remount=0" />')).not.toHaveProperty('remount');
+  });
+
   it('reads the boot token and the persisted write count', () => {
     expect(parseHooksMarker('<node label="tapsmith-hooks:1;epoch=3;boot=c0ffee42;url=app:///;writes=5" />'))
       .toEqual({ version: 1, epoch: 3, boot: 'c0ffee42', urlPrefix: 'app:///', writes: 5 });
@@ -236,5 +245,49 @@ describe('foldBackCapabilities', () => {
     foldBackCapabilities(store, { hooksDetected: true });
     expect(same).toBe(store);
     expect(store).toEqual({ hooksDetected: true });
+  });
+});
+
+describe('resetKeptScreens', () => {
+  const report = (over: Partial<AppResetReport>): AppResetReport => ({
+    policy: { mode: 'warm', scope: 'test' }, origin: 'inline', modeUsed: 'warm', fellBack: false, durationMs: 1, steps: [], ...over,
+  });
+
+  it('is true after an in-app reset in an app whose hooks do not remount it', () => {
+    expect(resetKeptScreens([{ report: report({ inAppReset: true }), capabilities: { hooksDetected: true } }])).toBe(true);
+    // Hooks from before the remount field (no `hooksRemount` read at all).
+    expect(resetKeptScreens([{ report: report({ inAppReset: true }) }])).toBe(true);
+  });
+
+  it('is false when the hooks remount the app, or the reset relaunched or cleared it', () => {
+    expect(resetKeptScreens([{ report: report({ inAppReset: true }), capabilities: { hooksRemount: true } }])).toBe(false);
+    expect(resetKeptScreens([{ report: report({}) }])).toBe(false);
+    expect(resetKeptScreens([{ report: report({ modeUsed: 'clear' }) }])).toBe(false);
+  });
+
+  it('flags a group when any one device kept its screens', () => {
+    expect(resetKeptScreens([
+      { report: report({ inAppReset: true }), capabilities: { hooksRemount: true } },
+      { report: report({ inAppReset: true }), capabilities: { hooksRemount: false } },
+    ])).toBe(true);
+  });
+
+  it('answers for a reset satisfied by a preparation that says how it left the app', () => {
+    const prepared = (inAppReset: boolean) => report({
+      origin: 'prepared', satisfiedBy: { policy: { mode: 'warm', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'background preparation', inAppReset },
+    });
+    expect(resetKeptScreens([{ report: prepared(true) }])).toBe(true);
+    expect(resetKeptScreens([{ report: prepared(true), capabilities: { hooksRemount: true } }])).toBe(false);
+    expect(resetKeptScreens([{ report: prepared(false) }])).toBe(false);
+  });
+
+  it('says nothing when no reset ran (a prepared device, or none)', () => {
+    expect(resetKeptScreens([{ report: report({ origin: 'prepared' }) }])).toBeUndefined();
+    expect(resetKeptScreens([{ report: report({ origin: 'skipped', modeUsed: 'none' }) }])).toBeUndefined();
+    expect(resetKeptScreens([])).toBeUndefined();
+  });
+
+  it('keeps the hint short enough for an MCP warning line', () => {
+    expect(KEPT_SCREENS_HINT.length).toBeLessThan(500);
   });
 });

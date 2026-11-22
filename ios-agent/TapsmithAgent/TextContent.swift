@@ -22,6 +22,10 @@ import XCTest
 /// - A label that starts with its nearest labelled ancestor's label and ", "
 ///   (a SwiftUI Stepper's buttons: "Quantity: 1, Increment") is read without
 ///   that prefix: the text belongs to the ancestor.
+/// - An exact match on one ", "-joined part of a label isn't one when the
+///   node's table row shows that part as a static text of its own, outside
+///   the node: UIKit's edit-mode Remove and Reorder controls repeat their
+///   row's texts (`matchesExact`, PILOT-1374).
 /// - Innermost (`SnapshotElementFinder.findMatches`): a getByText match that
 ///   contains another match is dropped, as Playwright's text engine drops an
 ///   element whose child matches. A Toggle row, a NavigationLink, an alert
@@ -102,13 +106,59 @@ enum TextContent {
     /// accessibilityLabel "Forgot password" hiding its "Forgot password?"
     /// text — is not that text, as an alert's "Log out" button is not its
     /// "Log out?" title.
-    static func matchesExact(_ texts: Texts, _ query: String) -> Bool {
+    ///
+    /// Not a joined part its table row shows as a text of its own
+    /// (`rowShowsQuery`, PILOT-1374): UIKit labels a row's edit-mode Remove
+    /// and Reorder controls "Remove A, 981 195, Alpha (a@example.com)", its
+    /// texts joined after a localized verb. That label names the row; the
+    /// text is the row's static text, not the control's.
+    static func matchesExact(_ texts: Texts, _ query: String, rowShowsQuery: Bool = false) -> Bool {
         if TextMatch.equals(texts.label, query) || TextMatch.equals(texts.title, query)
             || TextMatch.equals(texts.value, query) {
             return true
         }
+        if rowShowsQuery { return false }
         return TextMatch.containsChildText(texts.label, childText: query)
             || TextMatch.containsChildText(texts.title, childText: query)
+    }
+
+    /// Whether `query`, matched only as a joined part of `node`'s label or
+    /// title, is shown by `rowCell` (the node's nearest enclosing table or
+    /// collection row, in snapshot form) as a static text outside the node:
+    /// then the part is the row's text, and `matchesExact` drops it.
+    static func rowShows(
+        _ query: String, texts: Texts, node: [String: Any], rowCell: [String: Any]?
+    ) -> Bool {
+        guard let rowCell else { return false }
+        // A whole-label match stands, wherever the node is.
+        if matchesExact(texts, query, rowShowsQuery: true) { return false }
+        return staticTextCount(in: rowCell, equalTo: query) > staticTextCount(in: node, equalTo: query)
+    }
+
+    /// How many static texts in the snapshot subtree at `node` (itself
+    /// included) have the label `query`, whitespace-normalized. A row shows
+    /// the query outside a node in it when the row has more than the node.
+    static func staticTextCount(in node: [String: Any], equalTo query: String) -> Int {
+        var count = 0
+        if elementTypeRaw(node["elementType"]) == XCUIElement.ElementType.staticText.rawValue,
+           TextMatch.equals(node["label"] as? String ?? "", query) {
+            count += 1
+        }
+        for child in node["children"] as? [[String: Any]] ?? [] {
+            count += staticTextCount(in: child, equalTo: query)
+        }
+        return count
+    }
+
+    private static func elementTypeRaw(_ raw: Any?) -> UInt? {
+        switch raw {
+        case let value as UInt: return value
+        case let value as Int: return value >= 0 ? UInt(value) : nil
+        case let value as UInt64: return UInt(value)
+        case let value as NSNumber: return value.uintValue
+        case let value as String: return UInt(value)
+        default: return nil
+        }
     }
 
     /// getByText(string): a case-insensitive substring of the label, title or value.
