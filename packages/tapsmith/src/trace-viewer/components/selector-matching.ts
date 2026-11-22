@@ -550,7 +550,7 @@ function backButtonName(node: HierarchyNode): string {
  * Whether an Android node's text is a text field's typed value: an EditText's
  * text, unless it is the hint an empty field reports as its text. getByText
  * never matches it, as Playwright's never matches an `<input>`'s value — the
- * Android agent's textIsFieldValue (PILOT-1404).
+ * Android agent's textIsFieldValue.
  */
 export function textIsFieldValue(node: HierarchyNode): boolean {
   const text = node.attributes.get('text');

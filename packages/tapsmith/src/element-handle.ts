@@ -686,7 +686,7 @@ function strictCandidatesFor(el: ElementInfo): StrictCandidate[] {
 /**
  * The text getByText and `filter({ hasText })` read of a resolved element: its
  * text, except that an Android text field's is its typed value, which is no
- * text, as an `<input>`'s value is not in Playwright (PILOT-1404). The agent
+ * text, as an `<input>`'s value is not in Playwright. The agent
  * reports an empty field's text as "" (not its hint).
  */
 function textContentOf(el: ElementInfo): string {

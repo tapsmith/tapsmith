@@ -87,7 +87,7 @@ function tabProbe(needle: string): Probe {
 
 /**
  * The words as a text field's typed value. getByText doesn't read what was
- * typed into an Android field (PILOT-1404), while getByRole's name still
+ * typed into an Android field, while getByRole's name still
  * matches it whole, so a getByText written for a field's value is told the
  * locator that finds the field.
  */
