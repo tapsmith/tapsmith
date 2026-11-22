@@ -2006,7 +2006,7 @@ fn am_start_outcome(output: &str) -> AmStartOutcome {
     });
     if output.contains("unable to resolve Intent") {
         AmStartOutcome::Unresolved
-    } else if threw || am_start_reported_error(output) {
+    } else if threw || am_start_error(output).is_some() {
         AmStartOutcome::Failed
     } else {
         AmStartOutcome::Started
