@@ -709,7 +709,7 @@ npx tapsmith test --shard=1/4
 
 ### Warm App Reset
 
-The fastest reset is one the app performs itself. React Native / Expo apps get it by mounting `@tapsmith/react-native` once — Tapsmith detects the hooks automatically and `appReset: 'auto'` becomes `warm · per file` — the same isolation as before, at a fraction of the cost (a warm reset takes ~1 s where clear + relaunch takes 5-10 s). Scopes that need per-test isolation opt in with `appResetScope: 'test'`; see the [Warm app reset guide](warm-reset.md).
+The fastest reset is one the app performs itself. React Native / Expo apps get it by wrapping their root navigator in `@tapsmith/react-native`'s `<TapsmithTestHooks>` once — Tapsmith detects the hooks automatically and `appReset: 'auto'` becomes `warm · per file` — the same isolation as before, at a fraction of the cost (a warm reset takes ~1 s where clear + relaunch takes 5-10 s). Scopes that need per-test isolation opt in with `appResetScope: 'test'`; see the [Warm app reset guide](warm-reset.md).
 
 Apps without the module can expose a deep link that resets state (much faster than a full clear + relaunch). `appReset: 'auto'` then resolves to `warm · per file`:
 
