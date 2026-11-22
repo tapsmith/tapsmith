@@ -53,7 +53,7 @@ describe("nearMissProbes()", () => {
 
   it("checks an exact text as a substring first, and each word getter under the others", () => {
     vitestExpect(codes(_text("Welcome"))).toEqual([
-      'getByText("Welcome")', 'getByRole("textfield", { name: "Welcome", exact: true })', 'getByLabel("Welcome")', 'getByPlaceholder("Welcome")', 'getByDescription("Welcome")',
+      'getByText("Welcome")', 'getByRole("textfield", { name: "Welcome", exact: true })', 'getByRole("textfield")', 'getByRole("searchfield")', 'getByLabel("Welcome")', 'getByPlaceholder("Welcome")', 'getByDescription("Welcome")',
       'getByRole("tab", { name: "Welcome" })',
     ]);
     vitestExpect(codes(_hint("Email"))).toEqual(['getByText("Email")', 'getByLabel("Email")', 'getByDescription("Email")']);
@@ -64,14 +64,14 @@ describe("nearMissProbes()", () => {
       'getByText("Close")', 'getByLabel("Close")', 'getByPlaceholder("Close")', 'getByRole("tab", { name: "Close" })',
     ]);
     vitestExpect(codes(_textContains("Hi"))).toEqual([
-      'getByRole("textfield", { name: "Hi", exact: true })', 'getByLabel("Hi")', 'getByPlaceholder("Hi")', 'getByDescription("Hi")', 'getByRole("tab", { name: "Hi" })',
+      'getByRole("textfield", { name: "Hi", exact: true })', 'getByRole("textfield")', 'getByRole("searchfield")', 'getByLabel("Hi")', 'getByPlaceholder("Hi")', 'getByDescription("Hi")', 'getByRole("tab", { name: "Hi" })',
     ]);
   });
 
   it("also checks words ending in punctuation without it, as text and description (PILOT-880)", () => {
     // On iOS a React Native link labelled "Forgot password" hides its "Forgot password?" text.
     vitestExpect(codes(_textContains("Forgot password?"))).toEqual([
-      'getByRole("textfield", { name: "Forgot password?", exact: true })', 'getByLabel("Forgot password?")', 'getByPlaceholder("Forgot password?")', 'getByDescription("Forgot password?")',
+      'getByRole("textfield", { name: "Forgot password?", exact: true })', 'getByRole("textfield")', 'getByRole("searchfield")', 'getByLabel("Forgot password?")', 'getByPlaceholder("Forgot password?")', 'getByDescription("Forgot password?")',
       'getByText("Forgot password")', 'getByDescription("Forgot password")', 'getByRole("tab", { name: "Forgot password?" })',
     ]);
     vitestExpect(codes(_text("Done!")).slice(-3, -1)).toEqual(['getByText("Done")', 'getByDescription("Done")']);
@@ -83,9 +83,9 @@ describe("nearMissProbes()", () => {
     ]);
     // Punctuation alone, or none, adds nothing.
     vitestExpect(codes(_textContains("?"))).toEqual([
-      'getByRole("textfield", { name: "?", exact: true })', 'getByLabel("?")', 'getByPlaceholder("?")', 'getByDescription("?")', 'getByRole("tab", { name: "?" })',
+      'getByRole("textfield", { name: "?", exact: true })', 'getByRole("textfield")', 'getByRole("searchfield")', 'getByLabel("?")', 'getByPlaceholder("?")', 'getByDescription("?")', 'getByRole("tab", { name: "?" })',
     ]);
-    vitestExpect(codes(_textContains("Hi")).length).toBe(5);
+    vitestExpect(codes(_textContains("Hi")).length).toBe(7);
   });
 
   it("checks a text's words as a text field's typed value, which getByText doesn't read (PILOT-1404)", () => {
@@ -95,6 +95,15 @@ describe("nearMissProbes()", () => {
     // Not for the getters that never read a field's text.
     for (const s of [_label("old@value.com"), _hint("old@value.com"), _contentDesc("old@value.com"), _role("button", { name: "old@value.com" })]) {
       vitestExpect(codes(s).join()).not.toContain('getByRole("textfield"');
+    }
+  });
+
+  it("checks a text's words as an iOS text field's typed value, by each text input role (PILOT-1417)", () => {
+    for (const s of [_text("Alpha"), _textContains("Alpha")]) {
+      vitestExpect(codes(s)).toEqual(vitestExpect.arrayContaining(['getByRole("textfield")', 'getByRole("searchfield")']));
+    }
+    for (const s of [_label("Alpha"), _hint("Alpha"), _contentDesc("Alpha"), _role("button", { name: "Alpha" })]) {
+      vitestExpect(codes(s).join()).not.toContain('getByRole("searchfield"');
     }
   });
 
@@ -178,6 +187,35 @@ describe("a not-found error lists the near misses the agent finds", () => {
     vitestExpect(await err(d.getByText("Forgot password?", { exact: true }).tap())).toContain(
       'Nothing matches it, but on screen now these locators match: ' +
         'getByText("Forgot password") (1 element), getByDescription("Forgot password") (1 element).',
+    );
+  });
+
+  it("names an iOS text field holding the words by its own name, and points at toHaveValue() (PILOT-1417)", async () => {
+    const field = (id: string, cls: string, text: string, extra: Partial<ElementInfo> = {}): ElementInfo =>
+      ({ ...element(id, text), className: cls, role: "textfield", ...extra });
+    const { client } = missingClient((s) => {
+      if (s.kind.type !== "role" || s.kind.value.name) return [];
+      if (s.kind.value.role === "searchfield") return [field("s", "XCUIElementTypeSearchField", "Alpha", { hint: "Search items..." })];
+      // Another field, holding another value, and an Android field that a role name already covers.
+      return [field("o", "XCUIElementTypeTextField", "Beta", { contentDescription: "Email" }), field("a", "android.widget.EditText", "Alpha")];
+    });
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    vitestExpect(await err(d.getByText("Alpha", { exact: true }).find())).toBe(
+      'Element getByText("Alpha", { exact: true }) was not found after waiting 50ms. ' +
+        'Nothing matches it, but on screen now this locator matches: ' +
+        'getByRole("searchfield", { name: "Search items...", exact: true }) (1 element with the value "Alpha"). ' +
+        "A text field's typed value is not text to getByText(): assert it with toHaveValue(). " + LOCATOR_PICKER_HINT,
+    );
+  });
+
+  it("lists an unnamed iOS field by its role alone, and compares the value whitespace-normalized", async () => {
+    const { client } = missingClient((s) =>
+      s.kind.type === "role" && !s.kind.value.name && s.kind.value.role === "textfield"
+        ? [{ ...element("f", "Apollo\u00a011"), className: "XCUIElementTypeTextField", role: "textfield" }]
+        : []);
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    vitestExpect(await err(d.getByText("Apollo 11").find())).toContain(
+      'this locator matches: getByRole("textfield") (1 element with the value "Apollo 11").',
     );
   });
 

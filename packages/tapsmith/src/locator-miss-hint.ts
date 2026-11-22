@@ -15,8 +15,9 @@
  * @internal
  */
 
-import type { EvaluateSelectorsResponse, GetSystemAlertResponse } from './grpc-client.js';
+import type { ElementInfo, EvaluateSelectorsResponse, GetSystemAlertResponse } from './grpc-client.js';
 import { collapseSameTargetDuplicates } from './element-handle.js';
+import { IOS_TEXT_INPUT_TYPES } from './ios-text-content.js';
 import { normalizeRole } from './roles.js';
 import { formatSelector, makeSelector, type RoleSelectorValue, type Selector } from './selectors.js';
 
@@ -44,6 +45,14 @@ export interface NearMissEvaluator {
 interface Probe {
   selector: Selector;
   fallback?: boolean;
+  /** The probe looks for a text field holding the words: a hit is told to assert its value with toHaveValue(). */
+  field?: boolean;
+  /**
+   * iOS: the words a text field's typed value must equal. The selector
+   * (a role without a name) finds every field, and only an iOS field holding
+   * this value counts, listed by its own name.
+   */
+  iosFieldValue?: string;
 }
 
 /** The role query without its name filter's strictness or its state filters, or undefined when it has neither. */
@@ -92,7 +101,45 @@ function tabProbe(needle: string): Probe {
  * locator that finds the field.
  */
 function fieldValueProbe(needle: string): Probe {
-  return { selector: makeSelector({ type: 'role', value: { role: 'textfield', name: needle, exact: true } }) };
+  return { selector: makeSelector({ type: 'role', value: { role: 'textfield', name: needle, exact: true } }), field: true };
+}
+
+/**
+ * The words as an iOS text field's typed value, which getByText doesn't read
+ * either. An iOS field is named by its label or placeholder, never its value,
+ * so no locator finds it by the words: each text input role is asked for
+ * without a name, and a field holding the words is listed by its own name.
+ */
+function iosFieldValueProbes(needle: string): Probe[] {
+  return (['textfield', 'searchfield'] as const).map((role) => ({
+    selector: makeSelector({ type: 'role', value: { role, name: '' } }),
+    field: true,
+    iosFieldValue: needle,
+  }));
+}
+
+/** Collapse whitespace runs to one space and trim, as the agents compare text. */
+function normalizeText(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/** The elements of a probe's answer that count as its hits. */
+function probeHits(probe: Probe, elements: ElementInfo[]): ElementInfo[] {
+  const collapsed = collapseSameTargetDuplicates(elements);
+  if (probe.iosFieldValue === undefined) return collapsed;
+  const want = normalizeText(probe.iosFieldValue);
+  return collapsed.filter((el) => IOS_TEXT_INPUT_TYPES.has(el.className) && normalizeText(el.text) === want);
+}
+
+/** How a hit probe is listed: an iOS field-value probe by the field's own name. */
+function probeCode(probe: Probe, hits: ElementInfo[]): string {
+  if (probe.iosFieldValue === undefined || probe.selector.kind.type !== 'role') return formatSelector(probe.selector);
+  // getByRole names an iOS field by its label or title, else its placeholder, never its value.
+  const field = hits[0];
+  const name = field.contentDescription.trim() ? field.contentDescription : field.hint;
+  const role = probe.selector.kind.value.role;
+  const code = formatSelector(makeSelector({ type: 'role', value: name ? { role, name, exact: true } : { role, name: '' } }));
+  return `${code} (${plural(hits.length)} with the value ${JSON.stringify(probe.iosFieldValue)})`;
 }
 
 /**
@@ -124,11 +171,14 @@ export function nearMissProbes(selector: Selector): Probe[] {
       return [
         { selector: makeSelector({ type: 'textContains', value: kind.value }) },
         fieldValueProbe(kind.value),
+        ...iosFieldValueProbes(kind.value),
         ...wordProbes(kind.value, ['textContains']),
         tabProbe(kind.value),
       ];
     case 'textContains':
-      return kind.value ? [fieldValueProbe(kind.value), ...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)] : [];
+      return kind.value
+        ? [fieldValueProbe(kind.value), ...iosFieldValueProbes(kind.value), ...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)]
+        : [];
     case 'contentDesc':
     case 'label':
       return kind.value ? [...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)] : [];
@@ -149,14 +199,21 @@ function plural(n: number): string {
  */
 export function formatNearMisses(selector: Selector, probes: Probe[], response: EvaluateSelectorsResponse): string {
   if (response.errorMessage || response.results.length !== probes.length) return '';
-  const counts = response.results.map((r) => (r.errorMessage ? 0 : collapseSameTargetDuplicates(r.elements).length));
+  const found = response.results.map((r, i) => (r.errorMessage ? [] : probeHits(probes[i], r.elements)));
+  const counts = found.map((f) => f.length);
   const hits = probes
-    .map((p, i) => ({ probe: p, count: counts[i] }))
-    .filter((h) => h.count > 0 && !h.probe.fallback)
+    .map((p, i) => ({ probe: p, found: found[i] }))
+    .filter((h) => h.found.length > 0 && !h.probe.fallback)
     .slice(0, MAX_NEAR_MISSES);
   if (hits.length > 0) {
-    const list = hits.map((h) => `${formatSelector(h.probe.selector)} (${plural(h.count)})`).join(', ');
-    return `Nothing matches it, but on screen now ${hits.length === 1 ? 'this locator matches' : 'these locators match'}: ${list}.`;
+    const list = hits.map((h) => h.probe.iosFieldValue !== undefined
+      ? probeCode(h.probe, h.found)
+      : `${probeCode(h.probe, h.found)} (${plural(h.found.length)})`).join(', ');
+    // getByText reads no text field's typed value, as Playwright's doesn't.
+    const value = hits.some((h) => h.probe.field)
+      ? ' A text field\'s typed value is not text to getByText(): assert it with toHaveValue().'
+      : '';
+    return `Nothing matches it, but on screen now ${hits.length === 1 ? 'this locator matches' : 'these locators match'}: ${list}.${value}`;
   }
   const fallbackIndex = probes.findIndex((p) => p.fallback);
   if (fallbackIndex >= 0 && counts[fallbackIndex] > 0 && selector.kind.type === 'role') {
