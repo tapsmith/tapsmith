@@ -1937,6 +1937,37 @@ describe('runner app reset (declared isolation)', () => {
       expect(two.warnings).toBeUndefined();
     });
 
+    it('warns the next test once about an app the session reinstalled, with no dialog row (PILOT-1397)', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-reinstall-'));
+      try {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => {});
+        tapsmithTest('two', async () => {});
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({
+          rootDir: tempRoot,
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        }));
+        opts.devices[0].sessionContext!.notices.push({
+          kind: 'app-reinstalled', title: 'app-release.apk',
+          message: 'Reinstalled app-release.apk (build changed since the last run).', timestamp: Date.now(),
+        });
+
+        const result = await runSuiteContext(ctx, '', [], [], opts);
+
+        const [one, two] = collectResults(result);
+        expect(one.warnings).toEqual(['Reinstalled app-release.apk (build changed since the last run).']);
+        expect(two.warnings).toBeUndefined();
+        const zip = unzipSync(fs.readFileSync(one.tracePath!));
+        const rows = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+          .filter((e) => e.type === 'action' && e.action === 'systemDialog');
+        expect(rows).toEqual([]);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
     describe('a failure after a warm reset that kept the app\'s screens (PILOT-922)', () => {
       function warmHooks(d: ReturnType<typeof makeDevice>, opts: RunOptions, caps: { hooksRemount?: boolean } = {}) {
         opts.devices[0].sessionContext!.capabilities = { hooksDetected: true, ...caps };

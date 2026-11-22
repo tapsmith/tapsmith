@@ -43,6 +43,15 @@ const mocks = vi.hoisted(() => ({
   unreachable: new Set<string>(),
   /** What the daemon answers about the agent's own launch of the app. */
   appLaunchedFresh: false,
+  /** Build stamps (PILOT-1397): of the build on disk, and of the copy on the device. */
+  localStamp: 'local-0' as string | undefined,
+  deviceStamp: 'device-0' as string | undefined,
+}));
+
+vi.mock('../build-stamp.js', () => ({
+  localBuildStamp: vi.fn(async () => mocks.localStamp),
+  installedApkStamp: vi.fn(async () => mocks.deviceStamp),
+  installedSimulatorAppStamp: vi.fn(async () => mocks.deviceStamp),
 }));
 
 // No real backoff between agent-start attempts — the retry is what matters here.
@@ -113,6 +122,7 @@ vi.mock('../ios-simulator.js', () => ({
 
 vi.mock('../ios-devicectl.js', () => ({
   isPhysicalDevice: vi.fn((serial: string) => serial.startsWith('PHYS')),
+  isSimulatorUdid: vi.fn((serial: string) => !serial.startsWith('PHYS')),
   installAppOnDevice: vi.fn(async () => {}),
   isAppInstalledOnDevice: vi.fn(async () => true),
   describeUnreachablePhysicalDevice: vi.fn(async (serial: string) =>
@@ -147,7 +157,8 @@ vi.mock('../agent-resolve.js', async (importOriginal) => ({
 
 vi.mock('../session-preflight.js', () => mocks.preflight);
 
-const { openDeviceGroup, openDeviceSession, closeDeviceSession, recoverDeviceSessions, sessionsForRun, sessionsToPrepare, runDeviceCount } = await import('../device-session.js');
+const { openDeviceGroup, openDeviceSession, closeDeviceSession, recoverDeviceSessions, sessionsForRun, sessionsToPrepare, runDeviceCount, reinstallChangedBuild } = await import('../device-session.js');
+const { knownInstalledBuilds, rememberInstalledBuilds, verifiedBuilds } = await import('../installed-builds.js');
 const { CLAIMS_DIR_ENV, claimDevice } = await import('../device-claims.js');
 
 type MockDevice = Record<string, Mock>;
@@ -190,6 +201,8 @@ function makeConfig(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
   };
 }
 
+let stampSeq = 0;
+
 beforeEach(() => {
   for (const f of fs.readdirSync(claimsDir)) fs.rmSync(path.join(claimsDir, f), { recursive: true, force: true });
   mocks.devices.length = 0;
@@ -207,6 +220,10 @@ beforeEach(() => {
   mocks.unreachableGraceMs = 0;
   mocks.unreachable.clear();
   mocks.appLaunchedFresh = false;
+  // Unique per test: what one test proved never vouches for another's build.
+  stampSeq++;
+  mocks.localStamp = `local-${stampSeq}`;
+  mocks.deviceStamp = `device-${stampSeq}`;
   mocks.preflight.ensureSessionReady.mockClear();
   mocks.preflight.launchConfiguredApp.mockClear();
   mocks.preflight.probeResetCapabilities.mockClear();
@@ -1330,5 +1347,341 @@ describe('the app build the config names', () => {
     expect(messages).toContain('reinstalling app APK app.apk (installed build differs)');
     await open({ ...emulator, daemonAddress: 'localhost:50053' }, makeConfig());
     expect(mocks.devices.at(-1)!.installApk).not.toHaveBeenCalled();
+  });
+});
+
+// PILOT-1397: a session that outlives one run (UI mode, watch, MCP) adopts a
+// device the CLI set up; a rebuild since then must be reinstalled, as
+// `tapsmith test` would at its start.
+describe('a rebuilt app in a long-lived session', () => {
+  const emulator = { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50051' };
+  const adopt = (config: TapsmithConfig = makeConfig(), extra: Partial<Parameters<typeof openDeviceSession>[2]> = {}) =>
+    openDeviceSession(emulator, config, { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false, ...extra });
+
+  it('reinstalls a build that changed since the daemon installed it, relaunches it and says so', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    const reinstalled: Array<[string, string | undefined]> = [];
+    const progress: string[] = [];
+    const session = await adopt(makeConfig(), {
+      adoptPrepared: true,
+      onProgress: (m) => progress.push(m),
+      onReinstalled: (serial, build) => reinstalled.push([serial, build.message]),
+    });
+    expect(mocks.devices[0].installApk).toHaveBeenCalledWith(path.join(ROOT, 'app.apk'));
+    expect(progress).toContain('reinstalling app APK app.apk (installed build differs)');
+    // Relaunched from cleared data: the reinstall replaced the running app
+    // and kept the old build's data.
+    expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(session.context, 'launch after reinstall', { freshInstall: false });
+    expect(session.prepared?.policy).toEqual({ mode: 'clear', scope: 'file' });
+    expect(session.context.notices).toEqual([expect.objectContaining({
+      kind: 'app-reinstalled', message: 'Reinstalled app.apk (build changed since the last run).',
+    })]);
+    expect(reinstalled).toEqual([['emulator-5554', 'Reinstalled app.apk (build changed since the last run)']]);
+  });
+
+  it('says so when a session it opens itself replaces a different build (a UI worker respawned on its own daemon)', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    const reinstalled: Array<[string, string | undefined]> = [];
+    const open = (extra: Partial<Parameters<typeof openDeviceSession>[2]> = {}) => openDeviceSession(emulator, makeConfig(), {
+      claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1',
+      onReinstalled: (serial, build) => reinstalled.push([serial, build.message]), ...extra,
+    });
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    await open();
+    expect(mocks.devices[0].installApk).toHaveBeenCalled();
+    expect(reinstalled).toEqual([['emulator-5554', 'Reinstalled app.apk (the device had a different build)']]);
+  });
+
+  it('says a simulator reinstall happened only once the install has landed', async () => {
+    const { installAppAsync } = await import('../ios-simulator.js');
+    vi.mocked(installAppAsync).mockRejectedValueOnce(new Error('simctl install failed'));
+    mocks.simAppMatches = false;
+    const reinstalled: string[] = [];
+    await expect(openDeviceSession(
+      { name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50052' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1', onReinstalled: (_s, b) => { reinstalled.push(b.message ?? ''); } },
+    )).rejects.toThrow(/simctl install failed/);
+    expect(reinstalled).toEqual([]);
+  });
+
+  it('says nothing when a session it opens itself finds the build matching, or reinstalls only because it was forced', async () => {
+    const reinstalled: string[] = [];
+    const onReinstalled = (_serial: string, build: { message?: string }) => { reinstalled.push(build.message ?? ''); };
+    await openDeviceSession(emulator, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1', onReinstalled });
+    await openDeviceSession(emulator, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1', onReinstalled, forceInstall: true });
+    expect(mocks.devices[1].installApk).toHaveBeenCalled();
+    expect(reinstalled).toEqual([]);
+  });
+
+  it('leaves a matching build alone, and skips the full comparison until a stamp changes', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    const first = await adopt();
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    expect(first.context.notices).toEqual([]);
+    expect(mocks.preflight.launchConfiguredApp).not.toHaveBeenCalled();
+    // Nothing changed: a stat and a device query, no comparison.
+    await reinstallChangedBuild(first);
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    // The build on disk changed (a rebuild).
+    mocks.localStamp = 'rebuilt';
+    await reinstallChangedBuild(first);
+    expect(installedApkMatches).toHaveBeenCalledTimes(2);
+    // The copy on the device changed (someone else installed over it).
+    mocks.deviceStamp = 'replaced';
+    await reinstallChangedBuild(first);
+    expect(installedApkMatches).toHaveBeenCalledTimes(3);
+    await reinstallChangedBuild(first);
+    expect(installedApkMatches).toHaveBeenCalledTimes(3);
+    for (const d of mocks.devices) expect(d.installApk).not.toHaveBeenCalled();
+  });
+
+  it('runs the full comparison every time a stamp cannot be read', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    mocks.deviceStamp = undefined;
+    const session = await adopt();
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).toHaveBeenCalledTimes(2);
+  });
+
+  it('reinstalls when the comparison cannot be made, and says why', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValueOnce(undefined);
+    const session = await adopt();
+    expect(mocks.devices[0].installApk).toHaveBeenCalled();
+    expect(session.context.notices[0]?.message).toBe('Reinstalled app.apk (could not compare it with the installed build).');
+  });
+
+  it('does not call an app missing when its presence lookup failed but its copy was stamped', async () => {
+    mocks.installed = false;
+    const session = await adopt();
+    expect(mocks.devices[0].installApk).toHaveBeenCalled();
+    expect(session.context.notices[0]?.message).toBe('Reinstalled app.apk (build changed since the last run).');
+  });
+
+  it('reinstalls an app that is no longer on the device', async () => {
+    mocks.installed = false;
+    mocks.deviceStamp = undefined;
+    const session = await adopt();
+    expect(mocks.devices[0].installApk).toHaveBeenCalled();
+    expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(session.context, 'launch after reinstall', { freshInstall: false });
+    expect(session.context.notices[0]?.message).toBe('Installed app.apk (the app was no longer on the device).');
+  });
+
+  it('refuses a build that has gone since the session started', async () => {
+    await expect(adopt(makeConfig({ apk: './cleaned.apk' }))).rejects.toThrow(/App APK not found at .*cleaned\.apk/);
+    expect(mocks.devices[0].installApk).not.toHaveBeenCalled();
+  });
+
+  it('never reinstalls on its own for --force-install: that is the session start\'s', async () => {
+    await adopt(makeConfig(), { forceInstall: true });
+    expect(mocks.devices[0].installApk).not.toHaveBeenCalled();
+  });
+
+  it('checks nothing without a package or an app build', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    await adopt(makeConfig({ package: undefined }));
+    await adopt(makeConfig({ apk: undefined }), {});
+    expect(installedApkMatches).not.toHaveBeenCalled();
+    for (const d of mocks.devices) expect(d.installApk).not.toHaveBeenCalled();
+  });
+
+  it('reinstalls a rebuilt .app on an iOS simulator and relaunches it', async () => {
+    mocks.simAppMatches = false;
+    const session = await openDeviceSession(
+      { name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50051' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app', simulator: 'iPhone 16' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false },
+    );
+    expect(mocks.simInstalls).toBe(1);
+    expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(session.context, 'launch after reinstall', { freshInstall: false });
+    expect(session.context.notices[0]?.message).toBe('Reinstalled App.app (build changed since the last run).');
+  });
+
+  it('leaves a physical iPhone alone, whose startup check is presence only, without asking devicectl', async () => {
+    const { isAppInstalledOnDevice, installAppOnDevice, isPhysicalDevice } = await import('../ios-devicectl.js');
+    vi.mocked(isAppInstalledOnDevice).mockClear();
+    const session = await openDeviceSession(
+      { name: 'device-1', serial: 'PHYS-1', daemonAddress: 'localhost:50051' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false },
+    );
+    expect(isAppInstalledOnDevice).not.toHaveBeenCalled();
+    expect(installAppOnDevice).not.toHaveBeenCalled();
+    // The check before each file: a devicectl listing there would cost seconds.
+    vi.mocked(isPhysicalDevice).mockClear();
+    await reinstallChangedBuild(session);
+    expect(isPhysicalDevice).not.toHaveBeenCalled();
+  });
+
+  it('hands a fresh process the simulator container the last proof found', async () => {
+    const { installedSimulatorAppStamp } = await import('../build-stamp.js');
+    const sim = { name: 'device-1', serial: 'SIM-7', daemonAddress: 'localhost:50051' };
+    const ios = makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app', simulator: 'iPhone 16' });
+    rememberInstalledBuilds({ 'SIM-7': `com.example.app\n${path.join(ROOT, 'Build', 'App.app')}\nlocal\napp:/sims/X/Bundle/UUID-A/App.app:abc123` });
+    vi.mocked(installedSimulatorAppStamp).mockClear();
+    await openDeviceSession(sim, ios, { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false });
+    expect(installedSimulatorAppStamp).toHaveBeenCalledWith('SIM-7', 'com.example.app', '/sims/X/Bundle/UUID-A/App.app');
+  });
+
+  it('hands what it proved to a forked child and takes back what the child proved', async () => {
+    const session = await adopt();
+    const known = knownInstalledBuilds();
+    expect(known['emulator-5554']).toContain(`local-${stampSeq}`);
+    // A fresh process (a watch child) that is handed the record skips the comparison.
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    verifiedBuilds.clear();
+    rememberInstalledBuilds(known);
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).not.toHaveBeenCalled();
+    // And the parent takes back a record the child made.
+    verifiedBuilds.clear();
+    rememberInstalledBuilds({ 'emulator-5554': 'from-the-child' });
+    expect(knownInstalledBuilds()['emulator-5554']).toBe('from-the-child');
+  });
+
+  it('takes the startup check as the proof, so the session\'s first check is the cheap one', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    // The CLI's own open: the full comparison, which matches.
+    await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(knownInstalledBuilds()['emulator-5554']).toContain(`local-${stampSeq}`));
+    // The UI worker or watch child that adopts it next compares nothing.
+    await adopt();
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    for (const d of mocks.devices) expect(d.installApk).not.toHaveBeenCalled();
+  });
+
+  it('does not reinstall twice where the build cannot be compared: once at startup, then the record stands', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValue(undefined);
+    try {
+      await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+      expect(mocks.devices[0].installApk).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(knownInstalledBuilds()['emulator-5554']).toContain(`local-${stampSeq}`));
+      const session = await adopt();
+      expect(mocks.devices[1].installApk).not.toHaveBeenCalled();
+      expect(session.context.notices).toEqual([]);
+    } finally {
+      vi.mocked(installedApkMatches).mockReturnValue(true);
+    }
+  });
+
+  it('records the startup check\'s copy as stamped before the comparison, not a build another tool installed during it', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    const before = mocks.deviceStamp;
+    vi.mocked(installedApkMatches).mockImplementationOnce(() => { mocks.deviceStamp = 'foreign-install'; return true; });
+    await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+    await vi.waitFor(() => expect(knownInstalledBuilds()['emulator-5554']).toContain(`local-${stampSeq}`));
+    expect(knownInstalledBuilds()['emulator-5554']).toContain(String(before));
+    // So the session's first check sees a different copy and compares it.
+    vi.mocked(installedApkMatches).mockClear();
+    await adopt();
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the build on disk and the device\'s copy before the startup comparison, not alongside it', async () => {
+    const { localBuildStamp, installedApkStamp } = await import('../build-stamp.js');
+    const { installedApkMatches } = await import('../emulator.js');
+    const order: string[] = [];
+    vi.mocked(localBuildStamp).mockImplementationOnce(async () => { await new Promise((r) => setTimeout(r, 20)); order.push('local stamped'); return mocks.localStamp; });
+    vi.mocked(installedApkStamp).mockImplementationOnce(async () => { await new Promise((r) => setTimeout(r, 40)); order.push('device stamped'); return mocks.deviceStamp; });
+    vi.mocked(installedApkMatches).mockImplementationOnce(() => { order.push('compared'); return true; });
+    await openDeviceSession({ ...emulator, daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'CLI' });
+    expect(order).toEqual(['local stamped', 'device stamped', 'compared']);
+    expect(knownInstalledBuilds()['emulator-5554']).toContain(`device-${stampSeq}`);
+  });
+
+  it('never takes another app\'s simulator container for this one', async () => {
+    const { installedSimulatorAppStamp } = await import('../build-stamp.js');
+    rememberInstalledBuilds({ 'SIM-8': 'com.example.other\n/other/Other.app\nlocal\napp:/sims/X/Bundle/UUID-O/Other.app:abc' });
+    vi.mocked(installedSimulatorAppStamp).mockClear();
+    await openDeviceSession(
+      { name: 'device-1', serial: 'SIM-8', daemonAddress: 'localhost:50051' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app', simulator: 'iPhone 16' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false },
+    );
+    expect(installedSimulatorAppStamp).toHaveBeenCalledWith('SIM-8', 'com.example.app', undefined);
+  });
+
+  it('never takes the container of another app built to the same path', async () => {
+    const { installedSimulatorAppStamp } = await import('../build-stamp.js');
+    // The config named another bundle id with the same build path before.
+    rememberInstalledBuilds({ 'SIM-9': `com.example.other\n${path.join(ROOT, 'Build', 'App.app')}\nlocal\napp:/sims/X/Bundle/UUID-O/App.app:abc` });
+    vi.mocked(installedSimulatorAppStamp).mockClear();
+    await openDeviceSession(
+      { name: 'device-1', serial: 'SIM-9', daemonAddress: 'localhost:50051' },
+      makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app', simulator: 'iPhone 16' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Run', adopt: true, adoptVerify: false },
+    );
+    expect(installedSimulatorAppStamp).toHaveBeenCalledWith('SIM-9', 'com.example.app', undefined);
+  });
+
+  it('probes a reinstalled build for reset hooks afresh: the old build\'s detection does not carry over', async () => {
+    const session = await adopt();
+    (session.context.capabilities ??= {}).hooksDetected = true;
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    mocks.localStamp = 'rebuilt-without-hooks';
+    let atLaunch: boolean | undefined = true;
+    mocks.preflight.launchConfiguredApp.mockImplementationOnce(async () => {
+      atLaunch = session.context.capabilities?.hooksDetected;
+      return { policy: { mode: 'clear', scope: 'file' }, preparedAt: Date.now(), durationMs: 0, source: 'launch after reinstall' };
+    });
+    expect((await reinstallChangedBuild(session)).reinstalled).toBe(true);
+    expect(atLaunch).toBeUndefined();
+  });
+
+  it('forgets what the old build taught about keeping restored data and its hooks URL', async () => {
+    const session = await adopt();
+    Object.assign(session.context.capabilities ??= {}, {
+      hooksUrlPrefix: 'old:///',
+      appStateKeep: { noWrites: true, writingKeeps: 2, daemonCannotKeep: true },
+    });
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    mocks.localStamp = 'rebuilt-with-onreload';
+    expect((await reinstallChangedBuild(session)).reinstalled).toBe(true);
+    expect(session.context.capabilities?.hooksUrlPrefix).toBeUndefined();
+    expect(session.context.capabilities?.appStateKeep).toEqual({ daemonCannotKeep: true });
+  });
+
+  it('records the device\'s copy as it was before the comparison, never one installed meanwhile', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockClear();
+    const session = await adopt();
+    expect(installedApkMatches).toHaveBeenCalledTimes(1);
+    // The build is rebuilt and reinstalled by this check; another tool may
+    // install over it before the copy could be stamped, so it is not taken
+    // as proof: the next check compares in full once.
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    mocks.localStamp = 'rebuilt';
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).toHaveBeenCalledTimes(2);
+    mocks.deviceStamp = 'after-install';
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).toHaveBeenCalledTimes(3);
+    await reinstallChangedBuild(session);
+    expect(installedApkMatches).toHaveBeenCalledTimes(3);
+  });
+
+  it('forgets the proof when the reinstall fails, so the next run checks in full', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    vi.mocked(installedApkMatches).mockReturnValue(false);
+    try {
+      const session = await adopt();
+      mocks.devices[0].installApk.mockRejectedValueOnce(new Error('INSTALL_FAILED_INSUFFICIENT_STORAGE'));
+      mocks.localStamp = 'rebuilt-again';
+      await expect(reinstallChangedBuild(session)).rejects.toThrow(/Failed to install app APK: INSTALL_FAILED_INSUFFICIENT_STORAGE/);
+      expect(knownInstalledBuilds()['emulator-5554']).toBeUndefined();
+    } finally {
+      vi.mocked(installedApkMatches).mockReturnValue(true);
+    }
   });
 });

@@ -509,6 +509,27 @@ describe('whether the app runs behind the proxy, across children (PILOT-1013)', 
   });
 });
 
+describe('the builds the devices were proven to hold, across children (PILOT-1397)', () => {
+  const RUN_FILE = '/repo/tests/a.test.ts';
+
+  it('hands each child what the last one proved, so only a changed build is compared in full', async () => {
+    const dispatcher = armDispatcher(scriptedChild(), [RUN_FILE]);
+    const runOnce = async (installedBuilds?: Record<string, string>): Promise<WatchRunMessage> => {
+      const child = scriptedChild();
+      vi.mocked(fork).mockReturnValue(child as unknown as ReturnType<typeof fork>);
+      const run = internalsOf(dispatcher)._runFileInChild(RUN_FILE);
+      await untilRunning(child);
+      const msg = child.send.mock.calls[0][0] as WatchRunMessage;
+      child.emit('message', { ...(fileDone(RUN_FILE, [], 1) as object), ...(installedBuilds ? { installedBuilds } : {}) });
+      await run;
+      return msg;
+    };
+    const first = await runOnce({ 'emulator-mcp-1397': 'app.apk\nlocal-1\ndevice-1' });
+    expect(first.installedBuilds).toEqual(expect.any(Object));
+    expect((await runOnce()).installedBuilds['emulator-mcp-1397']).toBe('app.apk\nlocal-1\ndevice-1');
+  });
+});
+
 describe('a file that failed to load (PILOT-545)', () => {
   it('keeps the runner\'s load-failure result flagged as file-level, so a later real run retires it', async () => {
     const child = scriptedChild();

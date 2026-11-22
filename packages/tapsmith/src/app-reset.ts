@@ -84,6 +84,35 @@ export interface ResetCapabilities {
   appStateKeep?: { noWrites?: boolean; writingKeeps?: number; daemonCannotKeep?: boolean };
 }
 
+/**
+ * Forget, in place, what `caps` learnt about the app build: after a reinstall
+ * those facts describe a build that is gone, and they never downgrade on their
+ * own (a probe only upgrades `hooksDetected`; `appStateKeep` only learns
+ * reasons to stop trying). What describes the device or the daemon stays.
+ */
+export function forgetBuildCapabilities(caps: ResetCapabilities): void {
+  delete caps.hooksDetected;
+  delete caps.hooksUrlPrefix;
+  delete caps.hooksRemount;
+  if (caps.appStateKeep) {
+    delete caps.appStateKeep.noWrites;
+    delete caps.appStateKeep.writingKeeps;
+    if (Object.keys(caps.appStateKeep).length === 0) delete caps.appStateKeep;
+  }
+}
+
+/**
+ * Fold a watch-mode or MCP child's capabilities back into the parent's
+ * per-device store. The child was seeded from that store and its probes only
+ * upgrade, so its capabilities as they ended are the store's new contents —
+ * replaced, not merged, so whatever a reinstall in the child forgot
+ * ({@link forgetBuildCapabilities}) does not come back with the next child.
+ */
+export function foldBackCapabilities(store: ResetCapabilities, child: ResetCapabilities): void {
+  for (const key of Object.keys(store) as Array<keyof ResetCapabilities>) delete store[key];
+  Object.assign(store, structuredClone(child));
+}
+
 export interface AppStateBaseline {
   /** Absolute path of the restored archive. */
   archive: string;

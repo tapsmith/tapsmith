@@ -373,7 +373,7 @@ export interface DeviceActivityMessage {
   type: 'device-activity'
   id: string
   workerId: number
-  kind: 'prepare' | 'validate' | 'recycle' | 'mirror' | 'respawn'
+  kind: 'prepare' | 'validate' | 'recycle' | 'mirror' | 'respawn' | 'install'
   status: 'started' | 'completed' | 'error' | 'cancelled'
   /** e.g. "Prepare device (clear)", "Mirror: 3 taps" */
   label: string
@@ -1002,6 +1002,12 @@ export interface UIWorkerInitMessage {
   /** See `InitMessage.networkApisInRun`. */
   networkApisInRun: boolean
   /**
+   * The parent's `knownInstalledBuilds()`: the build each device was last
+   * proven to hold. Required, so a recycled or respawned worker
+   * starts with it instead of comparing the builds in full again.
+   */
+  installedBuilds: Record<string, string>
+  /**
    * The rest of the device group (`devices[1..]`) for a `use.devices`
    * project, each on a daemon the server spawned for it. Omitted for
    * single-device workers.
@@ -1086,6 +1092,8 @@ export interface UIWorkerReadyMessage {
   policy?: import('../app-reset.js').AppResetPolicy
   /** Runtime reset capabilities probed after launch (in-app hooks detected?). */
   capabilities?: import('../app-reset.js').ResetCapabilities
+  /** The worker's `knownInstalledBuilds()` after its start, for the parent. */
+  installedBuilds: Record<string, string>
 }
 
 /**
@@ -1097,6 +1105,27 @@ export interface UIWorkerReadyMessage {
 export interface UIWorkerCapabilitiesMessage {
   type: 'capabilities'
   workerId: number
+  capabilities: import('../app-reset.js').ResetCapabilities
+}
+
+/**
+ * UI worker → server: before a run (or while adopting the device), the worker
+ * found that the configured build changed and reinstalled it.
+ * The server shows it in Device activity and the terminal.
+ */
+export interface UIWorkerAppReinstalledMessage {
+  type: 'app-reinstalled'
+  workerId: number
+  deviceSerial: string
+  /** e.g. `Reinstalled app-release.apk (build changed since the last run)`. */
+  message: string
+  startedAt: number
+  durationMs: number
+  /**
+   * The worker's capabilities after the reinstall. They replace the server's
+   * copy, which otherwise only upgrades: the old ones describe a build that
+   * is gone (hooks the new build may not have).
+   */
   capabilities: import('../app-reset.js').ResetCapabilities
 }
 
@@ -1198,6 +1227,14 @@ export interface UIWorkerFileDoneMessage {
   filePath: string
   results: import('../worker-protocol.js').SerializedTestResult[]
   suite: import('../worker-protocol.js').SerializedSuiteResult
+  /**
+   * The file never ran because the check before it failed: the configured
+   * build is missing, or would not install or launch. The
+   * parent fails the file's tests with this message; the worker stays.
+   */
+  setupError?: string
+  /** The worker's `knownInstalledBuilds()`, for the parent's next worker. */
+  installedBuilds: Record<string, string>
 }
 
 /** UI worker → server: error. */
@@ -1220,3 +1257,4 @@ export type UIWorkerChildMessage =
   | UIWorkerPreparedMessage
   | UIWorkerPrepareFailedMessage
   | UIWorkerCapabilitiesMessage
+  | UIWorkerAppReinstalledMessage

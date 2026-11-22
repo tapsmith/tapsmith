@@ -72,8 +72,10 @@ export interface PreflightNotice {
    *  `foreign-dialog`: another package's, or iOS SpringBoard's (dismissed;
    *  trace row only).
    *  `hooks-missing`: `@tapsmith/react-native` is installed but its hooks
-   *  never showed up (its test gets a warning; no trace row). */
-  kind: 'app-dialog' | 'foreign-dialog' | 'hooks-missing'
+   *  never showed up (its test gets a warning; no trace row).
+   *  `app-reinstalled`: a long-lived session reinstalled a rebuilt app before
+   *  the run (its test gets a warning; the reset row shows the relaunch). */
+  kind: 'app-dialog' | 'foreign-dialog' | 'hooks-missing' | 'app-reinstalled'
   /** The dialog's title, e.g. `Pixel Launcher isn't responding`. */
   title: string
   /** Owning process, when dumpsys named exactly one (or it is the app's). */

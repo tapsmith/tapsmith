@@ -3,6 +3,8 @@ import {
   appResetAction,
   appResetPolicyEquals,
   describeAction,
+  foldBackCapabilities,
+  forgetBuildCapabilities,
   KEPT_SCREENS_HINT,
   parseHooksMarker,
   resetKeptScreens,
@@ -11,6 +13,7 @@ import {
   satisfies,
   warmResetTarget,
   type AppResetPolicy,
+  type ResetCapabilities,
   type AppResetReport,
 } from '../app-reset.js';
 
@@ -205,6 +208,44 @@ describe('parseHooksMarker', () => {
   it('treats an unknown protocol version as no marker', () => {
     expect(parseHooksMarker('<node text="tapsmith-hooks:2;epoch=3;url=a:///"/>')).toBeUndefined();
     expect(parseHooksMarker('<node text="tapsmith-hooks:0;epoch=3;url=a:///"/>')).toBeUndefined();
+  });
+});
+
+describe('forgetBuildCapabilities', () => {
+  it('forgets what described the old build and keeps what describes the device and daemon', () => {
+    const caps: ResetCapabilities = {
+      hooksDetected: true,
+      hooksUrlPrefix: 'old:///',
+      hooksRemount: true,
+      daemonWaitsForRender: true,
+      isPhysical: false,
+      appStateKeep: { noWrites: true, writingKeeps: 3, daemonCannotKeep: true },
+    };
+    forgetBuildCapabilities(caps);
+    expect(caps).toEqual({ daemonWaitsForRender: true, isPhysical: false, appStateKeep: { daemonCannotKeep: true } });
+  });
+
+  it('drops appStateKeep altogether when nothing in it is left', () => {
+    const caps: ResetCapabilities = { appStateKeep: { noWrites: true } };
+    forgetBuildCapabilities(caps);
+    expect(caps).toEqual({});
+  });
+});
+
+describe('foldBackCapabilities', () => {
+  it('takes the child\'s capabilities as they ended, so what a reinstall forgot stays forgotten', () => {
+    const store: ResetCapabilities = { hooksDetected: true, hooksUrlPrefix: 'old:///', appStateKeep: { noWrites: true } };
+    // The child was seeded from the store, then reinstalled a new build.
+    foldBackCapabilities(store, { daemonWaitsForRender: true });
+    expect(store).toEqual({ daemonWaitsForRender: true });
+  });
+
+  it('keeps the store object, which callers hold on to', () => {
+    const store: ResetCapabilities = {};
+    const same = store;
+    foldBackCapabilities(store, { hooksDetected: true });
+    expect(same).toBe(store);
+    expect(store).toEqual({ hooksDetected: true });
   });
 });
 

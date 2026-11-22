@@ -67,6 +67,7 @@ import type {
   UIDiscoverMessage,
   UIDiscoverChildMessage,
   UIWorkerChildMessage,
+  UIWorkerAppReinstalledMessage,
   UIWorkerMessage,
   TestTreeUseOptions,
   RunSelectionEntry,
@@ -77,9 +78,10 @@ import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
 import { DeviceReadiness, holdReason, McpCallsInFlight, mcpToolWorkers, MUTATING_MCP_TOOLS, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
-import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
+import { capabilitiesAfterRespawn, mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
+import { knownInstalledBuilds, rememberInstalledBuilds } from '../installed-builds.js';
 import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
 import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, PickGenerations, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
 import { hierarchyShowsAppWebView, nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
@@ -335,6 +337,8 @@ interface UIWorkerHandle {
   initialPolicy?: AppResetPolicy
   /** Runtime reset capabilities the worker probed (in-app hooks detected?). */
   capabilities?: ResetCapabilities
+  /** The worker reinstalled a rebuilt app: a respawn takes its fresh capabilities, not the old worker's. */
+  reinstalledBuild?: boolean
   /** Last file this worker ran — the edit → rerun loop's best guess for what runs next. */
   lastRun?: { file: string; projectName?: string }
   /** Activity-feed id of the in-flight preparation. */
@@ -634,6 +638,26 @@ export async function startUIServer(
   }
 
   /**
+   * A worker reinstalled a rebuilt app (PILOT-1397): one Device activity row
+   * and one terminal line, so a run against the new build never looks like
+   * one against the old.
+   */
+  function reportAppReinstalled(worker: UIWorkerHandle, msg: UIWorkerAppReinstalledMessage): void {
+    pushActivity({
+      type: 'device-activity', id: `install-${worker.id}-${msg.startedAt}`, workerId: worker.id, kind: 'install', status: 'completed',
+      label: 'Reinstalled app', detail: msg.message, timestamp: msg.startedAt, durationMs: msg.durationMs,
+    });
+    console.log(`  ${msg.message} on ${msg.deviceSerial}`);
+    // Replace, not merge: the server's copy only ever upgrades, and the old
+    // build's hooks would keep background preparation trying warm resets
+    // that the new build cannot acknowledge.
+    worker.reinstalledBuild = true;
+    if (JSON.stringify(msg.capabilities) === JSON.stringify(worker.capabilities)) return;
+    worker.capabilities = msg.capabilities;
+    if (!worker.retired) readinessEvent(worker, { type: 'candidate-changed' });
+  }
+
+  /**
    * A worker learned something new about its device (a reset detected hooks
    * the startup probe missed). Upgrade-only merge, then let readiness
    * re-evaluate: a `ready` prepared under the old resolution may no longer
@@ -652,6 +676,8 @@ export async function startUIServer(
       case 'capabilities':
         upgradeWorkerCapabilities(worker, msg.capabilities);
         break;
+      // Not 'app-reinstalled': a worker sends it only while it starts or runs
+      // a file, and those listeners report it (once).
       case 'prepared': {
         const started = worker.readiness?.state;
         readinessEvent(worker, { type: 'prepared', prepareId: msg.prepareId, policy: msg.policy, startedAt: msg.startedAt, durationMs: msg.durationMs, satisfiedBy: msg.satisfiedBy });
@@ -2437,6 +2463,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
         const onMessage = (msg: UIWorkerChildMessage) => {
           if (msg.type === 'ready' && msg.workerId === id) {
+            rememberInstalledBuilds(msg.installedBuilds);
             worker.initialPolicy = msg.policy;
             worker.capabilities = msg.capabilities;
             events?.onReady?.();
@@ -2447,6 +2474,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             if (launchProgress) events?.onProgress?.(msg.message);
             else console.log(`${DIM}  Worker ${id} (${deviceSerial}): ${msg.message}${RESET}`);
             broadcastWorkerStatus(worker, 'initializing');
+          } else if (msg.type === 'app-reinstalled' && msg.workerId === id) {
+            reportAppReinstalled(worker, msg);
           } else if (msg.type === 'error' && msg.workerId === id) {
             clearTimeout(timeout);
             cleanup();
@@ -2474,6 +2503,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           adoptPrepared: !!adopt && adoptPrepared,
           forceInstall,
           networkApisInRun: ctx.networkApisInRun,
+          installedBuilds: knownInstalledBuilds(),
           ...(members.length > 0 ? {
             groupMembers: members.map((m) => ({
               name: m.name,
@@ -3184,8 +3214,21 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               break;
             }
             case 'file-done': {
+              rememberInstalledBuilds(msg.installedBuilds);
               const results = msg.results.map(deserializeTestResult);
               const suite = deserializeSuiteResult(msg.suite);
+              // The build check before the file failed (PILOT-1397): its
+              // tests fail with why, and the worker stays for the next run.
+              if (msg.setupError !== undefined && worker.currentFile) {
+                const n = failUnservableFile(worker.currentFile, msg.setupError);
+                failed += n;
+                // Per worker too: its device is held for inspection at run end.
+                worker.failed += n;
+                if (n > 0) {
+                  anyFailed = true;
+                  if (worker.currentFile.projectName) failedProjectsInDispatch.add(worker.currentFile.projectName);
+                }
+              }
 
               // A test the user stopped mid-flight is interrupted, not failed
               // — keeps graceful-abort accounting consistent with the
@@ -3228,6 +3271,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             }
             case 'capabilities':
               upgradeWorkerCapabilities(worker, msg.capabilities);
+              break;
+            case 'app-reinstalled':
+              reportAppReinstalled(worker, msg);
               break;
             case 'progress':
               // Slow-device-action progress during the between-file preflight
@@ -3647,7 +3693,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // startup probe upgrade them, never downgrade (a probe that misses the
       // marker on a slow relaunch must not turn a verified hooks app into a
       // clear+relaunch one for the rest of the session).
-      newWorker.capabilities = mergeResetCapabilities(worker.capabilities, newWorker.capabilities);
+      newWorker.capabilities = capabilitiesAfterRespawn(worker.capabilities, newWorker.capabilities, newWorker.reinstalledBuild === true);
       uiWorkers[index] = newWorker;
     } finally {
       // The respawn is over either way. On failure the old handle stays in
