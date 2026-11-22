@@ -114,11 +114,9 @@ export function nextCandidate(input: CandidateInput): Candidate | undefined {
 }
 
 /**
- * Merge a worker's newly reported reset capabilities into the server's
- * snapshot. Capabilities only ever upgrade: `true` wins over `false`/unset,
- * because a probe that missed the marker (hierarchy lag, app not yet
- * rendered) must not downgrade a capability an earlier reset positively
- * verified — the same never-downgrade rule the worker applies locally.
+ * The server's capabilities for a respawned worker: the old worker's carried
+ * forward upgrade-only ({@link mergeResetCapabilities}), unless the respawn
+ * reinstalled a rebuilt app on the way up.
  */
 export function capabilitiesAfterRespawn(
   previous: ResetCapabilities | undefined,
@@ -130,6 +128,13 @@ export function capabilitiesAfterRespawn(
   return reinstalled ? fresh : mergeResetCapabilities(previous, fresh);
 }
 
+/**
+ * Merge a worker's newly reported reset capabilities into the server's
+ * snapshot. Capabilities only ever upgrade: `true` wins over `false`/unset,
+ * because a probe that missed the marker (hierarchy lag, app not yet
+ * rendered) must not downgrade a capability an earlier reset positively
+ * verified — the same never-downgrade rule the worker applies locally.
+ */
 export function mergeResetCapabilities(
   previous: ResetCapabilities | undefined,
   next: ResetCapabilities | undefined,
