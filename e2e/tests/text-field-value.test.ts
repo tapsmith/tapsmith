@@ -17,17 +17,29 @@ describe("getByText skips a text field's typed value", () => {
   // The row: Android's text, iOS's React Native touchable, which merges its text into its label.
   const rowRole = (platform: string) => (platform === "ios" ? "button" : "text")
 
-  test("an exact getByText finds the result typed into the search field, not the field", async ({ device, listScreen, platform }) => {
+  test("an exact getByText finds the result typed into the search field, not the field", async ({ listScreen, platform }) => {
     await listScreen.searchField.type("Item 7")
     await expect(listScreen.itemCount).toHaveText("1 items")
     const result = listScreen.itemByText("Item 7")
     await expect(result).toHaveCount(1)
     await expect(result).toHaveRole(rowRole(platform))
-    // On iOS a row tap while the keyboard is still up after type() only puts
-    // the keyboard away on this screen, whatever locator finds the row.
-    if (platform === "ios") await device.hideKeyboard()
+    // The keyboard is still up from type(): the row tap must reach the row,
+    // not only put the keyboard away (the list's React Native ScrollView
+    // spends the first touch after typing on that).
     await result.tap()
     await expect(listScreen.selectedCount).toHaveText("1 selected")
+  })
+
+  // The search field sits above the list, not in it: the keyboard-first step
+  // must put the keyboard away in the list, which closes it, rather than
+  // beside the field, which does not.
+  test("a row tap right after typing reaches the row in a list full of rows", async ({ listScreen }) => {
+    await listScreen.searchField.type("Item 1")
+    await expect(listScreen.itemCount).toHaveText("11 items")
+    // The app keeps its selection from the tests before this one.
+    const before = Number.parseInt(await listScreen.selectedCount.getText(), 10)
+    await listScreen.item(12).tap()
+    await expect(listScreen.selectedCount).not.toHaveText(`${before} selected`)
   })
 
   test("by substring and RegExp too", async ({ device, listScreen, platform }) => {
