@@ -271,6 +271,52 @@ describe('no-bare-locator-xpath rule', () => {
   });
 });
 
+describe('no-bare-locator-xpath on real code', () => {
+  const linter = new Linter({ configType: 'flat' });
+  const lint = (code: string) => linter.verify(code, [{
+    plugins: { tapsmith: plugin as unknown as ESLint.Plugin },
+    rules: { 'tapsmith/no-bare-locator-xpath': 'error' },
+    languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
+  }], 'tests/x.tapsmith.js').map((m) => m.line);
+
+  const body = (lines: string[]) => `async function t(device) {\n${lines.join('\n')}\n}\n`;
+
+  it('accepts a comment on the line before an awaited call', () => {
+    expect(lint(body([
+      '  // The button has no accessible name or id; only its position identifies it.',
+      "  await device.locator({ xpath: '//Button[2]' }).tap();",
+    ]))).toEqual([]);
+  });
+
+  it('accepts a comment on the line before an assignment', () => {
+    expect(lint(body([
+      '  // No accessible name: legacy view.',
+      "  const row = device.locator({ xpath: '//Row[1]' });",
+    ]))).toEqual([]);
+  });
+
+  it('accepts a comment on the call\'s own lines', () => {
+    expect(lint(body([
+      "  await device.locator({ xpath: '//Button[2]' }).tap(); // legacy view",
+      '  await device.locator({',
+      "    xpath: '//Row[1]', // no accessible name",
+      '  }).tap();',
+    ]))).toEqual([]);
+  });
+
+  it('reports a call whose nearest comment is two lines up behind other code', () => {
+    expect(lint(body([
+      '  // About the next line only.',
+      "  await device.getByText('Menu').tap();",
+      "  await device.locator({ xpath: '//Button[2]' }).tap();",
+    ]))).toEqual([4]);
+  });
+
+  it('reports a call with no comment', () => {
+    expect(lint(body(["  await device.locator({ xpath: '//Button[2]' }).tap();"]))).toEqual([2]);
+  });
+});
+
 // ─── prefer-accessible-locators ───
 
 describe('prefer-accessible-locators rule', () => {

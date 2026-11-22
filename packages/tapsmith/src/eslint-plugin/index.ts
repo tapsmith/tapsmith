@@ -8,7 +8,7 @@
  *   - prefer-role: Warns when `.locator({ className })` is used for standard
  *     Android widgets that have well-known accessibility roles.
  *   - no-bare-locator-xpath: Errors when `.locator({ xpath })` is used without
- *     an explanatory comment on the same or preceding line.
+ *     an explanatory comment on the line before it or on its own lines.
  *   - prefer-accessible-locators: Warns when `.getByTestId()` or
  *     `.locator({ id })` is used instead of `getByRole`, `getByText`,
  *     `getByDescription`, etc.
@@ -169,7 +169,7 @@ const noBareLocatorXpath: RuleModule = {
     },
     messages: {
       noBareLocatorXpath:
-        'locator({ xpath }) must have an explanatory comment on the same or preceding line. XPath locators are fragile and Android-only — document why this is necessary.',
+        'locator({ xpath }) must have an explanatory comment on the line before it or on one of its own lines. XPath locators are fragile and Android-only — document why this is necessary.',
     },
     schema: [],
   },
@@ -184,12 +184,18 @@ const noBareLocatorXpath: RuleModule = {
         const comments = sourceCode.getCommentsBefore(node);
         if (comments.length > 0) return;
 
-        const allComments = sourceCode.getAllComments();
-        const nodeLine = node.loc?.start.line;
-        const hasInlineComment = allComments.some(
-          (c) => c.loc?.start.line === nodeLine || c.loc?.end.line === nodeLine,
-        );
-        if (hasInlineComment) return;
+        // A comment on the line before the call, or on any line of it. The
+        // comments directly before the call miss the usual shapes, where an
+        // `await` or `const row =` sits between the comment and the call.
+        const startLine = node.loc?.start.line;
+        const endLine = node.loc?.end.line ?? startLine;
+        if (startLine === undefined || endLine === undefined) return;
+        const commented = sourceCode.getAllComments().some((c) => {
+          const from = c.loc?.start.line;
+          const to = c.loc?.end.line;
+          return from !== undefined && to !== undefined && to >= startLine - 1 && from <= endLine;
+        });
+        if (commented) return;
 
         context.report({ node, messageId: 'noBareLocatorXpath' });
       },
