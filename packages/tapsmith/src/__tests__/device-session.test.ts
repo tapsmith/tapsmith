@@ -1380,6 +1380,28 @@ describe('a rebuilt app in a long-lived session', () => {
     expect(reinstalled).toEqual([['emulator-5554', 'Reinstalled app.apk (build changed since the last run)']]);
   });
 
+  it('says so when a session it opens itself replaces a different build (a UI worker respawned on its own daemon)', async () => {
+    const { installedApkMatches } = await import('../emulator.js');
+    const reinstalled: Array<[string, string | undefined]> = [];
+    const open = (extra: Partial<Parameters<typeof openDeviceSession>[2]> = {}) => openDeviceSession(emulator, makeConfig(), {
+      claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1',
+      onReinstalled: (serial, build) => reinstalled.push([serial, build.message]), ...extra,
+    });
+    vi.mocked(installedApkMatches).mockReturnValueOnce(false);
+    await open();
+    expect(mocks.devices[0].installApk).toHaveBeenCalled();
+    expect(reinstalled).toEqual([['emulator-5554', 'Reinstalled app.apk (the device had a different build)']]);
+  });
+
+  it('says nothing when a session it opens itself finds the build matching, or reinstalls only because it was forced', async () => {
+    const reinstalled: string[] = [];
+    const onReinstalled = (_serial: string, build: { message?: string }) => { reinstalled.push(build.message ?? ''); };
+    await openDeviceSession(emulator, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1', onReinstalled });
+    await openDeviceSession(emulator, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'Worker 1', onReinstalled, forceInstall: true });
+    expect(mocks.devices[1].installApk).toHaveBeenCalled();
+    expect(reinstalled).toEqual([]);
+  });
+
   it('leaves a matching build alone, and skips the full comparison until a stamp changes', async () => {
     const { installedApkMatches } = await import('../emulator.js');
     vi.mocked(installedApkMatches).mockClear();

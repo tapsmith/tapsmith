@@ -978,6 +978,7 @@ export async function openDeviceSession(
       return session;
     }
 
+    const checkStarted = Date.now();
     const install = await checkInstallAndRemember(config, device, spec.serial, {
       freshDevice: opts.freshDevice,
       forceInstall: opts.forceInstall,
@@ -985,6 +986,17 @@ export async function openDeviceSession(
       onProgress: progress,
       onPhase: phase,
     });
+    // A long-lived parent that opens sessions itself (a UI worker respawned
+    // on its own daemon) learns of a replaced build the same way as after an
+    // adopt: it says so, and drops what it knew about the old build. A fresh
+    // install onto a device without the app, or a forced one, is no news.
+    if (opts.onReinstalled && install.installed && !install.freshInstall && !opts.forceInstall) {
+      opts.onReinstalled(spec.serial, {
+        reinstalled: true,
+        message: `Reinstalled ${path.basename((config.platform === 'ios' ? config.app : config.apk) ?? 'the app')} (the device had a different build)`,
+        durationMs: Date.now() - checkStarted,
+      });
+    }
 
     // Resolving the agent artifacts may build the simulator agent; a pending
     // simulator install runs alongside it, and is awaited before the agent
