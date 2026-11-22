@@ -2,7 +2,10 @@ import { defineConfig } from "tapsmith";
 
 export default defineConfig({
   apk: "../test-app/android/app/build/outputs/apk/release/app-release.apk",
-  activity: "dev.tapsmith.testapp.MainActivity",
+  // No `activity`: the test app has two launcher entries (its MainActivity
+  // and a LeakCanary-style alias), so every launch here goes through the
+  // daemon's launcher resolution (PILOT-1402). The other Android configs set
+  // it, which covers the configured-activity path.
   package: "dev.tapsmith.testapp",
   timeout: 15_000,
   // Animations off for the run; the device's own values come back after (PILOT-971).
