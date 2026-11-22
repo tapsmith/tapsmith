@@ -174,7 +174,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: test-app/android/app/build/outputs/apk/release/app-release.apk
-          key: test-app-android-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
+          key: test-app-android-${{ hashFiles('test-app/app/**', 'test-app/components/**', 'test-app/assets/**',
             'test-app/plugins/**', 'test-app/package-lock.json',
             'test-app/app.json', 'test-app/metro.config.js',
             'packages/tapsmith-react-native/src/**',
@@ -337,7 +337,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: e2e/fixtures/TapsmithTestApp.app
-          key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
+          key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/components/**', 'test-app/assets/**',
             'test-app/plugins/**', 'test-app/package-lock.json', 'test-app/app.json',
             'test-app/metro.config.js',
             'packages/tapsmith-react-native/src/**',

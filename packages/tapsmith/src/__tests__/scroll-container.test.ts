@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasScrollableContent, pickScrollRegion, scrollRegion } from '../scroll-container.js';
+import { hasScrollableContent, outsideRegion, pickScrollRegion, scrollRegion, visibleRegionOf } from '../scroll-container.js';
 
 // PILOT-934: scrollIntoView() swipes inside the scroll container that holds
 // its element, so a swipe cannot start outside a dialog (dismissing it) or on
@@ -330,5 +330,241 @@ describe('hasScrollableContent', () => {
 
   it('is false for a dump with no bounds at all', () => {
     expect(hasScrollableContent('<hierarchy/>', full, 'vertical')).toBe(false);
+  });
+});
+
+// PILOT-1370: an element can be "visible" (on screen) and still out of its
+// list's view: iOS frames are not clipped, so a row just below a list, behind
+// a bottom tab bar, reaches past the list's edge; and a bar the app lays over
+// the list hides the rows under it on both platforms.
+describe('visibleRegionOf', () => {
+  /** An iPad-like React Native screen: a list above a tab bar, full-screen wrappers drawn after it. */
+  const tabScreen = (rowFrame: string, extra = '') => ios(
+    el('Other', '[0,0][402,874]', '',
+      el('Other', '[0,0][402,800]', '',
+        el('ScrollView', '[0,70][402,800]', '',
+          el('Other', '[0,70][402,1400]', '', el('Other', rowFrame, 'identifier="counter plus button"'))) +
+        // An empty toolbar host and a wrapper over the whole screen: not bars.
+        el('Toolbar', '[0,0][402,800]', 'label="Toolbar" identifier="Toolbar" tapsmith-empty-bar-host="true"') +
+        el('Other', '[0,0][402,874]', 'identifier=""'),
+      ) +
+      el('Other', '[0,800][402,874]', '',
+        el('Button', '[0,800][201,874]', 'label="Catalog, tab, 1 of 2"') + el('Button', '[201,800][402,874]', 'label="Cart"')) +
+      extra,
+    ),
+  );
+  const list = { left: 0, top: 70, right: 402, bottom: 800 };
+
+  it('is the list holding the element when nothing is drawn over it', () => {
+    const frame = { left: 100, top: 800, right: 140, bottom: 840 };
+    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), frame)?.region).toEqual(list);
+  });
+
+  it('leaves out a bar the app draws over the bottom of the list', () => {
+    const bar = el('Other', '[0,740][402,800]', '', el('Button', '[0,740][402,800]', 'label="Add to cart"'));
+    const frame = { left: 100, top: 750, right: 140, bottom: 790 };
+    expect(visibleRegionOf(tabScreen('[100,750][140,790]', bar), frame)?.region).toEqual({ ...list, bottom: 740 });
+  });
+
+  it('leaves out a header drawn over the top of the list', () => {
+    const header = el('NavigationBar', '[0,70][402,130]', 'label="Catalog"');
+    const frame = { left: 100, top: 80, right: 140, bottom: 120 };
+    expect(visibleRegionOf(tabScreen('[100,80][140,120]', header), frame)?.region).toEqual({ ...list, top: 130 });
+  });
+
+  it('ignores an unnamed overlay, a narrow button and a tall sheet drawn over the list', () => {
+    const overlays =
+      el('Other', '[0,740][402,800]', '') + // nothing named in it: a background view
+      el('Button', '[330,720][390,780]', 'label="Add"') + // a floating button, not across the list
+      el('Other', '[0,300][402,800]', '', el('StaticText', '[0,300][402,340]', 'label="Sheet"')); // too tall for a bar
+    const frame = { left: 100, top: 750, right: 140, bottom: 790 };
+    expect(visibleRegionOf(tabScreen('[100,750][140,790]', overlays), frame)?.region).toEqual(list);
+  });
+
+  it('is undefined when the element matches nothing in the dump, or no scrollable holds it', () => {
+    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 1, top: 2, right: 3, bottom: 4 })).toBeUndefined();
+    expect(visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 0, top: 800, right: 201, bottom: 874 })).toBeUndefined();
+  });
+
+  it('leaves out two bars stacked over the bottom of the list, whichever the tree lists first', () => {
+    const miniBar = el('Other', '[0,660][402,720]', '', el('Button', '[0,660][402,720]', 'label="Now playing"'));
+    const checkout = el('Other', '[0,720][402,800]', '', el('Button', '[0,720][402,800]', 'label="Checkout"'));
+    const frame = { left: 100, top: 670, right: 140, bottom: 710 };
+    expect(visibleRegionOf(tabScreen('[100,670][140,710]', miniBar + checkout), frame)?.region).toEqual({ ...list, bottom: 660 });
+    expect(visibleRegionOf(tabScreen('[100,670][140,710]', checkout + miniBar), frame)?.region).toEqual({ ...list, bottom: 660 });
+  });
+
+  it('leaves out a UIKit navigation bar, which XCUITest lists before the table it is drawn over', () => {
+    const xml = ios(el('Other', '[0,0][402,874]', '',
+      el('NavigationBar', '[0,24][402,82]', 'label="Native Screens"') +
+      el('Other', '[0,0][402,874]', '', el('CollectionView', '[0,0][402,874]', '',
+        el('Cell', '[0,40][402,90]', 'label="Row 3"') + el('Cell', '[0,90][402,1400]', 'label="Rest"'))),
+    ));
+    expect(visibleRegionOf(xml, { left: 0, top: 40, right: 402, bottom: 90 })?.region)
+      .toEqual({ left: 0, top: 82, right: 402, bottom: 874 });
+  });
+
+  it('does not count the bars of a screen a sheet is presented over', () => {
+    // The tab bar of the screen under the sheet is still in the tree, in its
+    // own container; the sheet is drawn after it, at the window's level.
+    const xml = ios(
+      el('Other', '[0,0][402,874]', '',
+        el('Other', '[0,0][402,874]', '') + el('TabBar', '[0,790][402,874]', '', el('Button', '[0,790][201,874]', 'label="Home"'))),
+      el('Other', '[0,60][402,874]', '', el('Table', '[0,60][402,874]', '',
+        el('Cell', '[0,800][402,850]', 'label="Last row"') + el('Cell', '[0,850][402,1400]', 'label="More"'))),
+    );
+    const view = visibleRegionOf(xml, { left: 0, top: 800, right: 402, bottom: 850 });
+    expect(view?.region).toEqual({ left: 0, top: 60, right: 402, bottom: 874 });
+    expect(outsideRegion({ left: 0, top: 800, right: 402, bottom: 850 }, view!.region, view)).toBeUndefined();
+  });
+
+  it('judges a carousel card below the list by the list, which scrolls the way the card lies', () => {
+    const xml = ios(
+      el('ScrollView', '[0,70][402,800]', '',
+        el('Other', '[0,70][402,1400]', '',
+          el('ScrollView', '[0,780][402,900]', '',
+            el('Other', '[0,780][900,900]', '',
+              el('Button', '[16,790][200,890]', 'label="Card 1"') + el('Button', '[216,790][400,890]', 'label="Card 2"'))))),
+    );
+    const card = { left: 16, top: 790, right: 200, bottom: 890 };
+    const view = visibleRegionOf(xml, card);
+    expect(view?.region).toEqual({ left: 0, top: 70, right: 402, bottom: 800 });
+    expect(outsideRegion(card, view!.region, view)).toBe('down');
+  });
+
+  it('is only the nearest scrollable, never a farther one standing in for a chip bar too small to swipe in', () => {
+    const xml = ios(
+      el('ScrollView', '[0,70][402,800]', '',
+        el('ScrollView', '[0,100][402,140]', '', el('Button', '[360,100][440,140]', 'label="Chip 7"')) +
+        el('Other', '[0,140][402,1400]', '')),
+    );
+    expect(visibleRegionOf(xml, { left: 360, top: 100, right: 440, bottom: 140 })).toBeUndefined();
+  });
+
+  it('says which ways its scrollable has content to scroll', () => {
+    const view = visibleRegionOf(tabScreen('[100,800][140,840]'), { left: 100, top: 800, right: 140, bottom: 840 });
+    expect(view).toMatchObject({ vertical: true, horizontal: false });
+  });
+
+  it.each(['Table', 'CollectionView', 'ScrollView'])(
+    'counts an iOS %s as scrolling up and down when the target is the only element past its edge',
+    (type) => {
+      const xml = ios(el('Other', '[0,0][402,874]', '',
+        el(type, '[0,100][402,700]', '',
+          el('Cell', '[0,100][402,650]', 'label="Row 1"') + el('Cell', '[0,650][402,750]', 'label="Row 2"')) +
+        el('TabBar', '[0,700][402,874]', '', el('Button', '[0,700][201,874]', 'label="Home"')),
+      ));
+      const row = { left: 0, top: 650, right: 402, bottom: 750 };
+      const view = visibleRegionOf(xml, row);
+      expect(view?.region).toEqual({ left: 0, top: 100, right: 402, bottom: 700 });
+      expect(outsideRegion(row, view!.region, view)).toBe('down');
+    },
+  );
+
+  it("does not take a carousel's cards past the side for its list scrolling sideways", () => {
+    const xml = ios(el('Other', '[0,0][402,874]', '',
+      el('Table', '[0,100][402,700]', '',
+        el('Cell', '[0,100][402,300]', '', el('CollectionView', '[0,110][402,290]', '',
+          el('Cell', '[16,110][216,290]', 'label="Card 1"') + el('Cell', '[232,110][432,290]', 'label="Card 2"'))) +
+        el('Cell', '[0,650][402,750]', 'label="Row 2"')) +
+      el('TabBar', '[0,700][402,874]', '', el('Button', '[0,700][201,874]', 'label="Home"')),
+    ));
+    const row = { left: 0, top: 650, right: 402, bottom: 750 };
+    const view = visibleRegionOf(xml, row);
+    expect(view).toMatchObject({ vertical: true, horizontal: false });
+    expect(outsideRegion(row, view!.region, view)).toBe('down');
+  });
+
+  it('judges a carousel card under a tab bar laid over the feed by the feed, though the bar is too tall to count against the carousel', () => {
+    const xml = ios(el('Other', '[0,0][402,874]', '',
+      el('ScrollView', '[0,0][402,874]', '',
+        el('Other', '[0,0][402,2000]', '',
+          el('ScrollView', '[0,680][402,860]', '',
+            el('Other', '[0,680][900,860]', '',
+              el('Button', '[16,690][200,850]', 'label="Card 1"') + el('Button', '[216,690][400,850]', 'label="Card 2"'))))) +
+      el('Other', '[0,791][402,874]', '', el('Button', '[0,791][201,874]', 'label="Home"')),
+    ));
+    const card = { left: 16, top: 690, right: 200, bottom: 850 };
+    const view = visibleRegionOf(xml, card);
+    expect(view?.region).toEqual({ left: 0, top: 0, right: 402, bottom: 791 });
+    expect(outsideRegion(card, view!.region, view)).toBe('down');
+  });
+
+  it('does not nudge sideways in a list for a chip in a chip bar too small to swipe in, with more chips past the side', () => {
+    const xml = ios(
+      el('ScrollView', '[0,70][402,800]', '',
+        el('ScrollView', '[0,100][402,140]', '',
+          el('Button', '[360,100][440,140]', 'label="Chip 7"') + el('Button', '[450,100][530,140]', 'label="Chip 8"')) +
+        el('Other', '[0,140][402,1400]', '')),
+    );
+    const chip = { left: 360, top: 100, right: 440, bottom: 140 };
+    const view = visibleRegionOf(xml, chip);
+    expect(view ? outsideRegion(chip, view.region, view) : undefined).toBeUndefined();
+  });
+
+  it.each(['CollectionView', 'ScrollView'])(
+    'scrolls down for a row behind the tab bar of an iOS %s that runs under it, with content ending there',
+    (type) => {
+      const xml = ios(el('Other', '[0,0][402,874]', '',
+        el(type, '[0,0][402,874]', '',
+          el('StaticText', '[16,732][386,772]', 'label="Item 13"') + el('StaticText', '[16,772][386,812]', 'label="Item 14"')) +
+        el('TabBar', '[0,790][402,874]', '', el('Button', '[0,790][201,874]', 'label="Home"')),
+      ));
+      const item = { left: 16, top: 772, right: 386, bottom: 812 };
+      const view = visibleRegionOf(xml, item);
+      expect(view?.region).toEqual({ left: 0, top: 0, right: 402, bottom: 790 });
+      expect(outsideRegion(item, view!.region, view)).toBe('down');
+    },
+  );
+
+  it("on Android, leaves out a bar in another window: the activity's bottom navigation under a sheet", () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,1200][1080,2400]', '',
+        node('androidx.recyclerview.widget.RecyclerView', '[0,1200][1080,2400]', scrollable,
+          node('android.widget.TextView', '[0,2250][1080,2400]', 'text="Last row"'))),
+      node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+        node('com.google.android.material.bottomnavigation.BottomNavigationView', '[0,2200][1080,2400]', '',
+          node('android.widget.TextView', '[0,2200][540,2400]', 'text="Home"'))),
+      statusBar,
+    );
+    expect(visibleRegionOf(xml, { left: 0, top: 2250, right: 1080, bottom: 2400 })?.region)
+      .toEqual({ left: 0, top: 1200, right: 1080, bottom: 2400 });
+  });
+
+  it('on Android, leaves out a bottom bar laid over the list', () => {
+    const xml = android(
+      node('android.widget.FrameLayout', '[0,0][1080,2400]', '',
+        node('androidx.recyclerview.widget.RecyclerView', '[0,200][1080,2400]', scrollable,
+          node('android.widget.TextView', '[0,2250][1080,2350]', 'text="Row 9"')) +
+        node('android.view.View', '[0,2200][1080,2400]', '', node('android.widget.Button', '[0,2200][540,2400]', 'text="Home"'))),
+      statusBar,
+    );
+    expect(visibleRegionOf(xml, { left: 0, top: 2250, right: 1080, bottom: 2350 })?.region)
+      .toEqual({ left: 0, top: 200, right: 1080, bottom: 2200 });
+  });
+});
+
+describe('outsideRegion', () => {
+  const region = { left: 0, top: 70, right: 402, bottom: 800 };
+
+  it('says which way to scroll an element below, above, or beside the region', () => {
+    expect(outsideRegion({ left: 100, top: 800, right: 140, bottom: 840 }, region)).toBe('down');
+    expect(outsideRegion({ left: 100, top: 780, right: 140, bottom: 820 }, region)).toBe('down');
+    expect(outsideRegion({ left: 100, top: 20, right: 140, bottom: 60 }, region)).toBe('up');
+    expect(outsideRegion({ left: 380, top: 100, right: 450, bottom: 140 }, region)).toBe('right');
+    expect(outsideRegion({ left: -40, top: 100, right: 20, bottom: 140 }, region)).toBe('left');
+  });
+
+  it('only along the axes the container scrolls on: no sideways nudge in a list that scrolls up and down', () => {
+    expect(outsideRegion({ left: 380, top: 100, right: 450, bottom: 140 }, region, { vertical: true, horizontal: false }))
+      .toBeUndefined();
+    expect(outsideRegion({ left: 100, top: 800, right: 140, bottom: 840 }, region, { vertical: false, horizontal: true }))
+      .toBeUndefined();
+  });
+
+  it('is undefined inside the region (within rounding), or for a frame spanning it', () => {
+    expect(outsideRegion({ left: 0, top: 70, right: 402, bottom: 120 }, region)).toBeUndefined();
+    expect(outsideRegion({ left: 0, top: 760, right: 402, bottom: 803 }, region)).toBeUndefined();
+    expect(outsideRegion({ left: 0, top: 0, right: 402, bottom: 900 }, region)).toBeUndefined();
   });
 });

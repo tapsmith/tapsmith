@@ -4,7 +4,8 @@
     "app/**/*.tsx"
   ],
   "project": [
-    "app/**/*.tsx"
+    "app/**/*.tsx",
+    "components/**/*.tsx"
   ],
   "ignoreDependencies": [
     "@expo/vector-icons",

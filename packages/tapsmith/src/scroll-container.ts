@@ -108,6 +108,167 @@ export function pickScrollRegion(xml: string, target?: Rect, previous?: Rect): S
   return { region: largest, source: 'largest' };
 }
 
+/**
+ * The part of the scroll container holding `target` where its content shows,
+ * and the axes that container scrolls along: its region less a bar drawn over
+ * one of its edges — a tab bar, toolbar or header the app lays over the list,
+ * that content scrolls under. `undefined` when `target` matches nothing in the
+ * dump or no scrollable holds it.
+ *
+ * The container is the nearest scrollable around the element that can bring
+ * it in: one it reaches past along an axis that scrollable scrolls on, or,
+ * when no scrollable around it hides it, the nearest one it lies inside. A nearer one too small to swipe in, or reached
+ * past only along an axis it does not scroll on (a carousel row below the
+ * list that holds it), gives way to the next one out. So a slow sideways drag
+ * never runs in a list that scrolls only up and down, where it is the edge
+ * swipe that pops the screen.
+ *
+ * A bar is an app element drawn over the container, outside it, that lies
+ * across its top or bottom edge: at least half its width, at most a third of
+ * its height, and with something named in it (a label, an id, text). That
+ * leaves out what is drawn over the whole screen without hiding anything: a
+ * React Native wrapper view, an empty toolbar host, a pointer-events-none
+ * marker. Drawn over it means after it in the tree, or a UIKit bar in the
+ * same screen (a navigation bar a table scrolls under is listed first); not
+ * the bars of a screen a sheet is presented over.
+ */
+export function visibleRegionOf(xml: string, target: Rect): VisibleRegion | undefined {
+  const scan = scanScrollables(xml);
+  if (!scan) return undefined;
+  const { entries, region } = scan;
+  const self = entries.filter((e) => !e.nonApp && e.bounds && sameFrame(e.bounds, target)).at(-1);
+  if (!self) return undefined;
+  let inView: VisibleRegion | undefined;
+  for (let a = self.parent; a; a = a.parent) {
+    if (!isScrollable(a.node) || a.nonApp) continue;
+    const container = region(a);
+    if (!container) continue;
+    // Judged without the element itself: one sticking out past the side of
+    // a list that scrolls up and down does not make it scroll sideways.
+    const horizontal = scrollsAlong(a, entries, 'horizontal', { except: self });
+    const view: VisibleRegion = {
+      region: trimBars(a, container, self, entries),
+      horizontal,
+      // An iOS scroll view, table or collection view scrolls up and down
+      // unless what is in it shows it scrolls only sideways (a carousel): it
+      // lists only what shows, so the row reaching past its edge may be the
+      // only one, and content that ends behind a tab bar the list runs under
+      // reaches past nothing. A sideways nudge still needs content past a side.
+      vertical: scrollsAlong(a, entries, 'vertical', { except: self }) || (a.node.attributes.get('scrollable') !== 'true' && !horizontal),
+    };
+    // Out of this one's view along a way it scrolls: it brings the element
+    // in. Inside it: in view here, but an outer scrollable may still hide it
+    // (a carousel row under a tab bar laid over the feed that holds it, a bar
+    // too tall to count against the carousel), so the outer ones are judged
+    // too, and the nearest view stands when none of them hides it.
+    if (outsideRegion(target, view.region, view)) return view;
+    if (!outsideRegion(target, view.region)) inView ??= view;
+  }
+  return inView;
+}
+
+/** `container`, the region of the scrollable `list`, less the bars drawn over its top or bottom edge. */
+function trimBars(list: Entry, container: Rect, self: Entry, entries: readonly Entry[]): Rect {
+  const height = container.bottom - container.top;
+  const width = container.right - container.left;
+  const middle = container.top + height / 2;
+  const bars = entries.filter((c) => {
+    const b = c.bounds;
+    if (!b || c.nonApp || isAncestor(list, c) || isAncestor(c, list) || isAncestor(c, self)) return false;
+    // Another window (an Android activity's bottom navigation under a
+    // dialog's list) is drawn under the list or beside it, whatever the order.
+    if (c.window !== list.window) return false;
+    if (c.order <= list.order && !sameScreenUIKitBar(c, list)) return false;
+    return b.bottom - b.top <= height / 3 && named(c, entries);
+  });
+  // Trimmed until nothing more trims it: a bar stacked on another (a mini
+  // player above a tab bar) reaches the edge only once the outer one is taken
+  // off, whichever the tree lists first. Each pass that goes on trims at
+  // least one bar off for good, so there are at most as many as bars.
+  let r = container;
+  for (let pass = 0; pass <= bars.length; pass++) {
+    const before = r;
+    for (const c of bars) {
+      const b = c.bounds!;
+      const across = intersect(b, r);
+      if (!across || across.right - across.left < width / 2) continue;
+      const h = b.bottom - b.top;
+      if (b.top > middle && b.bottom >= r.bottom - h) {
+        if (b.top - r.top >= MIN_REGION && b.top < r.bottom) r = { ...r, bottom: b.top };
+      } else if (b.bottom < middle && b.top <= r.top + h) {
+        if (r.bottom - b.bottom >= MIN_REGION && b.bottom > r.top) r = { ...r, top: b.bottom };
+      }
+    }
+    if (r === before) break;
+  }
+  return r;
+}
+
+/**
+ * Whether `c` is a UIKit bar drawn over the content of its own container,
+ * which holds `list`: XCUITest lists a navigation bar before the table that
+ * scrolls under it. Not one whose container is the window or the
+ * application, which hold everything, including a sheet presented over the
+ * bar's screen (the agent's occlusion check draws the same line).
+ */
+function sameScreenUIKitBar(c: Entry, list: Entry): boolean {
+  if (!IOS_BAR_TYPES.has(c.node.attributes.get('type') ?? c.node.tagName)) return false;
+  const container = c.parent;
+  const type = container?.node.attributes.get('type') ?? container?.node.tagName;
+  if (!container || type === 'XCUIElementTypeWindow' || type === 'XCUIElementTypeApplication') return false;
+  return isAncestor(container, list);
+}
+
+/** {@link visibleRegionOf}'s answer: the region, and the axes its scrollable has content to scroll along. */
+export interface VisibleRegion {
+  region: Rect;
+  vertical: boolean;
+  horizontal: boolean;
+}
+
+/** UIKit bars, drawn over the content of their container whatever their place in the tree. */
+const IOS_BAR_TYPES: ReadonlySet<string> = new Set([
+  'XCUIElementTypeNavigationBar',
+  'XCUIElementTypeTabBar',
+  'XCUIElementTypeToolbar',
+]);
+
+/** Attributes that name an element, on either platform. */
+const NAME_ATTRIBUTES = ['label', 'identifier', 'text', 'content-desc', 'resource-id'] as const;
+
+/** Whether `e` or something in it is named: an element worth drawing, not an empty wrapper. */
+function named(e: Entry, entries: readonly Entry[]): boolean {
+  const has = (x: Entry) => NAME_ATTRIBUTES.some((a) => (x.node.attributes.get(a) ?? '') !== '');
+  if (e.node.attributes.get('tapsmith-empty-bar-host') === 'true') return false;
+  return has(e) || entries.some((d) => !d.nonApp && isAncestor(e, d) && has(d));
+}
+
+/**
+ * The way to scroll to bring `frame` inside `region`, when it reaches past
+ * one of its edges: `"down"` for one below it, `"up"` above,
+ * then `"right"` and `"left"` likewise. `undefined` when it is inside, or
+ * reaches past both edges of an axis (it cannot fit any better), and only
+ * along the `axes` its container scrolls on. iOS frames
+ * are not clipped, so an element below its list, behind a tab bar, reaches
+ * past the list's bottom edge; Android clips them to the list.
+ */
+export function outsideRegion(
+  frame: Rect,
+  region: Rect,
+  axes: { vertical: boolean; horizontal: boolean } = { vertical: true, horizontal: true },
+): 'up' | 'down' | 'left' | 'right' | undefined {
+  const past = (start: number, end: number, regionStart: number, regionEnd: number, back: 'up' | 'left', on: 'down' | 'right') => {
+    const before = start < regionStart - EDGE_SLACK;
+    const after = end > regionEnd + EDGE_SLACK;
+    return before === after ? undefined : before ? back : on;
+  };
+  return (axes.vertical ? past(frame.top, frame.bottom, region.top, region.bottom, 'up', 'down') : undefined) ??
+    (axes.horizontal ? past(frame.left, frame.right, region.left, region.right, 'left', 'right') : undefined);
+}
+
+/** How far past a region's edge a frame may reach and still count as inside it: rounding, and an iOS bounce settling. */
+const EDGE_SLACK = 4;
+
 interface ScrollScan {
   entries: Entry[];
   /** The union of the windows. */
@@ -203,19 +364,34 @@ export function hasScrollableContent(xml: string, region: Rect | undefined, axis
   // trim an edge differently: then the one under its centre.
   let swiped = scan.candidates.filter(({ r }) => sameFrame(r, region));
   if (swiped.length === 0) swiped = scan.candidates.filter(({ r }) => contains(r, centre(region)));
-  return swiped.some(({ e }) => {
-    if (e.node.attributes.get('scrollable') === 'true') {
-      const along = layoutAxis(e, scan.entries);
-      return along === undefined || along === axis;
-    }
-    const f = e.bounds!;
-    return scan.entries.some((d) => {
-      if (d.nonApp || !d.bounds || !isAncestor(e, d)) return false;
-      const b = d.bounds;
-      return axis === 'vertical'
-        ? b.top < f.top - FRAME_TOLERANCE || b.bottom > f.bottom + FRAME_TOLERANCE
-        : b.left < f.left - FRAME_TOLERANCE || b.right > f.right + FRAME_TOLERANCE;
-    });
+  return swiped.some(({ e }) => scrollsAlong(e, scan.entries, axis));
+}
+
+/**
+ * Whether the scrollable `e` has content to scroll along `axis`, as
+ * {@link hasScrollableContent} judges it. With `own`, only its own content
+ * counts: not `own.except` (the element being judged) and what is in it, nor
+ * what is inside a scrollable nested in `e` (a carousel's cards past the side
+ * of the list that holds it scroll with the carousel, not the list).
+ */
+function scrollsAlong(e: Entry, entries: readonly Entry[], axis: 'vertical' | 'horizontal', own?: { except: Entry }): boolean {
+  if (e.node.attributes.get('scrollable') === 'true') {
+    const along = layoutAxis(e, entries);
+    return along === undefined || along === axis;
+  }
+  const f = e.bounds;
+  if (!f) return false;
+  const nested = (d: Entry): boolean => {
+    for (let p = d.parent; p && p !== e; p = p.parent) if (isScrollable(p.node) && !p.nonApp) return true;
+    return false;
+  };
+  return entries.some((d) => {
+    if (d.nonApp || !d.bounds || !isAncestor(e, d)) return false;
+    if (own && (d === own.except || isAncestor(own.except, d) || nested(d))) return false;
+    const b = d.bounds;
+    return axis === 'vertical'
+      ? b.top < f.top - FRAME_TOLERANCE || b.bottom > f.bottom + FRAME_TOLERANCE
+      : b.left < f.left - FRAME_TOLERANCE || b.right > f.right + FRAME_TOLERANCE;
   });
 }
 

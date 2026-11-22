@@ -87,6 +87,7 @@ export default function RootLayout() {
             <Stack.Screen name="text-matching" options={{ title: "Text Matching" }} />
             <Stack.Screen name="webview" options={{ title: "WebView" }} />
             <Stack.Screen name="tabs" options={{ title: "Tabs" }} />
+            <Stack.Screen name="tab-bar-scroll" options={{ title: "Tab Bar Scroll" }} />
             <Stack.Screen name="native-tabs" options={{ title: "Native Tabs" }} />
             <Stack.Screen name="roles" options={{ title: "Roles" }} />
             <Stack.Screen name="stack/[level]" options={{ title: "Stack" }} />

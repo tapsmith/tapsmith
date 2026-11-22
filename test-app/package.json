@@ -8,9 +8,9 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint app/",
-    "format": "prettier --write app/",
-    "format:check": "prettier --check app/",
+    "lint": "eslint app/ components/",
+    "format": "prettier --write app/ components/",
+    "format:check": "prettier --check app/ components/",
     "knip": "knip"
   },
   "dependencies": {
