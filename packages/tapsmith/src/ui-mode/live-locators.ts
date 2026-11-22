@@ -119,10 +119,10 @@ export async function suggestLiveLocators(
     let found = false;
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
       if (options.superseded?.()) break;
-      const result = await webViewMatchesOf(client, serial, candidate.code, options);
+      let result = await webViewMatchesOf(client, serial, candidate.code, options);
       if (result.error) { note = result.error; break; }
       if (result.count > 0 && !(pickedPlace && result.matches.every((m) => m.bounds))) unplaced = true;
-      const index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
+      let index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
       if (index < 0) continue;
       found = true;
       // A name or label matches a substring: the whole one may pin the pick
@@ -134,6 +134,13 @@ export async function suggestLiveLocators(
           suggestions.push({ code: exact, label: candidate.label });
           continue;
         }
+        // The page may have changed since the first read: a position must
+        // come from the matches as they are now.
+        if (options.superseded?.()) break;
+        result = await webViewMatchesOf(client, serial, candidate.code, options);
+        if (result.error) { note = result.error; break; }
+        index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
+        if (index < 0) continue;
       }
       if (result.count === 1) {
         suggestions.push({ code: candidate.code, label: candidate.label });

@@ -1098,7 +1098,10 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   }
 
   const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
-  return applyPositionalIndex(collapseSameTargetNodes(kept), selector.index);
+  // A WebView's nodes are its DOM elements, each one the page counts, never
+  // one target exposed twice: only native matches collapse.
+  const distinct = selector.type.startsWith('wv-') ? kept : collapseSameTargetNodes(kept);
+  return applyPositionalIndex(distinct, selector.index);
 }
 
 // Geometry lives with the hierarchy model (no matching); re-exported for

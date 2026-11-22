@@ -1,5 +1,5 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
-import { getNodeRole, isLabelField, webViewAccessibleName, webViewLabels, WEBVIEW_TAG_TO_ROLE, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
+import { getNodeRole, isLabelField, webViewAccessibleName, webViewLabels, legacyWebViewTagRole, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
 import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
@@ -75,18 +75,7 @@ function getWebViewRole(node: HierarchyNode): string | null {
   const explicitRole = node.attributes.get('webview-role');
   if (explicitRole) return webViewRolesFor(explicitRole) ? explicitRole : null;
 
-  const tag = node.attributes.get('webview-tag') ?? '';
-  const inputType = node.attributes.get('webview-type') ?? '';
-
-  if (tag === 'input') {
-    if (inputType === 'checkbox') return 'checkbox';
-    if (inputType === 'radio') return 'radio';
-    if (inputType === 'range') return 'slider';
-    if (inputType === 'button' || inputType === 'submit' || inputType === 'reset') return 'button';
-    return 'textfield';
-  }
-
-  return WEBVIEW_TAG_TO_ROLE[tag] ?? null;
+  return legacyWebViewTagRole(node);
 }
 
 // ─── Selector Generation ───

@@ -261,8 +261,26 @@ export function webViewAriaLabel(node: HierarchyNode): string {
 export function webViewAriaRole(node: HierarchyNode): string {
   const computed = node.attributes.get('webview-aria-role');
   if (computed !== undefined) return computed;
-  const legacy = node.attributes.get('webview-role') || WEBVIEW_TAG_TO_ROLE[node.attributes.get('webview-tag') ?? ''] || '';
+  const legacy = node.attributes.get('webview-role') || legacyWebViewTagRole(node) || '';
   return legacy === 'textfield' ? 'textbox' : legacy === 'image' ? 'img' : legacy;
+}
+
+/**
+ * The role a WebView node's tag (and an input's type) gives it, in
+ * Tapsmith's spelling, for a dump that predates `webview-aria-role`: what
+ * the Playground both suggests and matches for such a dump.
+ */
+export function legacyWebViewTagRole(node: HierarchyNode): string | null {
+  const tag = node.attributes.get('webview-tag') ?? '';
+  if (tag === 'input') {
+    const inputType = node.attributes.get('webview-type') ?? '';
+    if (inputType === 'checkbox') return 'checkbox';
+    if (inputType === 'radio') return 'radio';
+    if (inputType === 'range') return 'slider';
+    if (inputType === 'button' || inputType === 'submit' || inputType === 'reset') return 'button';
+    return 'textfield';
+  }
+  return WEBVIEW_TAG_TO_ROLE[tag] ?? null;
 }
 
 /** Whether webview.getByRole(role) can find this WebView node. */
@@ -313,7 +331,8 @@ export function webViewLabels(node: HierarchyNode): string[] {
  * whitespace normalised on both sides.
  */
 export function webViewTextMatches(text: string, query: string, exact: boolean): boolean {
-  const norm = (s: string) => s.trim().replace(/\u200b/g, '').replace(/\s+/g, ' ');
+  // Playwright's normalisation: zero-width spaces and soft hyphens out before the trim.
+  const norm = (s: string) => s.replace(/[\u200b\u00ad]/g, '').trim().replace(/\s+/g, ' ');
   const v = norm(text);
   const q = norm(query);
   return exact ? v === q : v.toLowerCase().includes(q.toLowerCase());

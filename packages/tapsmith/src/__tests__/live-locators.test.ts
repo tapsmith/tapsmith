@@ -155,6 +155,32 @@ describe('suggestLiveLocators', () => {
     expect(suggestions.map((s) => s.code)[0]).toBe('webview.getByRole("button", { name: "Save", exact: true })');
   });
 
+  it('takes a position from the matches as they are after the exact check, not from before it', async () => {
+    const { page, matches } = fakePage();
+    const row = (top: number) => domEl({ tag: 'button', bounds: B(0, top, 100, top + 50) });
+    const picked = node({ webview: 'true', 'webview-tag': 'button', 'webview-aria-role': 'button', 'content-desc': 'Delete',
+      bounds: '[0,100][100,150]' });
+    // Unchanged page: the picked row is the second of three.
+    matches['getByRole:button'] = [row(0), row(100), row(200)];
+    matches['getByRole:button:exact'] = [row(0), row(100), row(200)];
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    let codes = (await suggestLiveLocators(fakeClient(() => []), 'emu', picked, { ios: false })).suggestions.map((s) => s.code);
+    expect(codes).toContain('webview.getByRole("button", { name: "Delete" }).nth(1)');
+    // The first row went while the exact variant was checked: the pick is now first.
+    type LiveMatches = (l: { _key: string }, t: number, max?: number) => Promise<unknown>;
+    const liveMatches = (page as unknown as { _liveMatches: ReturnType<typeof vi.fn<LiveMatches>> })._liveMatches;
+    const original = liveMatches.getMockImplementation()!;
+    liveMatches.mockImplementation(async (l, t, max) => {
+      const r = await original(l, t, max);
+      if (l._key === 'getByRole:button:exact') matches['getByRole:button'] = [row(100), row(200)];
+      return r;
+    });
+    matches['getByRole:button'] = [row(0), row(100), row(200)];
+    codes = (await suggestLiveLocators(fakeClient(() => []), 'emu', picked, { ios: false })).suggestions.map((s) => s.code);
+    expect(codes).toContain('webview.getByRole("button", { name: "Delete" }).nth(0)');
+    expect(codes).not.toContain('webview.getByRole("button", { name: "Delete" }).nth(1)');
+  });
+
   it('rejects a WebView candidate whose one match in the page is another element', async () => {
     const { page, matches } = fakePage();
     // An <a> without href is no link to the page; its one link is elsewhere.

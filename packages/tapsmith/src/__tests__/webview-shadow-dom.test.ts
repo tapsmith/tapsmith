@@ -585,6 +585,67 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
     expect(await handle.getByLabel('Hidden box').count()).toBe(1);
   });
 
+  it('treats aria-hidden case-insensitively everywhere, as Playwright does', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="v">Shown</button><button id="ah" aria-hidden="TRUE">AH</button></body>');
+    expect(await idsOf(handle, handle.getByRole('button')._finderAllJs)).toEqual(['v']);
+    expect(await idsOf(handle, handle.getByRole('button', { includeHidden: true })._finderAllJs)).toEqual(['v', 'ah']);
+    expect(await handle._dumpDomHierarchy()).toMatch(/webview-id="ah"[^>]*webview-a11y-hidden="true"/);
+  });
+
+  it('gives an unscoped <th> the role Playwright gives it from its neighbouring cells', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><table><tr><th id="c1">Plan</th><th id="c2">Price</th></tr>'
+      + '<tr><th id="r1">Basic</th><td>$1</td></tr><tr><th id="r2" scope="col">Pro</th><td>$2</td></tr></table>'
+      + '<table><tr><th id="only">Alone</th></tr></table></body>');
+    expect(await idsOf(handle, handle.getByRole('columnheader')._finderAllJs)).toEqual(['c1', 'c2', 'r2']);
+    expect(await idsOf(handle, handle.getByRole('rowheader', { name: 'Basic' })._finderAllJs)).toEqual(['r1']);
+    // The only cell of a one-row table heads nothing.
+    expect(await handle.getByRole('columnheader', { name: 'Alone' }).count()).toBe(0);
+  });
+
+  it('never puts a password\'s value into a name, while other fields\' values still name', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><label id="pl">PIN <input id="pin" type="password" value="hunter2"></label>'
+      + '<button id="go" aria-labelledby="pl">Go</button><label id="ql">Qty <input id="qty" value="3"></label>'
+      + '<button id="buy" aria-labelledby="ql">Buy</button></body>');
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'PIN', exact: true })._finderAllJs)).toEqual(['go']);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Qty 3', exact: true })._finderAllJs)).toEqual(['buy']);
+    expect(await idsOf(handle, handle.getByRole('textbox', { name: 'PIN' })._finderAllJs)).toEqual(['pin']);
+    expect(await handle._dumpDomHierarchy()).not.toContain('hunter2');
+  });
+
+  it('strips soft hyphens and zero-width spaces before trimming, as Playwright normalises text', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="co" aria-label="Check\u00adout">x</button>'
+      + '<button id="zw" aria-label="\u200b Save">y</button></body>');
+    expect(await idsOf(handle, handle.getByLabel('Checkout', { exact: true })._finderAllJs)).toEqual(['co']);
+    expect(await idsOf(handle, handle.getByRole('button', { name: 'Save', exact: true })._finderAllJs)).toEqual(['zw']);
+  });
+
+  it('keeps a RegExp\'s sticky flag, anchoring every test at the start', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><button id="s" aria-label="Save">a</button>'
+      + '<button id="q" aria-label="Quick Save">b</button></body>');
+    const sticky = handle.getByLabel(/Save/y);
+    expect(await idsOf(handle, sticky._finderAllJs)).toEqual(['s']);
+    expect(await idsOf(handle, sticky._finderAllJs)).toEqual(['s']);
+    expect(await handle.getByRole('button', { name: /Save/y }).count()).toBe(1);
+  });
+
+  it('suggests, in a strict-mode error, the label getByLabel reads, and only one that tells the matches apart', async () => {
+    const { handle } = handleOn('<!DOCTYPE html><body><span id="d">Save draft</span>'
+      + '<button aria-label="Save" aria-labelledby="d">a</button><button aria-label="Save">b</button>'
+      + '<button aria-label="Same">c</button><button aria-label="Same">d</button></body>');
+    const err = String(await handle.getByRole('button', { name: 'Sa' }).click().catch((e: unknown) => e));
+    expect(err).toContain('webview.getByLabel("Save draft", { exact: true })');
+    expect(err).toContain('webview.getByLabel("Save", { exact: true })');
+    expect(err).not.toContain('webview.getByLabel("Same"');
+  });
+
+  it('rejects a name that is only an inherited property, such as "constructor", as an unknown role', () => {
+    const { handle } = handleOn('<!DOCTYPE html><body></body>');
+    for (const role of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(() => handle.getByRole(role), role).toThrow(/unknown role/);
+      expect(parsedSelectorError(parseSelectorString(`webview.getByRole("${role}")`)!), role).toMatch(/unknown role/);
+    }
+  });
+
   it('throws at once on a role no element can have, an option it does not take, or a bad name', () => {
     const { handle } = handleOn('<!DOCTYPE html><body></body>');
     expect(() => handle.getByRole('textfeild')).toThrow(/unknown role "textfeild".*textbox.*textfield \(textbox, searchbox, spinbutton\)/);
@@ -708,6 +769,34 @@ describe('WebView getByRole and getByLabel match as Playwright\'s do (PILOT-1361
       const roots = parseHierarchyXml('<webview.div bounds="[0,0][10,10]" class="webview.div" webview-tag="div"'
         + ' webview-role="toast" text="Saved" webview="true" />');
       expect(generateSelectors(roots[0]!).map((g) => g.code).filter((c) => c.includes('getByRole'))).toEqual([]);
+    });
+
+    it('agrees on soft hyphens, full-length names and labels, and an old dump\'s input types', async () => {
+      const long = `${'A'.repeat(200)}Z`;
+      const { handle } = handleOn(`<!DOCTYPE html><body><button id="co" aria-label="Check\u00adout">x</button>`
+        + `<button id="long">${long}</button><label for="f">${long}</label><input id="f">`
+        + '<button id="s1">One</button><button id="s2">One</button></body>');
+      // Every element here has the same 10×10 box: two buttons with the same
+      // box and text are still two to the page.
+      const roots = parseHierarchyXml((await handle._dumpDomHierarchy())!);
+      for (const [code, locator] of [
+        ['webview.getByLabel("Checkout")', handle.getByLabel('Checkout')],
+        ['webview.getByRole("button", { name: "Checkout", exact: true })', handle.getByRole('button', { name: 'Checkout', exact: true })],
+        [`webview.getByRole("button", { name: "${long}", exact: true })`, handle.getByRole('button', { name: long, exact: true })],
+        [`webview.getByRole("button", { name: "${'A'.repeat(200)}", exact: true })`, handle.getByRole('button', { name: 'A'.repeat(200), exact: true })],
+        ['webview.getByLabel(/Z$/)', handle.getByLabel(/Z$/)],
+        ['webview.getByRole("button", { name: "One" })', handle.getByRole('button', { name: 'One' })],
+      ] as const) {
+        expect(count(roots, code), code).toBe(await locator.count());
+      }
+      expect(await handle.getByLabel('Checkout').count()).toBe(1);
+      expect(await handle.getByRole('button', { name: 'One' }).count()).toBe(2);
+      // A dump from before PILOT-1361 suggests and matches an input's type-given role alike.
+      const old = parseHierarchyXml('<webview.input bounds="[0,0][10,10]" class="webview.input" webview-tag="input"'
+        + ' webview-type="checkbox" webview="true" />');
+      const suggested = generateSelectors(old[0]!).map((g) => g.code).filter((c) => c.includes('getByRole'));
+      expect(suggested[0]).toMatch(/^webview\.getByRole\("checkbox"/);
+      expect(count(old, suggested[0]!)).toBe(1);
     });
 
     it('reads a dump from before PILOT-1361', () => {

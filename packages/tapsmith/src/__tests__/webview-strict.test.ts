@@ -20,6 +20,8 @@ interface ProbeMatch {
   id?: string
   testId?: string
   ariaLabel?: string
+  /** The label getByLabel reads; the aria-label by default. */
+  label?: string
   role?: string
   text?: string
   /** Whether the element has no child elements (the elements getByText finds). */
@@ -39,6 +41,7 @@ function probeOf(matches: ProbeMatch[], nthIndex = 0): WebViewLocatorProbe {
       id: m.id ?? '',
       testId: m.testId ?? '',
       ariaLabel: m.ariaLabel ?? '',
+      label: m.label ?? m.ariaLabel ?? '',
       role: m.role ?? '',
       text: m.text ?? '',
       leaf: m.leaf ?? true,

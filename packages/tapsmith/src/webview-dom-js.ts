@@ -60,7 +60,9 @@ export function unknownWebViewRoleMessage(role: string): string | null {
 /** The ARIA roles a webview.getByRole role name finds (case-insensitive), or undefined for an unknown name. */
 export function webViewRolesFor(role: string): readonly string[] | undefined {
   const wanted = role.toLowerCase();
-  return WEBVIEW_ROLE_ALIASES[wanted] ?? (ARIA_ROLES.includes(wanted) ? [wanted] : undefined);
+  // Own properties only: "constructor" is no alias.
+  if (Object.prototype.hasOwnProperty.call(WEBVIEW_ROLE_ALIASES, wanted)) return WEBVIEW_ROLE_ALIASES[wanted];
+  return ARIA_ROLES.includes(wanted) ? [wanted] : undefined;
 }
 
 /**
@@ -107,7 +109,7 @@ const HELPERS_JS = `(() => {
   // visibility: hidden.
   function a11yHidden(el) {
     for (let n = el; n; n = n.parentElement || n.getRootNode().host || null) {
-      if (n.getAttribute('aria-hidden') === 'true') return true;
+      if ((n.getAttribute('aria-hidden') || '').toLowerCase() === 'true') return true;
     }
     const style = getComputedStyle(el);
     if (el.getClientRects().length === 0 && style.display !== 'contents') return true;
@@ -204,7 +206,23 @@ const HELPERS_JS = `(() => {
     TEXTAREA: 'textbox', TFOOT: 'rowgroup',
     TH: (e) => {
       const scope = e.getAttribute('scope');
-      return scope === 'row' || scope === 'rowgroup' ? 'rowheader' : 'columnheader';
+      if (scope === 'col' || scope === 'colgroup') return 'columnheader';
+      if (scope === 'row' || scope === 'rowgroup') return 'rowheader';
+      // Without a scope, as Chromium reads it from the neighbouring cells.
+      const next = e.nextElementSibling;
+      const prev = e.previousElementSibling;
+      if (!next && !prev) {
+        // The only cell of a one-row table heads nothing.
+        const row = e.parentElement && tagOf(e.parentElement) === 'TR' ? e.parentElement : null;
+        const table = row ? closestCrossShadow(row, 'table') : null;
+        if (table && table.rows.length <= 1) return null;
+        return 'columnheader';
+      }
+      const isHeader = (c) => !!c && tagOf(c) === 'TH';
+      const isDataCell = (c) => !!c && tagOf(c) === 'TD' && !!((c.textContent || '').trim() || c.children.length > 0);
+      if (isHeader(next) && isHeader(prev)) return 'columnheader';
+      if (isDataCell(next) || isDataCell(prev)) return 'rowheader';
+      return 'columnheader';
     },
     THEAD: 'rowgroup', TIME: 'time', TR: 'row', UL: 'list',
   };
@@ -354,6 +372,8 @@ const HELPERS_JS = `(() => {
       if (!(by || []).includes(el)) {
         if (r === 'textbox') {
           o.visited.add(el);
+          // Never a password: names go into the hierarchy dump and traces.
+          if (t === 'INPUT' && String(el.type || '').toLowerCase() === 'password') return '';
           return t === 'INPUT' || t === 'TEXTAREA' ? (el.value || '') : (el.textContent || '');
         }
         if (r === 'combobox' || r === 'listbox') {
@@ -474,8 +494,9 @@ const HELPERS_JS = `(() => {
     o.visited.add(el);
     return '';
   }
-  // Whitespace as Playwright normalises it.
-  const norm = (s) => String(s).trim().replace(/\\u200b/g, '').replace(/\\s+/g, ' ');
+  // Whitespace as Playwright normalises it: zero-width spaces and soft
+  // hyphens out first, so neither hides an end's whitespace from the trim.
+  const norm = (s) => String(s).replace(/[\\u200b\\u00ad]/g, '').trim().replace(/\\s+/g, ' ');
   /** The element's accessible name, whitespace-normalised. */
   function name(el, includeHidden) {
     if (NAME_PROHIBITED_ROLES.includes(role(el) || '')) return '';
@@ -521,7 +542,7 @@ const HELPERS_JS = `(() => {
     const s = norm(m.s);
     return m.exact ? v === s : v.toLowerCase().includes(s.toLowerCase());
   }
-  return { all, queryAll, first, skipText, isLeaf, a11yHidden, role, name, labelTexts, textMatch };
+  return { all, queryAll, first, skipText, isLeaf, a11yHidden, role, name, labelTexts, textMatch, norm };
 })()`;
 
 /**

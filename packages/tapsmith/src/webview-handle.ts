@@ -44,8 +44,10 @@ export interface WebViewLabelOptions {
 /** The in-page matcher (webview-dom-js.ts `textMatch`) for a getBy* text argument. */
 function textMatcherJs(text: string | RegExp, exact: boolean | undefined): string {
   if (text instanceof RegExp) {
-    // A global or sticky RegExp keeps state between tests; Playwright's does not.
-    return JSON.stringify({ re: text.source, flags: text.flags.replace(/[gy]/g, '') });
+    // The page builds a fresh RegExp for every test, so a global one keeps no
+    // state between them and a sticky one is anchored at the start, as in
+    // Playwright.
+    return JSON.stringify({ re: text.source, flags: text.flags.replace(/[gd]/g, '') });
   }
   return JSON.stringify({ s: text, exact: !!exact });
 }
@@ -64,6 +66,8 @@ interface WebViewDomDescription {
   id: string
   testId: string
   ariaLabel: string
+  /** The first label text webview.getByLabel matches it by, whitespace-normalised ('' for none). */
+  label: string
   role: string
   text: string
   /** No child elements: the only kind of element webview.getByText finds. */
@@ -91,14 +95,21 @@ export interface WebViewLocatorProbe {
 }
 
 /** Best-effort unambiguous WebView locator suggestion for one DOM match. */
-function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string | undefined {
+function suggestWebViewSelectorFor(
+  d: WebViewDomDescription | undefined,
+  sample: readonly WebViewDomDescription[] = [],
+): string | undefined {
   if (!d) return undefined;
   // Copy-paste-safe string literals, like the native suggestions (PILOT-659).
   const lit = (v: string): string => `"${escapeJsString(v)}"`;
   if (d.testId && !d.inShadow) return `webview.getByTestId(${lit(d.testId)})`;
   if (d.id && !d.inShadow) return `webview.locator(${lit(cssIdSelector(d.id))})`;
-  // getByLabel matches a substring: exact pins this label (PILOT-1361).
-  if (d.ariaLabel) return `webview.getByLabel(${lit(d.ariaLabel)}, { exact: true })`;
+  // getByLabel matches a substring: exact pins this label (PILOT-1361). The
+  // label getByLabel reads (an aria-labelledby outranks an aria-label), and
+  // only when no other match shares it.
+  if (d.label && sample.every((other) => other === d || other.label !== d.label)) {
+    return `webview.getByLabel(${lit(d.label)}, { exact: true })`;
+  }
   // getByText finds leaf elements only: a parent's text would resolve to the
   // child holding it, or to nothing when it spans several (PILOT-666).
   if (d.text && d.leaf) {
@@ -157,7 +168,7 @@ function buildWebViewStrictError(loc: WebViewLocator, probe: WebViewLocatorProbe
   }));
   return buildStrictModeViolationError(`"${loc._selector}"`, elements, {
     totalCount: probe.count,
-    suggest: (_el, i) => suggestWebViewSelectorFor(probe.sample[i]),
+    suggest: (_el, i) => suggestWebViewSelectorFor(probe.sample[i], probe.sample),
   });
 }
 
@@ -657,7 +668,7 @@ export class WebViewHandle {
           return { found: true, value: (${opts.valueJs}) };
         })()`
       : 'undefined';
-    const probe = await this._evaluate(`(() => {
+    const probe = await this._evaluate(withDomHelpers(`(() => {
       const els = (${loc._finderAllJs});
       const vis = (el) => {
         // No client rects ⇒ not rendered at all (covers ancestors with
@@ -676,6 +687,7 @@ export class WebViewHandle {
           id: el.id || '',
           testId: el.getAttribute('data-testid') || '',
           ariaLabel: el.getAttribute('aria-label') || '',
+          label: __ts.norm(__ts.labelTexts(el).find((t) => __ts.norm(t)) || ''),
           role: el.getAttribute('role') || '',
           text: (el.textContent || '').trim().slice(0, 80),
           leaf: el.firstElementChild === null,
@@ -683,7 +695,7 @@ export class WebViewHandle {
         })),
         target: ${targetJs},
       };
-    })()`, timeoutMs);
+    })()`), timeoutMs);
     return probe as WebViewLocatorProbe;
   }
 
@@ -1001,8 +1013,9 @@ export class WebViewHandle {
           const kids = kidsOf(el);
           const r = el.getBoundingClientRect();
           if (r.width === 0 && r.height === 0) return kids.flatMap((child) => walk(child, depth));
-          const name = __ts.name(el).slice(0, 200);
-          const nameWithHidden = __ts.name(el, true).slice(0, 200);
+          // Whole, as the page matches them (a long name's end can matter).
+          const name = __ts.name(el);
+          const nameWithHidden = __ts.name(el, true);
           const node = {
             tag: tag,
             id: el.id || '',
@@ -1024,7 +1037,7 @@ export class WebViewHandle {
             // content changes it (an aria-hidden control, an icon's text).
             ariaLabelWithHidden: nameWithHidden !== name ? nameWithHidden : undefined,
             // Raw, as a getByLabel RegExp tests them; a string match normalises.
-            labels: __ts.labelTexts(el).map((t) => t.slice(0, 200)),
+            labels: __ts.labelTexts(el),
             // The attribute alone: what webview.getByLabel matches (PILOT-666).
             ariaLabelAttr: el.getAttribute('aria-label') || '',
             testId: el.getAttribute('data-testid') || '',
