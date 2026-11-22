@@ -49,11 +49,11 @@ const screens = [
 ] as const
 
 export default function HomeScreen() {
-  // Component-local state (here: the scroll offset) survives the warm reset's
-  // navigation, so scroll back to the top when the reset epoch changes. An
-  // imperative reset is preferred over remounting with `key={resetEpoch}`: on
-  // Android a remounted ScrollView exposes accessibility nodes with empty
-  // bounds until the next input event, which hides its items from UIAutomator.
+  // The root layout wraps the navigator in the reset hooks, which remount it
+  // on every reset, so this screen starts at the top anyway. The scroll-back
+  // stays for apps that mount the hooks beside their navigator, where the
+  // screen a reset lands on keeps its scroll offset: it is the docs' example
+  // of resetting one screen's state without remounting it.
   const resetEpoch = useTapsmithResetEpoch()
   const listRef = useRef<ScrollView>(null)
   useEffect(() => {

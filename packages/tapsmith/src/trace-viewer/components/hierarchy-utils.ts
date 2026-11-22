@@ -333,3 +333,27 @@ export function pathToNode(roots: HierarchyNode[], target: HierarchyNode): numbe
   };
   return walk(roots, []);
 }
+
+/**
+ * The root of an iOS in-app browser (SFSafariViewController), which the
+ * agent names by SafariViewService's identifier. Its page is
+ * SafariViewService's, not the app's: `device.webview()` cannot attach to
+ * it, so its content is matched with native locators only.
+ */
+export function isInAppBrowserRoot(node: HierarchyNode): boolean {
+  return (node.attributes.get('identifier') ?? '').startsWith('BrowserView?');
+}
+
+/**
+ * Whether a hierarchy dump shows a WebView of the app's own on screen: one
+ * `device.webview()` can connect to. An in-app browser's page does not count
+ * (`isInAppBrowserRoot`). The common answer is decided from the text alone;
+ * the dump is parsed only when it holds both a WebView and an in-app browser.
+ */
+export function hierarchyShowsAppWebView(xml: string): boolean {
+  if (!xml.includes('XCUIElementTypeWebView')) return xml.includes('android.webkit.WebView');
+  if (!xml.includes('identifier="BrowserView?')) return true;
+  const outsideBrowser = (node: HierarchyNode): boolean =>
+    !isInAppBrowserRoot(node) && (node.tagName === 'XCUIElementTypeWebView' || node.children.some(outsideBrowser));
+  return parseHierarchyXml(xml).some(outsideBrowser);
+}

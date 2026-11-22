@@ -86,6 +86,16 @@ function tabProbe(needle: string): Probe {
 }
 
 /**
+ * The words as a text field's typed value. getByText doesn't read what was
+ * typed into an Android field, while getByRole's name still
+ * matches it whole, so a getByText written for a field's value is told the
+ * locator that finds the field.
+ */
+function fieldValueProbe(needle: string): Probe {
+  return { selector: makeSelector({ type: 'role', value: { role: 'textfield', name: needle, exact: true } }) };
+}
+
+/**
  * The alternative selectors a miss of `selector` is checked against. Empty
  * for a scoped selector (the agent evaluates unscoped selectors only), a
  * RegExp needle under a text getter, and the id-like getters, whose values
@@ -113,10 +123,12 @@ export function nearMissProbes(selector: Selector): Probe[] {
     case 'text':
       return [
         { selector: makeSelector({ type: 'textContains', value: kind.value }) },
+        fieldValueProbe(kind.value),
         ...wordProbes(kind.value, ['textContains']),
         tabProbe(kind.value),
       ];
     case 'textContains':
+      return kind.value ? [fieldValueProbe(kind.value), ...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)] : [];
     case 'contentDesc':
     case 'label':
       return kind.value ? [...wordProbes(kind.value, [kind.type]), tabProbe(kind.value)] : [];

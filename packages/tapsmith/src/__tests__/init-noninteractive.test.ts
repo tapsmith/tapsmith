@@ -33,6 +33,8 @@ const baseEnv: EnvScan = {
     { name: 'Pixel_7', tagId: 'google_apis', apiLevel: 36 },
     { name: 'Pixel_8', tagId: 'google_apis', apiLevel: 36 },
   ],
+  androidDevices: [],
+  unusableAndroidDevices: [],
   isMacOS: true,
 };
 
@@ -1573,4 +1575,115 @@ describe('resolveInitPlan() on Flutter projects (PILOT-868)', () => {
     expect(err.fix).not.toContain('xcodebuild');
     expect(err.fix).toContain('--app <path>');
   }));
+});
+
+// ─── The running emulator and --device (PILOT-1201) ───
+
+describe('resolveInitPlan() with a running emulator or --device (PILOT-1201)', () => {
+  const env = (androidDevices: EnvScan['androidDevices']): EnvScan => ({
+    ...baseEnv,
+    avds: ['Pilot_Probe_API_28', 'Pixel_8', 'Phone_API_36'],
+    avdImages: [
+      { name: 'Pilot_Probe_API_28', tagId: 'google_apis', apiLevel: 28 },
+      { name: 'Pixel_8', tagId: 'google_apis', apiLevel: 34 },
+      { name: 'Phone_API_36', tagId: 'google_apis', apiLevel: 36 },
+    ],
+    androidDevices,
+  });
+  const android = (over: Partial<InitCommandOptions> = {}) => initArgs({ yes: true, platform: 'android', ...over });
+
+  it('writes the running emulator\'s AVD, not the first capable one in list order', () => {
+    const plan = resolveInitPlan(android(), env([{ serial: 'emulator-5560', avd: 'Pixel_8', held: false }]), detectStubs);
+    expect(plan.android).toMatchObject({ avd: 'Pixel_8', useEmulators: true });
+    expect(plan.android?.device).toBeUndefined();
+  });
+
+  it('with nothing running, picks the newest capture-capable AVD', () => {
+    const plan = resolveInitPlan(android(), env([]), detectStubs);
+    expect(plan.android?.avd).toBe('Phone_API_36');
+  });
+
+  it('skips an emulator another Tapsmith session holds, and one whose AVD name is unreadable', () => {
+    const plan = resolveInitPlan(android(), env([
+      { serial: 'emulator-5560', avd: 'Pilot_Probe_API_28', held: true },
+      { serial: 'emulator-5562', held: false },
+    ]), detectStubs);
+    expect(plan.android?.avd).toBe('Phone_API_36');
+  });
+
+  it('--device <emulator> writes that emulator\'s AVD', () => {
+    const plan = resolveInitPlan(android({ device: 'emulator-5580' }), env([
+      { serial: 'emulator-5560', avd: 'Pixel_8', held: false },
+      { serial: 'emulator-5580', avd: 'Pilot_Probe_API_28', held: false },
+    ]), detectStubs);
+    expect(plan.android).toMatchObject({ avd: 'Pilot_Probe_API_28', useEmulators: true, usePhysicalDevices: false });
+    expect(plan.android?.device).toBeUndefined();
+  });
+
+  it('--device <physical serial> pins device, and says the pin is this machine\'s', () => {
+    const plan = resolveInitPlan(android({ device: 'R5CT10ABCDE' }), env([{ serial: 'R5CT10ABCDE', held: false }]), detectStubs);
+    expect(plan.android).toMatchObject({ device: 'R5CT10ABCDE', useEmulators: false, usePhysicalDevices: true });
+    expect(plan.android?.avd).toBeUndefined();
+    expect(plan.warnings.join('\n')).toContain("device: 'R5CT10ABCDE'");
+  });
+
+  it('--device on an emulator whose AVD name cannot be read pins its serial', () => {
+    const plan = resolveInitPlan(android({ device: 'emulator-5562' }), env([{ serial: 'emulator-5562', held: false }]), detectStubs);
+    expect(plan.android).toMatchObject({ device: 'emulator-5562', useEmulators: false });
+    expect(plan.android?.avd).toBeUndefined();
+  });
+
+  it('--device that adb does not list is DEVICE_NOT_FOUND, listing what is connected', () => {
+    const err = expectInitError(
+      () => resolveInitPlan(android({ device: 'emulator-5554' }), env([{ serial: 'emulator-5560', avd: 'Pixel_8', held: false }]), detectStubs),
+      'DEVICE_NOT_FOUND',
+    );
+    expect(err.candidates).toEqual(['emulator-5560']);
+    expect(err.fix).toContain('adb devices');
+  });
+
+  it('--device on a device adb lists as unauthorized or offline says so, with the fix for that state', () => {
+    const unauthorized = expectInitError(
+      () => resolveInitPlan(android({ device: 'R5CT10ABCDE' }), { ...env([]), unusableAndroidDevices: [{ serial: 'R5CT10ABCDE', state: 'unauthorized' }] }, detectStubs),
+      'DEVICE_UNUSABLE',
+    );
+    expect(unauthorized.message).toContain('"unauthorized"');
+    expect(unauthorized.fix).toContain('Accept the USB debugging prompt');
+    const booting = expectInitError(
+      () => resolveInitPlan(android({ device: 'emulator-5554' }), { ...env([]), unusableAndroidDevices: [{ serial: 'emulator-5554', state: 'offline' }] }, detectStubs),
+      'DEVICE_UNUSABLE',
+    );
+    expect(booting.fix).toContain('finish booting');
+  });
+
+  it('--device with adb off PATH says adb is the problem, not the device', () => {
+    const err = expectInitError(
+      () => resolveInitPlan(android({ device: 'emulator-5554' }), { ...env([]), adbVersion: undefined, adbOffPath: '/sdk/platform-tools' }, detectStubs),
+      'ADB_NOT_FOUND',
+    );
+    expect(err.message).toContain('adb is not on PATH');
+    expect(err.fix).not.toContain('Start the emulator');
+  });
+
+  it('--device with an iOS-only setup points at --simulator', () => {
+    const err = expectInitError(
+      () => resolveInitPlan(initArgs({ yes: true, platform: 'ios', device: 'ABC-UDID' }), env([]), detectStubs),
+      'DEVICE_NEEDS_ANDROID',
+    );
+    expect(err.fix).toContain('--simulator');
+  });
+
+  it('refuses --device with --avd or --device-type', () => {
+    expectInitError(() => initArgs({ device: 'emulator-5554', avd: 'Pixel_8' }), 'CONFLICTING_FLAGS');
+    expectInitError(() => initArgs({ device: 'emulator-5554', deviceType: 'physical' }), 'CONFLICTING_FLAGS');
+    expect(initArgs({ device: 'emulator-5554' })).toMatchObject({ device: 'emulator-5554', anySetupFlag: true });
+  });
+
+  it('writes device: into the config, and a CI note above avd', () => {
+    const physical = generateConfig(['android'], { apkPath: 'a.apk', packageName: 'com.x', useEmulators: false, usePhysicalDevices: true, device: 'R5CT10ABCDE' }, undefined, false);
+    expect(physical).toContain("  device: 'R5CT10ABCDE',");
+    const emulator = generateConfig(['android'], { apkPath: 'a.apk', packageName: 'com.x', useEmulators: true, usePhysicalDevices: false, avd: 'Pixel_8' }, undefined, false);
+    expect(emulator).toContain("  avd: 'Pixel_8',");
+    expect(emulator).toMatch(/\/\/ .*CI/);
+  });
 });

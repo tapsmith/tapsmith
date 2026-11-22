@@ -10,7 +10,7 @@ import { fork, execFileSync, type ChildProcess } from 'node:child_process';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { normalizeGrep, resolveDeviceStrategy, type TapsmithConfig } from './config.js';
+import { normalizeGrep, type TapsmithConfig } from './config.js';
 import { sharedDeviceGroup } from './project.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { assignGroupMemberDevices, deviceGroupSize, resolveDeviceGroup, type DeviceGroupEntry } from './config.js';
@@ -36,6 +36,7 @@ import {
   cleanupStaleEmulators,
   resolveEmulatorLaunchSettings,
   prefilterDevicesForStrategy,
+  resolveAndroidDeviceTarget,
   selectDevicesForStrategy,
   filterPreferInstalledApp,
   listAdbDevices,
@@ -975,7 +976,6 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
 
   const { config, reporter, testFiles } = opts;
   const isIos = config.platform === 'ios';
-  const deviceStrategy = resolveDeviceStrategy(config);
   const launchProgress = opts.launchProgress;
   // One bucket of a multi-bucket run failing to start is not the run
   // failing: the other buckets still run, and coordinateBuckets writes the
@@ -1248,6 +1248,8 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
   );
 
   let launchedEmulators: LaunchedEmulator[] = [];
+  // On CI, the configured AVD is not on the machine: nothing is booted (PILOT-1201).
+  let avdMissingOnCi = false;
   let clonedSimulators: ClonedSimulator[] = [];
   let freshIosUdids = new Set<string>();
   let deviceSerials: string[];
@@ -1441,6 +1443,11 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       // but stay "occupied" for the emulator launch below.
       const unheldAndroid = withoutHeldDevices(androidDevices.map((d) => d.serial));
       for (const claim of unheldAndroid.held) note(skippedHeldDeviceMessage(claim));
+      // On CI a connected emulator stands in for an AVD the machine lacks (PILOT-1201).
+      const target = resolveAndroidDeviceTarget(config, unheldAndroid.free);
+      const { strategy: deviceStrategy, launchEmulators } = target;
+      avdMissingOnCi = target.avdMissingOnCi === true;
+      if (target.notice) note(target.notice);
       const prefilteredOnline = prefilterDevicesForStrategy(
         unheldAndroid.free,
         deviceStrategy,
@@ -1475,7 +1482,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       warnSkippedDevices(installedOnline.skippedDevices, launchProgress);
 
       if (
-        config.launchEmulators &&
+        launchEmulators &&
         installedOnline.selectedSerials.length < maxUsefulWorkers * groupSize
       ) {
         // Without adb the emulator would boot and the boot wait time out:
@@ -1528,7 +1535,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
               listBootedSimulators().filter((sim) => sim.name === config.simulator || sim.udid === config.simulator).map((sim) => sim.udid),
             ).held)
           // adb's state now, not at discovery: provisioning may have changed it.
-          : noOnlineDeviceMessage(config, listAdbDevices(), androidToolchainBlocker())
+          : noOnlineDeviceMessage({ ...config, avdMissingOnCi }, listAdbDevices(), androidToolchainBlocker())
             + heldDevicesNote(withoutHeldDevices(listAdbDevices().filter((d) => d.state === 'device').map((d) => d.serial)).held),
       );
     }

@@ -53,7 +53,7 @@ describe("nearMissProbes()", () => {
 
   it("checks an exact text as a substring first, and each word getter under the others", () => {
     vitestExpect(codes(_text("Welcome"))).toEqual([
-      'getByText("Welcome")', 'getByLabel("Welcome")', 'getByPlaceholder("Welcome")', 'getByDescription("Welcome")',
+      'getByText("Welcome")', 'getByRole("textfield", { name: "Welcome", exact: true })', 'getByLabel("Welcome")', 'getByPlaceholder("Welcome")', 'getByDescription("Welcome")',
       'getByRole("tab", { name: "Welcome" })',
     ]);
     vitestExpect(codes(_hint("Email"))).toEqual(['getByText("Email")', 'getByLabel("Email")', 'getByDescription("Email")']);
@@ -64,14 +64,14 @@ describe("nearMissProbes()", () => {
       'getByText("Close")', 'getByLabel("Close")', 'getByPlaceholder("Close")', 'getByRole("tab", { name: "Close" })',
     ]);
     vitestExpect(codes(_textContains("Hi"))).toEqual([
-      'getByLabel("Hi")', 'getByPlaceholder("Hi")', 'getByDescription("Hi")', 'getByRole("tab", { name: "Hi" })',
+      'getByRole("textfield", { name: "Hi", exact: true })', 'getByLabel("Hi")', 'getByPlaceholder("Hi")', 'getByDescription("Hi")', 'getByRole("tab", { name: "Hi" })',
     ]);
   });
 
   it("also checks words ending in punctuation without it, as text and description (PILOT-880)", () => {
     // On iOS a React Native link labelled "Forgot password" hides its "Forgot password?" text.
     vitestExpect(codes(_textContains("Forgot password?"))).toEqual([
-      'getByLabel("Forgot password?")', 'getByPlaceholder("Forgot password?")', 'getByDescription("Forgot password?")',
+      'getByRole("textfield", { name: "Forgot password?", exact: true })', 'getByLabel("Forgot password?")', 'getByPlaceholder("Forgot password?")', 'getByDescription("Forgot password?")',
       'getByText("Forgot password")', 'getByDescription("Forgot password")', 'getByRole("tab", { name: "Forgot password?" })',
     ]);
     vitestExpect(codes(_text("Done!")).slice(-3, -1)).toEqual(['getByText("Done")', 'getByDescription("Done")']);
@@ -83,9 +83,19 @@ describe("nearMissProbes()", () => {
     ]);
     // Punctuation alone, or none, adds nothing.
     vitestExpect(codes(_textContains("?"))).toEqual([
-      'getByLabel("?")', 'getByPlaceholder("?")', 'getByDescription("?")', 'getByRole("tab", { name: "?" })',
+      'getByRole("textfield", { name: "?", exact: true })', 'getByLabel("?")', 'getByPlaceholder("?")', 'getByDescription("?")', 'getByRole("tab", { name: "?" })',
     ]);
-    vitestExpect(codes(_textContains("Hi")).length).toBe(4);
+    vitestExpect(codes(_textContains("Hi")).length).toBe(5);
+  });
+
+  it("checks a text's words as a text field's typed value, which getByText doesn't read (PILOT-1404)", () => {
+    const field = 'getByRole("textfield", { name: "old@value.com", exact: true })';
+    vitestExpect(codes(_text("old@value.com"))).toContain(field);
+    vitestExpect(codes(_textContains("old@value.com"))).toContain(field);
+    // Not for the getters that never read a field's text.
+    for (const s of [_label("old@value.com"), _hint("old@value.com"), _contentDesc("old@value.com"), _role("button", { name: "old@value.com" })]) {
+      vitestExpect(codes(s).join()).not.toContain('getByRole("textfield"');
+    }
   });
 
   it("checks the words as a tab's name for a description, a text, a label or another role's name", () => {

@@ -1267,6 +1267,16 @@ describe('tap()', () => {
     expect(err.message).not.toContain('name: "a@b.c"');
   });
 
+  it("never suggests getByText for an Android text field's typed value (PILOT-1404)", () => {
+    // getByText doesn't match a field by what was typed into it.
+    const err = buildStrictModeViolationError('getByRole("textbox")', [
+      makeElementInfo({ role: '', className: 'android.widget.EditText', text: 'Apollo 11', hint: '', contentDescription: '' }),
+      makeElementInfo({ role: '', className: 'android.widget.TextView', text: 'Apollo 12' }),
+    ]);
+    expect(err.message).not.toContain('getByText("Apollo 11"');
+    expect(err.message).toContain('aka device.getByText("Apollo 12", { exact: true })');
+  });
+
   it('suggests getByTestId only for an RN testID, never the name part of a native id (PILOT-659)', () => {
     const err = buildStrictModeViolationError('getByRole("image")', [
       makeElementInfo({ role: 'image', resourceId: 'avatar' }),
@@ -3212,6 +3222,28 @@ describe('count()/all()/allTextContents() re-read a stale snapshot until it sett
     const handle = new ElementHandle(makeMockClient({ findElements }), _role('listitem'), 5000);
     expect(await withFakeClock(5000, () => handle.count())).toBe(3);
     expect(calls).toBe(2);
+  });
+});
+
+// ─── filter({ hasText }) skips a text field's typed value (PILOT-1404) ───
+
+describe("filter({ hasText }) on an Android text field", () => {
+  const fieldAndRow = () => new ElementHandle(makeMockClient({
+    findElements: vi.fn(async () => makeFindElementsResponse([
+      makeElementInfo({ elementId: 'f', className: 'android.widget.EditText', text: 'Apollo 11', hint: 'Search', bounds: { left: 0, top: 0, right: 100, bottom: 50 } }),
+      makeElementInfo({ elementId: 'r', className: 'android.widget.TextView', text: 'Apollo 11', bounds: { left: 0, top: 50, right: 100, bottom: 100 } }),
+    ])),
+  }), _className('android.view.View'), 5000);
+
+  it("doesn't read the typed value as text, by a string or a RegExp", async () => {
+    for (const hasText of ['Apollo', /^Apollo 11$/]) {
+      expect((await fieldAndRow().filter({ hasText }).all()).length).toBe(1);
+      expect((await fieldAndRow().filter({ hasText }).find()).elementId).toBe('r');
+    }
+  });
+
+  it('hasNotText keeps the field', async () => {
+    expect((await fieldAndRow().filter({ hasNotText: 'Apollo' }).find()).elementId).toBe('f');
   });
 });
 

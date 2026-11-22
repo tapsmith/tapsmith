@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Keyboard, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatMarker, BOOT_TOKEN } from './protocol.js';
 import { currentResetEpoch, subscribeResetEpoch } from './epoch.js';
@@ -60,6 +60,20 @@ export interface TapsmithTestHooksProps {
    * the flag in an npm-installed Expo Release build.
    */
   enabled?: boolean;
+  /**
+   * The app to remount on every reset: wrap the root navigator
+   * (`<TapsmithTestHooks …><Stack /></TapsmithTestHooks>`). A reset then
+   * leaves no screen holding React state from the previous test — a tab
+   * navigator keeps every visited tab's screen mounted, and a reset that
+   * lands on the screen already showing keeps that one — so the app starts
+   * each test as a fresh launch would, on the route the reset asked for.
+   * The navigation container must sit above the hooks, since it holds the
+   * route that the remounted navigator picks back up: expo-router's root
+   * layout already renders inside its container; a bare React Navigation app
+   * puts the hooks inside `<NavigationContainer>`, never around it.
+   * Rendered as-is, never remounted, when the hooks are disabled.
+   */
+  children?: ReactNode;
 }
 
 /** React Native's keyboard, for blurring the focused input on reset. */
@@ -74,15 +88,16 @@ const keyboardDeps: KeyboardDeps = {
 };
 
 /**
- * Mount once at the root of the app. Renders an invisible, always-present
+ * Mount once at the root of the app, wrapping the root navigator so every
+ * reset remounts the app (see `children`). Renders an invisible, always-present
  * marker in the accessibility tree that tells Tapsmith the app can be reset
  * in-process (and acknowledges each reset by bumping an epoch), and listens
  * for the reset deep links Tapsmith opens. Tapsmith reads the marker from the
  * hierarchy; no locator matches it.
  *
- * Renders nothing and registers nothing when disabled (production).
+ * Renders only its children and registers nothing when disabled (production).
  */
-export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPrefix, scheme, enabled }: TapsmithTestHooksProps) {
+export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPrefix, scheme, enabled, children }: TapsmithTestHooksProps) {
   const active = enabled ?? hooksEnabledByDefault();
   // Per process, not per mount (see link-state.ts): a remount keeps them.
   const epoch = useSyncExternalStore(subscribeResetEpoch, currentResetEpoch);
@@ -154,12 +169,17 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
     };
   }, [active]);
 
-  if (!active) return null;
+  const wraps = children !== undefined;
+  if (!active) return wraps ? <>{children}</> : null;
 
   // The write count is published only when Tapsmith can act on it: the app
   // can reset while keeping its data, and every tracked store is counted.
   const reportsWrites = !!onReload && !!stores && trackable !== false;
-  const marker = formatMarker({ epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error, ...(reportsWrites ? { writes } : {}) });
+  const marker = formatMarker({
+    epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error,
+    ...(reportsWrites ? { writes } : {}),
+    ...(wraps ? { remount: true } : {}),
+  });
 
   // The marker. Deliberately screen-sized rather than tucked into a corner: a
   // platform's own UI can sit on top of a corner — Android's three-button
@@ -180,12 +200,23 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
   // grey text in the bottom-right corner, which showed in every screenshot
   // (PILOT-830). Tapsmith reads the marker from the hierarchy dump, and its
   // locators never match it, so nothing on screen needs it.
+  //
+  // Wrapped children are keyed on the epoch, which advances only once the
+  // reset's clear and handlers have finished: the whole app remounts in the
+  // same commit that acknowledges the reset, so Tapsmith never sees the ack
+  // before the fresh screens, and they read the already-cleared stores. A
+  // remounted React Navigation navigator picks its state back up from the
+  // navigation container above it (see `children`), so the app stays on the
+  // route the reset link opened; only the screens' own state starts over.
   return (
-    <View pointerEvents="none" style={styles.carrier} importantForAccessibility="yes">
-      <Text testID="tapsmith-hooks" style={styles.carrierText}>
-        {marker}
-      </Text>
-    </View>
+    <>
+      {wraps ? <Fragment key={epoch}>{children}</Fragment> : null}
+      <View pointerEvents="none" style={styles.carrier} importantForAccessibility="yes">
+        <Text testID="tapsmith-hooks" style={styles.carrierText}>
+          {marker}
+        </Text>
+      </View>
+    </>
   );
 }
 

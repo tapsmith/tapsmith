@@ -121,6 +121,25 @@ describe('a label-less text field is named by its placeholder', () => {
     expect(code).toBe('device.getByRole("textfield", { name: "Email" })');
     expect(findMatchingNodes([node], parseSelectorString(code)!)).toHaveLength(1);
   });
+
+  it("Android: never suggests getByText for a text field's typed value (PILOT-1404)", () => {
+    const node = makeNode('node', { class: 'android.widget.EditText', text: 'Apollo 11', hint: 'Search Wikipedia' });
+    const codes = generateSelectors(node).map((s) => s.code);
+    expect(codes.some((c) => c.startsWith('device.getByText('))).toBe(false);
+    expect(findMatchingNodes([node], parseSelectorString('device.getByText("Apollo 11")')!)).toHaveLength(0);
+  });
+
+  it("Android: getByText finds the result typed into a search field, not the field (PILOT-1404)", () => {
+    const field = makeNode('node', { class: 'android.widget.EditText', text: 'Apollo 11', hint: 'Search Wikipedia' });
+    const result = makeNode('node', { class: 'android.widget.TextView', text: 'Apollo 11' });
+    const root = makeNode('node', { class: 'android.widget.FrameLayout', text: '' }, [field, result]);
+    for (const code of ['device.getByText("Apollo 11", { exact: true })', 'device.getByText("apollo")', 'device.getByText(/^Apollo 11$/)']) {
+      expect(findMatchingNodes([root], parseSelectorString(code)!), code).toEqual([result]);
+    }
+    // An empty field's hint, reported as its text, is still its text.
+    const empty = makeNode('node', { class: 'android.widget.EditText', text: 'Search Wikipedia', hint: 'Search Wikipedia' });
+    expect(findMatchingNodes([empty], parseSelectorString('device.getByText("Search Wikipedia")')!)).toHaveLength(1);
+  });
 });
 
 // ─── Native selector priority order ───
@@ -128,8 +147,10 @@ describe('a label-less text field is named by its placeholder', () => {
 describe('generateNativeSelectors priority order', () => {
   it('follows Testing Library priority: Role+name > Label > Description > Placeholder > Text > TestID', () => {
     const node = makeNode('node', {
+      // An empty field reports its hint as its text, which getByText reads
+      // (a typed value it does not: PILOT-1404).
       class: 'android.widget.EditText',
-      text: 'current value',
+      text: 'Enter email',
       'content-desc': 'Email',
       hint: 'Enter email',
       // An RN testID: a package-qualified id gets no getByTestId (PILOT-659).

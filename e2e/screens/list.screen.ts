@@ -5,6 +5,7 @@ export class ListScreen {
 
   get itemCount() { return this.device.getByTestId("item-count") }
   get selectedCount() { return this.device.getByTestId("selected-count") }
+  get searchField() { return this.device.getByTestId("search-input") }
   // The "Item N" rows only: a substring "Item" also matches "30 items" and
   // the "Search items..." field, as getByText ignores case (PILOT-522).
   get allItems() { return this.device.getByText(/^Item \d+$/) }

@@ -2544,6 +2544,12 @@ async function startAgentFromConfig(
           agentApk,
           agentTestApk,
           iosXctestrun,
+          undefined,
+          false,
+          false,
+          // Every launch of the app this session (launch_app, a run's
+          // resets) then starts the config's activity (PILOT-1402).
+          config?.activity ?? '',
         );
         // A refusal is an answer, not an error: the daemon's reason is in it.
         if (res?.success === false) throw new Error(res.errorMessage || 'the daemon refused to start the agent');
