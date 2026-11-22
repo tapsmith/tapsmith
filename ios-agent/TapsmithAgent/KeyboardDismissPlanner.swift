@@ -97,26 +97,34 @@ struct KeyboardDismissPlanner {
     typealias Node = OcclusionAnalyzer.Node
 
     /// A way of dismissing the keyboard, in the order they are tried.
-    enum Strategy: CaseIterable {
-        case scrollSwipe, dismissKey, blankTap, returnKey
+    enum Strategy {
+        case scrollSwipe, dismissKey, blankTap, scrollerBlankTap, returnKey
 
         var summary: String {
             switch self {
             case .scrollSwipe: return "dragging a scroll view"
             case .dismissKey: return "the keyboard's dismiss key"
             case .blankTap: return "tapping a blank spot"
+            case .scrollerBlankTap: return "tapping a blank spot in the target's scroll view"
             case .returnKey: return "the return key"
             }
         }
     }
 
+    /// Strategies `hideKeyboard` uses, in order. Not the blank tap in a
+    /// target's scroll view: hideKeyboard has no target.
+    static let hideKeyboardStrategies: [Strategy] = [.scrollSwipe, .dismissKey, .blankTap, .returnKey]
+
     /// Strategies a touch's keyboard-first step may use (PILOT-622), in
     /// order. A blank tap: it is what the user's own first tap would have
-    /// done on a React Native ScrollView. Never the drag, which scrolls the
+    /// done on a React Native ScrollView — first in the scroll view the
+    /// target is in, the one that would eat the touch (PILOT-1432: a search
+    /// field above a list sits in a plain view, where a tap beside the field
+    /// leaves the keyboard up), then beside the field. Never the drag, which scrolls the
     /// content even when the keyboard stays (then the touch would no longer
     /// go ahead as before), and never the return key, which submits the
     /// field — the touch about to be made may be that submit.
-    static let keyboardFirstStrategies: [Strategy] = [.blankTap, .dismissKey]
+    static let keyboardFirstStrategies: [Strategy] = [.scrollerBlankTap, .blankTap, .dismissKey]
 
     /// What happened to a strategy: it ran and the keyboard stayed, or it was
     /// not possible on this screen (the reason says why).
@@ -450,6 +458,37 @@ struct KeyboardDismissPlanner {
             if rect.isNull { continue }
             let point = clearestPoint(in: rect, avoiding: statusBar.map { [$0] } ?? []) { i in
                 if fieldAncestors.contains(i) { return false }
+                return !isPlain(i)
+            }
+            if let point { return point }
+        }
+        return nil
+    }
+
+    /// A blank spot inside the scroll view `target` is in (keyboard first,
+    /// PILOT-1432): above the keyboard and below the status bar, clear of
+    /// everything but plain containers and the scroll views around it, the
+    /// spot furthest from anything else. That scroll view is the one a
+    /// React Native ScrollView with `keyboardShouldPersistTaps` "never" or
+    /// "handled" puts the keyboard away for on a touch no child takes — the
+    /// touch it would otherwise spend the target's tap on. The innermost
+    /// such scroll view is tried first, then the ones around it. nil when
+    /// the target is not found in the tree, is in no scroll view, or no
+    /// scroll view of it has such a spot on screen.
+    func blankPointInScroller(of target: OcclusionAnalyzer.Target) -> CGPoint? {
+        let area = touchableArea
+        guard !area.isNull, let t = analyzer.locate(target) else { return nil }
+        let up = analyzer.ancestors(of: t)
+        for scroller in up where OcclusionAnalyzer.keyboardEatingScrollerTypes.contains(nodes[scroller].elementType) {
+            let rect = clippedToScrollers(nodes[scroller].frame.intersection(area), around: scroller)
+            if rect.isNull { continue }
+            // The scroll view and what holds it are where the touch lands:
+            // plain containers and enclosing scroll views do not take it.
+            let transparent = Set([scroller] + analyzer.ancestors(of: scroller).filter {
+                isPlain($0) || OcclusionAnalyzer.scrollerTypes.contains(nodes[$0].elementType)
+            })
+            let point = clearestPoint(in: rect, avoiding: statusBar.map { [$0] } ?? []) { i in
+                if transparent.contains(i) { return false }
                 return !isPlain(i)
             }
             if let point { return point }

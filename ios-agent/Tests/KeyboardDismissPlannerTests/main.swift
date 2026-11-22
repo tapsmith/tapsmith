@@ -1093,6 +1093,117 @@ do {
     checkTrue("failure message says what to do", message.contains("device.pressKey(\"enter\")"), message)
 }
 
+// PILOT-1432: the keyboard-first step's blank tap inside the scroll view the
+// target is in. On a search screen the field sits above a React Native list,
+// in a plain view that does not put the keyboard away when tapped; the list
+// does, so the blank spot must be in the list.
+let listSearchField = R(16, 132, 370, 44)
+/// /list with the keyboard up: a search field and two counts above a
+/// FlatList whose rows (React Native touchables) keep a 16 pt margin either
+/// side and 8 pt apart.
+func listScreen(rows count: Int, rowFrame: (Int) -> CGRect = { R(16, 242 + Double($0) * 66, 370, 58) }) -> [Row] {
+    appHead + [
+        (4, .searchField, "Search", "search-input", listSearchField),
+        (4, .staticText, "30 items", "item-count", R(16, 192, 370, 17)),
+        (4, .staticText, "0 selected", "selected-count", R(16, 217, 370, 17)),
+        (4, .scrollView, "Shopping list", "", R(0, 242, 402, 632)),
+        (5, .other, "", "", R(0, 242, 402, max(632, Double(count) * 66))),
+    ] + (0..<count).flatMap { i -> [Row] in
+        [
+            (6, .other, "", "", rowFrame(i)),
+            (7, .button, "Item \(i + 1)", "item-\(i + 1)", rowFrame(i)),
+            (8, .staticText, "Item \(i + 1)", "", rowFrame(i).insetBy(dx: 16, dy: 12)),
+        ]
+    } + keyboardWindows()
+}
+func rowTarget(_ i: Int, _ frame: CGRect = R(16, 242 + Double(0) * 66, 370, 58)) -> OcclusionAnalyzer.Target {
+    .init(frame: frame, elementType: .button, label: "Item \(i + 1)", identifier: "item-\(i + 1)")
+}
+let listViewport = R(0, 242, 402, 529 - 242)
+
+do {
+    // Every row of a full list on screen: only the side margins are blank.
+    let rows = listScreen(rows: 30)
+    let p = planner(rows).blankPointInScroller(of: rowTarget(1, R(16, 308, 370, 58)))
+    checkTrue("packed list: a blank spot in the list", p.map { listViewport.contains($0) } ?? false, "\(String(describing: p))")
+    checkTrue("packed list: the blank spot is clear of every row",
+              p.map { p in notInside(p, (0..<30).map { R(16, 242 + Double($0) * 66, 370, 58) }) } ?? false,
+              "\(String(describing: p))")
+    // The field-scope blank spot is outside the list: the plain view the
+    // field sits in, which does not put the keyboard away.
+    let fieldSpot = planner(rows).blankPoint(focusedFrame: listSearchField)
+    checkTrue("packed list: the field's own blank spot is outside the list",
+              fieldSpot.map { !R(0, 242, 402, 632).contains($0) } ?? true, "\(String(describing: fieldSpot))")
+}
+
+do {
+    // One row left after filtering: the empty list below it is blank.
+    let p = planner(listScreen(rows: 1)).blankPointInScroller(of: rowTarget(0))
+    checkTrue("filtered list: a blank spot in the list", p.map { listViewport.contains($0) } ?? false, "\(String(describing: p))")
+    checkTrue("filtered list: clear of the row", p.map { notInside($0, [R(16, 242, 370, 58)]) } ?? false, "\(String(describing: p))")
+}
+
+do {
+    // Rows edge to edge with no gaps: nothing in the list is blank.
+    let rows = listScreen(rows: 30, rowFrame: { R(0, 242 + Double($0) * 58, 402, 58) })
+    check("edge-to-edge rows: no blank spot in the list",
+          planner(rows).blankPointInScroller(of: rowTarget(0, R(0, 242, 402, 58))), nil)
+}
+
+do {
+    // A target in no scroll view, or not in the tree: no spot.
+    check("target in no scroll view: none",
+          planner(occlusion).blankPointInScroller(
+              of: .init(frame: R(16, 325, 370, 56), elementType: .button, label: "Covered action", identifier: "")),
+          nil)
+    check("target not in the tree: none",
+          planner(listScreen(rows: 1)).blankPointInScroller(
+              of: .init(frame: R(1, 2, 3, 4), elementType: .button, label: "Gone", identifier: "")),
+          nil)
+    check("no keyboard: none",
+          planner(Array(listScreen(rows: 1).dropLast(keyboardWindows().count))).blankPointInScroller(of: rowTarget(0)), nil)
+}
+
+do {
+    // A list entirely under the keyboard has no visible blank spot.
+    let rows: [Row] = appHead + [
+        (4, .searchField, "Search", "search-input", listSearchField),
+        (4, .scrollView, "", "", R(0, 560, 402, 314)),
+        (5, .button, "Item 1", "item-1", R(16, 560, 370, 58)),
+    ] + keyboardWindows()
+    check("list under the keyboard: none", planner(rows).blankPointInScroller(of: rowTarget(0, R(16, 560, 370, 58))), nil)
+}
+
+do {
+    // A bar from elsewhere drawn over the list blocks the spot under it.
+    let bar = R(0, 300, 402, 229)
+    var rows = listScreen(rows: 1)
+    rows.insert((4, .button, "Floating action", "", bar), at: appHead.count + 5 + 3)
+    let p = planner(rows).blankPointInScroller(of: rowTarget(0))
+    checkTrue("bar over the list blocks the spot", p.map { notInside($0, [bar, R(16, 242, 370, 58)]) } ?? true,
+              "\(String(describing: p))")
+}
+
+do {
+    // A horizontal carousel inside the vertical list: the spot may be in the
+    // carousel or the list around it (a touch in either is a touch in the
+    // list), and the outer scroll view does not block the inner one's.
+    let rows: [Row] = appHead + [
+        (4, .searchField, "Search", "search-input", listSearchField),
+        (4, .scrollView, "", "", R(0, 242, 402, 632)),
+        (5, .scrollView, "", "", R(0, 242, 402, 120)),
+        (6, .button, "Card 1", "", R(16, 250, 150, 104)),
+        (6, .button, "Card 2", "", R(182, 250, 150, 104)),
+        (6, .button, "Card 3", "", R(348, 250, 150, 104)),
+    ] + keyboardWindows()
+    let p = planner(rows).blankPointInScroller(
+        of: .init(frame: R(16, 250, 150, 104), elementType: .button, label: "Card 1", identifier: ""))
+    checkTrue("carousel in a list: a spot in the list", p.map { listViewport.contains($0) } ?? false, "\(String(describing: p))")
+    checkTrue("carousel in a list: clear of the cards",
+              p.map { notInside($0, [R(16, 250, 150, 104), R(182, 250, 150, 104), R(348, 250, 150, 104)]) } ?? false,
+              "\(String(describing: p))")
+}
+
 // PILOT-622: when the keyboard-first step runs, and for how long.
 func checkGate(_ name: String, _ ok: Bool) {
     if ok { print("ok   \(name)") } else { failures += 1; print("FAIL \(name)") }
@@ -1115,8 +1226,10 @@ checkGate("too little time: skipped",
           KeyboardFirstGate.stepDeadline(now: t0, readDeadline: t0.addingTimeInterval(KeyboardFirstGate.minRemaining - 0.1)) == nil)
 checkGate("unknown daemon deadline: the full length",
           KeyboardFirstGate.stepDeadline(now: t0, readDeadline: nil) == t0.addingTimeInterval(KeyboardFirstGate.maxStep))
-checkGate("the blank tap comes first",
-          KeyboardDismissPlanner.keyboardFirstStrategies.first == .blankTap)
+checkGate("the blank tap in the target's scroll view comes first, then beside the field",
+          KeyboardDismissPlanner.keyboardFirstStrategies.prefix(2) == [.scrollerBlankTap, .blankTap])
+checkGate("hideKeyboard has no target, so no blank tap in its scroll view",
+          !KeyboardDismissPlanner.hideKeyboardStrategies.contains(.scrollerBlankTap))
 checkGate("no drag: it would scroll the content even when the keyboard stays",
           !KeyboardDismissPlanner.keyboardFirstStrategies.contains(.scrollSwipe))
 
