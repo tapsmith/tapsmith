@@ -7316,7 +7316,8 @@ fn unresolved_launcher_message(
     if !installed {
         return format!(
             "Failed to launch app: {package_name} is not installed on the device. \
-             Install it first, or set `apk` in tapsmith.config.ts to its APK so Tapsmith installs it."
+             Install it first (for the config's app, set `apk` in tapsmith.config.ts to its APK \
+             and Tapsmith installs it)."
         );
     }
     let what = match refused {
