@@ -1669,8 +1669,27 @@ async function invokeHook(
   } catch (err) {
     // The traced action the hook was stuck in ends failed in the trace.
     if (isRunnerTimeoutError(err)) bound.traceCollector?.failPendingOperation(err.message);
-    throw err;
+    throw labelHookError(err, bound, where);
   }
+}
+
+/** Errors already prefixed with their hook, so one thrown twice is not labelled twice. */
+const labelledHookErrors = new WeakSet<Error>();
+
+/**
+ * A setup hook's (beforeEach/beforeAll) error, its message prefixed with the
+ * hook and where it was registered: the error is reported under the test's
+ * name, and an SDK error's stack may hold no frame of the hook. A skip, a
+ * stop and a hook timeout (whose message already names the hook) pass through.
+ */
+function labelHookError(err: unknown, bound: HookBound, where: string): unknown {
+  if (bound.kind !== 'beforeEach' && bound.kind !== 'beforeAll') return err;
+  if (isTestSkip(err) || isAbortError(err) || isRunnerTimeoutError(err) || bound.abortSignal?.aborted) return err;
+  const error = err instanceof Error ? err : new Error(String(err));
+  if (labelledHookErrors.has(error)) return error;
+  labelledHookErrors.add(error);
+  error.message = `"${bound.kind}" hook${where} failed: ${error.message}`;
+  return error;
 }
 
 /**

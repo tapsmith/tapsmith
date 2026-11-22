@@ -2457,9 +2457,9 @@ describe('beforeAll failure marks all tests as failed', () => {
     const flat = collectResults(result);
     expect(flat).toHaveLength(2);
     expect(flat[0].status).toBe('failed');
-    expect(flat[0].error?.message).toBe('setup exploded');
+    expect(flat[0].error?.message).toBe('"beforeAll" hook failed: setup exploded');
     expect(flat[1].status).toBe('failed');
-    expect(flat[1].error?.message).toBe('setup exploded');
+    expect(flat[1].error?.message).toBe('"beforeAll" hook failed: setup exploded');
   });
 
   it('marks nested describe tests as failed', async () => {
@@ -2474,7 +2474,7 @@ describe('beforeAll failure marks all tests as failed', () => {
     expect(flat).toHaveLength(1);
     expect(flat[0].status).toBe('failed');
     expect(flat[0].fullName).toBe('root > inner > nested-test');
-    expect(flat[0].error?.message).toBe('boom');
+    expect(flat[0].error?.message).toBe('"beforeAll" hook failed: boom');
   });
 });
 
