@@ -3213,6 +3213,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               if (msg.setupError !== undefined && worker.currentFile) {
                 const n = failUnservableFile(worker.currentFile, msg.setupError);
                 failed += n;
+                // Per worker too: its device is held for inspection at run end.
+                worker.failed += n;
                 if (n > 0) {
                   anyFailed = true;
                   if (worker.currentFile.projectName) failedProjectsInDispatch.add(worker.currentFile.projectName);

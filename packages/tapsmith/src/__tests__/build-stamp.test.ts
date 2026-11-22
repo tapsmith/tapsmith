@@ -45,12 +45,37 @@ describe('localBuildStamp', () => {
     const first = await localBuildStamp(apk);
     expect(first).toMatch(/^file:/);
     expect(await localBuildStamp(apk)).toBe(first);
-    // A rebuild that keeps the size and lands in the same mtime tick still
-    // writes a new file (gradle replaces the output).
-    const mtime = fs.statSync(apk).mtime;
-    fs.rmSync(apk);
+  });
+
+  it('changes when an APK is replaced by a same-size file with the same mtime (gradle writes a new file)', async () => {
+    const apk = path.join(ROOT, 'replaced.apk');
+    // Whole seconds: exactly representable, so the mtime alone cannot differ.
+    const mtime = new Date(1_700_000_000_000);
+    fs.writeFileSync(apk, 'apk v1');
+    fs.utimesSync(apk, mtime, mtime);
+    const first = await localBuildStamp(apk);
+    // Written beside the original while it still exists (no inode reuse),
+    // then renamed over it.
+    const next = path.join(ROOT, 'replaced.apk.tmp');
+    fs.writeFileSync(next, 'apk v2');
+    fs.utimesSync(next, mtime, mtime);
+    fs.renameSync(next, apk);
+    expect(fs.statSync(apk).mtimeMs).toBe(mtime.getTime());
+    expect(await localBuildStamp(apk)).not.toBe(first);
+  });
+
+  it('changes when an APK is rewritten in place with its size and mtime restored', async () => {
+    const apk = path.join(ROOT, 'in-place.apk');
+    const mtime = new Date(1_700_000_000_000);
+    fs.writeFileSync(apk, 'apk v1');
+    fs.utimesSync(apk, mtime, mtime);
+    const first = await localBuildStamp(apk);
+    const ino = fs.statSync(apk).ino;
+    // The change time has a clock tick to move by.
+    await new Promise((r) => setTimeout(r, 20));
     fs.writeFileSync(apk, 'apk v2');
     fs.utimesSync(apk, mtime, mtime);
+    expect(fs.statSync(apk).ino).toBe(ino);
     expect(await localBuildStamp(apk)).not.toBe(first);
   });
 

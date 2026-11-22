@@ -613,15 +613,26 @@ async function installedBuildStamp(config: TapsmithConfig, serial: string, artif
   return config.platform === 'ios'
     // Where the last proof of this same build found the bundle: a watch or
     // MCP child is a fresh process, and asking simctl again costs most of a
-    // second per run. Never another app's: the token must name this artifact.
-    ? installedSimulatorAppStamp(serial, config.package, simulatorContainerOf(verifiedBuilds.get(serial), artifact))
+    // second per run. Never another app's: the token must name this bundle
+    // id and artifact.
+    ? installedSimulatorAppStamp(serial, config.package, simulatorContainerOf(verifiedBuilds.get(serial), config.package, artifact))
     : installedApkStamp(serial, config.package);
 }
 
-/** The simulator container path a verified-build token for `artifact` holds (`<artifact>\n…\napp:<container>:<hash>`), if any. */
-function simulatorContainerOf(token: string | undefined, artifact: string): string | undefined {
-  const [tokenArtifact, , installed] = token?.split('\n') ?? [];
-  if (tokenArtifact !== artifact || !installed?.startsWith('app:')) return undefined;
+/**
+ * The record of a passed check: the app's id, the build's path, and the
+ * stamps of the build on disk and of the device's copy. The id is part of
+ * it, so a config that names another app with the same build path never
+ * matches (or reuses the other app's simulator container).
+ */
+function verifiedBuildToken(config: TapsmithConfig, artifact: string, local: string | undefined, installed: string | undefined): string | undefined {
+  return config.package && local && installed ? `${config.package}\n${artifact}\n${local}\n${installed}` : undefined;
+}
+
+/** The simulator container path a verified-build token for `bundleId` and `artifact` holds (`<bundleId>\n<artifact>\n…\napp:<container>:<hash>`), if any. */
+function simulatorContainerOf(token: string | undefined, bundleId: string, artifact: string): string | undefined {
+  const [tokenBundleId, tokenArtifact, , installed] = token?.split('\n') ?? [];
+  if (tokenBundleId !== bundleId || tokenArtifact !== artifact || !installed?.startsWith('app:')) return undefined;
   const end = installed.lastIndexOf(':');
   return end > 4 ? installed.slice(4, end) : undefined;
 }
@@ -629,9 +640,8 @@ function simulatorContainerOf(token: string | undefined, artifact: string): stri
 /**
  * The startup install check, recording a matching build as the device's
  * verified one, so the first check of a long-lived session that follows is
- * the cheap one. Both stamps are taken as the check starts (the device's in
- * the background, alongside it), so a build another tool installs while the
- * check runs never gets recorded. A build this check installs is not
+ * the cheap one. Both stamps are read before the check starts, so a build
+ * another tool installs while the check runs never gets recorded. A build this check installs is not
  * recorded: nothing ties the copy found after the install to the install,
  * so the session's first check compares it in full once (unless the copy
  * cannot be compared at all, see below).
@@ -650,27 +660,24 @@ async function checkInstallAndRemember(
   }
   // A physical iPhone has no simulator container: it stamps as `undefined`,
   // and nothing is recorded (its later checks never run).
-  // The local stamp is awaited: a `.app` is a tree walk that would otherwise
-  // trail the comparison and could read a rebuild written meanwhile. The
-  // device's runs alongside (a reinstall elsewhere moves or fails it).
-  const installedBefore = artifact ? installedBuildStamp(config, serial, artifact) : undefined;
-  installedBefore?.catch(() => {});
-  const localBefore = artifact ? await localBuildStamp(artifact) : undefined;
-  const stamps = installedBefore ? installedBefore.then((installed) => [localBefore, installed] as const) : undefined;
-  stamps?.catch(() => {});
+  // Both stamps are read before the comparison starts (together, so the
+  // tree walk and the device query overlap): one read during it could see a
+  // rebuild, or another tool's install, that the comparison never saw.
+  const [localBefore, installedBefore] = artifact
+    ? await Promise.all([localBuildStamp(artifact), installedBuildStamp(config, serial, artifact).catch(() => undefined)])
+    : [undefined, undefined];
   const install = await installAppUnderTest(config, device, serial, opts);
-  if (stamps && !install.installed) {
-    void stamps.then(([built, installed]) => {
-      if (built && installed) verifiedBuilds.set(serial, `${artifact}\n${built}\n${installed}`);
-    }).catch(() => {});
+  if (artifact && !install.installed) {
+    const verified = verifiedBuildToken(config, artifact, localBefore, installedBefore);
+    if (verified !== undefined) verifiedBuilds.set(serial, verified);
   } else if (artifact && localBefore && install.uncompared) {
     // A device whose copy cannot be compared reinstalls on every full check:
     // the copy found after this install is the best evidence there is.
     const built = localBefore;
     const verifiedArtifact = artifact;
     void (install.pending ?? Promise.resolve()).then(async () => {
-      const installed = await installedBuildStamp(config, serial, verifiedArtifact);
-      if (built && installed) verifiedBuilds.set(serial, `${artifact}\n${built}\n${installed}`);
+      const verified = verifiedBuildToken(config, verifiedArtifact, built, await installedBuildStamp(config, serial, verifiedArtifact));
+      if (verified !== undefined) verifiedBuilds.set(serial, verified);
     }).catch(() => {});
   }
   return install;
@@ -723,8 +730,7 @@ export async function reinstallChangedBuild(
   // Stamped before the check, so a build written while it runs is never
   // recorded as the one it compared.
   const [local, before] = await Promise.all([localBuildStamp(artifact), installedBuildStamp(config, serial, artifact)]);
-  const token = (installed: string | undefined): string | undefined =>
-    local && installed ? `${artifact}\n${local}\n${installed}` : undefined;
+  const token = (installed: string | undefined): string | undefined => verifiedBuildToken(config, artifact, local, installed);
   const known = token(before);
   if (known !== undefined && verifiedBuilds.get(serial) === known) return { reinstalled: false };
 
@@ -756,6 +762,9 @@ export async function reinstallChangedBuild(
     : install.uncompared ? `Reinstalled ${name} (could not compare it with the installed build)`
       : `Reinstalled ${name} (build changed since the last run)`;
   opts.onProgress?.(`relaunching ${config.package} after the reinstall`);
+  // Hook detection described the old build, and only ever upgrades: the
+  // relaunch probes the new one afresh (in place, as the runner shares it).
+  if (session.context.capabilities) delete session.context.capabilities.hooksDetected;
   try {
     // Always from cleared data: a reinstall keeps the old build's data, and
     // the agent that launches a freshly installed app at its own start is

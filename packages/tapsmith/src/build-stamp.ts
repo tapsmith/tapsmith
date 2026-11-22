@@ -55,15 +55,16 @@ async function treeStamp(root: string): Promise<string> {
 }
 
 /**
- * The stamp of a build on disk: an APK's size, modification time and inode
- * (a rebuild that writes a new file changes the inode even within one mtime
- * tick), or a `.app` bundle's whole tree. `undefined` when it cannot be read.
+ * The stamp of a build on disk: an APK's size, modification time, inode and
+ * change time (a rebuild that writes a new file changes the inode even within
+ * one mtime tick, and one that rewrites it in place and restores its mtime
+ * still moves its ctime), or a `.app` bundle's whole tree. `undefined` when it cannot be read.
  */
 export async function localBuildStamp(artifact: string): Promise<string | undefined> {
   try {
     const st = await fs.promises.stat(artifact);
     if (st.isDirectory()) return `tree:${await treeStamp(artifact)}`;
-    return `file:${st.size}:${st.mtimeMs}:${st.ino}`;
+    return `file:${st.size}:${st.mtimeMs}:${st.ino}:${st.ctimeMs}`;
   } catch {
     return undefined;
   }
