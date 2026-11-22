@@ -169,6 +169,10 @@ When a test fails and retries are configured, Tapsmith re-runs the entire test f
 
 The final status is determined by the last attempt. If attempt 2 passes, the test is reported as "passed" (marked as "flaky" in reporters that support it). `afterEach` hooks run after every attempt, including failed ones.
 
+### When the device session breaks
+
+If a test fails because the device session broke (the automation agent lost its connection, the device rebooted), Tapsmith recovers the session and runs the test file again, so its `beforeAll` hooks run against the recovered app. If that run hits the same kind of error, Tapsmith stops the file there. Each test it did not reach is reported as failed (or skipped, if it would have been skipped anyway), with an error that starts `Did not run:` and names the error that stopped the file, so the summary and every report still count all of the file's tests. With `--workers`, the worker that hit the error twice is retired and the file runs again on another worker.
+
 ### Tracing only retried tests
 
 To minimize overhead, you can record traces only when a test is being retried:
