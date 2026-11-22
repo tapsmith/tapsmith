@@ -1,6 +1,6 @@
 # @tapsmith/react-native
 
-In-app reset hooks for [Tapsmith](https://tapsmith.dev). One line in your app's root turns Tapsmith's between-test app reset from a cold relaunch (7–13 s on an iOS simulator) into an acknowledged in-process reset (well under a second). Resets still happen once per test file by default; because they are now cheap, a file that needs a fresh app before **every test** can opt in with `test.use({ appResetScope: 'test' })`.
+In-app reset hooks for [Tapsmith](https://tapsmith.dev). One component around your app's root navigator turns Tapsmith's between-test app reset from a cold relaunch (7–13 s on an iOS simulator) into an acknowledged in-process reset (well under a second). Resets still happen once per test file by default; because they are now cheap, a file that needs a fresh app before **every test** can opt in with `test.use({ appResetScope: 'test' })`.
 
 ```tsx
 // app/_layout.tsx or src/app/_layout.tsx (Expo Router) — or your root component
@@ -10,17 +10,19 @@ import { TapsmithTestHooks } from '@tapsmith/react-native';
 
 export default function RootLayout() {
   return (
-    <>
+    <TapsmithTestHooks
+      urlPrefix={Linking.createURL('/')}
+      enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === '1'}
+    >
       <Stack />
-      <TapsmithTestHooks
-        urlPrefix={Linking.createURL('/')}
-        enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === '1'}
-      />
-    </>
+    </TapsmithTestHooks>
   );
 }
 ```
 
+Wrap your root navigator (`<Stack />`, `<Tabs />`, or the default template's `<AppTabs />`): the hooks remount it after every reset, so no screen keeps React state from the previous test. Mounted beside the navigator instead, they remount nothing, and a screen that stays mounted — every visited tab of a tab navigator — keeps its state into the next test.
+
+- `children` — your root navigator, remounted after every reset (rendered as-is when the hooks are disabled).
 - `clear` — stores to wipe on every reset (anything with `clear()` or `clearAll()`, e.g. `[AsyncStorage]` from `@react-native-async-storage/async-storage`, which the stock Expo template does not include, or an MMKV instance).
 - `onReset` — your own reset (sign out, drop in-memory state, reset navigation).
 - `onReload` + `track` — keep a restored `appState` between tests: `track` lists the stores the app persists data in (counted writes), and `onReload` drops in-memory state and reads it back from storage. While a test writes nothing, the next test's reset runs `onReload` instead of restoring the archive and relaunching. Report writes the hooks cannot see with `markTapsmithWrite()`. See [Keeping restored app state between tests](https://tapsmith.dev/guides/warm-reset/#keeping-restored-app-state-between-tests).

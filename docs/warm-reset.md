@@ -4,7 +4,7 @@ Tapsmith resets your app to a known state before tests (see [Test isolation](wri
 
 ## Add the in-app hooks
 
-Install `@tapsmith/react-native` in your app and mount it once at the root:
+Install `@tapsmith/react-native` in your app and mount it once at the root, **wrapped around your root navigator**:
 
 ```bash
 npm install @tapsmith/react-native
@@ -18,16 +18,17 @@ import { TapsmithTestHooks } from "@tapsmith/react-native"
 
 export default function RootLayout() {
   return (
-    <>
+    <TapsmithTestHooks
+      urlPrefix={Linking.createURL("/")}
+      enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+    >
       <Stack />
-      <TapsmithTestHooks
-        urlPrefix={Linking.createURL("/")}
-        enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
-      />
-    </>
+    </TapsmithTestHooks>
   )
 }
 ```
+
+Wrap whatever navigator your root layout renders: `<Stack />`, `<Tabs />`, or the `<NativeTabs>` of the default `create-expo-app` template (its `<AppTabs />`). Providers your screens need (a theme, auth, a query client) can stay outside it. Wrapping is what makes each reset a fresh start: the hooks remount everything inside them after every reset, so no screen keeps React state from the previous test. Without it, a tab navigator keeps every tab you visited mounted, with its state, and a test that expects an empty list finds the previous test's items (see [What a warm reset does not clear](#what-a-warm-reset-does-not-clear)). When the hooks are disabled, they render the navigator as it is and never remount it.
 
 Keep the `enabled` line exactly as written, in your app's own code: it is what lets a Release build made for tests turn the hooks on (see [Release builds for e2e](#release-builds-for-e2e)).
 
@@ -40,13 +41,16 @@ import AsyncStorage from "@react-native-async-storage/async-storage"
   urlPrefix={Linking.createURL("/")}
   enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
   clear={[AsyncStorage]}
-/>
+>
+  <Stack />
+</TapsmithTestHooks>
 ```
 
-That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'` detects the hooks in the app's accessibility tree and the file-entry reset switches from clear + relaunch (5-10 s) to a warm in-app reset (~1 s). Scopes whose tests need a fresh app before *every* test opt in with `test.use({ appResetScope: 'test' })` — each of those resets is warm too. Your existing `beforeEach` resets keep working (the lint rule `tapsmith/prefer-app-reset-option` will point out the ones that are now redundant).
+Together, wrapping the navigator and passing `clear` give each test what a fresh launch would: cleared stores, and every screen mounted anew. **No Tapsmith config changes**: `appReset: 'auto'` detects the hooks in the app's accessibility tree and the file-entry reset switches from clear + relaunch (5-10 s) to a warm in-app reset (~1 s). Scopes whose tests need a fresh app before *every* test opt in with `test.use({ appResetScope: 'test' })` — each of those resets is warm too. Your existing `beforeEach` resets keep working (the lint rule `tapsmith/prefer-app-reset-option` will point out the ones that are now redundant).
 
 | Prop | Purpose |
 |---|---|
+| `children` | Your root navigator. Remounted after every reset, so no screen keeps React state from the previous test; the app stays on the route the reset opened. Rendered as-is when the hooks are disabled. |
 | `clear` | Stores to wipe on every reset — anything with `clear()` or `clearAll()`: AsyncStorage, MMKV, … |
 | `onReset` | Your own reset: sign out, drop in-memory caches, reset navigation. Receives `{ target, nonce }`; if it navigates, navigate to `target` — that is the route the reset (and an `appResetRoute`) asked for, and Tapsmith cannot see where the app ends up. `target` is the route's path without its query: a query in `appResetRoute` (`'/settings?tab=2'`) reaches your app only with the reset link itself, so a handler that navigates again drops it. |
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
@@ -69,7 +73,17 @@ In a bare React Native app, which does not inline `EXPO_PUBLIC_*` variables, pas
 
 ## What a warm reset does not clear
 
-The reset clears storage and re-navigates, but React keeps component-local state that survives navigation — and a reset that lands on the screen already showing (a per-test `appResetRoute`, after the previous test on the same screen) does not remount it at all: a `ScrollView` offset, an uncontrolled `TextInput`, an animation value. If a test relies on such state being fresh (for example, tapping a link at the top of a home list that an earlier test scrolled), reset it when the epoch changes:
+A warm reset keeps the app's process running: it clears the stores in `clear`, runs `onReset`, and opens a link to the start route. With the navigator wrapped in `<TapsmithTestHooks>`, the hooks then remount the whole navigator, so the next test starts on fresh screens, as after a launch.
+
+With the hooks mounted beside the navigator instead (`<Stack /><TapsmithTestHooks … />`, as earlier versions of this guide showed), nothing remounts. Every screen that stays mounted keeps its React state, and some of it gets written back to storage after the clear:
+
+- a **tab navigator** (`Tabs`, `NativeTabs`, including the default `create-expo-app` template) keeps every tab you visited mounted, so a counter, a list held in `useState`, or a typed-in form survives into the next test;
+- a reset that lands on the **screen already showing** (a per-test `appResetRoute`, after the previous test on the same screen) does not remount it at all;
+- a `ScrollView` offset, an uncontrolled `TextInput`, an animation value.
+
+The reset still reports success, so the test fails as an ordinary locator timeout ("expected … to be visible"). Tapsmith adds a warning to a test that fails right after such a reset, pointing here. Wrap the navigator, rebuild the app, and the warning goes away.
+
+To reset one screen's state without remounting it, follow the reset epoch:
 
 ```tsx
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
@@ -84,7 +98,9 @@ export default function HomeScreen() {
 }
 ```
 
-`useTapsmithResetEpoch()` returns the number of resets acknowledged in this process — it changes after every reset and is `0` at launch, so it costs nothing in production builds where the hooks are disabled. Prefer an imperative reset like this over remounting with `key={resetEpoch}`: on Android a remounted `ScrollView` exposes accessibility nodes with empty bounds until the next input event, which hides its items from UIAutomator.
+`useTapsmithResetEpoch()` returns the number of resets acknowledged in this process — it changes after every reset and is `0` at launch, so it costs nothing in production builds where the hooks are disabled.
+
+Nothing outside the hooks remounts, wrapped or not: a provider above them (an auth context, a Redux store, a query cache) keeps its state, so reset it in `onReset`.
 
 ## Keeping restored app state between tests
 
@@ -94,8 +110,9 @@ Most tests only read that data, though. If nothing was written since the restore
 
 ```tsx
 import AsyncStorage from "@react-native-async-storage/async-storage"
+import type { ReactNode } from "react"
 
-function Hooks() {
+function Hooks({ children }: { children: ReactNode }) {
   const { reloadFromStorage, resetAppState } = useAuth()
   return (
     <TapsmithTestHooks
@@ -105,10 +122,14 @@ function Hooks() {
       onReset={resetAppState}
       track={[AsyncStorage]}
       onReload={reloadFromStorage}
-    />
+    >
+      {children}
+    </TapsmithTestHooks>
   )
 }
 ```
+
+Render it inside your auth provider, around the navigator (`<AuthProvider><Hooks><Stack /></Hooks></AuthProvider>`). A keep reset remounts the navigator too, so screens read the kept data back as they would at launch. A screen that writes to a tracked store when it mounts (saving what it just loaded) makes that a write, and the next restore of the archive goes cold.
 
 `onReload` should leave the app as a fresh launch with the same stored data would: for a signed-in session, re-read the session from storage rather than clear it. It is the only handler a keep reset runs — `clear`, `onReset` and handlers added with `registerTapsmithReset` do not run — so it must also drop whatever in-memory state those reset (a Redux store, a query cache), and cancel writes the app has scheduled but not made yet (a debounced save): a fresh launch would never make them.
 
