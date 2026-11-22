@@ -975,13 +975,71 @@
       "matches": true
     },
     {
-      "why": "a text field's typed value is text",
+      "why": "a text field's typed value is not text",
       "platform": "android",
       "type": "android.widget.EditText",
       "text": "ada@example.com",
       "placeholder": "Email",
       "query": {
         "exact": "ada@example.com"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor by substring",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "text": "Apollo 11",
+      "placeholder": "Search Wikipedia",
+      "query": {
+        "substring": "apollo"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor by RegExp",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "text": "Apollo 11",
+      "placeholder": "Search Wikipedia",
+      "query": {
+        "source": "^Apollo",
+        "flags": "",
+        "pattern": "\\AApollo",
+        "ignoreCase": false
+      },
+      "matches": false
+    },
+    {
+      "why": "nor with no hint",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "text": "Apollo 11",
+      "query": {
+        "exact": "Apollo 11"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor a Material field's",
+      "platform": "android",
+      "type": "com.google.android.material.textfield.TextInputEditText",
+      "text": "Apollo 11",
+      "placeholder": "Search",
+      "query": {
+        "exact": "Apollo 11"
+      },
+      "matches": false
+    },
+    {
+      "why": "an empty field with no hint is no text, as any empty node",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "query": {
+        "source": "^$",
+        "flags": "",
+        "pattern": "\\A\\z",
+        "ignoreCase": false
       },
       "matches": true
     },
@@ -993,6 +1051,39 @@
       "placeholder": "Email",
       "query": {
         "exact": "Email"
+      },
+      "matches": true
+    },
+    {
+      "why": "by substring too",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "text": "Search Wikipedia",
+      "placeholder": "Search Wikipedia",
+      "query": {
+        "substring": "search"
+      },
+      "matches": true
+    },
+    {
+      "why": "a typed value equal to the hint reads as the hint",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "text": "Email",
+      "placeholder": "Email",
+      "query": {
+        "substring": "mail"
+      },
+      "matches": true
+    },
+    {
+      "why": "a TextView's text is text",
+      "platform": "android",
+      "type": "android.widget.TextView",
+      "text": "Apollo 11",
+      "placeholder": "Search",
+      "query": {
+        "exact": "Apollo 11"
       },
       "matches": true
     },

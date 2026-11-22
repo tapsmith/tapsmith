@@ -547,6 +547,18 @@ function backButtonName(node: HierarchyNode): string {
 }
 
 /**
+ * Whether an Android node's text is a text field's typed value: an EditText's
+ * text, unless it is the hint an empty field reports as its text. getByText
+ * never matches it, as Playwright's never matches an `<input>`'s value — the
+ * Android agent's textIsFieldValue.
+ */
+export function textIsFieldValue(node: HierarchyNode): boolean {
+  const text = node.attributes.get('text');
+  return !!text && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
+    && text !== node.attributes.get('hint');
+}
+
+/**
  * Whether an Android EditText's text is its hint — what an empty field
  * reports as its text — which names it only through {@link placeholderName},
  * so a described field is named by its description alone (PILOT-834).
@@ -670,6 +682,9 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector, pare
     if (!isWebViewNode(node)) return false;
     return webViewNodeMatchesSelector(node, selector);
   }
+
+  // A text field's typed value is no getByText text (PILOT-1404).
+  if (TEXT_SELECTOR_TYPES.has(selector.type) && textIsFieldValue(node)) return false;
 
   // Native selector types match native nodes
   switch (selector.type) {
