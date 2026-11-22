@@ -5,9 +5,9 @@ import { HomeScreen } from "../screens/home.screen"
 // debug builds (test-app/plugins/with-leakcanary-launcher.js), which opens the
 // native settings screen. `resolve-activity` answers the system chooser for
 // such an app and `monkey -c LAUNCHER` may start either entry, so every launch
-// path must start the app's own MainActivity (PILOT-1402). Under a config
-// without `activity` (tapsmith.config.android-ci.mjs) that is the daemon's
-// launcher resolution; under one with it, the configured activity.
+// path must start the app's own MainActivity (PILOT-1402). The configs that
+// run this file set no `activity`, so this is the daemon's launcher
+// resolution.
 async function expectOwnLauncherActivity(device: Device) {
   await expect(new HomeScreen(device).header).toBeVisible()
   expect(await device.currentActivity()).toMatch(/\.MainActivity$/)
