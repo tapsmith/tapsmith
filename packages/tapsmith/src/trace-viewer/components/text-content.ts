@@ -1,5 +1,7 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
+import { getNodeBounds } from './hierarchy-utils.js';
 import { IOS_NAME_ONLY_TYPES, iosTextValue } from '../../ios-text-content.js';
+import { iosIsChoice } from '../../roles.js';
 
 // ─── iOS text content for getByText (PILOT-794) ───
 //
@@ -22,6 +24,13 @@ import { IOS_NAME_ONLY_TYPES, iosTextValue } from '../../ios-text-content.js';
 // - Innermost: a getByText match that contains another match is dropped
 //   (findMatchingNodes), and so is a generic wrapper that only echoes a
 //   name-only descendant's label on its bounds (an RN image, PILOT-1366).
+// - A checkbox or radio button matched by its label gives way to another
+//   match beside it (on the same line) whose text its label holds
+//   (iosWithoutChoices): React Native hides
+//   a checkbox's own texts inside it, so its label is the only copy of a text
+//   it shows, but a text on screen as another element is that element's, and
+//   the checkbox's label only names it ("Toggle Buy oat milk" beside "Buy oat
+//   milk").
 
 /** An iOS node's label, title and value as text content: each empty when it isn't. */
 export interface IosTexts {
@@ -95,4 +104,37 @@ export function iosTextMatchesSubstring(texts: IosTexts, query: string): boolean
 /** getByText(RegExp) on iOS: tested against the raw label, title or value. */
 export function iosTextMatchesRegex(texts: IosTexts, re: RegExp): boolean {
   return [texts.label, texts.title, texts.value].some((t) => re.test(t));
+}
+
+/**
+ * getByText's iOS matches without each checkbox or radio button (iosIsChoice)
+ * beside which another match shows a text its label holds — the agent's
+ * `TextContent.withoutChoices`. Beside is on the same line: the two bounds'
+ * vertical extents overlap. A match shows its label and title, and a static
+ * text its value; the label holds one case-insensitively, whitespace
+ * normalized. A choice with no such neighbour keeps its match: its label is
+ * the only copy of a text inside it. Matches from elsewhere (Android, a
+ * WebView) are never choices.
+ */
+export function iosWithoutChoices(matches: HierarchyNode[]): HierarchyNode[] {
+  const isChoice = (node: HierarchyNode): boolean => !node.attributes.has('class')
+    && node.attributes.get('webview') !== 'true'
+    && iosIsChoice(node.attributes.get('type') ?? node.tagName, node.attributes.get('value'));
+  const others = matches.filter((node) => !isChoice(node)).map((node) => {
+    const texts = [node.attributes.get('label') ?? '', node.attributes.get('title') ?? ''];
+    if ((node.attributes.get('type') ?? node.tagName) === 'XCUIElementTypeStaticText') texts.push(node.attributes.get('value') ?? '');
+    return { bounds: getNodeBounds(node), texts: texts.map((t) => normalize(t).toLowerCase()).filter((t) => t !== '') };
+  }).filter((other) => other.texts.length > 0);
+  if (others.length === 0) return matches;
+  return matches.filter((node) => {
+    if (!isChoice(node)) return true;
+    const label = normalize(node.attributes.get('label') ?? '').toLowerCase();
+    const own = getNodeBounds(node);
+    return !others.some((other) => onSameLine(own, other.bounds) && other.texts.some((t) => label.includes(t)));
+  });
+}
+
+/** Whether two nodes' bounds share a line: their vertical extents overlap (TextContent.onSameLine). */
+function onSameLine(a: { top: number; bottom: number } | null, b: { top: number; bottom: number } | null): boolean {
+  return a !== null && b !== null && a.bottom > a.top && b.bottom > b.top && a.top < b.bottom && b.top < a.bottom;
 }

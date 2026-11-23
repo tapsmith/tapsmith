@@ -1,5 +1,5 @@
 import { decodeXmlEntities } from '../../xml-entities.js';
-import { ANDROID_ROLE_CLASSES } from '../../roles.js';
+import { ANDROID_ROLE_CLASSES, iosIsChoice } from '../../roles.js';
 import { webViewRolesFor } from '../../webview-dom-js.js';
 import { isHooksMarkerCarrier } from './non-app-nodes.js';
 
@@ -237,12 +237,32 @@ const ANDROID_LABEL_FIELD_CLASSES: ReadonlySet<string> = new Set(
   ANDROID_LABEL_FIELD_ROLES.flatMap((role) => ANDROID_ROLE_CLASSES[role] ?? []),
 );
 
-/** Whether the runtime's getByLabel can find this node: a native input of a type or class the agent looks at. */
+/**
+ * Whether the runtime's getByLabel can find this node: a native input of a
+ * type or class the agent looks at, or on iOS a React Native checkbox or
+ * radio button, a generic view described as one (iosIsChoice).
+ */
 export function isLabelField(node: HierarchyNode): boolean {
   if (node.attributes.get('webview') === 'true') return false;
   const className = node.attributes.get('class');
   if (className !== undefined) return ANDROID_LABEL_FIELD_CLASSES.has(className);
-  return IOS_LABEL_FIELD_TYPES.has(node.attributes.get('type') ?? node.tagName);
+  const type = node.attributes.get('type') ?? node.tagName;
+  return IOS_LABEL_FIELD_TYPES.has(type) || iosIsChoice(type, node.attributes.get('value'));
+}
+
+/**
+ * The label of an iOS text view that holds one text twice, without the
+ * repeat ("Notes" for "Notes Notes"), else ''. React Native appends an empty
+ * multi-line input's placeholder to its label, so one whose placeholder
+ * repeats its accessibilityLabel reads "Notes Notes" until it holds text —
+ * the agent's `LabelMatch.unrepeated`. Whitespace-normalized.
+ */
+export function iosUnrepeatedLabel(label: string): string {
+  const normalized = label.replace(/\s+/g, ' ').trim();
+  if (normalized.length % 2 === 0) return '';
+  const half = (normalized.length - 1) / 2;
+  const head = normalized.slice(0, half);
+  return head !== '' && normalized[half] === ' ' && normalized.slice(half + 1) === head ? head : '';
 }
 
 /**

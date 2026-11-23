@@ -485,7 +485,7 @@ enum RoleMapping {
     /// value with ("checkbox" in "checkbox, unchecked"), lowercased — or nil.
     /// Only the first part counts: the states and the app's own value text
     /// follow it, and a value text of "Alert" doesn't make a radio an alert.
-    private static func describedRole(in value: String?) -> String? {
+    static func describedRole(in value: String?) -> String? {
         guard let first = value?.split(separator: ",", omittingEmptySubsequences: false).first else { return nil }
         let part = first.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return otherRoleDescriptions.values.contains(part) ? part : nil

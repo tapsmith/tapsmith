@@ -16,4 +16,7 @@ export class NativeTabsScreen {
   get exploreContent() { return this.device.getByText("Explore content", { exact: true }) }
   get countUp() { return this.device.getByRole("button", { name: "Count up" }) }
   exploreCount(n: number) { return this.device.getByText(`Explore count: ${n}`, { exact: true }) }
+  /** Pushes the detail screen onto the Explore tab's own stack. */
+  get openDetail() { return this.device.getByRole("button", { name: "Open detail" }) }
+  get exploreDetail() { return this.device.getByText("Explore detail", { exact: true }) }
 }

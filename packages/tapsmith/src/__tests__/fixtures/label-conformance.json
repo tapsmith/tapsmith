@@ -127,6 +127,153 @@
       "matches": false
     },
     {
+      "why": "React Native checkbox",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Toggle Buy oat milk",
+      "value": "checkbox, unchecked",
+      "query": "Toggle Buy oat milk",
+      "matches": true
+    },
+    {
+      "why": "React Native checked checkbox",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Toggle Buy oat milk",
+      "value": "checkbox, checked",
+      "query": "Toggle Buy oat milk",
+      "matches": true
+    },
+    {
+      "why": "React Native radio button",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Small",
+      "value": "radio button, unchecked",
+      "query": "Small",
+      "matches": true
+    },
+    {
+      "why": "RegExp on a React Native checkbox",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Toggle Buy oat milk",
+      "value": "checkbox, unchecked",
+      "query": {
+        "source": "oat milk$",
+        "flags": "",
+        "pattern": "oat\\u0020milk\\z",
+        "ignoreCase": false
+      },
+      "matches": true
+    },
+    {
+      "why": "a React Native checkbox is compared whole",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Toggle Buy oat milk",
+      "value": "checkbox, unchecked",
+      "query": "Buy oat milk",
+      "matches": false
+    },
+    {
+      "why": "a React Native combo box is not an input",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Country",
+      "value": "combo box",
+      "query": "Country",
+      "matches": false
+    },
+    {
+      "why": "a React Native alert is not an input",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Saved",
+      "value": "alert",
+      "query": "Saved",
+      "matches": false
+    },
+    {
+      "why": "only the value's lead part describes the role",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "label": "Plan",
+      "value": "Basic, checkbox",
+      "query": "Plan",
+      "matches": false
+    },
+    {
+      "why": "a button described as a checkbox is still a button",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "label": "Remember me",
+      "value": "checkbox, unchecked",
+      "query": "Remember me",
+      "matches": false
+    },
+    {
+      "why": "an empty React Native multi-line input whose placeholder repeats its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "Multiline input Multiline input",
+      "query": "Multiline input",
+      "matches": true
+    },
+    {
+      "why": "one word, repeated",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "Notes Notes",
+      "query": "Notes",
+      "matches": true
+    },
+    {
+      "why": "the repeated label whole still names it",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "Notes Notes",
+      "query": "Notes Notes",
+      "matches": true
+    },
+    {
+      "why": "RegExp tests the label without its repeat",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "Notes Notes",
+      "query": {
+        "source": "^notes$",
+        "flags": "i",
+        "pattern": "\\Anotes\\z",
+        "ignoreCase": true
+      },
+      "matches": true
+    },
+    {
+      "why": "another placeholder is not stripped",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "Notes Add a note",
+      "query": "Notes",
+      "matches": false
+    },
+    {
+      "why": "a single-line field is never repeated",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "Notes Notes",
+      "query": "Notes",
+      "matches": false
+    },
+    {
+      "why": "an odd repeat is no repeat",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "label": "Notes Notes Notes",
+      "query": "Notes",
+      "matches": false
+    },
+    {
       "why": "the title names the input too",
       "platform": "ios",
       "type": "XCUIElementTypeTextField",

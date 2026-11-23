@@ -37,8 +37,21 @@ function List(props: TabBarScrollListProps) {
   const [taps, setTaps] = useState(0)
   const [ready, setReady] = useState(false)
   const scrolled = useRef(false)
+  const offsetY = useRef(0)
   const list = useRef<ScrollView>(null)
   const top = listHeight > 0 ? props.targetTop(listHeight) : 0
+
+  // Scroll to the starting offset and show the status only once the list
+  // reports it is there. A scrollTo the native list receives before it is
+  // ready (Android, while the screen is still being attached) is dropped, so
+  // it is retried, a frame at a time, until the offset holds.
+  const settleAt = (offset: number, attempt = 0) => {
+    list.current?.scrollTo({ y: offset, animated: false })
+    requestAnimationFrame(() => {
+      if (Math.abs(offsetY.current - offset) < 1 || attempt >= 30) setReady(true)
+      else settleAt(offset, attempt + 1)
+    })
+  }
 
   return (
     <View style={styles.screen}>
@@ -50,14 +63,16 @@ function List(props: TabBarScrollListProps) {
         style={styles.list}
         testID="tab-bar-scroll-list"
         onLayout={(e) => setListHeight(Math.round(e.nativeEvent.layout.height))}
+        onScroll={(e) => {
+          offsetY.current = e.nativeEvent.contentOffset.y
+        }}
+        scrollEventThrottle={16}
         onContentSizeChange={() => {
           if (scrolled.current || listHeight === 0) return
           scrolled.current = true
-          if (props.initialOffset) {
-            list.current?.scrollTo({ y: props.initialOffset(listHeight), animated: false })
-          }
-          // A frame later, once the offset has been applied.
-          requestAnimationFrame(() => setReady(true))
+          if (props.initialOffset) settleAt(props.initialOffset(listHeight))
+          // A frame later, once the content has been laid out.
+          else requestAnimationFrame(() => setReady(true))
         }}
       >
         {listHeight > 0 && (

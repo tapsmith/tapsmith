@@ -25,10 +25,18 @@ describe("a multi-line text field", () => {
     await expect(keyboardScreen.multilineInputByRole).toBeEditable()
     await keyboardScreen.multilineInputByRole.clearAndType("line one")
     await expect(keyboardScreen.multilineInputByRole).toHaveValue("line one")
-    // The same field by label, once it holds text: while it is empty, React
-    // Native on iOS appends the placeholder to a multi-line input's label
-    // ("Multiline input Multiline input"), which getByLabel compares whole.
+    // The same field by label, once it holds text.
     await expect(keyboardScreen.multilineInputByLabel).toHaveValue("line one")
     await expect(keyboardScreen.multilineInputByLabel).toHaveRole("textfield")
+  })
+
+  test("is found by its label while empty", async ({ keyboardScreen }) => {
+    // While it is empty, React Native on iOS appends the placeholder to a
+    // multi-line input's label ("Multiline input Multiline input"); a
+    // placeholder that repeats the label still leaves the label. The file
+    // resets the app once, so empty the field an earlier test typed into.
+    await keyboardScreen.multilineInput.clear()
+    await expect(keyboardScreen.multilineInputByLabel).toBeVisible()
+    expect(await keyboardScreen.multilineInputByLabel.boundingBox()).toEqual(await keyboardScreen.multilineInput.boundingBox())
   })
 })

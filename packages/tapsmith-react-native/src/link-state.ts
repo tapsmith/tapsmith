@@ -54,8 +54,8 @@ export interface HandleUrlOptions {
   initial: boolean;
   /** The listening component unmounted. */
   isDisposed: () => boolean;
-  /** Run the reset the link asks for. */
-  run: (request: ResetRequest) => Promise<void>;
+  /** Run the reset the link asks for; `url` is the link itself. */
+  run: (request: ResetRequest, url: string) => Promise<void>;
 }
 
 /**
@@ -77,7 +77,7 @@ export async function handleIncomingUrl(url: string | null | undefined, options:
   while (seenResets.size > 64) seenResets.delete(seenResets.values().next().value as string);
   let error: string | undefined;
   try {
-    await options.run(request);
+    await options.run(request, url);
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }

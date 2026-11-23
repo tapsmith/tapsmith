@@ -73,6 +73,24 @@ data class Box(
  *   order still fall back to child order: Compose before 1.9, and every app
  *   below API 24, report 0 for all nodes, and there child order is paint
  *   order.
+ *
+ *   Another exception (PILOT-1447): one control the tree splits in two, an
+ *   empty wrapper and its touch surface. React Native puts a `testID` on a
+ *   plain View wrapped around a native view that takes the touches itself (a
+ *   header menu button built on react-native-context-menu-view), and the
+ *   tree can report the two as siblings rather than parent and child. So
+ *   when the target takes no touches, has no children, and has its parent's
+ *   bounds, a touchable node found under the point in a later sibling at
+ *   that level (the sibling itself or one of its descendants) is not a cover
+ *   if it lies wholly inside the target's bounds: it is what a finger on the
+ *   target touches. Only that level is exempt: anything painted over the
+ *   parent (a dialog, a full-screen modal, a loading overlay) still covers,
+ *   and so does a later sibling of a target that takes touches itself, has
+ *   content of its own, or is smaller than its parent. (A View's bounds are
+ *   clipped to its parent's, so there every such node lies inside the
+ *   target; the bounds check matters only where they are not, as in
+ *   Compose.) The cost: an empty, untouchable view with a touchable sibling
+ *   laid over it in a same-sized container is taken for one control too.
  * - **A loading overlay** (PILOT-979): a node painted after the target, over
  *   the touch point, that is a progress indicator (a ProgressBar — React
  *   Native's ActivityIndicator is one) or holds a visible one. Apps lay one
@@ -364,11 +382,15 @@ object OcclusionAnalyzer {
         // keeps it from starving the touchable-cover search.
         val loadingReader = BudgetedReader(MAX_NODES_VISITED)
 
+        val ownLevel = levels.firstOrNull()?.takeIf(::isSplitControl)
         for (level in levels.asReversed()) {
             for (sibling in paintedOver(level, reader)) {
                 // A control in a loading overlay (its Cancel button) is named
                 // as the cover; the overlay is named when nothing in it is.
-                searchSubtree(sibling, x, y, reader)?.let { return Verdict.Covered(it.describe(), CoverKind.CONTROL) }
+                val cover = searchSubtree(sibling, x, y, reader)
+                if (cover != null && !(level === ownLevel && level.branch.bounds.contains(cover.bounds))) {
+                    return Verdict.Covered(cover.describe(), CoverKind.CONTROL)
+                }
                 if (isLoadingOverlay(sibling, x, y, loadingReader)) {
                     return Verdict.Covered("a loading overlay (${sibling.describe()})", CoverKind.LOADING)
                 }
@@ -376,6 +398,14 @@ object OcclusionAnalyzer {
             if (reader.exhausted) return null
         }
         return null
+    }
+
+    /** Whether [level], the target's own, splits one control in two (see the
+     *  class doc): the target ([Level.branch]) is an empty node that takes no
+     *  touches, with the bounds of its parent. */
+    private fun isSplitControl(level: Level): Boolean {
+        val target = level.branch
+        return !target.takesTouches && target.childCount() == 0 && level.parent.bounds == target.bounds
     }
 
     /** One step of the target's path to the root: [parent], the child of it

@@ -28,7 +28,7 @@ describe('reset pipeline', () => {
     const reload = vi.fn(async (req: { target: string }) => { order.push(`reload:${req.target}`); });
     const settle = vi.fn(async () => { order.push('settle'); return true; });
 
-    await runResetPipeline({ target: '/profile', nonce: 'n', keepData: true }, [store], [handler], settle, reload);
+    await runResetPipeline({ target: '/profile', nonce: 'n', keepData: true }, [store], [handler], { settle, reload });
 
     expect(order).toEqual(['settle', 'reload:/profile']);
   });
@@ -45,9 +45,37 @@ describe('reset pipeline', () => {
   it('ignores the reload handler on an ordinary reset', async () => {
     const reload = vi.fn();
     const handler = vi.fn();
-    await runResetPipeline({ target: '/', nonce: '' }, [], [handler], undefined, reload);
+    await runResetPipeline({ target: '/', nonce: '' }, [], [handler], { reload });
     expect(handler).toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('resets navigation after the clear and before the handlers, so a handler that navigates wins', async () => {
+    const order: string[] = [];
+    const store = { clear: vi.fn(async () => { order.push('clear'); }) };
+    const handler = vi.fn(async () => { order.push('handler'); });
+    const resetNavigation = vi.fn(async () => { order.push('navigation'); });
+
+    await runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], { resetNavigation });
+
+    expect(order).toEqual(['clear', 'navigation', 'handler']);
+  });
+
+  it('resets navigation on a keep request too, before the reload', async () => {
+    const order: string[] = [];
+    const reload = vi.fn(async () => { order.push('reload'); });
+    const resetNavigation = vi.fn(async () => { order.push('navigation'); });
+
+    await runResetPipeline({ target: '/', nonce: 'n', keepData: true }, [], [], { reload, resetNavigation });
+
+    expect(order).toEqual(['navigation', 'reload']);
+  });
+
+  it('fails the reset when navigation cannot be reset, rather than leave the last test\'s screens', async () => {
+    const handler = vi.fn();
+    const resetNavigation = vi.fn(async () => { throw new Error('nav'); });
+    await expect(runResetPipeline({ target: '/', nonce: 'n' }, [], [handler], { resetNavigation })).rejects.toThrow('nav');
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('registerTapsmithReset adds and removes handlers', () => {
@@ -98,7 +126,7 @@ describe('reset pipeline with a blur to settle (keyboard dismissal)', () => {
       return true;
     });
 
-    const run = runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], settle);
+    const run = runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], { settle });
     expect(order).toEqual(['clear', 'settle:start']);
     await run;
 
@@ -107,14 +135,14 @@ describe('reset pipeline with a blur to settle (keyboard dismissal)', () => {
 
   it('clears once when no input had focus', async () => {
     const store = { clear: vi.fn(async () => undefined) };
-    await runResetPipeline({ target: '/', nonce: 'n' }, [store], [], async () => false);
+    await runResetPipeline({ target: '/', nonce: 'n' }, [store], [], { settle: async () => false });
     expect(store.clear).toHaveBeenCalledTimes(1);
   });
 
   it('a failing settle does not fail the reset', async () => {
     const store = { clear: vi.fn(async () => undefined) };
     const handler = vi.fn();
-    await runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], async () => { throw new Error('keyboard'); });
+    await runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], { settle: async () => { throw new Error('keyboard'); } });
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });

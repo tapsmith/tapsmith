@@ -3,8 +3,10 @@ import { AccessibilityScreen } from "./screens/accessibility.screen.js"
 import { AnimatingScreen } from "./screens/animating.screen.js"
 import { CoversScreen } from "./screens/covers.screen.js"
 import { TabBarScrollScreen } from "./screens/tab-bar-scroll.screen.js"
+import { StatusBarScreen } from "./screens/status-bar.screen.js"
 import { ApiCallsScreen } from "./screens/api-calls.screen.js"
 import { CarouselScreen } from "./screens/carousel.screen.js"
+import { ChecklistScreen } from "./screens/checklist.screen.js"
 import { StackScreen } from "./screens/stack.screen.js"
 import { DelayedListScreen } from "./screens/delayed-list.screen.js"
 import { DialogsScreen } from "./screens/dialogs.screen.js"
@@ -36,7 +38,9 @@ type ScreenFixtures = {
   apiCallsScreen: ApiCallsScreen
   coversScreen: CoversScreen
   tabBarScrollScreen: TabBarScrollScreen
+  statusBarScreen: StatusBarScreen
   carouselScreen: CarouselScreen
+  checklistScreen: ChecklistScreen
   stackScreen: StackScreen
   delayedListScreen: DelayedListScreen
   dialogsScreen: DialogsScreen
@@ -79,8 +83,14 @@ export const test = base.extend<ScreenFixtures>({
   tabBarScrollScreen: async ({ device }, use) => {
     await use(new TabBarScrollScreen(device))
   },
+  statusBarScreen: async ({ device }, use) => {
+    await use(new StatusBarScreen(device))
+  },
   carouselScreen: async ({ device }, use) => {
     await use(new CarouselScreen(device))
+  },
+  checklistScreen: async ({ device }, use) => {
+    await use(new ChecklistScreen(device))
   },
   stackScreen: async ({ device }, use) => {
     await use(new StackScreen(device))

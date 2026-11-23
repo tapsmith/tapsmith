@@ -59,6 +59,7 @@ export default function RootLayout() {
             <Stack.Screen name="profile" options={{ title: "Profile" }} />
             <Stack.Screen name="list" options={{ title: "List" }} />
             <Stack.Screen name="toggles" options={{ title: "Toggles" }} />
+            <Stack.Screen name="checklist" options={{ title: "Checklist" }} />
             <Stack.Screen name="spinner" options={{ title: "Spinner" }} />
             <Stack.Screen name="gestures" options={{ title: "Gestures", gestureEnabled: false }} />
             <Stack.Screen name="drag" options={{ title: "Drag and Drop", gestureEnabled: false }} />
@@ -88,6 +89,7 @@ export default function RootLayout() {
             <Stack.Screen name="webview" options={{ title: "WebView" }} />
             <Stack.Screen name="tabs" options={{ title: "Tabs" }} />
             <Stack.Screen name="tab-bar-scroll" options={{ title: "Tab Bar Scroll" }} />
+            <Stack.Screen name="status-bar" options={{ headerShown: false }} />
             <Stack.Screen name="native-tabs" options={{ title: "Native Tabs" }} />
             <Stack.Screen name="roles" options={{ title: "Roles" }} />
             <Stack.Screen name="stack/[level]" options={{ title: "Stack" }} />
