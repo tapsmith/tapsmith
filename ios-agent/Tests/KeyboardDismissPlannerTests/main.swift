@@ -1406,11 +1406,11 @@ do {
         }
         return rows + keyboardWindows()
     }
-    let row2 = R(0, 309, 402, 66)
     let target = OcclusionAnalyzer.Target(frame: R(16, 321, 80, 20), elementType: .staticText, label: "Row 2 0", identifier: "")
     for (name, rows) in [("three texts", textRows(contentView: true, texts: 3)), ("straight under the scroll view", textRows(contentView: false, texts: 1))] {
         let p = planner(rows).blankPointInScroller(of: target, focusedFrame: listSearchField)
-        checkTrue("rows of \(name): the spot is not in the target's row", p.map { !row2.contains($0) } ?? true, "\(String(describing: p))")
+        // Rows holding only text may each be the control: no spot at all.
+        check("rows of \(name): no spot, not even in the target's row", p, nil)
     }
     // Rows each holding a title and two buttons (Edit, Delete), packed.
     var controls: [Row] = appHead + [
@@ -1431,8 +1431,8 @@ do {
     controls += keyboardWindows()
     let cp = planner(controls).blankPointInScroller(
         of: .init(frame: R(250, 341, 60, 44), elementType: .button, label: "Edit", identifier: ""), focusedFrame: listSearchField)
-    checkTrue("rows of two controls: the spot is not in the target's row",
-              cp.map { !R(0, 323, 402, 80).contains($0) } ?? true, "\(String(describing: cp))")
+    checkTrue("rows of two controls: a spot in another row's margin, not the target's row",
+              cp.map { listViewport.contains($0) && !R(0, 323, 402, 80).contains($0) } ?? false, "\(String(describing: cp))")
     let card = R(0, 243, 402, 600)
     let feed: [Row] = appHead + [
         (4, .other, "", "", R(16, 132, 370, 45)),
@@ -1447,7 +1447,7 @@ do {
     ] + keyboardWindows()
     let fp = planner(feed).blankPointInScroller(
         of: .init(frame: R(16, 300, 60, 44), elementType: .button, label: "Like", identifier: ""), focusedFrame: listSearchField)
-    checkTrue("feed card taller than the list: the spot is not in it", fp.map { !card.contains($0) } ?? true, "\(String(describing: fp))")
+    check("feed card taller than the list: no spot (the card is all of it)", fp, nil)
 }
 
 do {
@@ -1480,7 +1480,7 @@ do {
     ] + keyboardWindows()
     let p = planner(rows).blankPointInScroller(
         of: .init(frame: card, elementType: .other, label: "", identifier: "hero"), focusedFrame: listSearchField)
-    checkTrue("large plain target: the spot is not on it", p.map { notInside($0, [card]) } ?? true, "\(String(describing: p))")
+    check("large plain target covering the list: no spot", p, nil)
 }
 
 // PILOT-622: when the keyboard-first step runs, and for how long.
