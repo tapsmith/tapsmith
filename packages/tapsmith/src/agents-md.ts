@@ -163,13 +163,17 @@ export function writeAgentsMd(cwd: string): string {
  * Rewrite the Tapsmith section of `<cwd>/AGENTS.md` with the docs path as it
  * is now. The wizard writes AGENTS.md before it offers to install Tapsmith,
  * and an install from a workspace package lands in the workspace root. A
- * file without the section (the user declined it) is left alone.
+ * file without exactly one well-formed section is left alone.
  */
 export function refreshAgentsMdDocsDir(cwd: string): void {
   const filePath = path.join(cwd, 'AGENTS.md');
   if (!fs.existsSync(filePath)) return;
   const existing = fs.readFileSync(filePath, 'utf8');
-  if (!existing.includes(AGENTS_BEGIN)) return;
+  // Only a single, well-formed section: with a stray marker the section's
+  // extent is a guess, and replacing it could take the user's own text.
+  const begins = existing.split(AGENTS_BEGIN).length - 1;
+  const ends = existing.split(AGENTS_END).length - 1;
+  if (begins !== 1 || ends !== 1 || existing.indexOf(AGENTS_END) < existing.indexOf(AGENTS_BEGIN)) return;
   const updated = mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd)));
   if (updated !== existing) fs.writeFileSync(filePath, updated);
 }

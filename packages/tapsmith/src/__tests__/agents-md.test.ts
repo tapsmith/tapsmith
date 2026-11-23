@@ -189,4 +189,22 @@ describe('the docs path init writes', () => {
     expect(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8')).toBe('# Mine\n');
     refreshAgentsMdDocsDir(tmp()); // no AGENTS.md at all: nothing written
   });
+
+  it('refreshAgentsMdDocsDir() leaves a file with mismatched markers alone, rather than replace the user\'s text', () => {
+    const root = tmp();
+    const pkg = path.join(root, 'e2e');
+    fs.mkdirSync(pkg);
+    // The user deleted the end marker of an old section and wrote below it;
+    // init's write then appended a whole new section.
+    fs.writeFileSync(path.join(pkg, 'AGENTS.md'), `Intro\n${AGENTS_BEGIN}\nMY OWN NOTES\n`);
+    writeAgentsMd(pkg);
+    const written = fs.readFileSync(path.join(pkg, 'AGENTS.md'), 'utf8');
+    install(root);
+    refreshAgentsMdDocsDir(pkg);
+    expect(fs.readFileSync(path.join(pkg, 'AGENTS.md'), 'utf8')).toBe(written);
+    // An end marker before the begin marker.
+    fs.writeFileSync(path.join(pkg, 'AGENTS.md'), `Intro\n${AGENTS_END}\nmid\n${AGENTS_BEGIN}\nNOTES\n`);
+    refreshAgentsMdDocsDir(pkg);
+    expect(fs.readFileSync(path.join(pkg, 'AGENTS.md'), 'utf8')).toBe(`Intro\n${AGENTS_END}\nmid\n${AGENTS_BEGIN}\nNOTES\n`);
+  });
 });
