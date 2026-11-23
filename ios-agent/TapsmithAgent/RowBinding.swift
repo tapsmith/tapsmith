@@ -135,20 +135,26 @@ enum RowBinding {
     /// still at the frame it was found at is kept. One elsewhere is either
     /// another element, listed at that place because the live query does not
     /// follow the tree's order, or the element found, moved since (a panel
-    /// still sliding in, a field the keyboard pushed up): the element found
-    /// is looked for at its frame among its lookalikes (`lookalikeFrames`,
-    /// the live frames of the elements with its type, label and identifier,
-    /// read only then), and bound if it is the one there. Otherwise one with
-    /// the identity found (`liveIsFoundIdentity`) is taken to have moved,
-    /// and kept; any other is dropped.
+    /// still sliding in, a field the keyboard pushed up). The element found
+    /// is looked for at its frame among its lookalikes (`lookalikes`: the
+    /// live frames of the elements with its type, label, identifier and
+    /// placeholder, read only then, and whether every one was read), and
+    /// bound if it is the one there. Failing that, the live element is kept
+    /// only when it is the one element with the identity found
+    /// (`liveIsFoundIdentity`, and no other lookalike), so it can only be the
+    /// element found, moved; otherwise the element found cannot be told among
+    /// its lookalikes, and the binding is dropped.
     static func firstUse(
-        found: CGRect, live: CGRect?, liveIsFoundIdentity: Bool, lookalikeFrames: () -> [CGRect?]
+        found: CGRect, live: CGRect?, liveIsFoundIdentity: Bool,
+        lookalikes: () -> (frames: [CGRect?], complete: Bool)
     ) -> FirstUse {
         guard live != nil else { return .drop }
         if isFoundElement(found: found, live: live) { return .keep }
-        let atFound = lookalikeFrames().enumerated().filter { isFoundElement(found: found, live: $0.element) }
+        let read = lookalikes()
+        let atFound = read.frames.enumerated().filter { isFoundElement(found: found, live: $0.element) }
         if atFound.count == 1 { return .rebind(atFound[0].offset) }
-        return liveIsFoundIdentity ? .keep : .drop
+        if atFound.isEmpty, read.complete, read.frames.count == 1, liveIsFoundIdentity { return .keep }
+        return .drop
     }
 
     /// Whether the live element, read at `live` (nil: it could not be read),
