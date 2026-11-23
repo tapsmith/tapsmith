@@ -17,6 +17,7 @@ export class TogglesScreen {
   get radioSmall() { return this.device.getByRole("radiobutton", { name: "Small" }) }
   get radioMedium() { return this.device.getByRole("radiobutton", { name: "Medium" }) }
   get radioLarge() { return this.device.getByRole("radiobutton", { name: "Large" }) }
+  get largeByLabel() { return this.device.getByLabel("Large") }
   get smallLabel() { return this.device.getByText("Small", { exact: true }) }
   get mediumLabel() { return this.device.getByText("Medium", { exact: true }) }
   get largeLabel() { return this.device.getByText("Large", { exact: true }) }

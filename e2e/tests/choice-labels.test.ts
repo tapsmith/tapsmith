@@ -39,9 +39,9 @@ describe("a radio button whose text is inside it", () => {
   test("getByLabel finds it, and getByText its text", async ({ device, togglesScreen }) => {
     await openScreen(device, "/toggles")
     await device.swipe("up")
-    await expect(device.getByLabel("Large")).not.toBeChecked()
-    await device.getByLabel("Large").tap()
-    await expect(device.getByLabel("Large")).toBeChecked()
+    await expect(togglesScreen.largeByLabel).not.toBeChecked()
+    await togglesScreen.largeByLabel.tap()
+    await expect(togglesScreen.largeByLabel).toBeChecked()
     // React Native hides the radio's own text inside it on iOS, so its
     // label is the text there: getByText still finds it.
     await expect(togglesScreen.largeLabel).toBeVisible()
