@@ -152,6 +152,20 @@ describe("a not-found error lists the near misses the agent finds", () => {
     vitestExpect(await err(d.getByText("Yes, delete", { exact: true }).tap())).toBe(
       'Element getByText("Yes, delete", { exact: true }) was not found after waiting 50ms. ' + offScreen + LOCATOR_PICKER_HINT,
     );
+    // A hit that only contains the words is another element: the one asked for may be below the fold.
+    const longer = missingClient((s) => (s.kind.type === "textContains" ? [element("h", "Delete all")] : []));
+    const d3 = new Device(longer.client, { platform: "android", timeout: 50 });
+    vitestExpect(await err(d3.getByText("Delete", { exact: true }).tap())).toBe(
+      'Element getByText("Delete", { exact: true }) was not found after waiting 50ms. ' +
+        'Nothing matches it, but on screen now this locator matches: getByText("Delete") (1 element). ' +
+        offScreen + LOCATOR_PICKER_HINT,
+    );
+    // The words in another case, or as a description, are the words on screen.
+    for (const hit of [element("c", "SIGN  IN"), { ...element("d", ""), contentDescription: "sign in" }]) {
+      const same = missingClient((s) => (s.kind.type === "textContains" || s.kind.type === "contentDesc" ? [hit] : []));
+      const d4 = new Device(same.client, { platform: "android", timeout: 50 });
+      vitestExpect(await err(d4.getByRole("button", { name: "Sign in" }).tap())).not.toContain("off-screen");
+    }
     // Only the role matches, under other names: the one named may still be off-screen.
     const roleOnly = missingClient((s) =>
       s.kind.type === "role" && s.kind.value.role === "button" ? [element("a", "Log in")] : []);

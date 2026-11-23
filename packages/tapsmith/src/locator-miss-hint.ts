@@ -204,12 +204,6 @@ function plural(n: number): string {
 }
 
 /**
- * How a near-miss sentence that lists locators matching the same words starts:
- * the element is on screen under another locator.
- */
-export const NEAR_MISS_LEAD = 'Nothing matches it';
-
-/**
  * The near-miss sentence for `selector`, from the agent's answer to its
  * probes (one result per probe, in order), or '' when none matched.
  */
@@ -229,7 +223,7 @@ export function formatNearMisses(selector: Selector, probes: Probe[], response: 
     const value = hits.some((h) => h.probe.fieldValue !== undefined && holdsValue(h.found, h.probe.fieldValue))
       ? ' A text field\'s typed value is not text to getByText(): assert it with toHaveValue().'
       : '';
-    return `${NEAR_MISS_LEAD}, but on screen now ${hits.length === 1 ? 'this locator matches' : 'these locators match'}: ${list}.${value}`;
+    return `Nothing matches it, but on screen now ${hits.length === 1 ? 'this locator matches' : 'these locators match'}: ${list}.${value}`;
   }
   const fallbackIndex = probes.findIndex((p) => p.fallback);
   if (fallbackIndex >= 0 && counts[fallbackIndex] > 0 && selector.kind.type === 'role') {
@@ -252,15 +246,62 @@ export async function nearMissHint(
   signal?: AbortSignal,
   budgetMs = NEAR_MISS_BUDGET_MS,
 ): Promise<string> {
+  return (await nearMissCheck(client, selector, signal, budgetMs)).hint;
+}
+
+/** What the near-miss check found: its sentence, and whether a hit shows the locator's own words. */
+export interface NearMissCheck {
+  /** The near-miss sentence ({@link nearMissHint}), or ''. */
+  hint: string;
+  /**
+   * A listed element's text or description is the locator's words (in any
+   * case, whitespace-normalized; without trailing punctuation too), so the
+   * element asked for is on screen under another locator, not off-screen. A
+   * hit that only contains the words is another element.
+   */
+  wordsOnScreen: boolean;
+}
+
+/** {@link nearMissHint}, also saying whether a hit shows the locator's own words. */
+export async function nearMissCheck(
+  client: NearMissEvaluator,
+  selector: Selector,
+  signal?: AbortSignal,
+  budgetMs = NEAR_MISS_BUDGET_MS,
+): Promise<NearMissCheck> {
+  const none = { hint: '', wordsOnScreen: false };
   const probes = nearMissProbes(selector);
-  if (probes.length === 0 || typeof client.evaluateSelectors !== 'function') return '';
+  if (probes.length === 0 || typeof client.evaluateSelectors !== 'function') return none;
   const evaluate = client.evaluateSelectors.bind(client);
   const response = await withinBudget(() => evaluate(probes.map((p) => p.selector)), signal, budgetMs);
   try {
-    return response ? formatNearMisses(selector, probes, response) : '';
+    if (!response) return none;
+    const hint = formatNearMisses(selector, probes, response);
+    return { hint, wordsOnScreen: hint !== '' && showsWords(selector, probes, response) };
   } catch {
-    return '';
+    return none;
   }
+}
+
+/** The words a locator looks for, or undefined (a RegExp, an id). */
+function locatorWords(selector: Selector): string | undefined {
+  const kind = selector.kind;
+  switch (kind.type) {
+    case 'role': return kind.value.nameRegex ? undefined : kind.value.name || undefined;
+    case 'text': case 'textContains': case 'contentDesc': case 'label': case 'hint':
+      return typeof kind.value === 'string' ? kind.value : undefined;
+    default: return undefined;
+  }
+}
+
+/** Whether a listed (non-fallback) hit's text or description is the locator's words ({@link NearMissCheck}). */
+function showsWords(selector: Selector, probes: Probe[], response: EvaluateSelectorsResponse): boolean {
+  const words = locatorWords(selector);
+  if (words === undefined) return false;
+  const fold = (s: string) => normalizeText(s).toLowerCase();
+  const wanted = new Set([fold(words), fold(words.trim().replace(TRAILING_PUNCTUATION, ''))].filter(Boolean));
+  return probes.some((probe, i) => !probe.fallback && !response.results[i].errorMessage &&
+    probeHits(probe, response.results[i].elements).some((el) => wanted.has(fold(el.text ?? '')) || wanted.has(fold(el.contentDescription ?? ''))));
 }
 
 /** The RPC the system-alert check needs (a TapsmithGrpcClient in production). */

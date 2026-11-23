@@ -107,7 +107,7 @@ await device.getByRole("checkbox", { name: "Remember me" }).tap()
 await device.getByRole("switch", { name: "Dark mode" }).tap()
 ```
 
-As in Playwright, `name` is a **case-insensitive substring match** by default, so `{ name: "sign in" }` finds a button labelled `SIGN IN` (how Android renders React Native's `<Button title="Sign In">`) or `Sign in now`. Pass `exact: true` for a case-sensitive, whole-string match — needed when one name is part of another on the same screen:
+As in Playwright, `name` is a **case-insensitive substring match** by default, so `{ name: "sign in" }` finds a button labelled `SIGN IN` (how Android renders React Native's `<Button title="Sign In">`) or `Sign in now`. Pass `exact: true` for a case-sensitive, whole-string match (on Android a name read from text also matches it in capitals) — needed when one name is part of another on the same screen:
 
 ```typescript
 await device.getByRole("button", { name: "Show overlay", exact: true }).tap()  // not "Show overlay briefly"
@@ -319,7 +319,7 @@ A text field's typed value is not text, as an `<input>`'s value is not in Playwr
 
 On iOS, `getByText` returns the innermost element holding the text, as Playwright does: a SwiftUI `Toggle` row, a `NavigationLink` or an alert gives way to the text inside it, so `getByText("Dark Mode")` finds one element. A control's value (a switch's `1`, a slider's `50%`) is not text, and neither is an image's label: an image above a caption with the same words leaves `getByText` one match, as on Android. Find the image with `getByRole("image", { name })`.
 
-> **Strict mode:** because of the case-insensitive substring default, `getByText("Sign in")` also matches longer or differently-cased text such as `"Sign in to continue"` or a `"SIGN IN"` heading. A locator that resolves to more than one element throws a `strict mode violation` when you act or assert on it (instead of silently using the first match). Disambiguate with `{ exact: true }`, `getByRole(role, { name, exact: true })`, `getByTestId()`, or `.first()/.nth()/.last()`. Absence checks (`toBeHidden`, `not.toBeVisible`, `waitFor({ state: "hidden" })`) and multi-element APIs (`count()`, `all()`, `toHaveCount`) are exempt. See the [API reference](api-reference.md#strict-mode) for the full rules. WebView locators (`webview.getBy*`, `webview.locator(css)`) enforce the same rules.
+> **Strict mode:** because of the case-insensitive substring default, `getByText("Sign in")` also matches longer or differently-cased text such as `"Sign in to continue"` or a `"SIGN IN"` heading. A locator that resolves to more than one element throws a `strict mode violation` when you act or assert on it (instead of silently using the first match). Disambiguate with `{ exact: true }`, `getByRole(role, { name, exact: true })`, `getByTestId()`, or `.first()/.nth()/.last()` (on Android `{ exact: true }` still matches the words in capitals, so it doesn't tell a `"SIGN IN"` heading apart). Absence checks (`toBeHidden`, `not.toBeVisible`, `waitFor({ state: "hidden" })`) and multi-element APIs (`count()`, `all()`, `toHaveCount`) are exempt. See the [API reference](api-reference.md#strict-mode) for the full rules. WebView locators (`webview.getBy*`, `webview.locator(css)`) enforce the same rules.
 
 ### `getByDescription(text)`
 

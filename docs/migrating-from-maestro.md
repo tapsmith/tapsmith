@@ -172,7 +172,7 @@ Name Tapsmith test files `*.tapsmith.ts` (what `tapsmith init` sets up), so that
 
 **Locators.** Maestro treats `text` and `id` as regular expressions, and relational selectors (`below`, `childOf`, …) narrow them. In Tapsmith:
 
-- `getByText("Sign in")` is a case-insensitive substring match; `{ exact: true }` matches the whole text, case-sensitively; a `RegExp` (`getByText(/^Sign in$/i)`) works as in JavaScript.
+- `getByText("Sign in")` is a case-insensitive substring match; `{ exact: true }` matches the whole text, case-sensitively (on Android, also in capitals); a `RegExp` (`getByText(/^Sign in$/i)`) works as in JavaScript.
 - `getByRole(role, { name })` checks what the element is as well as its label, which also makes the app more accessible ([Making React Native apps testable](locators.md#making-react-native-apps-testable-and-accessible)).
 - Instead of relational selectors, scope a locator inside another (`device.getByTestId("row-5").getByRole("button", { name: "Delete" })`), or narrow it with `filter()`, `first()`, `nth()`, `and()` and `or()` ([ElementHandle](api-reference.md#elementhandle)). Position on screen (`below`, `leftOf`) has no locator equivalent.
 - Ambiguity is an error. When a locator matches several elements, Tapsmith's strict mode refuses to guess: it reports every match and suggests a unique locator for each.

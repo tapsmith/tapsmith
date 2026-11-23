@@ -41,8 +41,7 @@ import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES, isIosTextInput } from './ios
 import {
   LOCATOR_PICKER_HINT,
   NEAR_MISS_BUDGET_MS,
-  NEAR_MISS_LEAD,
-  nearMissHint,
+  nearMissCheck,
   type NearMissEvaluator,
   SYSTEM_ALERT_BUDGET_MS,
   systemAlertHint,
@@ -1823,8 +1822,9 @@ export class ElementHandle {
    * @internal — Everything a not-found message says after its first
    * sentence, as ". …" to append to it: the locators that do
    * match the same words on screen now (asked of the device agent, for an
-   * unmodified native locator), then `offScreen` unless one did (the words
-   * are on screen, so scrolling is not the fix), then `hints` (by default
+   * unmodified native locator), then `offScreen` unless one of them shows
+   * the locator's own words (the element is on screen, so scrolling is not
+   * the fix), then `hints` (by default
    * the platform hint, {@link _missHint}), then where to find a locator that
    * matches.
    *
@@ -1851,12 +1851,12 @@ export class ElementHandle {
       ? await systemAlertHint(this._client, signal, Math.min(SYSTEM_ALERT_BUDGET_MS, budgetMs))
       : '';
     const near = this._hasModifiers() || budgetMs <= 0
-      ? ''
-      : await nearMissHint(this._client, this._selector, signal, budgetMs);
+      ? { hint: '', wordsOnScreen: false }
+      : await nearMissCheck(this._client, this._selector, signal, budgetMs);
     // With an alert named, the locator hints (off-screen, unnamed role)
     // would send the reader to the wrong cause.
-    const offScreen = alert || near.startsWith(NEAR_MISS_LEAD) ? '' : options.offScreen ?? '';
-    return `. ${[alert, near, offScreen, alert ? '' : hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
+    const offScreen = alert || near.wordsOnScreen ? '' : options.offScreen ?? '';
+    return `. ${[alert, near.hint, offScreen, alert ? '' : hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
   }
 
   /** {@link _missHint} as a bare sentence (with its leading space), to follow one that ends in a full stop. */
