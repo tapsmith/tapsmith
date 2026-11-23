@@ -292,7 +292,7 @@ Common components and their recommended props:
 
 ### `getByText(text | RegExp, { exact? })`
 
-Find an element by its visible text content. **Case-insensitive substring match by default**, like Playwright. Pass `{ exact: true }` for a case-sensitive, whole-text match.
+Find an element by its visible text content. **Case-insensitive substring match by default**, like Playwright. Pass `{ exact: true }` for a case-sensitive, whole-text match (on Android it also matches the text in capitals, which is how Android draws many buttons: see [`getByText`](api-reference.md#devicegetbytexttext-string--regexp-options--exact-boolean--elementhandle)).
 
 ```typescript
 // Substring match — finds elements containing "Welcome", in any case
@@ -301,7 +301,7 @@ await expect(device.getByText("Welcome")).toBeVisible()
 // Finds a button rendered as "GET STARTED" (e.g. textTransform: "uppercase")
 await device.getByText("get started").tap()
 
-// Exact match
+// Exact match (on Android it also finds the all-caps "SIGN IN" a button draws)
 await device.getByText("Sign In", { exact: true }).tap()
 
 // Useful for dynamic content
