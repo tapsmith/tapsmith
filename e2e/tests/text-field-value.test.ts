@@ -36,10 +36,12 @@ describe("getByText skips a text field's typed value", () => {
   test("a row tap right after typing reaches the row in a list full of rows", async ({ listScreen }) => {
     await listScreen.searchField.type("Item 1")
     await expect(listScreen.itemCount).toHaveText("11 items")
-    // The app keeps its selection from the tests before this one.
+    // The app keeps its selection from the tests before this one. Exactly
+    // one row toggles: the tap reached Item 12, and putting the keyboard
+    // away pressed nothing else.
     const before = Number.parseInt(await listScreen.selectedCount.getText(), 10)
     await listScreen.item(12).tap()
-    await expect(listScreen.selectedCount).not.toHaveText(`${before} selected`)
+    await expect(listScreen.selectedCount).toHaveText(new RegExp(`^(${before - 1}|${before + 1}) selected$`))
   })
 
   test("by substring and RegExp too", async ({ device, listScreen, platform }) => {

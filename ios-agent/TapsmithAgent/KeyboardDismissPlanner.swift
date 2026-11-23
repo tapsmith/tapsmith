@@ -466,53 +466,54 @@ struct KeyboardDismissPlanner {
     }
 
     /// A blank spot inside the scroll view `target` is in (keyboard first,
-    /// PILOT-1432): above the keyboard and below the status bar, clear of
-    /// everything but plain containers, the spot furthest from anything else.
-    /// That scroll view is the one a React Native ScrollView with
-    /// `keyboardShouldPersistTaps` "never" or "handled" puts the keyboard
-    /// away for on a touch no child takes — the touch it would otherwise
-    /// spend the target's tap on. The innermost such scroll view is tried
-    /// first, then the ones around it.
+    /// PILOT-1432): above the keyboard and below the status bar, the spot
+    /// furthest from anything else. That scroll view is the one a React
+    /// Native ScrollView with `keyboardShouldPersistTaps` "never" or
+    /// "handled" puts the keyboard away for on a touch no child takes — the
+    /// touch it would otherwise spend the target's tap on. The innermost such
+    /// scroll view is tried first, then the ones around it.
     ///
-    /// What holds the scroll view never blocks: a touch on its blank part
-    /// goes to the scroll view, not to a container around it (React Native
-    /// wraps a list with an accessibility label in a labeled view of its
-    /// size). What is drawn over it from outside does: content, and a
-    /// sheet's or modal's backdrop — an unlabeled view with nothing in it
-    /// laid under content drawn after it, which would take the touch (and
-    /// close the sheet). Other plain containers drawn after the screen (empty
-    /// wrappers, a box-none overlay holding a floating button) let the touch
-    /// through: only what they hold blocks.
+    /// Not a scroll view the focused field (at `focusedFrame`) is drawn after
+    /// and outside of: that field sits in a sheet, modal or bar over or
+    /// beside the list, and a touch on the list behind a sheet lands on its
+    /// backdrop. What holds the scroll view never blocks (React Native wraps
+    /// a list with an accessibility label in a labeled view of its size);
+    /// the target itself always does, and so does anything else that is not
+    /// a plain container. A spot clear of every other row's container comes
+    /// first — a row can take a touch without showing as an element (its
+    /// container is then plain) — and only a list with no such spot (packed
+    /// with rows) gets one in a row's plain margin.
     ///
-    /// nil when the target is not found in the tree, is in no scroll view, or
-    /// no scroll view of it has such a spot on screen.
-    func blankPointInScroller(of target: OcclusionAnalyzer.Target) -> CGPoint? {
+    /// nil when the target or the focused field is not found in the tree,
+    /// the target is in no such scroll view, or none has a spot on screen.
+    func blankPointInScroller(of target: OcclusionAnalyzer.Target, focusedFrame: CGRect?) -> CGPoint? {
         let area = touchableArea
-        guard !area.isNull, let t = analyzer.locate(target) else { return nil }
-        let windows = keyboardWindows
-        for scroller in analyzer.ancestors(of: t)
-        where OcclusionAnalyzer.keyboardEatingScrollerTypes.contains(nodes[scroller].elementType) {
+        guard !area.isNull, let t = analyzer.locate(target), let field = fieldIndex(focusedFrame) else { return nil }
+        let up = analyzer.ancestors(of: t)
+        let targetSubtree = t..<nodes[t].subtreeEnd
+        // The target's containers that hold other content too: the list's
+        // own (its content view), not the target's row.
+        let listContainers = Set(up.filter { a in
+            ((a + 1)..<nodes[a].subtreeEnd).contains { !targetSubtree.contains($0) && !up.contains($0) }
+        })
+        for scroller in up where OcclusionAnalyzer.keyboardEatingScrollerTypes.contains(nodes[scroller].elementType) {
+            let inside = (scroller + 1)..<nodes[scroller].subtreeEnd
+            if field > scroller, !inside.contains(field) { continue }
             let rect = clippedToScrollers(nodes[scroller].frame.intersection(area), around: scroller)
             if rect.isNull { continue }
             let holders = Set([scroller] + analyzer.ancestors(of: scroller))
-            let inside = (scroller + 1)..<nodes[scroller].subtreeEnd
-            let point = clearestPoint(in: rect, avoiding: statusBar.map { [$0] } ?? []) { i in
-                if holders.contains(i) { return false }
-                if inside.contains(i) || i < scroller { return !isPlain(i) }
-                // Drawn after the scroll view, outside it: over it.
-                if let w = nodes[i].window, windows.contains(w) { return !isPlain(i) }
-                return !isPlain(i) || isBackdrop(i)
+            let keepOut = (statusBar.map { [$0] } ?? []) + [nodes[t].frame]
+            let blocks = { (i: Int, strict: Bool) -> Bool in
+                if holders.contains(i) || i == t { return false }
+                if strict, inside.contains(i), !listContainers.contains(i) { return true }
+                return !isPlain(i)
             }
-            if let point { return point }
+            if let point = clearestPoint(in: rect, avoiding: keepOut, blockers: { blocks($0, true) })
+                ?? clearestPoint(in: rect, avoiding: keepOut, blockers: { blocks($0, false) }) {
+                return point
+            }
         }
         return nil
-    }
-
-    /// Whether plain node `i` is a backdrop: it has nothing in it, and
-    /// content is drawn after it in its parent (the sheet over it).
-    private func isBackdrop(_ i: Int) -> Bool {
-        guard nodes[i].subtreeEnd == i + 1, let parent = nodes[i].parent else { return false }
-        return ((i + 1)..<nodes[parent].subtreeEnd).contains { !isPlain($0) }
     }
 
     // MARK: - 4. Return key

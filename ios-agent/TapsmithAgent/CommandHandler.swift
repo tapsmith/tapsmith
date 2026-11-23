@@ -3912,7 +3912,7 @@ class CommandHandler {
             return .keyboardStayed
         case .scrollerBlankTap:
             guard let target else { return .notPossible("no element is about to be touched") }
-            guard let point = planner.blankPointInScroller(of: target) else {
+            guard let point = planner.blankPointInScroller(of: target, focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame) else {
                 return .notPossible("no blank spot in the element's scroll view above the keyboard")
             }
             NSLog("[TapsmithCommand] keyboard first: tapping a blank spot in the element's scroll view at \(NSCoder.string(for: point))")
