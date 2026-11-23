@@ -140,8 +140,41 @@ export function expoRouterNavigationReset(
     if (!replaceRootState(container, { ...root, index: 0, routes: [freshRoot] })) return false;
     navigate(href);
     await waitForNavigationToSettle(container, root);
+    // A RESET the router rejects is dropped with a console warning, and the
+    // reset would then be acknowledged over the old stacks. A reset that
+    // landed leaves nothing of the old nested state: the router seeds it
+    // afresh, and the navigation builds on that.
+    const after = container.getRootState()?.routes.find((route) => route.name === EXPO_ROUTER_ROOT_ROUTE)?.state;
+    if (sharesObjects(after, rootRoute.state)) {
+      throw new Error('expo-router did not apply the navigation reset; the previous test\'s screens are still there');
+    }
     return true;
   };
+}
+
+/**
+ * Whether any route or navigator state in `next` (an object with a `key`) is,
+ * by identity, one from `previous`. Only keyed objects count: a router may
+ * share constants (an empty history array) between unrelated states.
+ */
+function sharesObjects(next: unknown, previous: unknown): boolean {
+  if (!next || !previous) return false;
+  const keyed = (value: object): boolean => typeof (value as { key?: unknown }).key === 'string';
+  const seen = new Set<object>();
+  const collect = (value: unknown): void => {
+    if (!value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    for (const child of Object.values(value)) collect(child);
+  };
+  collect(previous);
+  const visited = new Set<object>();
+  const find = (value: unknown): boolean => {
+    if (!value || typeof value !== 'object' || visited.has(value)) return false;
+    if (seen.has(value) && keyed(value)) return true;
+    visited.add(value);
+    return Object.values(value).some(find);
+  };
+  return find(next);
 }
 
 /**

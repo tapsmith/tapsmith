@@ -60,6 +60,14 @@ describe('expo-router navigation reset', () => {
     expect(navigate).toHaveBeenCalledWith('/');
   });
 
+  it('fails the reset when the router ignored it and the old nested state is still there', async () => {
+    const state = expoState(['index', 'new'], 'index');
+    // A container whose reset is dropped (as a router that rejects the
+    // payload does): the state never changes.
+    const container: NavigationContainerLike = { isReady: () => true, getRootState: () => state, reset: vi.fn() };
+    await expect(expoRouterNavigationReset(container, vi.fn())('/')).rejects.toThrow(/did not apply the navigation reset/);
+  });
+
   it('leaves navigation alone when the container can reset nothing', async () => {
     const container: NavigationContainerLike = { isReady: () => true, getRootState: () => expoState(['index'], 'index') };
     const navigate = vi.fn();
