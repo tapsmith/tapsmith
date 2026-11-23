@@ -1174,6 +1174,18 @@ do {
 }
 
 do {
+    // A content view grown to fill the list (contentContainerStyle flexGrow:
+    // 1), filtered to one row: the empty list below the row is still blank.
+    var rows = listScreen(rows: 1)
+    for i in rows.indices where rows[i].depth == 6 || rows[i].depth == 7 {
+        if rows[i].frame == R(0, 243, 402, 66) { rows[i].frame = R(0, 243, 402, 631) }
+    }
+    let p = planner(rows).blankPointInScroller(of: rowTarget(0), focusedFrame: listSearchField)
+    checkTrue("one row in a content view grown to fill the list: a spot below it",
+              p.map { listViewport.contains($0) && $0.y > 243 + 58 } ?? false, "\(String(describing: p))")
+}
+
+do {
     // Rows edge to edge with no gaps: nothing in the list is blank.
     let rows = listScreen(rows: 30, rowFrame: { R(0, 243 + Double($0) * 58, 402, 58) })
     check("edge-to-edge rows: no blank spot in the list",

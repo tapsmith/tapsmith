@@ -504,10 +504,14 @@ struct KeyboardDismissPlanner {
                 let own = [field] + fieldUp.prefix { !holders.contains($0) }
                 if own.contains(where: { nodes[$0].frame.intersects(rect) }) { continue }
             }
-            // The list's own containers: its content view, and the target's
-            // containers that hold more than one row. The rest of them are
-            // the target's row.
-            let rowOfTarget = up.filter { inside.contains($0) && nodes[$0].parent != scroller && !isListContainer($0) }
+            // The list's own containers: its content view, the target's
+            // containers that hold more than one row, and any that covers
+            // all of the list on screen (a content view grown to fill it).
+            // The rest of them are the target's row.
+            let rowOfTarget = up.filter {
+                inside.contains($0) && nodes[$0].parent != scroller && !isListContainer($0)
+                    && !nodes[$0].frame.insetBy(dx: -1, dy: -1).contains(rect)
+            }
             let keepOut = (statusBar.map { [$0] } ?? []) + [nodes[t].frame] + rowOfTarget.map { nodes[$0].frame }
             let blocks = { (i: Int, strict: Bool) -> Bool in
                 if holders.contains(i) || i == t { return false }
