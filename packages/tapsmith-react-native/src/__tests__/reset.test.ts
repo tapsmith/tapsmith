@@ -54,7 +54,7 @@ describe('reset pipeline', () => {
     const order: string[] = [];
     const store = { clear: vi.fn(async () => { order.push('clear'); }) };
     const handler = vi.fn(async () => { order.push('handler'); });
-    const resetNavigation = vi.fn(() => { order.push('navigation'); });
+    const resetNavigation = vi.fn(async () => { order.push('navigation'); });
 
     await runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], { resetNavigation });
 
@@ -64,7 +64,7 @@ describe('reset pipeline', () => {
   it('resets navigation on a keep request too, before the reload', async () => {
     const order: string[] = [];
     const reload = vi.fn(async () => { order.push('reload'); });
-    const resetNavigation = vi.fn(() => { order.push('navigation'); });
+    const resetNavigation = vi.fn(async () => { order.push('navigation'); });
 
     await runResetPipeline({ target: '/', nonce: 'n', keepData: true }, [], [], { reload, resetNavigation });
 
@@ -73,7 +73,7 @@ describe('reset pipeline', () => {
 
   it('fails the reset when navigation cannot be reset, rather than leave the last test\'s screens', async () => {
     const handler = vi.fn();
-    const resetNavigation = vi.fn(() => { throw new Error('nav'); });
+    const resetNavigation = vi.fn(async () => { throw new Error('nav'); });
     await expect(runResetPipeline({ target: '/', nonce: 'n' }, [], [handler], { resetNavigation })).rejects.toThrow('nav');
     expect(handler).not.toHaveBeenCalled();
   });

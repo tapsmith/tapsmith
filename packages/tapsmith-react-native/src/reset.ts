@@ -33,9 +33,9 @@ export interface ResetSteps {
   reload?: ResetHandler;
   /**
    * Put the navigation state where a cold launch on the reset's route would
-   * (see navigation.ts).
+   * (see navigation.ts). Resolves once the new state has committed.
    */
-  resetNavigation?: () => void;
+  resetNavigation?: () => Promise<unknown>;
 }
 
 /**
@@ -69,7 +69,7 @@ export async function runResetPipeline(
       throw new Error('Tapsmith asked for a reset that keeps the app\'s data, but <TapsmithTestHooks> has no onReload');
     }
     if (settle) await settle().catch(() => false);
-    resetNavigation?.();
+    await resetNavigation?.();
     await reload(request);
     return;
   }
@@ -77,7 +77,7 @@ export async function runResetPipeline(
   const settled = settle ? settle().catch(() => false) : Promise.resolve(false);
   const [, blurred] = await Promise.all([cleared, settled]);
   if (blurred) await clearStores(clear);
-  resetNavigation?.();
+  await resetNavigation?.();
   for (const handler of handlers) {
     await handler(request);
   }

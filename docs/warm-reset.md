@@ -102,11 +102,11 @@ export default function HomeScreen() {
 
 ### Navigation
 
-Remounting the navigator does not reset where it is: a navigator reads its state back from the navigation container, and that state holds every tab's own stack. So the hooks reset the navigation state on every reset, before `onReset` or `onReload` runs, to what a launch on the reset's route would give: that route, with nothing pushed on any other tab. A test that pushed a form inside the Tasks tab no longer leaves it there for the next test, whichever tab the reset lands on.
+Remounting the navigator does not reset where it is: a navigator reads its state back from the navigation container, and that state holds every tab's own stack. So the hooks reset the navigation state on every reset, before `onReset` or `onReload` runs, to what a launch on the reset's route would give: that route, with nothing pushed on any other tab. The reset is acknowledged only once the new navigation state is on screen. A test that pushed a form inside the Tasks tab no longer leaves it there for the next test, whichever tab the reset lands on.
 
 They do this for the two navigation setups they know, with no code on your side:
 
-- **expo-router**: the navigation state under the root layout is replaced, keeping the root layout itself mounted, and the app then navigates to the reset's route, with its query.
+- **expo-router**: the navigation state under the root layout is replaced, keeping the root layout itself mounted. Up to expo-router 55 the new state is the one your routes build for the reset's route, as on a launch from the reset link; from 56 on, every navigator under the root layout starts over on its first screen and the app then navigates to the reset's route, with its query.
 - **React Navigation** with a [`linking`](https://reactnavigation.org/docs/configuring-links) config on the `NavigationContainer`: the whole state is replaced with the one your linking config builds for the reset's route, as on a launch from that link.
 
 Without one of these (React Navigation with no `linking` config, a route your config does not match, another navigation library), navigation is left as it is: reset it in `onReset`.

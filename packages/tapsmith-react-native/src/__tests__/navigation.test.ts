@@ -5,16 +5,12 @@ import {
   expoRouterNavigationReset,
   reactNavigationReset,
   useNavigationReset,
+  waitForNavigationToSettle,
   type NavigationContainerLike,
   type NavigationStateLike,
 } from '../navigation.js';
 
-/**
- * A container that applies resets and navigations to its state the way the
- * real one does, as far as these tests need: a reset replaces the state; a
- * navigation (the reset link's, or the reset's own) moves the focused tab and
- * pushes onto that tab's stack.
- */
+/** A container whose reset replaces its state, as the real one does. */
 function fakeContainer(initial: NavigationStateLike | undefined, ready = true) {
   let state = initial;
   const container: NavigationContainerLike & { state: () => NavigationStateLike | undefined } = {
@@ -50,13 +46,13 @@ function expoState(tasksStack: string[], focusedTab: 'index' | 'tasks'): Navigat
 }
 
 describe('expo-router navigation reset', () => {
-  it('resets through the container\'s reset when it has no resetRoot (expo-router 56 and later)', () => {
+  it('resets through the container\'s reset when it has no resetRoot (expo-router 56 and later)', async () => {
     let state: NavigationStateLike | undefined = expoState(['index', 'new'], 'index');
     const reset = vi.fn((next: object) => { state = next as NavigationStateLike; });
     const container: NavigationContainerLike = { isReady: () => true, getRootState: () => state, reset };
     const navigate = vi.fn();
 
-    expect(expoRouterNavigationReset(container, navigate)('/')).toBe(true);
+    expect(await expoRouterNavigationReset(container, navigate)('/')).toBe(true);
     expect(reset).toHaveBeenCalledTimes(1);
     // A complete root state: key, route names and key sequence kept.
     expect(state).toMatchObject({ key: 'stack-root', stale: false, routeNames: [EXPO_ROUTER_ROOT_ROUTE], routeKeySeq: 3 });
@@ -64,19 +60,19 @@ describe('expo-router navigation reset', () => {
     expect(navigate).toHaveBeenCalledWith('/');
   });
 
-  it('leaves navigation alone when the container can reset nothing', () => {
+  it('leaves navigation alone when the container can reset nothing', async () => {
     const container: NavigationContainerLike = { isReady: () => true, getRootState: () => expoState(['index'], 'index') };
     const navigate = vi.fn();
-    expect(expoRouterNavigationReset(container, navigate)('/')).toBe(false);
+    expect(await expoRouterNavigationReset(container, navigate)('/')).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it('keeps the root route and its key, drops every nested state, then navigates to the reset\'s route', () => {
+  it('keeps the root route and its key, drops every nested state, then navigates to the reset\'s route', async () => {
     const container = fakeContainer(expoState(['index', 'new'], 'index'));
     const navigate = vi.fn();
 
     const reset = expoRouterNavigationReset(container, navigate);
-    expect(reset('/settings?tab=2')).toBe(true);
+    expect(await reset('/settings?tab=2')).toBe(true);
 
     const state = container.state();
     expect(state?.routes).toEqual([{ name: EXPO_ROUTER_ROOT_ROUTE, key: '__root-key' }]);
@@ -88,32 +84,32 @@ describe('expo-router navigation reset', () => {
       .toBeLessThan(navigate.mock.invocationCallOrder[0]);
   });
 
-  it('ends fresh whether the reset link\'s own navigation landed before or after it', () => {
+  it('ends fresh whether the reset link\'s own navigation landed before or after it', async () => {
     // Landed before: the link already moved to the home tab, the tasks tab
     // still holds the pushed form. The reset drops it.
     const before = fakeContainer(expoState(['index', 'new'], 'index'));
-    expoRouterNavigationReset(before, vi.fn())('/');
+    await expoRouterNavigationReset(before, vi.fn())('/');
     expect(JSON.stringify(before.state())).not.toContain('new-key');
 
     // Lands after: the link's queued navigation applies on top of the reset
     // state, which no longer has the tasks tab's stack.
     const after = fakeContainer(expoState(['index', 'new'], 'tasks'));
-    expoRouterNavigationReset(after, vi.fn())('/');
+    await expoRouterNavigationReset(after, vi.fn())('/');
     expect(JSON.stringify(after.state())).not.toContain('new-key');
   });
 
-  it('leaves navigation alone while the container is not ready (a cold launch the link started)', () => {
+  it('leaves navigation alone while the container is not ready (a cold launch the link started)', async () => {
     const container = fakeContainer(expoState(['index', 'new'], 'tasks'), false);
     const navigate = vi.fn();
-    expect(expoRouterNavigationReset(container, navigate)('/')).toBe(false);
+    expect(await expoRouterNavigationReset(container, navigate)('/')).toBe(false);
     expect(container.resetRoot).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it('leaves a state with no expo-router root route alone', () => {
+  it('leaves a state with no expo-router root route alone', async () => {
     const container = fakeContainer({ routes: [{ name: 'Home', key: 'h' }] });
     const navigate = vi.fn();
-    expect(expoRouterNavigationReset(container, navigate)('/')).toBe(false);
+    expect(await expoRouterNavigationReset(container, navigate)('/')).toBe(false);
     expect(container.resetRoot).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });
@@ -128,62 +124,125 @@ describe('React Navigation reset', () => {
     ],
   };
 
-  it('replaces the state with the one the linking config builds for the route, as a cold launch would', () => {
+  it('replaces the state with the one the linking config builds for the route, as a cold launch would', async () => {
     const container = fakeContainer(tabsWithStack);
     const built = { routes: [{ name: 'Home' }] };
     const getStateFromPath = vi.fn(() => built);
     const config = { screens: { Home: '' } };
 
-    expect(reactNavigationReset(container, { config }, getStateFromPath)('/?tab=2')).toBe(true);
+    expect(await reactNavigationReset(container, { config }, getStateFromPath)('/?tab=2')).toBe(true);
 
     expect(getStateFromPath).toHaveBeenCalledWith('/?tab=2', config);
     expect(container.resetRoot).toHaveBeenCalledWith(built);
   });
 
-  it('uses the app\'s own getStateFromPath when its linking options have one', () => {
+  it('uses the app\'s own getStateFromPath when its linking options have one', async () => {
     const container = fakeContainer(tabsWithStack);
     const own = vi.fn(() => ({ routes: [{ name: 'Home' }] }));
     const library = vi.fn();
-    reactNavigationReset(container, { getStateFromPath: own }, library)('/');
+    await reactNavigationReset(container, { getStateFromPath: own }, library)('/');
     expect(own).toHaveBeenCalled();
     expect(library).not.toHaveBeenCalled();
   });
 
-  it('leaves the state alone without linking, with linking disabled, or for a route the config does not match', () => {
+  it('leaves the state alone without linking, with linking disabled, or for a route the config does not match', async () => {
     const toState = vi.fn(() => undefined);
     for (const linking of [undefined, { enabled: false }, {}]) {
       const container = fakeContainer(tabsWithStack);
-      expect(reactNavigationReset(container, linking, toState)('/nowhere')).toBe(false);
+      expect(await reactNavigationReset(container, linking, toState)('/nowhere')).toBe(false);
       expect(container.resetRoot).not.toHaveBeenCalled();
     }
     const notReady = fakeContainer(tabsWithStack, false);
-    expect(reactNavigationReset(notReady, {}, vi.fn(() => ({ routes: [] })))('/')).toBe(false);
+    expect(await reactNavigationReset(notReady, {}, vi.fn(() => ({ routes: [] })))('/')).toBe(false);
     expect(notReady.resetRoot).not.toHaveBeenCalled();
+  });
+});
+
+describe('expo-router root key on a linking reset (expo-router 55 and earlier)', () => {
+  it('keeps the root route\'s key, so the root layout that renders the hooks stays mounted', async () => {
+    const container = fakeContainer(expoState(['index', 'new'], 'tasks'));
+    // What expo-router's getStateFromPath builds: a partial state, no keys.
+    const built = { routes: [{ name: EXPO_ROUTER_ROOT_ROUTE, state: { routes: [{ name: 'index' }] } }] };
+
+    expect(await reactNavigationReset(container, { getStateFromPath: () => built }, undefined)('/')).toBe(true);
+
+    expect(container.state()?.routes).toEqual([
+      { name: EXPO_ROUTER_ROOT_ROUTE, key: '__root-key', state: { routes: [{ name: 'index' }] } },
+    ]);
+  });
+});
+
+describe('waiting for navigation to settle', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  function listeningContainer(state: NavigationStateLike) {
+    const listeners = new Set<() => void>();
+    let current = state;
+    const container: NavigationContainerLike = {
+      isReady: () => true,
+      getRootState: () => current,
+      addListener: (_event, listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    const commit = (next: NavigationStateLike) => { current = next; for (const l of listeners) l(); };
+    return { container, commit, listeners };
+  }
+
+  it('resolves only once the dispatched updates have committed and gone quiet', async () => {
+    vi.useFakeTimers();
+    const before = expoState(['index'], 'index');
+    const { container, commit, listeners } = listeningContainer(before);
+    let settled = false;
+    void waitForNavigationToSettle(container, before).then(() => { settled = true; });
+
+    // The reset and the navigation land a render or more later.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(settled).toBe(false);
+    commit(expoState(['index'], 'index'));
+    await vi.advanceTimersByTimeAsync(100);
+    commit(expoState(['index'], 'tasks'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBe(true);
+    expect(listeners.size).toBe(0);
+  });
+
+  it('gives up after a bounded wait when nothing commits', async () => {
+    vi.useFakeTimers();
+    const before = expoState(['index'], 'index');
+    const { container, listeners } = listeningContainer(before);
+    let settled = false;
+    void waitForNavigationToSettle(container, before).then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(settled).toBe(true);
+    expect(listeners.size).toBe(0);
   });
 });
 
 describe('useNavigationReset', () => {
   afterEach(() => { _setNavigationLibrariesForTests(undefined); });
 
-  it('is undefined when the app has no navigation library the hooks know', () => {
+  it('is undefined when the app has no navigation library the hooks know', async () => {
     _setNavigationLibrariesForTests({});
     expect(useNavigationReset()).toBeUndefined();
   });
 
-  it('resets through expo-router\'s container and router when it is installed', () => {
+  it('resets through expo-router\'s container and router when it is installed', async () => {
     const container = fakeContainer(expoState(['index', 'new'], 'tasks'));
     const navigate = vi.fn();
     _setNavigationLibrariesForTests({ expoRouter: { router: { navigate }, useNavigationContainerRef: () => container } });
 
     const reset = useNavigationReset();
-    expect(reset?.('/')).toBe(true);
+    expect(await reset?.('/')).toBe(true);
     expect(container.resetRoot).toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith('/');
   });
 
-  it('reports nothing reset while expo-router\'s container is not ready', () => {
+  it('reports nothing reset while expo-router\'s container is not ready', async () => {
     const container = fakeContainer(undefined, false);
     _setNavigationLibrariesForTests({ expoRouter: { router: { navigate: vi.fn() }, useNavigationContainerRef: () => container } });
-    expect(useNavigationReset()?.('/')).toBe(false);
+    expect(await useNavigationReset()?.('/')).toBe(false);
   });
 });

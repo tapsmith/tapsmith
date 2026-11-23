@@ -165,7 +165,7 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
         return runResetPipeline(request, stores, handlers, {
           settle: () => blurFocusedInput(keyboardDeps),
           reload,
-          resetNavigation: navigationReset ? () => { navigationReset(resetHref(url)); } : undefined,
+          resetNavigation: navigationReset ? () => navigationReset(resetHref(url)) : undefined,
         });
       },
     });
