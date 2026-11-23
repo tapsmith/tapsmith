@@ -2,7 +2,8 @@
  * A permission alert a test raises and never answers. SpringBoard keeps it up
  * across relaunches and runs, covering the app for every later test, so
  * Tapsmith answers it once the test has ended (pressing an accepting button,
- * never a denial) — but never while the test that raised it is running.
+ * never a denial) — but, on a simulator, not while the test that raised it is
+ * running.
  *
  * The two tests run in order in one file: the first leaves the alert up, the
  * second checks it starts clean.
