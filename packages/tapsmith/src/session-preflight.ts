@@ -88,27 +88,54 @@ export interface PreflightNotice {
 
 /** The iOS agent's event kind for a leftover "Open in “App”?" prompt it cancelled. */
 const OPEN_IN_PROMPT_KIND = 'open-in-prompt';
+/** The iOS agent's event kind for an alert it answered at a test boundary. */
+const LEFTOVER_ALERT_KIND = 'leftover-alert';
 
 /** Deadline for taking the agent's answered dialogs at the end of a test: a
  *  queue read on the device, so anything slower is a wedged agent, and the
  *  report must not hold the test's end for it. */
 const ANSWERED_DIALOGS_DEADLINE_MS = 3_000;
+/** The same on iOS, where the agent first answers any alert still up: each
+ *  press waits up to 2 s for the alert to close and 0.7 s for a queued one,
+ *  for at most three alerts. */
+const LEFTOVER_ALERTS_DEADLINE_MS = 15_000;
+
+/**
+ * Where {@link collectAnsweredSystemDialogs} is called: both are boundaries
+ * at which an alert still up cannot belong to the test about to run, so the
+ * iOS agent answers it. `test-end`: a test attempt has just ended (its
+ * failure screenshot already taken). `reset-start`: a declared app reset is
+ * about to begin, before any of its steps can launch the app — the first
+ * thing a run, a file or UI mode's background preparation does.
+ */
+export type DialogBoundary = 'test-end' | 'reset-start';
 
 /**
  * Take the system dialogs the agent answered on its own and add them to
  * {@link SessionPreflightContext.notices}, so the runner reports them like the
  * preflight's: a trace row for each, and a warning on the test for the app
  * under test's own ANR (a finding, not noise). On Android these are ANR /
- * crash dialogs answered during a test, or a lookup or tap outside one; on iOS,
+ * crash dialogs answered during a test, or a lookup or tap outside one.
+ *
+ * On iOS the agent first answers any SpringBoard alert still up, since at
+ * `boundary` it is a leftover: a permission prompt a test raised and never
+ * answered otherwise covers the app for every later test and run, even after
+ * the app is uninstalled. It presses an allow-style button, never a denial
+ * (iOS asks once per bundle id), and leaves up an alert with no such button.
+ * Never in the middle of a test: an alert up then is the test's. Those, and
  * a leftover "Open in “App”?" prompt the agent cancelled before launching the
- * app, which also gets an info line, since it explains what was wrong with
- * the device. Best effort: an agent that cannot say (an older one, a dead
+ * app, also get an info line, since they explain what was wrong with the
+ * device. Best effort: an agent that cannot say (an older one, a dead
  * session) adds nothing, and the test's own outcome stands.
  */
-export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext): Promise<void> {
+export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext, boundary: DialogBoundary): Promise<void> {
+  const ios = ctx.config.platform === 'ios';
   let events;
   try {
-    ({ events } = await ctx.client.takeSystemDialogEvents(ANSWERED_DIALOGS_DEADLINE_MS));
+    ({ events } = await ctx.client.takeSystemDialogEvents(
+      ios ? LEFTOVER_ALERTS_DEADLINE_MS : ANSWERED_DIALOGS_DEADLINE_MS,
+      { answerLeftoverAlerts: ios },
+    ));
   } catch {
     return;
   }
@@ -120,6 +147,17 @@ export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext)
       const message = `A system alert left on the device, "${title}", was covering the app; `
         + `Tapsmith pressed ${event.button} before using the app. Something outside the test opened a link to the app `
         + '(npx expo run:ios does when it finishes).';
+      ctx.notices.push({ kind: 'foreign-dialog', title, owner, message, timestamp });
+      process.stderr.write(`[tapsmith] ${message}\n`);
+      continue;
+    }
+    if (event.kind === LEFTOVER_ALERT_KIND) {
+      const message = boundary === 'test-end'
+        ? `A system alert was still up when the test ended: "${title}". `
+          + `Tapsmith pressed ${event.button}, so it does not cover the app in the next test. `
+          + 'A test that raises an alert should answer it before it ends (device.tapXY() on its button).'
+        : `A system alert left on the device, "${title}", was covering the app; `
+          + `Tapsmith pressed ${event.button} before resetting the app. An earlier test or run raised it and never answered it.`;
       ctx.notices.push({ kind: 'foreign-dialog', title, owner, message, timestamp });
       process.stderr.write(`[tapsmith] ${message}\n`);
       continue;
@@ -817,6 +855,13 @@ export async function executeAppReset(
 
   const action = appResetAction(policy);
 
+  // On iOS, first answer a system alert an earlier test or run left up (a
+  // permission prompt it never answered): before any step below can launch
+  // the app, so nothing of this reset's own is answered. Best effort.
+  if (ctx.config.platform === 'ios') {
+    await step('leftoverAlertCheck', () => collectAnsweredSystemDialogs(ctx, 'reset-start'));
+  }
+
   if (!ctx.config.package) {
     await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
     return finish({ origin: 'skipped', modeUsed: 'none', fellBack: false, reason: 'no package configured' });
@@ -824,17 +869,13 @@ export async function executeAppReset(
 
   if (options.prepared && satisfies(options.prepared.policy, policy)) {
     let relaunched = false;
+    // A run that starts on an app prepared earlier sends the iOS agent no
+    // launch and no link, the points where it cancels a leftover "Open in"
+    // prompt (one `npx expo run:ios` raised while UI mode sat between runs):
+    // the leftover-alert check above answered it.
     await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase, undefined, {
       onRelaunch: () => { relaunched = true; },
     }));
-    // A run that starts on an app prepared earlier sends the iOS agent no
-    // launch and no link, the points where it cancels a leftover "Open in"
-    // prompt (one `npx expo run:ios` raised while UI mode sat between runs).
-    // Its readiness check looks for one (at most every 15 s) and returns at
-    // once for an app that has rendered. A relaunch already looked.
-    if (ctx.config.platform === 'ios' && !relaunched) {
-      await step('leftoverPromptCheck', () => checkLeftoverPrompt(ctx, ctx.config.package!));
-    }
     // The prepared state stands, but not necessarily on this scope's start
     // route: one navigation instead of a whole reset. An app the readiness
     // check had to relaunch is on its launch screen, whatever was prepared.
@@ -1597,22 +1638,6 @@ async function waitForAppReady(
 ): Promise<void> {
   if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, options);
   return waitForAndroidAppReady(ctx);
-}
-
-/** How long the iOS readiness call made only for its leftover-prompt check
- *  may take: the app is already up, so it answers at once unless the agent
- *  is cancelling a prompt (a tap and up to 2 s for it to close). */
-const LEFTOVER_PROMPT_CHECK_TIMEOUT_MS = 3_000;
-
-/** Have the iOS agent look for (and cancel) a leftover "Open in" prompt by
- *  way of its readiness check. Best effort: an older agent or a failed call
- *  leaves the prompt to be named in errors. */
-async function checkLeftoverPrompt(ctx: SessionPreflightContext, pkg: string): Promise<void> {
-  try {
-    await ctx.client.waitForAppReady(pkg, LEFTOVER_PROMPT_CHECK_TIMEOUT_MS, LEFTOVER_PROMPT_CHECK_TIMEOUT_MS + APP_READY_RPC_SLACK_MS);
-  } catch {
-    // Best effort.
-  }
 }
 
 /**

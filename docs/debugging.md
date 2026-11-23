@@ -439,10 +439,19 @@ The usual one is **"Open in “App”?"**. `npx expo run:ios` ends by opening a 
 
 The trace also shows it, as a `systemDialog` step on the test that was running when Tapsmith collected it. Tapsmith presses **Cancel**, not **Open**: Open would deliver a link no test asked for. A prompt that comes up during a run may stay up until the next of those checks; while it is up, errors name it. Prompts that Tapsmith's own `device.openDeepLink()` raises are answered with Open, as before. Tapsmith recognises the English prompt only.
 
-**Fixes**, for any other alert that the error names:
+**Leftover permission prompts and other alerts.** A permission prompt ("“my-app” Would Like to Send You Notifications") that a test raised and never answered would otherwise stay up for every later test and run, even after the app is uninstalled. So Tapsmith answers any system alert still up **when a test ends** and **before every app reset** (which is also the first thing each test file, and so each run, does), and says so:
 
-- Close it on the simulator (or device), then run again
+```
+[tapsmith] A system alert was still up when the test ended: "“my-app” Would Like to Send You Notifications". Tapsmith pressed Allow, so it does not cover the app in the next test. A test that raises an alert should answer it before it ends (device.tapXY() on its button).
+[tapsmith] A system alert left on the device, "“my-app” Would Like to Send You Notifications", was covering the app; Tapsmith pressed Allow before resetting the app. An earlier test or run raised it and never answered it.
+```
+
+Each is also a `systemDialog` step in the trace (on the test that ended, or in its APP RESET group). Tapsmith follows the same rule as for prompts on physical devices: it presses an accepting button (**Allow**, **OK**, **Allow While Using App**, …), never **Don’t Allow**, because iOS asks for a permission only once per app and a denial stays until the app is reinstalled. An alert with no such button is left up, and errors name it. "Open in" prompts are still cancelled. Tapsmith never answers an alert in the middle of a test: one that comes up during a test is the test's, and its errors name it until the test answers it or ends. An alert that the app raises as a reset launches it is left for the test too; one the app raises when the run first launches it is still up at the first test file's reset, which answers it.
+
+**Fixes**, for an alert that the error names:
+
 - If your test raises it on purpose, tap one of its buttons with `device.tapXY()` at the button's position on the failure screenshot
+- If no button can be pressed safely (only **Don’t Allow**, or buttons Tapsmith does not know), close it on the simulator (or device), then run again
 
 ### "SpringBoard quit unexpectedly" (iOS simulator)
 
