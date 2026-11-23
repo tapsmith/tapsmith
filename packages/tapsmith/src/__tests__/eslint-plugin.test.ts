@@ -334,6 +334,49 @@ describe('no-bare-locator-xpath on real code', () => {
     ]))).toEqual([5]);
   });
 
+  it('does not count a comment about another class field, object property or array element', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lintFile([
+      '// Login screen.',
+      'export class Login {',
+      '  constructor(device) { this.device = device; }',
+      '  // Submit button.',
+      "  submit = this.device.getByRole('button');",
+      "  row = this.device.locator({ xpath: '//Row[1]' });",
+      '}',
+    ])).toEqual([6]);
+    expect(lintFile([
+      'export default {',
+      '  // The title.',
+      '  title: 1,',
+      "  row: device.locator({ xpath: '//Row[1]' }),",
+      '};',
+    ])).toEqual([4]);
+    expect(lintFile([
+      'const rows = [',
+      '  // The first.',
+      '  first,',
+      "  device.locator({ xpath: '//Row[1]' }),",
+      '];',
+    ])).toEqual([4]);
+  });
+
+  it('accepts a comment above the class field, object property or array element itself', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lintFile([
+      'export class Login {',
+      '  // Legacy row with no accessible name.',
+      '  row = this.device',
+      "    .locator({ xpath: '//Row[1]' });",
+      '}',
+      'export const screen = {',
+      '  // Legacy row with no accessible name.',
+      '  row:',
+      "    device.locator({ xpath: '//Row[1]' }),",
+      '};',
+    ])).toEqual([]);
+  });
+
   it('reports a call with no comment', () => {
     expect(lint(body(["  await device.locator({ xpath: '//Button[2]' }).tap();"]))).toEqual([2]);
   });

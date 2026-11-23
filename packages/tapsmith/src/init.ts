@@ -42,7 +42,7 @@ import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitigno
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 import { detectCodingAgents, pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
-import { installedDocsDir } from './agents-md.js';
+import { installedDocsDir, refreshAgentsMdDocsDir } from './agents-md.js';
 import { appIdProblem, appIdWarning, type AppIdPlatform } from './app-id.js';
 
 const DIM = '\x1b[2m';
@@ -1652,6 +1652,9 @@ async function runInitInner(): Promise<void> {
 
   // Step 8.6: Tapsmith itself, which the config and test import (PILOT-551)
   const installStep = await offerTapsmithInstall(process.cwd());
+  // Written above with the docs path before the install, which a workspace
+  // package hoists to the workspace root.
+  if (written.includes('AGENTS.md') && !installStep) refreshAgentsMdDocsDir(process.cwd());
   if (selectedPlatforms.includes('android')) await warnIfAndroidAgentMissing(process.cwd());
 
   // Step 9: Next steps

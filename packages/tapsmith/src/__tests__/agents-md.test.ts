@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { renderAgentsSection, mergeAgentsMd, installedDocsDir, writeAgentsMd, AGENTS_BEGIN, AGENTS_END } from '../agents-md.js';
+import { renderAgentsSection, mergeAgentsMd, installedDocsDir, writeAgentsMd, refreshAgentsMdDocsDir, AGENTS_BEGIN, AGENTS_END } from '../agents-md.js';
 
 describe('renderAgentsSection()', () => {
   it('renders fenced section with run/debug/MCP guidance', () => {
@@ -165,5 +165,28 @@ describe('the docs path init writes', () => {
     fs.mkdirSync(pkg, { recursive: true });
     const written = fs.readFileSync(writeAgentsMd(pkg), 'utf8');
     expect(written).toContain('`../../node_modules/tapsmith/docs/<page>.md`');
+  });
+
+  it('refreshAgentsMdDocsDir() repoints a section written before a hoisting install', () => {
+    const root = tmp();
+    const pkg = path.join(root, 'packages', 'e2e');
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'AGENTS.md'), '# Mine\n\n');
+    writeAgentsMd(pkg);
+    expect(fs.readFileSync(path.join(pkg, 'AGENTS.md'), 'utf8')).toContain('`node_modules/tapsmith/docs/<page>.md`');
+    install(root); // the wizard's install, hoisted to the workspace root
+    refreshAgentsMdDocsDir(pkg);
+    const after = fs.readFileSync(path.join(pkg, 'AGENTS.md'), 'utf8');
+    expect(after).toContain('`../../node_modules/tapsmith/docs/<page>.md`');
+    expect(after.startsWith('# Mine\n')).toBe(true);
+    expect(after.match(new RegExp(AGENTS_BEGIN, 'g'))).toHaveLength(1);
+  });
+
+  it('refreshAgentsMdDocsDir() leaves an AGENTS.md without a Tapsmith section alone', () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Mine\n');
+    refreshAgentsMdDocsDir(dir);
+    expect(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8')).toBe('# Mine\n');
+    refreshAgentsMdDocsDir(tmp()); // no AGENTS.md at all: nothing written
   });
 });

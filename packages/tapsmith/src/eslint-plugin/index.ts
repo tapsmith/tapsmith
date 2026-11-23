@@ -162,15 +162,17 @@ const preferRole: RuleModule = {
 // ─── no-bare-locator-xpath ───
 
 /**
- * The statement or declaration `node` is part of. Within an expression-bodied
- * arrow function, the body: the statement around the function can start
- * lines above the call.
+ * The statement, class field or object property `node` is part of, or its
+ * element of an array: the unit a comment above explains. Within an
+ * expression-bodied arrow function, the body. The class, object, array or
+ * function around these can start lines above the call, with comments about
+ * other members in between.
  */
 function enclosingStatement(node: ASTNode): ASTNode {
   let prev = node;
   for (let n: ASTNode | undefined = node; n; prev = n, n = n.parent) {
-    if (/(Statement|Declaration)$/.test(n.type)) return n;
-    if (/Function(Expression)?$/.test(n.type)) return prev;
+    if (/(Statement|Declaration)$/.test(n.type) || n.type === 'Property' || n.type === 'PropertyDefinition') return n;
+    if (/Function(Expression)?$/.test(n.type) || n.type === 'ArrayExpression') return prev;
   }
   return prev;
 }
