@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { derivedDataBuildWarning, detectGradleApplicationId, detectProjectLayout, findDerivedDataApps, nativeBuildHint, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
+import { debugBuildWarning, derivedDataBuildWarning, detectGradleApplicationId, detectProjectLayout, findDerivedDataApps, nativeBuildHint, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
 
 describe('parseAapt2Badging()', () => {
   it('extracts the package name', () => {
@@ -607,4 +607,42 @@ describe('Flutter projects (PILOT-868)', () => {
     expect(warning).toContain('`flutter build ios --simulator --debug`');
     expect(warning).not.toContain('xcodebuild');
   }));
+});
+
+describe('debugBuildWarning()', () => {
+  const rnLayout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true, flutter: false };
+  const expo = { hasAndroidDir: true, hasIosDir: true, usesTapsmithHooks: true };
+
+  it('warns about a React Native Debug simulator build and gives the Release one', () => {
+    const warning = debugBuildWarning('ios/build/Build/Products/Debug-iphonesimulator/App.app', 'ios', rnLayout, true);
+    expect(warning).toContain('ios/build/Build/Products/Debug-iphonesimulator/App.app is a Debug build');
+    expect(warning).toContain('Metro');
+    expect(warning).toContain('`cd ios && xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphonesimulator -derivedDataPath build build`');
+    expect(warning).not.toContain('first');
+  });
+
+  it('gives the Expo release build, hooks flag included, in an Expo project', () => {
+    const ios = debugBuildWarning('/dd/Build/Products/Debug-iphonesimulator/my-app.app', 'ios', rnLayout, true, expo);
+    expect(ios).toContain('EXPO_PUBLIC_TAPSMITH_HOOKS=1 xcodebuild');
+    expect(ios).toContain('-configuration Release');
+    const android = debugBuildWarning('android/app/build/outputs/apk/debug/app-debug.apk', 'android', rnLayout, true, expo);
+    expect(android).toContain('is a Debug build');
+    expect(android).toContain('./gradlew assembleRelease');
+  });
+
+  it('gives assembleRelease for a bare React Native Debug APK, flavoured or not', () => {
+    expect(debugBuildWarning('android/app/build/outputs/apk/debug/app-debug.apk', 'android', rnLayout, true))
+      .toContain('`cd android && ./gradlew assembleRelease`');
+    expect(debugBuildWarning('android/app/build/outputs/apk/staging/debug/app-staging-debug.apk', 'android', rnLayout, true)).toBeDefined();
+  });
+
+  it('says nothing for a Release build, a native app, or a configuration it cannot judge', () => {
+    expect(debugBuildWarning('ios/build/Build/Products/Release-iphonesimulator/App.app', 'ios', rnLayout, true)).toBeUndefined();
+    expect(debugBuildWarning('android/app/build/outputs/apk/release/app-release.apk', 'android', rnLayout, true)).toBeUndefined();
+    expect(debugBuildWarning('build/Build/Products/Debug-iphonesimulator/App.app', 'ios', rnLayout, false)).toBeUndefined();
+    expect(debugBuildWarning('build/Build/Products/Staging-iphonesimulator/App.app', 'ios', rnLayout, true)).toBeUndefined();
+    expect(debugBuildWarning('builds/App.app', 'ios', rnLayout, true)).toBeUndefined();
+    // A folder that merely contains "debug" is not a Debug build.
+    expect(debugBuildWarning('debug-builds/app-release.apk', 'android', rnLayout, true)).toBeUndefined();
+  });
 });

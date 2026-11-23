@@ -163,6 +163,18 @@ export function resolveInitPlan(
     expoMemo ??= { value: (detect.detectExpoProject ?? detectDefaults.detectExpoProject)(cwd) };
     return expoMemo.value;
   };
+  // Notes that need only whether this is Expo, not the app config's ids,
+  // read no config: that would run the project's Expo CLI.
+  let expoShapeMemo: { value: detectDefaults.ExpoProject | undefined } | undefined;
+  const expoShape = (): detectDefaults.ExpoProject | undefined => {
+    if (expoMemo) return expoMemo.value;
+    expoShapeMemo ??= { value: (detect.detectExpoProject ?? detectDefaults.detectExpoProject)(cwd, () => undefined) };
+    return expoShapeMemo.value;
+  };
+  const debugWarning = (build: string, platform: Platform): string | undefined => {
+    if (!detectDefaults.isReactNativeProject(cwd)) return undefined;
+    return detectDefaults.debugBuildWarning(build, platform, detectDefaults.detectProjectLayout(cwd), true, expoShape());
+  };
 
   // Platform: explicit flag, else infer from the builds given and the
   // project layout: android/ and ios/ (React Native), or a root
@@ -200,13 +212,10 @@ export function resolveInitPlan(
     // A React Native app usually targets both, so an inferred Android-only
     // setup on a Mac says why iOS is missing and how to add it (PILOT-625).
     if (env.isMacOS && !inferred.includes('ios') && reactNative) {
-      // The note needs only whether this is Expo, not the app config's ids,
-      // so the config is not read: that would run the project's Expo CLI.
-      const detectExpo = detect.detectExpoProject ?? detectDefaults.detectExpoProject;
       // Once ios/ exists, --package alone no longer names Android, so a
       // re-run it configured must name both platforms.
       const packageOnly = packageNamesAndroid && !args.apk && !detectDefaults.hasAndroidProject(layout);
-      warnings.push(iosLeftOutNote(detectExpo(cwd, () => undefined), args.apk, packageOnly));
+      warnings.push(iosLeftOutNote(expoShape(), args.apk, packageOnly));
     }
   }
 
@@ -263,6 +272,8 @@ export function resolveInitPlan(
       // resets an app that is already installed, it just cannot install it.
       warnings.push(`No APK found, so the config has no apk: Tapsmith will launch and reset ${packageName} but cannot install it — install the app on the device yourself, or add apk: '<path>' to tapsmith.config.ts`);
     } else {
+      const debug = debugWarning(apkPath, 'android');
+      if (debug) warnings.push(debug);
       const apkAbs = path.resolve(cwd, apkPath);
       packageName ??= detect.detectAndroidPackage(apkAbs);
       // The app config's id stands in only for a build that exists: a missing
@@ -358,6 +369,8 @@ export function resolveInitPlan(
       if (fromDerivedData) warnings.push(detectDefaults.derivedDataBuildWarning(appPath, layout, 'iphonesimulator', reactNative));
     }
 
+    const debug = debugWarning(appPath, 'ios');
+    if (debug) warnings.push(debug);
     const appAbs = path.resolve(cwd, appPath);
     let bundleId = args.bundleId ?? detect.detectIosBundleId(appAbs);
     const configBundleId = !bundleId && fs.existsSync(appAbs) ? expo()?.iosBundleId : undefined;

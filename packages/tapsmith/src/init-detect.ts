@@ -490,6 +490,45 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
     + `which writes the .app under ${out} (\`xcodebuild -list\` shows the schemes if yours is not ${target.scheme}${metro}; see ${BUILD_DOCS})`;
 }
 
+/** A Debug build by its output path: Xcode's `Debug-iphone*` products folder, Gradle's `debug` variant. */
+function isDebugBuildPath(build: string, platform: 'android' | 'ios'): boolean {
+  return platform === 'ios'
+    ? /(?:^|[\\/])Debug-iphone(?:simulator|os)[\\/]/.test(build)
+    : /(?:^|[\\/])debug[\\/][^\\/]+\.apk$|-debug\.apk$/i.test(build);
+}
+
+/**
+ * A warning for a React Native (or Expo) Debug build, which loads its
+ * JavaScript from Metro: it needs Metro running for every run, runs slower,
+ * and a Metro reload can interrupt a test. Gives the Release build to use
+ * instead. Undefined for a Release build, a native app, or a build whose
+ * configuration the path does not say.
+ */
+export function debugBuildWarning(
+  build: string,
+  platform: 'android' | 'ios',
+  layout: ProjectLayout,
+  reactNative: boolean,
+  expo?: ExpoProject,
+): string | undefined {
+  if (!reactNative || !isDebugBuildPath(build, platform)) return undefined;
+  let release: string;
+  if (expo) {
+    release = expoBuildStep(platform, expo);
+  } else if (platform === 'android') {
+    const cd = layout.androidRoot === undefined || layout.androidRoot === '.' ? '' : `cd ${shellArg(layout.androidRoot)} && `;
+    release = `Build one with \`${cd}./gradlew assembleRelease\`, which writes app/build/outputs/apk/release/app-release.apk.`;
+  } else if (xcodeBuildTarget(layout)) {
+    release = `${nativeBuildHint('ios', layout, true).replace(/^Build one for the simulator first/, 'Build one')}.`;
+  } else {
+    release = 'Build one with `xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build` '
+      + 'in the folder with your Xcode project.';
+  }
+  return `${build} is a Debug build, which loads its JavaScript from Metro: Metro must be running for every run, tests run slower, `
+    + 'and a Metro reload (Expo\'s "Refreshing…" banner) can interrupt a test. For faster, steadier runs, test a Release build. '
+    + `${release} Then point the config at it.`;
+}
+
 /**
  * A Flutter app's build, with `flutter build`, which knows to run
  * the Dart build first: a bare Gradle or Xcode build of a fresh checkout

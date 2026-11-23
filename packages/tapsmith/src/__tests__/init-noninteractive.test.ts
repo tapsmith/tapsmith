@@ -379,6 +379,22 @@ describe('resolveInitPlan()', () => {
       expect(rerun.android?.packageName).toBe('com.x');
     }, false));
 
+    it('warns that a React Native Debug build needs Metro, and gives the Release build', () => withProject({ 'react-native': '0.79.0' }, (tmp) => {
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android,ios' }), baseEnv, { ...detectStubs, detectExpoProject: () => undefined }, tmp);
+      const debug = plan.warnings.filter((w) => w.includes('is a Debug build'));
+      expect(debug).toHaveLength(2);
+      expect(debug[0]).toContain('android/app/build/outputs/apk/debug/app-debug.apk');
+      expect(debug[0]).toContain('assembleRelease');
+      expect(debug[1]).toContain('Debug-iphonesimulator/MyApp.app');
+      expect(debug[1]).toContain('-configuration Release');
+    }));
+
+    it('does not warn about a Debug build of a native app', () => withProject({ lodash: '4.0.0' }, (tmp) => {
+      const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android,ios' }), baseEnv, { ...detectStubs, detectExpoProject: () => undefined }, tmp);
+      expect(plan.warnings.filter((w) => w.includes('is a Debug build'))).toEqual([]);
+    }));
+
     it('quotes an --apk path the shell would split', () => withProject({ 'react-native': '0.79.0' }, (tmp) => {
       const plan = resolveInitPlan(initArgs({ yes: true, apk: "my builds/it's.apk" }), baseEnv, { ...detectStubs, detectExpoProject: () => undefined }, tmp);
       expect(iosNote(plan.warnings)).toContain("`npx tapsmith init --force --apk 'my builds/it'\\''s.apk'`");
