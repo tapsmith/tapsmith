@@ -7,6 +7,16 @@ describe("Dialogs screen", () => {
     await expect(dialogsScreen.heading).toBeVisible()
   })
 
+  // PILOT-1448: Android draws an Alert.alert dialog's buttons in capitals
+  // (CANCEL) and reports them so; the button's text as written finds it
+  // exactly, as Detox's by.text does.
+  test("an Android alert button is found by its text as written, exactly", async ({ platform, dialogsScreen }) => {
+    test.skip(platform !== "android", "Android's AlertDialog draws its buttons in capitals")
+    await dialogsScreen.showConfirmButton.tap()
+    await dialogsScreen.confirmCancelText.tap()
+    await expect(dialogsScreen.confirmResult).toHaveText("Result: Cancelled")
+  })
+
   // ─── Alert, then BACK ───
 
   // PILOT-1252: on iOS 27 a BACK straight after the alert's OK landed while

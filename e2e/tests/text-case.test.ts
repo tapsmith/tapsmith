@@ -35,4 +35,16 @@ describe("Case-insensitive substring getByText (PILOT-522)", () => {
     await expect(device.getByText("welcome to expo", { exact: true })).toHaveCount(0)
     await expect(device.getByText("Welcome to Expo", { exact: true })).toHaveCount(1)
   })
+
+  // PILOT-1448: Android reports the capitalized text, and an exact match
+  // also accepts the query in capitals, as Detox and Playwright match the
+  // text before it is capitalized. iOS keeps exact case-sensitive.
+  test("on Android, exact matching also finds text drawn in capitals", async ({ platform }) => {
+    if (platform === "android") {
+      await screen.getStartedExact.tap()
+      await expect(screen.startedCount).toHaveText("started=1")
+    } else {
+      await expect(screen.getStartedExact).toHaveCount(0)
+    }
+  })
 })

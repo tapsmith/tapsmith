@@ -18,6 +18,8 @@ export class DialogsScreen {
   get confirmAlertButtons() { return this.confirmAlert.getByRole("button") }
   get confirmAlertCancel() { return this.confirmAlert.getByRole("button", { name: "Cancel", exact: true }) }
   get confirmResult() { return this.device.getByTestId("confirm-result") }
+  /** The confirm alert's Cancel button by its text as written: Android draws it in capitals (CANCEL). */
+  get confirmCancelText() { return this.device.getByText("Cancel", { exact: true }) }
 
   // Toast
   get showToastButton() { return this.device.getByRole("button", { name: "Show toast" }) }

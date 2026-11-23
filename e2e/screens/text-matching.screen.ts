@@ -6,6 +6,8 @@ export class TextMatchingScreen {
 
   get counts() { return this.device.getByTestId("text-matching-counts") }
   get startedCount() { return this.device.getByTestId("text-matching-started") }
+  /** "Get started" as written, exactly: textTransform renders it as GET STARTED. */
+  get getStartedExact() { return this.device.getByText("Get started", { exact: true }) }
   /** The field labelled "Full name", with placeholder "Your name". */
   get fullNameField() { return this.device.getByLabel("Full name") }
   /** The field with no accessibility label, only its placeholder "Nickname". */
