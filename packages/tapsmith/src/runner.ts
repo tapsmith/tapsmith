@@ -1687,9 +1687,18 @@ function labelHookError(err: unknown, bound: HookBound, where: string): unknown 
   if (isTestSkip(err) || isAbortError(err) || isRunnerTimeoutError(err) || bound.abortSignal?.aborted) return err;
   const error = err instanceof Error ? err : new Error(String(err));
   if (labelledHookErrors.has(error)) return error;
-  labelledHookErrors.add(error);
-  error.message = `"${bound.kind}" hook${where} failed: ${error.message}`;
-  return error;
+  const message = `"${bound.kind}" hook${where} failed: ${error.message}`;
+  let labelled: Error = error;
+  try {
+    // An own property: a DOMException's `message` is a getter-only accessor.
+    Object.defineProperty(error, 'message', { value: message, writable: true, configurable: true });
+  } catch {
+    // A frozen error cannot take one: report a copy, with the hook's stack.
+    labelled = new Error(message, { cause: error });
+    labelled.stack = error.stack;
+  }
+  labelledHookErrors.add(labelled);
+  return labelled;
 }
 
 /**

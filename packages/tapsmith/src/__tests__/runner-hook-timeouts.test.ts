@@ -383,6 +383,26 @@ describe('runTestFile — hook failures name the hook', () => {
     ]);
   });
 
+  it('labels an error whose message is read-only (a DOMException) or that is frozen, without losing it', async () => {
+    const filePath = writeFile('readonly.test.mjs', `
+      describe('dom', () => {
+        beforeEach(() => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); });
+        test('a', async () => {});
+      });
+      describe('frozen', () => {
+        beforeEach(() => { throw Object.freeze(new Error('frozen one')); });
+        test('b', async () => {});
+      });
+    `);
+
+    const results = collectResults(await runTestFile(filePath, makeOpts()));
+    const byName = Object.fromEntries(results.map((r) => [r.fullName, r.error]));
+
+    expect(byName['dom > a']!.message).toBe('"beforeEach" hook at readonly.test.mjs:9 failed: The operation was aborted due to timeout');
+    expect(byName['frozen > b']!.message).toBe('"beforeEach" hook at readonly.test.mjs:13 failed: frozen one');
+    expect(byName['frozen > b']!.stack).toContain(`${filePath}:13`);
+  });
+
   it('labels a non-Error throw, keeps every line of a multi-line message, and leaves body errors alone', async () => {
     const filePath = writeFile('mixed.test.mjs', `
       describe('string', () => {

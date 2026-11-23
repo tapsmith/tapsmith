@@ -412,10 +412,13 @@ describe('ListReporter', () => {
     const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
     reporter.onTestEnd!(makeTestResult({ status: 'passed', fullName: 'first test', durationMs: 8500, setupMs: 7950 }));
     reporter.onTestEnd!(makeTestResult({ status: 'passed', fullName: 'second test', durationMs: 600 }));
+    // Entering a describe with no reset or beforeAll takes a millisecond or two: no label.
+    reporter.onTestEnd!(makeTestResult({ status: 'passed', fullName: 'plain describe', durationMs: 600, setupMs: 2 }));
     reporter.onTestEnd!(makeTestResult({ status: 'failed', fullName: 'retried', durationMs: 2000, setupMs: 1500, error: new Error('x'), _willRetry: true, retry: 0 }));
     const out = strip(stdoutSpy.mock.calls.map((c: unknown[]) => c[0]).join(''));
     expect(out).toContain('first test (8.5s, incl. 8.0s setup)');
     expect(out).toContain('second test (600ms)');
+    expect(out).toContain('plain describe (600ms)');
     expect(out).toContain('retried (2.0s, incl. 1.5s setup)');
   });
 
