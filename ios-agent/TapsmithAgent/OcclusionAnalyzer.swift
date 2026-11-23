@@ -335,6 +335,27 @@ struct OcclusionAnalyzer {
     }
 
 
+    /// Where the status bar is, as read for one action (a SpringBoard
+    /// snapshot): read the first time a pass needs it, and again after a pass
+    /// found the target covered by it — the app may be hiding the bar, and
+    /// the wait for a cover to go must see it go. Otherwise kept: the bar
+    /// does not move while one touch is planned.
+    struct StatusBarCache {
+        private var read: CGRect??
+
+        /// Whether the next pass that needs the region must read it.
+        var needsRead: Bool { read == nil }
+        /// The region last read; nil when none is shown, or none was read.
+        var region: CGRect? { read ?? nil }
+
+        mutating func store(_ region: CGRect?) { read = .some(region) }
+
+        /// Note a pass's verdict (nil when no tree could be read).
+        mutating func passEnded(with verdict: Verdict?) {
+            if case .covered(let by)? = verdict, by == OcclusionAnalyzer.statusBarName { read = nil }
+        }
+    }
+
     static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
 
     /// Whether node `i` is a progress indicator or holds a visible one inside

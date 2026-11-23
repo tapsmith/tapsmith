@@ -1050,5 +1050,26 @@ checkBool("a nav bar at the very top (status bar hidden) exempts nothing: read",
               (3, .button, "Back", "", R(8, 2, 40, 40)),
           ]).mayBeUnderStatusBar(R(8, 2, 40, 40)), true)
 
+// The status bar as read for one action: once, then again after a pass found
+// the target covered by it, so a bar the app is hiding is seen to go.
+do {
+    var cache = OcclusionAnalyzer.StatusBarCache()
+    checkBool("nothing read yet: read", cache.needsRead, true)
+    cache.store(statusBarStrip)
+    checkBool("read: not read again on the next pass", cache.needsRead, false)
+    checkBool("…and the region is kept", cache.region == statusBarStrip, true)
+    cache.passEnded(with: .covered(by: "the keyboard"))
+    checkBool("covered by something else: the region is kept", cache.needsRead, false)
+    cache.passEnded(with: .clear(point: .zero, visible: R(0, 54, 10, 10)))
+    checkBool("clear: the region is kept", cache.needsRead, false)
+    cache.passEnded(with: .covered(by: OcclusionAnalyzer.statusBarName))
+    checkBool("covered by the status bar: read again on the next pass, to see it go", cache.needsRead, true)
+    cache.store(nil)
+    checkBool("read again and none shown now: no region", cache.region == nil, true)
+    checkBool("…and not read again", cache.needsRead, false)
+    cache.passEnded(with: nil)
+    checkBool("no tree read: the region is kept", cache.needsRead, false)
+}
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
