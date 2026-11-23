@@ -560,10 +560,14 @@ class GestureInjector(
      *   momentum events, a paging list's snap) only on a lift. Inside a scroll
      *   view nothing under the finger is clicked: the scroll view takes the
      *   drag over past slop and cancels the touch for the view under it.
-     * - Except a drag that pulls down (toward the top of the content): it is
-     *   cancelled, not lifted. Past the top of a list it is a pull, and a
-     *   lift starts the list's pull-to-refresh (a refresh on almost every
-     *   step at the top of a React Native RefreshControl list on API 36).
+     * - Except a drag that pulls down (toward the top of the content): it
+     *   keeps the ending steps always had — no last-move gap, still samples
+     *   at the end point, a cancel. Past the top of a list it is a pull, and
+     *   a lift starts the list's pull-to-refresh (a refresh on almost every
+     *   step at the top of a React Native RefreshControl list on API 36);
+     *   and with the gap and moved-on still samples but a cancel, the tap
+     *   after a step up to a React Native button at the top was lost on API
+     *   33 (3 of 3; none with this ending).
      *
      * A refused event stops the drag, and the pointer is cancelled rather
      * than lifted after a drag that did not finish (as is one whose lift is
@@ -580,9 +584,13 @@ class GestureInjector(
         val n = steps.coerceIn(STEP_DRAG_MIN_MOVES, STEP_DRAG_MAX_MOVES)
         val xStep = (x2 - x1).toDouble() / n
         val yStep = (y2 - y1).toDouble() / n
+        // A drag that pulls down (toward the top of the content) keeps the
+        // ending steps always had: no last-move gap, still samples at the
+        // end point, a cancel. See the KDoc.
+        val lifts = y2 <= y1
         // Every event time is at or before the real time it is sent: the
         // last still sample is stamped this far after the press.
-        val movesEnd = STEP_DRAG_MOVE_MS + STEP_DRAG_LAST_MOVE_GAP_MS
+        val movesEnd = STEP_DRAG_MOVE_MS + if (lifts) STEP_DRAG_LAST_MOVE_GAP_MS else 0
         val span = movesEnd + STEP_DRAG_STOP_GAP_MS + STEP_DRAG_HORIZON_MS
         val downTime = clock.now() - span
         var x = x1
@@ -619,8 +627,8 @@ class GestureInjector(
             }
         }
         // One pixel on along the drag per still sample (its main axis).
-        val nudgeX = if (abs(x2 - x1) > abs(y2 - y1)) (x2 - x1).sign else 0
-        val nudgeY = if (nudgeX == 0) (y2 - y1).sign else 0
+        val nudgeX = if (lifts && abs(x2 - x1) > abs(y2 - y1)) (x2 - x1).sign else 0
+        val nudgeY = if (lifts && nudgeX == 0) (y2 - y1).sign else 0
         val stillAt = downTime + movesEnd + STEP_DRAG_STOP_GAP_MS
         if (ok) {
             x += nudgeX
@@ -638,9 +646,7 @@ class GestureInjector(
             at(end, TouchAction.CANCEL, sync = true)
             return false
         }
-        // A drag that pulls down can end as a pull at the top of a list,
-        // and a lift there starts its pull-to-refresh: it is cancelled.
-        if (y2 > y1) return at(end, TouchAction.CANCEL, sync = true)
+        if (!lifts) return at(end, TouchAction.CANCEL, sync = true)
         if (at(end, TouchAction.UP, sync = true)) return true
         at(end, TouchAction.CANCEL, sync = true)
         return false

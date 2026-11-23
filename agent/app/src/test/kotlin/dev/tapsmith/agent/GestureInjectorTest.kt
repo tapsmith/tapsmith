@@ -633,28 +633,31 @@ class GestureInjectorTest {
     }
 
     @Test
-    fun `a step drag that pulls down cancels instead of lifting`() {
-        // A drag that pulls down (toward the top of the content) can end in
-        // a pull at the top of a list, and lifting there starts its
-        // pull-to-refresh.
+    fun `a step drag that pulls down ends as before, still at its end point and cancelled`() {
+        // A drag that pulls down (toward the top of the content) can end as
+        // a pull at the top of a list: a lift there starts its
+        // pull-to-refresh, and still samples moved on from the end point lost
+        // the next tap on API 33. So it keeps the ending it had: moves over
+        // STEP_DRAG_MOVE_MS, still samples at the end point, and a cancel.
         val sink = FakeSink(clock)
         assertTrue(injector(sink).scrollStepDrag(0, 200, 0, 1000, steps = 20))
         assertEquals(TouchAction.CANCEL, sink.actions().last())
         assertFalse(TouchAction.UP in sink.actions())
-        // It still holds still, past the app's touch prediction, first.
         val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }
         assertEquals(GestureInjector.STEP_DRAG_MAX_MOVES + 2, moves.size)
-        assertEquals(
-            PointerState(0, 0, 1002),
-            moves
-                .last()
-                .second.pointers
-                .single(),
-        )
+        assertTrue(moves.takeLast(3).all { it.second.pointers.single() == PointerState(0, 0, 1000) })
+        val times = eventTimes(sink)
+        val lastMoving =
+            sink.touches.indexOfFirst {
+                it.second.pointers
+                    .single()
+                    .y == 1000
+            }
+        assertEquals(GestureInjector.STEP_DRAG_MOVE_MS, times[lastMoving] - times.first())
     }
 
     @Test
-    fun `a step drag's still samples each move the pointer one pixel on along the drag`() {
+    fun `a lifted step drag's still samples each move the pointer one pixel on along the drag`() {
         // The app's input queue moves a sample at the pointer's last position
         // to its last prediction: still samples at the end point never told
         // the velocity tracker the pointer stopped, and the lift flung the list.
@@ -669,11 +672,6 @@ class GestureInjectorTest {
                 .second.pointers
                 .single(),
         )
-
-        val down = FakeSink(clock)
-        injector(down).scrollStepDrag(5, 200, 5, 1000, steps = 20)
-        val downMoves = down.touches.filter { it.second.action == TouchAction.MOVE }.map { it.second.pointers.single() }
-        assertEquals(listOf(PointerState(0, 5, 1001), PointerState(0, 5, 1002)), downMoves.takeLast(2))
 
         val sideways = FakeSink(clock)
         injector(sideways).scrollStepDrag(900, 40, 100, 40, steps = 20)
