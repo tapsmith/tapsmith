@@ -127,8 +127,8 @@ export function expoRouterNavigationReset(
   navigate: (href: string) => void,
 ): NavigationReset {
   return async (href) => {
-    // Not ready: the container is still mounting, as on a cold launch the
-    // reset link started. Its state is then the link's, built from scratch.
+    // Not ready: no navigator is mounted under the container yet, so there
+    // is no state to reset.
     if (!container.isReady()) return false;
     const root = container.getRootState();
     const rootRoute = root?.routes.find((route) => route.name === EXPO_ROUTER_ROOT_ROUTE);

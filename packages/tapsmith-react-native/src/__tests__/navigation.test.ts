@@ -98,7 +98,7 @@ describe('expo-router navigation reset', () => {
     expect(JSON.stringify(after.state())).not.toContain('new-key');
   });
 
-  it('leaves navigation alone while the container is not ready (a cold launch the link started)', async () => {
+  it('leaves navigation alone while no navigator is mounted under the container', async () => {
     const container = fakeContainer(expoState(['index', 'new'], 'tasks'), false);
     const navigate = vi.fn();
     expect(await expoRouterNavigationReset(container, navigate)('/')).toBe(false);
