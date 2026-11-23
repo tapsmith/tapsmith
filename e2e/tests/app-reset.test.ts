@@ -203,3 +203,28 @@ describe("Screens a tab navigator keeps mounted", () => {
     await expect(nativeTabsScreen.exploreCount(0)).toBeVisible()
   })
 })
+
+/**
+ * A remounted navigator reads its state back from the navigation container,
+ * which holds every tab's nested stack. The hooks reset that state too, so a
+ * screen pushed inside a tab the reset does not land on is gone next test, as
+ * after a cold launch.
+ */
+describe("A tab's own stack", () => {
+  // No retries, as above: a cold retry would hide a stack the reset kept.
+  test.use({ appResetScope: "test", appResetRoute: "/native-tabs", retries: 0 })
+
+  test("a test pushes a screen on a tab the reset does not land on", async ({ nativeTabsScreen }) => {
+    await expect(nativeTabsScreen.homeContent).toBeVisible()
+    await nativeTabsScreen.tab("Explore").tap()
+    await nativeTabsScreen.openDetail.tap()
+    await expect(nativeTabsScreen.exploreDetail).toBeVisible()
+  })
+
+  test("the next test finds that tab on its first screen", async ({ nativeTabsScreen }) => {
+    await expect(nativeTabsScreen.homeContent).toBeVisible()
+    await nativeTabsScreen.tab("Explore").tap()
+    await expect(nativeTabsScreen.exploreCount(0)).toBeVisible()
+    await expect(nativeTabsScreen.exploreDetail).toBeHidden()
+  })
+})
