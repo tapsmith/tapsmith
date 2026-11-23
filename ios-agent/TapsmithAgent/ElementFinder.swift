@@ -279,7 +279,9 @@ class ElementFinder {
                 if elem.elementType != .textView { return true }
                 // A text view the predicate took for its type: its label,
                 // title or repeated label must match (LabelMatch).
-                return LabelMatch.matches(elementType: .textView, label: elem.label, title: elem.title, regex: labelRegex)
+                return LabelMatch.matches(
+                    elementType: .textView, label: elem.label, title: elem.title, regex: labelRegex
+                )
             }
         }
 

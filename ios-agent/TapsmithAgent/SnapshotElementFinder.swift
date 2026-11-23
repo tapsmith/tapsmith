@@ -335,10 +335,9 @@ class SnapshotElementFinder {
         // (TextContent.withoutChoices).
         if selector.matchesInnermostOnly {
             matches = TextContent.withoutChoices(matches) { match in
-                LabelMatch.isChoice(
-                    elementType: XCUIElement.ElementType(rawValue: SnapshotElementFinder.parseUInt(match.0["elementType"]) ?? 0)
-                        ?? .other,
-                    value: match.0["value"] as? String
+                let raw = SnapshotElementFinder.parseUInt(match.0["elementType"]) ?? 0
+                return LabelMatch.isChoice(
+                    elementType: XCUIElement.ElementType(rawValue: raw) ?? .other, value: match.0["value"] as? String
                 )
             }
         }

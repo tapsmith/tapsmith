@@ -42,8 +42,10 @@ expect("a static text described as a checkbox is no choice",
 expect("a repeated text view label", LabelMatch.unrepeated("Notes Notes", elementType: .textView) == "Notes")
 expect("a repeated label, whitespace-normalized",
        LabelMatch.unrepeated(" Delivery  notes Delivery notes ", elementType: .textView) == "Delivery notes")
-expect("a repeated label with non-ASCII text", LabelMatch.unrepeated("Café 🍰 Café 🍰", elementType: .textView) == "Café 🍰")
-expect("a text field's label is never unrepeated", LabelMatch.unrepeated("Notes Notes", elementType: .textField).isEmpty)
+expect("a repeated label with non-ASCII text",
+       LabelMatch.unrepeated("Café 🍰 Café 🍰", elementType: .textView) == "Café 🍰")
+expect("a text field's label is never unrepeated",
+       LabelMatch.unrepeated("Notes Notes", elementType: .textField).isEmpty)
 expect("another placeholder is no repeat", LabelMatch.unrepeated("Notes Add a note", elementType: .textView).isEmpty)
 expect("an even label is no repeat", LabelMatch.unrepeated("NotesNotes", elementType: .textView).isEmpty)
 expect("a single space is no repeat", LabelMatch.unrepeated(" ", elementType: .textView).isEmpty)
