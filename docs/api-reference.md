@@ -969,7 +969,7 @@ The `ElementInfo` object contains:
 | `role` | `string` | Accessibility role (e.g. "button", "textfield") |
 | `viewportRatio` | `number` | Fraction of element visible in viewport (0.0-1.0) |
 | `inAlert` | `boolean \| undefined` | iOS: the element is a native alert or inside one. Always `false` on Android |
-| `bounds` | `Bounds` | Element bounding rectangle |
+| `bounds` | `{ left: number; top: number; right: number; bottom: number } \| undefined` | Element bounding rectangle |
 
 #### `elementHandle.exists(): Promise<boolean>`
 
@@ -3013,7 +3013,7 @@ Set up a project. With no options, in a terminal, it runs the interactive wizard
 
 - **`tapsmith.config.ts`**, with `testMatch: ['**/*.tapsmith.ts']`. Jest and Vitest don't run that suffix by default (outside a `__tests__` folder, where Jest runs every file), so the project's own unit-test run doesn't pick up Tapsmith tests and Tapsmith doesn't pick up its unit tests. When the project already has Tapsmith tests named `*.test.ts` or `*.spec.ts` (from an older init, say), init warns that the new config won't run them.
 - **An example test**, `tests/example.tapsmith.ts`. When the project has a Playwright config, init notes that the example sits beside Playwright's tests, and that neither runner picks up the other's files.
-- **An `AGENTS.md` section** for coding agents. Its paths to the docs point at the Tapsmith the project resolves, so in a workspace that hoists it (`npm i -D tapsmith -w e2e`) they lead to the root's `node_modules/tapsmith/docs/`.
+- **An `AGENTS.md` section** for coding agents. Its paths to the docs point at the Tapsmith the project resolves, so in a workspace that hoists it (`npm i -D tapsmith -w e2e`) they lead to the root's `node_modules/tapsmith/docs/`. That holds when Tapsmith is installed before init or by the wizard's install offer; after installing it yourself later, run init again to update the section.
 - **A minimal `tsconfig.json`**, when the project has no `tsconfig.json` or `jsconfig.json`. It includes `tapsmith.config.ts`, `tests/` and every `*.tapsmith.ts` file, which the [ESLint plugin](locators.md#eslint-plugin)'s type-aware rules need. One it cannot write is a warning.
 - **`.gitignore` entries** for `tapsmith-results/` (traces, screenshots, JSON and JUnit results), `tapsmith-report/` (the HTML report) and `node_modules/` (which a native iOS or Android project's `.gitignore` lacks), creating the file if there is none and skipping any entry git already ignores. A `.gitignore` it cannot update is a warning, not an error.
 
