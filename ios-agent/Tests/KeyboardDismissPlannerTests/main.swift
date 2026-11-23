@@ -1161,6 +1161,19 @@ do {
 }
 
 do {
+    // Rows of role-less Pressables (labeled `.other` leaves), packed: still
+    // the list's side margins, as for buttons.
+    var rows = listScreen(rows: 30)
+    for i in rows.indices where rows[i].type == .button { rows[i].type = .other }
+    let p = planner(rows).blankPointInScroller(
+        of: .init(frame: R(16, 309, 370, 58), elementType: .other, label: "Item 2", identifier: "item-2"),
+        focusedFrame: listSearchField)
+    checkTrue("packed list of role-less Pressable rows: a spot in the list's margin",
+              p.map { listViewport.contains($0) && notInside($0, (0..<30).map { R(16, 243 + Double($0) * 66, 370, 58) }) } ?? false,
+              "\(String(describing: p))")
+}
+
+do {
     // Rows edge to edge with no gaps: nothing in the list is blank.
     let rows = listScreen(rows: 30, rowFrame: { R(0, 243 + Double($0) * 58, 402, 58) })
     check("edge-to-edge rows: no blank spot in the list",

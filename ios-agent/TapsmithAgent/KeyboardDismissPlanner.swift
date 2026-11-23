@@ -525,19 +525,26 @@ struct KeyboardDismissPlanner {
         return nil
     }
 
-    /// Whether node `i` holds more than one row: two or more children that
-    /// are controls (XCUITest often lists a React Native list's rows straight
-    /// under one wrapper) or containers with something not plain in them. A
-    /// row's own texts (a title and a subtitle) are not rows.
+    /// Whether node `i` holds more than one row. A row is a child that is a
+    /// control, a container with something not plain in it, or anything else
+    /// not plain but a text or image (a role-less Pressable is a labeled
+    /// `.other`); XCUITest often lists a React Native list's rows straight
+    /// under one wrapper. Texts and images count as rows only three or more
+    /// at a time: two are a row's own title and subtitle.
     private func isListContainer(_ i: Int) -> Bool {
         var rows = 0
+        var texts = 0
         var c = i + 1
         while c < nodes[i].subtreeEnd {
-            if OcclusionAnalyzer.interactiveTypes.contains(nodes[c].elementType)
-                || (nodes[c].subtreeEnd > c + 1 && ((c + 1)..<nodes[c].subtreeEnd).contains(where: { !isPlain($0) })) {
+            let type = nodes[c].elementType
+            let hasContent = nodes[c].subtreeEnd > c + 1
+                && ((c + 1)..<nodes[c].subtreeEnd).contains(where: { !isPlain($0) })
+            if OcclusionAnalyzer.interactiveTypes.contains(type) || hasContent {
                 rows += 1
-                if rows >= 2 { return true }
+            } else if !isPlain(c) {
+                if OcclusionAnalyzer.textRunTypes.contains(type) || type == .image { texts += 1 } else { rows += 1 }
             }
+            if rows >= 2 || texts >= 3 { return true }
             c = nodes[c].subtreeEnd
         }
         return false
