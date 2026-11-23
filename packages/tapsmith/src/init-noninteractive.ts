@@ -171,9 +171,10 @@ export function resolveInitPlan(
     expoShapeMemo ??= { value: (detect.detectExpoProject ?? detectDefaults.detectExpoProject)(cwd, () => undefined) };
     return expoShapeMemo.value;
   };
-  const debugWarning = (build: string, platform: Platform): string | undefined => {
+  // `--yes` has one channel for such notes: its (documented) `warnings`.
+  const debugNote = (build: string, platform: Platform): string | undefined => {
     if (!detectDefaults.isReactNativeProject(cwd)) return undefined;
-    return detectDefaults.debugBuildWarning(build, platform, detectDefaults.detectProjectLayout(cwd), true, expoShape());
+    return detectDefaults.debugBuildNote(build, platform, detectDefaults.detectProjectLayout(cwd), true, expoShape());
   };
 
   // Platform: explicit flag, else infer from the builds given and the
@@ -272,7 +273,7 @@ export function resolveInitPlan(
       // resets an app that is already installed, it just cannot install it.
       warnings.push(`No APK found, so the config has no apk: Tapsmith will launch and reset ${packageName} but cannot install it — install the app on the device yourself, or add apk: '<path>' to tapsmith.config.ts`);
     } else {
-      const debug = debugWarning(apkPath, 'android');
+      const debug = debugNote(apkPath, 'android');
       if (debug) warnings.push(debug);
       const apkAbs = path.resolve(cwd, apkPath);
       packageName ??= detect.detectAndroidPackage(apkAbs);
@@ -369,7 +370,7 @@ export function resolveInitPlan(
       if (fromDerivedData) warnings.push(detectDefaults.derivedDataBuildWarning(appPath, layout, 'iphonesimulator', reactNative));
     }
 
-    const debug = debugWarning(appPath, 'ios');
+    const debug = debugNote(appPath, 'ios');
     if (debug) warnings.push(debug);
     const appAbs = path.resolve(cwd, appPath);
     let bundleId = args.bundleId ?? detect.detectIosBundleId(appAbs);

@@ -498,13 +498,14 @@ function isDebugBuildPath(build: string, platform: 'android' | 'ios'): boolean {
 }
 
 /**
- * A warning for a React Native (or Expo) Debug build, which loads its
- * JavaScript from Metro: it needs Metro running for every run, runs slower,
- * and a Metro reload can interrupt a test. Gives the Release build to use
- * instead. Undefined for a Release build, a native app, or a build whose
- * configuration the path does not say.
+ * A note for a React Native (or Expo) Debug build, which loads its
+ * JavaScript from Metro: Metro has to keep running while testing. That is a
+ * supported setup (it suits watch and UI mode), so the note is neutral, and
+ * gives the Release build for CI or the steadiest runs. Undefined for a
+ * Release build, a native app, or a build whose configuration the path does
+ * not say.
  */
-export function debugBuildWarning(
+export function debugBuildNote(
   build: string,
   platform: 'android' | 'ios',
   layout: ProjectLayout,
@@ -513,19 +514,26 @@ export function debugBuildWarning(
 ): string | undefined {
   if (!reactNative || !isDebugBuildPath(build, platform)) return undefined;
   let release: string;
-  if (expo) {
-    release = expoBuildStep(platform, expo);
-  } else if (platform === 'android') {
-    const cd = layout.androidRoot === undefined || layout.androidRoot === '.' ? '' : `cd ${shellArg(layout.androidRoot)} && `;
-    release = `Build one with \`${cd}./gradlew assembleRelease\`, which writes app/build/outputs/apk/release/app-release.apk.`;
+  if (platform === 'android') {
+    if (expo) {
+      release = expoBuildStep('android', expo);
+    } else {
+      const root = layout.androidRoot === undefined || layout.androidRoot === '.' ? undefined : layout.androidRoot;
+      const cd = root ? `cd ${shellArg(root)} && ` : '';
+      release = `Build one with \`${cd}./gradlew assembleRelease\`, which writes ${root ? `${root}/` : ''}app/build/outputs/apk/release/app-release.apk.`;
+    }
   } else if (xcodeBuildTarget(layout)) {
-    release = `${nativeBuildHint('ios', layout, true).replace(/^Build one for the simulator first/, 'Build one')}.`;
+    // The project's own workspace and scheme, as the other build hints name them.
+    const hooks = expo?.usesTapsmithHooks ? `${HOOKS_FLAG} ` : '';
+    release = `${nativeBuildHint('ios', layout, true).replace(/^Build one for the simulator first/, 'Build one').replace('xcodebuild ', `${hooks}xcodebuild `)}.`;
+  } else if (expo) {
+    release = expoBuildStep('ios', expo);
   } else {
     release = 'Build one with `xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build` '
       + 'in the folder with your Xcode project.';
   }
-  return `${build} is a Debug build, which loads its JavaScript from Metro: Metro must be running for every run, tests run slower, `
-    + 'and a Metro reload (Expo\'s "Refreshing…" banner) can interrupt a test. For faster, steadier runs, test a Release build. '
+  return `${build} is a Debug build: it loads its JavaScript from Metro, so keep Metro running while you test. `
+    + 'That suits iterating with watch or UI mode. For CI, or the fastest and steadiest runs, use a Release build. '
     + `${release} Then point the config at it.`;
 }
 
