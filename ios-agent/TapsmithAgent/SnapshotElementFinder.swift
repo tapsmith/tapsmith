@@ -29,10 +29,14 @@ class SnapshotElementFinder {
     /// it from a same-frame cover.
     private var identityCache: [String: CachedIdentity] = [:]
     private var cacheOrder: [String] = []
-    /// Ids whose live element is bound by its place in a query that returns
-    /// other nodes too (a row's, or any outside a row), so checked against
-    /// where it was found on every use (RowBinding, PILOT-952).
+    /// Ids whose live element is a row's, bound by its place in a query that
+    /// returns other nodes too, so checked against where it was found on
+    /// every use (RowBinding, PILOT-952).
     private var rowBindings: Set<String> = []
+    /// Ids whose live element is bound by its place in a query that returns
+    /// other nodes too, outside any row, not yet checked against where it was
+    /// found: checked on their first use, then trusted (RowBinding).
+    private var uncheckedBindings: Set<String> = []
     /// Ids found through their row's anchor in a collection view, with the
     /// query for the cells holding it and the command it was last checked
     /// in: checked to name one cell once per command (RowAnchor, PILOT-952).
@@ -698,6 +702,7 @@ class SnapshotElementFinder {
         identityCache.removeAll()
         cacheOrder.removeAll()
         rowBindings.removeAll()
+        uncheckedBindings.removeAll()
         anchorChecks.removeAll()
         queryPins.removeAll()
         focusedTextInputHint = nil
@@ -757,6 +762,7 @@ class SnapshotElementFinder {
             boundsCache.removeValue(forKey: candidate)
             identityCache.removeValue(forKey: candidate)
             rowBindings.remove(candidate)
+            uncheckedBindings.remove(candidate)
             anchorChecks.removeValue(forKey: candidate)
             queryPins.removeValue(forKey: candidate)
             overflow -= 1
@@ -771,11 +777,12 @@ class SnapshotElementFinder {
     /// Get a cached XCUIElement by its stable ID (for actions like tap).
     ///
     /// **Cost:** no IPC, except for a live element checked as
-    /// `RowBinding.plan` says (PILOT-952): one bound by its place among
-    /// others, in a row or not, takes one `snapshot()` of it on each call, to check it is still
+    /// `RowBinding.plan` says (PILOT-952): a row's bound by its place among
+    /// others takes one `snapshot()` of it on each call, to check it is still
     /// the element found (the query behind it is evaluated again on every
     /// read, so a check made once would not hold while a table moves and
-    /// reuses its cells within one touch); one found through its row's
+    /// reuses its cells within one touch); one bound that way outside any
+    /// row takes one on its first call only; one found through its row's
     /// anchor in a collection view takes one count of the cells holding the
     /// anchor, once per command.
     func getElement(_ elementId: String) throws -> XCUIElement {
@@ -784,7 +791,8 @@ class SnapshotElementFinder {
         if cached != nil {
             touchLocked(elementId)
         }
-        let checked = cached != nil && rowBindings.contains(elementId)
+        let checked = cached != nil
+            && (rowBindings.contains(elementId) || uncheckedBindings.contains(elementId))
         let anchorCheck = cached != nil ? anchorChecks[elementId] : nil
         let serial = commandSerial
         let found = boundsCache[elementId]
@@ -813,12 +821,14 @@ class SnapshotElementFinder {
         if let elem = cached, checked {
             let live = try? elem.snapshot().frame
             let bound = found.map { RowBinding.isFoundElement(found: $0, live: live) } ?? false
+            lock.lock()
+            // Checked once outside a row: either way, never again.
+            uncheckedBindings.remove(elementId)
             if !bound {
-                lock.lock()
                 rowBindings.remove(elementId)
                 elementCache.removeValue(forKey: elementId)
-                lock.unlock()
             }
+            lock.unlock()
             if !bound {
                 // Another element (another row's, the live query's order
                 // having changed as the table reused its cells, or one the
@@ -856,7 +866,7 @@ class SnapshotElementFinder {
         _ elementId: String, liveFrame: CGRect, liveLabel: String, liveIdentifier: String, livePlaceholder: String
     ) -> Bool {
         lock.lock()
-        let checked = rowBindings.contains(elementId)
+        let checked = rowBindings.contains(elementId) || uncheckedBindings.contains(elementId)
         let anchoredRows = anchorChecks[elementId]?.rows
         let found = boundsCache[elementId]
         let pin = queryPins[elementId] ?? .none
@@ -2467,6 +2477,7 @@ class SnapshotElementFinder {
             elementCache[elementId] = element
             queryPins[elementId] = pin
             if plan.checkFrame { rowBindings.insert(elementId) }
+            if plan.checkFrameOnce { uncheckedBindings.insert(elementId) }
             if plan.checkAnchor, let anchoredRows { anchorChecks[elementId] = (anchoredRows, nil) }
             lock.unlock()
         }

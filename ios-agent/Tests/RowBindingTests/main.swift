@@ -63,10 +63,12 @@ let noAnchorList = Tags(listExposesEveryRow: false)
 // Outside any row, XCTest's live query still need not return nodes in the
 // snapshot's order (it listed a React Navigation tab bar's buttons before the
 // header's toggle, which comes first in the tree): a binding by place among
-// others is checked, one its query alone returns stands.
-check("outside a row, by place among others: frame-checked",
+// others is checked, once, on its first use: that order does not change as
+// the element moves, so a field that moves once typing focuses it keeps its
+// live element. One its query alone returns stands.
+check("outside a row, by place among others: frame-checked once",
       RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false),
-      Plan(checkFrame: true))
+      Plan(checkFrameOnce: true))
 check("outside a row, unique in its query: as before",
       RowBinding.plan(bound: true, inRow: false, uniqueInQuery: true, tags: Tags(), treeHasLazyList: false), Plan())
 check("outside a row, no live element on purpose stays none",

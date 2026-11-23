@@ -79,6 +79,9 @@ enum RowBinding {
         var throughAnchor = false
         /// Checked on every use to be at the frame it was found at.
         var checkFrame = false
+        /// Checked once, on its first use, to be at the frame it was found
+        /// at, and trusted from then on.
+        var checkFrameOnce = false
         /// Checked once per command that its anchor still names one row.
         var checkAnchor = false
     }
@@ -94,14 +97,17 @@ enum RowBinding {
     /// UITableView's anchor is then checked.
     ///
     /// Outside any row, a binding by place among others is frame-checked
-    /// too: XCTest's live query need not list nodes in the snapshot's order.
-    /// On a React Navigation screen it listed the bottom tab bar's buttons
-    /// before the header's drawer toggle, which comes first in the tree, so
-    /// `getByRole("button").first()` was bound to the first tab, and its tap
-    /// touched that tab and reported success.
+    /// too, once: XCTest's live query need not list nodes in the snapshot's
+    /// order. On a React Navigation screen it listed the bottom tab bar's
+    /// buttons before the header's drawer toggle, which comes first in the
+    /// tree, so `getByRole("button").first()` was bound to the first tab, and
+    /// its tap touched that tab and reported success. That order does not
+    /// change as an element moves, unlike a table's as it reuses its cells,
+    /// so a binding that was the element found on its first use stays it: a
+    /// field that moves once typing has focused it is still read live.
     static func plan(bound: Bool, inRow: Bool, uniqueInQuery: Bool, tags: Tags, treeHasLazyList: Bool) -> Plan {
         guard bound else { return Plan() }
-        guard inRow else { return Plan(checkFrame: !uniqueInQuery) }
+        guard inRow else { return Plan(checkFrameOnce: !uniqueInQuery) }
         if uniqueInQuery && tags.listExposesEveryRow { return Plan() }
         guard tags.anchor != nil else { return Plan(checkFrame: true) }
         return Plan(
