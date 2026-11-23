@@ -29,6 +29,25 @@ let typesByName: [String: XCUIElement.ElementType] = {
 expect("a text view has a dump type name", RoleMapping.typeName(for: .textView) == "XCUIElementTypeTextView")
 expect("a stepper has a dump type name", RoleMapping.typeName(for: .stepper) == "XCUIElementTypeStepper")
 
+// A checkbox or radio button: its native type, or a generic view React
+// Native describes as one in its value.
+expect("a described checkbox is a choice", LabelMatch.isChoice(elementType: .other, value: "checkbox, checked"))
+expect("a described radio is a choice", LabelMatch.isChoice(elementType: .other, value: "radio button, unchecked"))
+expect("a native check box is a choice", LabelMatch.isChoice(elementType: .checkBox, value: nil))
+expect("a described combo box is no choice", !LabelMatch.isChoice(elementType: .other, value: "combo box"))
+expect("an undescribed view is no choice", !LabelMatch.isChoice(elementType: .other, value: nil))
+expect("a static text described as a checkbox is no choice",
+       !LabelMatch.isChoice(elementType: .staticText, value: "checkbox, unchecked"))
+// A text view's label holding one text twice (React Native's empty multi-line input).
+expect("a repeated text view label", LabelMatch.unrepeated("Notes Notes", elementType: .textView) == "Notes")
+expect("a repeated label, whitespace-normalized",
+       LabelMatch.unrepeated(" Delivery  notes Delivery notes ", elementType: .textView) == "Delivery notes")
+expect("a repeated label with non-ASCII text", LabelMatch.unrepeated("Café 🍰 Café 🍰", elementType: .textView) == "Café 🍰")
+expect("a text field's label is never unrepeated", LabelMatch.unrepeated("Notes Notes", elementType: .textField).isEmpty)
+expect("another placeholder is no repeat", LabelMatch.unrepeated("Notes Add a note", elementType: .textView).isEmpty)
+expect("an even label is no repeat", LabelMatch.unrepeated("NotesNotes", elementType: .textView).isEmpty)
+expect("a single space is no repeat", LabelMatch.unrepeated(" ", elementType: .textView).isEmpty)
+
 let fixturePath = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
     : "../packages/tapsmith/src/__tests__/fixtures/label-conformance.json"
@@ -47,9 +66,12 @@ if let data = FileManager.default.contents(atPath: fixturePath),
         let label = c["label"] as? String ?? ""
         let title = c["title"] as? String ?? ""
         let rowLabel = c["rowLabel"] as? String ?? ""
+        let value = c["value"] as? String ?? ""
         let want = c["matches"] as? Bool ?? false
         if let query = c["query"] as? String {
-            let got = LabelMatch.matches(elementType: type, label: label, title: title, rowLabel: rowLabel, query: query)
+            let got = LabelMatch.matches(
+                elementType: type, label: label, title: title, value: value, rowLabel: rowLabel, query: query
+            )
             expect("string \(why)", got == want)
         } else if let query = c["query"] as? [String: Any] {
             let source = query["source"] as? String ?? ""
@@ -59,7 +81,9 @@ if let data = FileManager.default.contents(atPath: fixturePath),
                 ignoreCase: query["ignoreCase"] as? Bool ?? false,
                 display: "/\(source)/\(flags)"
             )
-            let got = LabelMatch.matches(elementType: type, label: label, title: title, rowLabel: rowLabel, regex: re)
+            let got = LabelMatch.matches(
+                elementType: type, label: label, title: title, value: value, rowLabel: rowLabel, regex: re
+            )
             expect("regex /\(source)/\(flags) \(why)", re.error == nil && got == want)
         } else {
             expect("\(why): has a query", false)

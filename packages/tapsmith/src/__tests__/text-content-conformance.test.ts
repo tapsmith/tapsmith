@@ -461,6 +461,50 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
   });
 });
 
+describe('iOS getByText beside a React Native checkbox or radio', () => {
+  // React Native's checkbox is a generic view it describes in its value, its
+  // own texts hidden inside it: its label is the only copy of a text it
+  // shows, and only a name when the text is on screen as another element.
+  const checkbox = (label: string, checked = false) =>
+    node(T.other, label, [], { value: `checkbox, ${checked ? 'checked' : 'unchecked'}` });
+  const row = (title: string) => node(T.other, '', [checkbox(`Toggle ${title}`), node(T.link, title)]);
+  const list = node(T.other, '', [row('Buy oat milk'), row('Walk the dog')]);
+
+  it('a row\'s text beside a checkbox named after it is the text alone', () => {
+    expect(matchTypes(list, 'device.getByText("Buy oat milk")')).toEqual([`${T.link}:Buy oat milk`]);
+    expect(matchTypes(list, 'device.getByText("Buy oat milk", { exact: true })')).toEqual([`${T.link}:Buy oat milk`]);
+    expect(matchTypes(list, 'device.getByText(/oat milk/)')).toEqual([`${T.link}:Buy oat milk`]);
+  });
+
+  it('a checkbox labelled with the very text beside it gives way to the text', () => {
+    const same = node(T.other, '', [checkbox('Buy oat milk', true), node(T.text, 'Buy oat milk')]);
+    expect(matchTypes(same, 'device.getByText("Buy oat milk", { exact: true })')).toEqual([`${T.text}:Buy oat milk`]);
+  });
+
+  it('a radio whose text is only inside it keeps the match', () => {
+    const radios = node(T.other, '', ['Small', 'Medium'].map((size) => node(T.other, size, [], { value: 'radio button, unchecked' })));
+    expect(matchTypes(radios, 'device.getByText("Small", { exact: true })')).toEqual([`${T.other}:Small`]);
+  });
+
+  it('when only checkboxes match, they are all kept', () => {
+    expect(matchTypes(list, 'device.getByText("Toggle")')).toEqual([`${T.other}:Toggle Buy oat milk`, `${T.other}:Toggle Walk the dog`]);
+  });
+
+  it('nth() counts the matches left', () => {
+    expect(matchTypes(list, 'device.getByText(/^(Toggle )?(Buy|Walk)/).nth(1)')).toEqual([`${T.link}:Walk the dog`]);
+  });
+
+  it('an undescribed generic view is no checkbox: its label stays text', () => {
+    const plain = node(T.other, '', [node(T.other, 'Buy oat milk'), node(T.link, 'Buy oat milk')]);
+    expect(matchTypes(plain, 'device.getByText("Buy oat milk", { exact: true })')).toEqual([`${T.other}:Buy oat milk`, `${T.link}:Buy oat milk`]);
+  });
+
+  it('getByLabel and getByRole still find the checkbox', () => {
+    expect(matchTypes(list, 'device.getByLabel("Toggle Buy oat milk")')).toEqual([`${T.other}:Toggle Buy oat milk`]);
+    expect(matchTypes(list, 'device.getByRole("checkbox", { name: "Buy oat milk" })')).toEqual([`${T.other}:Toggle Buy oat milk`]);
+  });
+});
+
 describe("iOS getByText of a table row's text in edit mode (PILOT-1374)", () => {
   // A recorded UIKit table in edit mode: each row's Remove and Reorder
   // controls are labelled with the row's texts ("Remove A, 981 195, Alpha

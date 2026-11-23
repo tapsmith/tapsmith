@@ -1,5 +1,6 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { IOS_NAME_ONLY_TYPES, iosTextValue } from '../../ios-text-content.js';
+import { iosIsChoice } from '../../roles.js';
 
 // ─── iOS text content for getByText (PILOT-794) ───
 //
@@ -22,6 +23,11 @@ import { IOS_NAME_ONLY_TYPES, iosTextValue } from '../../ios-text-content.js';
 // - Innermost: a getByText match that contains another match is dropped
 //   (findMatchingNodes), and so is a generic wrapper that only echoes a
 //   name-only descendant's label on its bounds (an RN image, PILOT-1366).
+// - A checkbox or radio button matched by its label gives way to any other
+//   match (iosWithoutChoices): React Native hides a checkbox's own texts
+//   inside it, so its label is the only copy of a text it shows, but a text
+//   on screen as another element is that element's, and the checkbox's label
+//   only names it ("Toggle Buy oat milk" beside "Buy oat milk").
 
 /** An iOS node's label, title and value as text content: each empty when it isn't. */
 export interface IosTexts {
@@ -95,4 +101,17 @@ export function iosTextMatchesSubstring(texts: IosTexts, query: string): boolean
 /** getByText(RegExp) on iOS: tested against the raw label, title or value. */
 export function iosTextMatchesRegex(texts: IosTexts, re: RegExp): boolean {
   return [texts.label, texts.title, texts.value].some((t) => re.test(t));
+}
+
+/**
+ * getByText's iOS matches without the checkboxes and radio buttons among
+ * them (iosIsChoice) when anything else matched too — the agent's
+ * `TextContent.withoutChoices`. Matches from elsewhere (Android, a WebView)
+ * are never choices.
+ */
+export function iosWithoutChoices(matches: HierarchyNode[]): HierarchyNode[] {
+  const isChoice = (node: HierarchyNode): boolean => !node.attributes.has('class')
+    && node.attributes.get('webview') !== 'true'
+    && iosIsChoice(node.attributes.get('type') ?? node.tagName, node.attributes.get('value'));
+  return matches.some((node) => !isChoice(node)) ? matches.filter((node) => !isChoice(node)) : matches;
 }

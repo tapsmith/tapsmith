@@ -331,6 +331,17 @@ class SnapshotElementFinder {
             matches = matches.enumerated()
                 .compactMap { (i, m) in suppressed.contains(i) ? nil : m }
         }
+        // A checkbox's label gives way to a text on screen as anything else
+        // (TextContent.withoutChoices).
+        if selector.matchesInnermostOnly {
+            matches = TextContent.withoutChoices(matches) { match in
+                LabelMatch.isChoice(
+                    elementType: XCUIElement.ElementType(rawValue: SnapshotElementFinder.parseUInt(match.0["elementType"]) ?? 0)
+                        ?? .other,
+                    value: match.0["value"] as? String
+                )
+            }
+        }
 
         let screenSize = self.screenSize
 
@@ -1945,18 +1956,21 @@ class SnapshotElementFinder {
             if isExpanded != wantExpanded { return false }
         }
 
-        // Label selector: an input named by its label or title, or its
-        // settings row's title (LabelMatch, PILOT-666, RowName); a RegExp
-        // tests the raw text (PILOT-520).
+        // Label selector: an input or a React Native checkbox or radio,
+        // named by its label or title, or its settings row's title
+        // (LabelMatch, PILOT-666, RowName); a RegExp tests the raw text
+        // (PILOT-520).
         if let labelSelector = selector.label,
            !LabelMatch.matches(
-               elementType: elType, label: label, title: title, rowLabel: RowName.label(of: node), query: labelSelector
+               elementType: elType, label: label, title: title, value: value, rowLabel: RowName.label(of: node),
+               query: labelSelector
            ) {
             return false
         }
         if let labelRegex = selector.labelRegex,
            !LabelMatch.matches(
-               elementType: elType, label: label, title: title, rowLabel: RowName.label(of: node), regex: labelRegex
+               elementType: elType, label: label, title: title, value: value, rowLabel: RowName.label(of: node),
+               regex: labelRegex
            ) {
             return false
         }

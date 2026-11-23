@@ -1,9 +1,9 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { androidResourceIdMatches } from './resource-id.js';
-import { getNodeRole, isComposeRoleCarrier, isLabelField, getNodeBounds, webViewAccessibleName, webViewHasRole, webViewLabels, webViewTextMatches } from './hierarchy-utils.js';
+import { getNodeRole, isComposeRoleCarrier, isLabelField, iosUnrepeatedLabel, getNodeBounds, webViewAccessibleName, webViewHasRole, webViewLabels, webViewTextMatches } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
-import { iosStaticTextCount, iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
+import { iosStaticTextCount, iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring, iosWithoutChoices } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unknownWebViewRoleMessage } from '../../webview-dom-js.js';
 import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES, iosBackButtonName } from '../../accessible-name.js';
@@ -678,8 +678,9 @@ function iosNodeMatchesText(
  * TextField's label is a child of the field (PILOT-828), while a Spinner's
  * child is its value, or a nameless control's row label (`tapsmith-label`) —
  * and iOS's label or title, or a settings row's title (`tapsmith-label`, the
- * agent's RowName) for the control UIKit labels with the row's texts. iOS
- * tests an empty label like any other text, as its agent does.
+ * agent's RowName) for the control UIKit labels with the row's texts, or a
+ * text view's label without its repeat (iosUnrepeatedLabel). iOS tests an
+ * empty label like any other text, as its agent does.
  */
 function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean): boolean {
   if (node.attributes.has('class')) {
@@ -691,8 +692,13 @@ function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean):
     return ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '') && descendantText(node).some(test);
   }
   const rowLabel = node.attributes.get('tapsmith-label');
-  return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '')
-    || (rowLabel !== undefined && rowLabel !== '' && test(rowLabel));
+  const label = node.attributes.get('label') ?? '';
+  // An empty React Native multi-line input repeats its label as its
+  // placeholder ("Notes Notes"): the label is named without the repeat.
+  const unrepeated = (node.attributes.get('type') ?? node.tagName) === 'XCUIElementTypeTextView' ? iosUnrepeatedLabel(label) : '';
+  return test(label) || test(node.attributes.get('title') ?? '')
+    || (rowLabel !== undefined && rowLabel !== '' && test(rowLabel))
+    || (unrepeated !== '' && test(unrepeated));
 }
 
 function isWebViewNode(node: HierarchyNode): boolean {
@@ -1097,7 +1103,10 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     walk(root, '', false, undefined, undefined);
   }
 
-  const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
+  const innermost = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
+  // A checkbox's label gives way to a text on screen as anything else, as
+  // the agent's TextContent.withoutChoices decides.
+  const kept = iosText ? iosWithoutChoices(innermost) : innermost;
   // A WebView's nodes are its DOM elements, each one the page counts, never
   // one target exposed twice: only native matches collapse.
   const distinct = selector.type.startsWith('wv-') ? kept : collapseSameTargetNodes(kept);

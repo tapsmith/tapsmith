@@ -230,6 +230,19 @@ describe('generateNativeSelectors priority order', () => {
     expect(buttonSelectors.some(s => s.label === 'Label')).toBe(false);
   });
 
+  it('suggests getByLabel for a React Native checkbox on iOS, and an empty multi-line input by its label alone', () => {
+    const checkbox = makeNode('XCUIElementTypeOther', {
+      type: 'XCUIElementTypeOther', label: 'Toggle Buy oat milk', value: 'checkbox, unchecked',
+    });
+    expect(generateSelectors(checkbox).some((s) => s.code === 'device.getByLabel("Toggle Buy oat milk")')).toBe(true);
+    const plain = makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther', label: 'Toggle Buy oat milk', value: '' });
+    expect(generateSelectors(plain).some((s) => s.label === 'Label')).toBe(false);
+    const notes = makeNode('XCUIElementTypeTextView', {
+      type: 'XCUIElementTypeTextView', label: 'Notes Notes', value: '', 'tapsmith-role': 'textfield',
+    });
+    expect(generateSelectors(notes).filter((s) => s.label === 'Label').map((s) => s.code)).toEqual(['device.getByLabel("Notes")']);
+  });
+
   it('does not suggest getByLabel when no accessible name', () => {
     const node = makeNode('node', {
       class: 'android.widget.EditText',

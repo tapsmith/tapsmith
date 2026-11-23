@@ -37,6 +37,13 @@ import XCTest
 ///   contains another match is dropped, as Playwright's text engine drops an
 ///   element whose child matches. A Toggle row, a NavigationLink, an alert
 ///   give way to the static text they hold.
+/// - A checkbox or radio button (`LabelMatch.isChoice`) matched by its label
+///   gives way to any other match (`withoutChoices`). React Native hides a
+///   checkbox's own texts inside it, so its label is the only copy of a text
+///   it shows and stays text; but a text on screen as another element is
+///   that element's, and the checkbox's label only names it ("Toggle Buy oat
+///   milk" beside the row's "Buy oat milk"), as Android's getByText never
+///   reads a CheckBox's content description.
 ///
 /// One rule shared by the snapshot walk and the trace viewer's offline
 /// matcher (`trace-viewer/components/text-content.ts`), pinned by the SDK's
@@ -192,6 +199,13 @@ enum TextContent {
         case let value as String: return UInt(value)
         default: return nil
         }
+    }
+
+    /// getByText's matches without the checkboxes and radio buttons among
+    /// them when anything else matched too: then the text is that element's.
+    /// When only choices match, their labels are the only copies of the text.
+    static func withoutChoices<Match>(_ matches: [Match], isChoice: (Match) -> Bool) -> [Match] {
+        matches.contains { !isChoice($0) } ? matches.filter { !isChoice($0) } : matches
     }
 
     /// getByText(string): a case-insensitive substring of the label, title or value.

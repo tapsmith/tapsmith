@@ -57,6 +57,15 @@ expect("an unlabelled wrapper is not an echo",
        !TextContent.echoesName(wrapperType: .other, wrapperLabel: "",
                                nodeType: .image, nodeLabel: "", sameTarget: true))
 
+// getByText's matches without the checkboxes when anything else matched.
+let mixed: [(String, Bool)] = [("Toggle Buy oat milk", true), ("Buy oat milk", false)]
+expect("a checkbox gives way to another match",
+       TextContent.withoutChoices(mixed) { $0.1 }.map(\.0) == ["Buy oat milk"])
+let onlyChoices: [(String, Bool)] = [("Small", true), ("Medium", true)]
+expect("only checkboxes matching are all kept",
+       TextContent.withoutChoices(onlyChoices) { $0.1 }.map(\.0) == ["Small", "Medium"])
+expect("no matches stay none", TextContent.withoutChoices([(String, Bool)]()) { $0.1 }.isEmpty)
+
 let fixturePath = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
     : "../packages/tapsmith/src/__tests__/fixtures/text-content-conformance.json"
