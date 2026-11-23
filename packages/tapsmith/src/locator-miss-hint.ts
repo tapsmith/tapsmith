@@ -204,6 +204,12 @@ function plural(n: number): string {
 }
 
 /**
+ * How a near-miss sentence that lists locators matching the same words starts:
+ * the element is on screen under another locator.
+ */
+export const NEAR_MISS_LEAD = 'Nothing matches it';
+
+/**
  * The near-miss sentence for `selector`, from the agent's answer to its
  * probes (one result per probe, in order), or '' when none matched.
  */
@@ -223,7 +229,7 @@ export function formatNearMisses(selector: Selector, probes: Probe[], response: 
     const value = hits.some((h) => h.probe.fieldValue !== undefined && holdsValue(h.found, h.probe.fieldValue))
       ? ' A text field\'s typed value is not text to getByText(): assert it with toHaveValue().'
       : '';
-    return `Nothing matches it, but on screen now ${hits.length === 1 ? 'this locator matches' : 'these locators match'}: ${list}.${value}`;
+    return `${NEAR_MISS_LEAD}, but on screen now ${hits.length === 1 ? 'this locator matches' : 'these locators match'}: ${list}.${value}`;
   }
   const fallbackIndex = probes.findIndex((p) => p.fallback);
   if (fallbackIndex >= 0 && counts[fallbackIndex] > 0 && selector.kind.type === 'role') {

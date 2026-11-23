@@ -132,18 +132,36 @@ describe("nearMissProbes()", () => {
 });
 
 describe("a not-found error lists the near misses the agent finds", () => {
-  it("in an action, before the off-screen hint and with the picker last", async () => {
+  it("in an action, in place of the off-screen hint and with the picker last", async () => {
+    // The words are on screen under another locator, so scrolling is not the fix.
     const { client } = missingClient((s) => (s.kind.type === "textContains" ? [element("t", "Sign in")] : []));
     const d = new Device(client, { platform: "android", timeout: 50 });
     const message = await err(d.getByRole("button", { name: "Sign in" }).tap());
     vitestExpect(message).toBe(
       'Element getByRole("button", { name: "Sign in" }) was not found after waiting 50ms. ' +
         'Nothing matches it, but on screen now this locator matches: getByText("Sign in") (1 element). ' +
-        'It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with ' +
-        'await locator.scrollIntoView() (scrollIntoView({ direction: "up" }) for one above the screen), then tap() it. ' +
         LOCATOR_PICKER_HINT,
     );
   });
+
+  it("in an action, keeps the off-screen hint when nothing near matches", async () => {
+    const offScreen = 'It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with ' +
+      'await locator.scrollIntoView() (scrollIntoView({ direction: "up" }) for one above the screen), then tap() it. ';
+    const { client } = missingClient(() => []);
+    const d = new Device(client, { platform: "android", timeout: 50 });
+    vitestExpect(await err(d.getByText("Yes, delete", { exact: true }).tap())).toBe(
+      'Element getByText("Yes, delete", { exact: true }) was not found after waiting 50ms. ' + offScreen + LOCATOR_PICKER_HINT,
+    );
+    // Only the role matches, under other names: the one named may still be off-screen.
+    const roleOnly = missingClient((s) =>
+      s.kind.type === "role" && s.kind.value.role === "button" ? [element("a", "Log in")] : []);
+    const d2 = new Device(roleOnly.client, { platform: "android", timeout: 50 });
+    vitestExpect(await err(d2.getByRole("button", { name: "Sign in" }).tap())).toBe(
+      'Element getByRole("button", { name: "Sign in" }) was not found after waiting 50ms. ' +
+        'getByRole("button") matches 1 element on screen now, none named "Sign in". ' + offScreen + LOCATOR_PICKER_HINT,
+    );
+  });
+
 
   it("lists up to three, with their counts, in recommendation order", async () => {
     const { client } = missingClient((s) => {
