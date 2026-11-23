@@ -481,10 +481,9 @@ struct KeyboardDismissPlanner {
     ///
     /// What holds the scroll view never blocks (React Native wraps a list
     /// with an accessibility label in a labeled view of its size). The
-    /// target's own row (its container under the innermost container holding
-    /// two or more rows) is kept out — a row holding two controls of its own
-    /// counts as such a container, so then only the target is — and
-    /// anything that is not a plain container blocks. A spot clear of every row comes first; only a
+    /// target's own row (its container under the outermost container in the
+    /// list holding two or more rows) is kept out, and anything that is not
+    /// a plain container blocks. A spot clear of every row comes first; only a
     /// list with none (packed with rows) gets one in a row's plain margin,
     /// and then only a row that shows a control of its own — a row holding
     /// only text or images may itself be the control.
@@ -512,13 +511,15 @@ struct KeyboardDismissPlanner {
                     continue
                 }
             }
-            // The target's row: its container under the innermost list
-            // container around it (one holding two or more rows). With none,
+            // The target's row: its container under the outermost list
+            // container around it in this scroll view (one holding two or
+            // more rows) — a row holding two controls of its own is such a
+            // container too, inside the list's. With none,
             // every container of the target in the list but one covering all
             // of the list on screen (a content view grown to fill it).
             let path = Array(up.prefix { $0 != scroller }) + [scroller]
             let rowOfTarget: [Int]
-            if let list = path.firstIndex(where: { isListContainer($0) }) {
+            if let list = path.lastIndex(where: { isListContainer($0) }) {
                 rowOfTarget = [list == 0 ? t : path[list - 1]]
             } else {
                 rowOfTarget = up.filter { inside.contains($0) && !nodes[$0].frame.insetBy(dx: -1, dy: -1).contains(rect) }

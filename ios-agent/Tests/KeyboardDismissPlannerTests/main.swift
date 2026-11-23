@@ -1412,6 +1412,27 @@ do {
         let p = planner(rows).blankPointInScroller(of: target, focusedFrame: listSearchField)
         checkTrue("rows of \(name): the spot is not in the target's row", p.map { !row2.contains($0) } ?? true, "\(String(describing: p))")
     }
+    // Rows each holding a title and two buttons (Edit, Delete), packed.
+    var controls: [Row] = appHead + [
+        (4, .other, "", "", R(16, 132, 370, 45)),
+        (5, .searchField, "Search", "search-input", listSearchField),
+        (4, .scrollView, "", "", R(0, 243, 402, 631)),
+        (5, .other, "", "", R(0, 243, 402, 800)),
+    ]
+    for i in 0..<10 {
+        let y = 243 + Double(i) * 80
+        controls += [
+            (6, .other, "", "", R(0, y, 402, 80)),
+            (7, .staticText, "Row \(i + 1)", "", R(16, y + 30, 80, 20)),
+            (7, .button, "Edit", "", R(250, y + 18, 60, 44)),
+            (7, .button, "Delete", "", R(326, y + 18, 60, 44)),
+        ]
+    }
+    controls += keyboardWindows()
+    let cp = planner(controls).blankPointInScroller(
+        of: .init(frame: R(250, 341, 60, 44), elementType: .button, label: "Edit", identifier: ""), focusedFrame: listSearchField)
+    checkTrue("rows of two controls: the spot is not in the target's row",
+              cp.map { !R(0, 323, 402, 80).contains($0) } ?? true, "\(String(describing: cp))")
     let card = R(0, 243, 402, 600)
     let feed: [Row] = appHead + [
         (4, .other, "", "", R(16, 132, 370, 45)),
