@@ -130,6 +130,12 @@ check("moved since found, no lookalike: kept", RowBinding.firstUse(
 ), FirstUse.keep)
 // With lookalikes, one that moved cannot be told from another listed at its
 // place: not kept, so the touch goes to the found frame.
+// The one lookalike read is the element found, moved; the live element is
+// another one with its label and identifier (of another type, which the
+// lookalike query, scoped to the type found, does not return).
+check("moved since found, the one lookalike elsewhere than the live element: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([elsewhere])
+), FirstUse.drop)
 check("moved since found, with lookalikes: dropped", RowBinding.firstUse(
     found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([firstTab, elsewhere])
 ), FirstUse.drop)

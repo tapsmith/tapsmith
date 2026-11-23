@@ -141,9 +141,9 @@ enum RowBinding {
     /// placeholder, read only then, and whether every one was read), and
     /// bound if it is the one there. Failing that, the live element is kept
     /// only when it is the one element with the identity found
-    /// (`liveIsFoundIdentity`, and no other lookalike), so it can only be the
-    /// element found, moved; otherwise the element found cannot be told among
-    /// its lookalikes, and the binding is dropped.
+    /// (`liveIsFoundIdentity`, and the only lookalike is at its frame), so it
+    /// can only be the element found, moved; otherwise the element found
+    /// cannot be told among its lookalikes, and the binding is dropped.
     static func firstUse(
         found: CGRect, live: CGRect?, liveIsFoundIdentity: Bool,
         lookalikes: () -> (frames: [CGRect?], complete: Bool)
@@ -153,7 +153,11 @@ enum RowBinding {
         let read = lookalikes()
         let atFound = read.frames.enumerated().filter { isFoundElement(found: found, live: $0.element) }
         if atFound.count == 1 { return .rebind(atFound[0].offset) }
-        if atFound.isEmpty, read.complete, read.frames.count == 1, liveIsFoundIdentity { return .keep }
+        // The only lookalike, and the live element is it.
+        if atFound.isEmpty, read.complete, read.frames.count == 1, liveIsFoundIdentity,
+           isFoundElement(found: read.frames[0] ?? .null, live: live) {
+            return .keep
+        }
         return .drop
     }
 
