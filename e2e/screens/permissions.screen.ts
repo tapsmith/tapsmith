@@ -11,6 +11,10 @@ export class PermissionsScreen {
   get checkCameraButton() { return this.device.getByRole("button", { name: "Check camera permission" }) }
   /** The camera status last read ("unknown", "granted", "undetermined"…). */
   get cameraStatus() { return this.device.getByTestId("camera-status") }
+  /** Asks for location access: iOS shows its permission alert when it is undetermined. */
+  get requestLocationButton() { return this.device.getByRole("button", { name: "Request location permission" }) }
+  /** The location status last read ("unknown", "granted", "denied"…). */
+  get locationStatus() { return this.device.getByTestId("location-status") }
 
   async open() {
     await this.device.openDeepLink("tapsmithtest:///permissions")
