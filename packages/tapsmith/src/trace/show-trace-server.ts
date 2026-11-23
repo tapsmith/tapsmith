@@ -36,12 +36,13 @@ function traceArchiveProblem(resolvedTrace: string): string | undefined {
   } catch (err) {
     return `Not a readable trace archive: ${resolvedTrace} (${err instanceof Error ? err.message : String(err)})`;
   }
+  const raw = files['metadata.json'];
+  if (!raw) return `Not a Tapsmith trace: the archive has no metadata.json (${resolvedTrace})`;
   let metadata: unknown;
   try {
-    const raw = files['metadata.json'];
-    metadata = raw ? JSON.parse(new TextDecoder().decode(raw)) : undefined;
+    metadata = JSON.parse(new TextDecoder().decode(raw));
   } catch {
-    metadata = undefined;
+    return `Not a Tapsmith trace: its metadata.json is not valid JSON (${resolvedTrace})`;
   }
   const problem = traceFormatProblem(metadata);
   return problem ? `${problem} (${resolvedTrace})` : undefined;

@@ -127,7 +127,7 @@ describe('showTrace', () => {
     const open = (await import('open')).default as unknown as ReturnType<typeof vi.fn>;
     open.mockClear();
     const tracePath = writeTraceFile('other.zip', zipSync({ 'readme.txt': new TextEncoder().encode('hi') }));
-    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Not a Tapsmith trace/);
+    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Not a Tapsmith trace: the archive has no metadata\.json/);
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -139,7 +139,7 @@ describe('showTrace', () => {
 
   it('refuses a trace whose metadata.json is not JSON', async () => {
     const tracePath = writeTraceFile('badmeta.zip', zipSync({ 'metadata.json': new TextEncoder().encode('{not json') }));
-    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Not a Tapsmith trace/);
+    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Not a Tapsmith trace: its metadata\.json is not valid JSON/);
   });
 
   it('throws for non-zip file', async () => {
