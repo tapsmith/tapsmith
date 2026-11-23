@@ -1387,6 +1387,67 @@ do {
 }
 
 do {
+    // The target's own row is never the spot: rows of three texts (title,
+    // category, price), rows straight under the scroll view, and a feed
+    // card taller than the list on screen.
+    func textRows(contentView: Bool, texts: Int) -> [Row] {
+        let d = contentView ? 1 : 0
+        var rows: [Row] = appHead + [
+            (4, .other, "", "", R(16, 132, 370, 45)),
+            (5, .searchField, "Search", "search-input", listSearchField),
+            (4, .scrollView, "", "", R(0, 243, 402, 631)),
+        ]
+        if contentView { rows.append((5, .other, "", "", R(0, 243, 402, 660))) }
+        for i in 0..<10 {
+            rows.append((5 + d, .other, "", "", R(0, 243 + Double(i) * 66, 402, 66)))
+            for k in 0..<texts {
+                rows.append((6 + d, .staticText, "Row \(i + 1) \(k)", "", R(16 + Double(k) * 120, 255 + Double(i) * 66, 80, 20)))
+            }
+        }
+        return rows + keyboardWindows()
+    }
+    let row2 = R(0, 309, 402, 66)
+    let target = OcclusionAnalyzer.Target(frame: R(16, 321, 80, 20), elementType: .staticText, label: "Row 2 0", identifier: "")
+    for (name, rows) in [("three texts", textRows(contentView: true, texts: 3)), ("straight under the scroll view", textRows(contentView: false, texts: 1))] {
+        let p = planner(rows).blankPointInScroller(of: target, focusedFrame: listSearchField)
+        checkTrue("rows of \(name): the spot is not in the target's row", p.map { !row2.contains($0) } ?? true, "\(String(describing: p))")
+    }
+    let card = R(0, 243, 402, 600)
+    let feed: [Row] = appHead + [
+        (4, .other, "", "", R(16, 132, 370, 45)),
+        (5, .searchField, "Search", "search-input", listSearchField),
+        (4, .scrollView, "", "", R(0, 243, 402, 631)),
+        (5, .other, "", "", R(0, 243, 402, 1210)),
+        (6, .other, "", "", card),
+        (7, .staticText, "Caption", "", R(16, 260, 200, 20)),
+        (7, .button, "Like", "", R(16, 300, 60, 44)),
+        (6, .other, "", "", R(0, 853, 402, 600)),
+        (7, .button, "Like", "", R(16, 910, 60, 44)),
+    ] + keyboardWindows()
+    let fp = planner(feed).blankPointInScroller(
+        of: .init(frame: R(16, 300, 60, 44), elementType: .button, label: "Like", identifier: ""), focusedFrame: listSearchField)
+    checkTrue("feed card taller than the list: the spot is not in it", fp.map { !card.contains($0) } ?? true, "\(String(describing: fp))")
+}
+
+do {
+    // A sheet with its backdrop beside it (not around it), over a short list
+    // the sheet itself doesn't reach: the backdrop covers the list.
+    let sheetField = R(16, 420, 370, 44)
+    let rows: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 200)),
+        (5, .other, "", "", R(0, 116, 402, 66)),
+        (6, .button, "Item 1", "item-1", R(16, 116, 370, 58)),
+        (4, .other, "", "", R(0, 116, 402, 758)),
+        (4, .other, "", "", R(0, 400, 402, 129)),
+        (5, .textField, "Note", "", sheetField),
+    ] + keyboardWindows()
+    check("sheet with a backdrop beside it over a short list: none",
+          planner(rows).blankPointInScroller(
+              of: .init(frame: R(16, 116, 370, 58), elementType: .button, label: "Item 1", identifier: "item-1"),
+              focusedFrame: sheetField), nil)
+}
+
+do {
     // A large plain target (a testID'd card covering half the screen) is
     // never the blank spot.
     let card = R(0, 243, 402, 460)

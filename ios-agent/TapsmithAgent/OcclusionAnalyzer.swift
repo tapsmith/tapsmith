@@ -708,7 +708,7 @@ struct OcclusionAnalyzer {
 
     /// A scroll view's indicator ("Vertical scroll bar, 2 pages"): drawn over
     /// the content's edge, but it never takes touches.
-    private func isScrollIndicator(_ node: Node) -> Bool {
+    func isScrollIndicator(_ node: Node) -> Bool {
         guard node.elementType == .other,
               let p = node.parent, Self.scrollerTypes.contains(nodes[p].elementType) else { return false }
         return node.label.lowercased().contains("scroll bar")

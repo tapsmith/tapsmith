@@ -481,7 +481,8 @@ struct KeyboardDismissPlanner {
     ///
     /// What holds the scroll view never blocks (React Native wraps a list
     /// with an accessibility label in a labeled view of its size). The
-    /// target's own row never takes the spot, and anything that is not a
+    /// target's own row (its container under the innermost container holding
+    /// two or more rows) never takes the spot, and anything that is not a
     /// plain container blocks. A spot clear of every row comes first; only a
     /// list with none (packed with rows) gets one in a row's plain margin,
     /// and then only a row that shows a control of its own — a row holding
@@ -500,17 +501,26 @@ struct KeyboardDismissPlanner {
             if rect.isNull { continue }
             let holders = Set([scroller] + analyzer.ancestors(of: scroller))
             if field > scroller, !inside.contains(field) {
-                // The field's own containers: below what it shares with the list.
+                // The field's own containers: below what it shares with the
+                // list. They, or what is drawn beside them after the list
+                // (a sheet's backdrop next to the sheet), lie over it.
                 let own = [field] + fieldUp.prefix { !holders.contains($0) }
                 if own.contains(where: { nodes[$0].frame.intersects(rect) }) { continue }
+                if let top = own.last, let shared = nodes[top].parent,
+                   children(of: shared).contains(where: { $0 > scroller && $0 != top && nodes[$0].frame.intersects(rect) }) {
+                    continue
+                }
             }
-            // The list's own containers: its content view, the target's
-            // containers that hold more than one row, and any that covers
-            // all of the list on screen (a content view grown to fill it).
-            // The rest of them are the target's row.
-            let rowOfTarget = up.filter {
-                inside.contains($0) && nodes[$0].parent != scroller && !isListContainer($0)
-                    && !nodes[$0].frame.insetBy(dx: -1, dy: -1).contains(rect)
+            // The target's row: its container under the innermost list
+            // container around it (one holding two or more rows). With none,
+            // every container of the target in the list but one covering all
+            // of the list on screen (a content view grown to fill it).
+            let path = Array(up.prefix { $0 != scroller }) + [scroller]
+            let rowOfTarget: [Int]
+            if let list = path.firstIndex(where: { isListContainer($0) }) {
+                rowOfTarget = [list == 0 ? t : path[list - 1]]
+            } else {
+                rowOfTarget = up.filter { inside.contains($0) && !nodes[$0].frame.insetBy(dx: -1, dy: -1).contains(rect) }
             }
             let keepOut = (statusBar.map { [$0] } ?? []) + [nodes[t].frame] + rowOfTarget.map { nodes[$0].frame }
             let blocks = { (i: Int, strict: Bool) -> Bool in
@@ -533,25 +543,32 @@ struct KeyboardDismissPlanner {
     /// control, a container with something not plain in it, or anything else
     /// not plain but a text or image (a role-less Pressable is a labeled
     /// `.other`); XCUITest often lists a React Native list's rows straight
-    /// under one wrapper. Texts and images count as rows only three or more
-    /// at a time: two are a row's own title and subtitle.
+    /// under one wrapper. Texts and images are a row's own content, and a
+    /// scroll view's scroll bars are no rows.
     private func isListContainer(_ i: Int) -> Bool {
         var rows = 0
-        var texts = 0
-        var c = i + 1
-        while c < nodes[i].subtreeEnd {
+        for c in children(of: i) where !analyzer.isScrollIndicator(nodes[c]) {
             let type = nodes[c].elementType
             let hasContent = nodes[c].subtreeEnd > c + 1
                 && ((c + 1)..<nodes[c].subtreeEnd).contains(where: { !isPlain($0) })
-            if OcclusionAnalyzer.interactiveTypes.contains(type) || hasContent {
+            if OcclusionAnalyzer.interactiveTypes.contains(type) || hasContent
+                || (!isPlain(c) && !OcclusionAnalyzer.textRunTypes.contains(type) && type != .image) {
                 rows += 1
-            } else if !isPlain(c) {
-                if OcclusionAnalyzer.textRunTypes.contains(type) || type == .image { texts += 1 } else { rows += 1 }
+                if rows >= 2 { return true }
             }
-            if rows >= 2 || texts >= 3 { return true }
-            c = nodes[c].subtreeEnd
         }
         return false
+    }
+
+    /// The direct children of node `i`, in order.
+    private func children(of i: Int) -> [Int] {
+        var result: [Int] = []
+        var c = i + 1
+        while c < nodes[i].subtreeEnd {
+            result.append(c)
+            c = nodes[c].subtreeEnd
+        }
+        return result
     }
 
     /// Whether node `i` holds something not plain but no control: a row
