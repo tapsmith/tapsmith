@@ -123,6 +123,69 @@ describe('expo-router navigation reset', () => {
   });
 });
 
+/**
+ * A container that follows expo-router 56+'s contract, as far as the reset
+ * relies on it: `reset` and `router.navigate` are queued and land together in
+ * one later commit; `getRootState` returns the last committed state until
+ * then; each commit emits `'state'`; a RESET whose payload is not a complete
+ * root state (`stale: false`, same route names) is dropped with only a
+ * warning; and the dropped nested state is seeded afresh.
+ */
+function expoRouter58Container(initial: NavigationStateLike, commitAfterMs = 40) {
+  let committed = initial;
+  const listeners = new Set<() => void>();
+  const queue: ((state: NavigationStateLike) => NavigationStateLike)[] = [];
+  let scheduled = false;
+  const drain = () => {
+    scheduled = false;
+    for (const step of queue.splice(0)) committed = step(committed);
+    for (const l of listeners) l();
+  };
+  const enqueue = (step: (state: NavigationStateLike) => NavigationStateLike) => {
+    queue.push(step);
+    if (!scheduled) { scheduled = true; setTimeout(drain, commitAfterMs); }
+  };
+  const container: NavigationContainerLike = {
+    isReady: () => true,
+    getRootState: () => committed,
+    reset: (payload: object) => enqueue((state) => {
+      const next = payload as NavigationStateLike;
+      const complete = next.stale === false && JSON.stringify(next.routeNames) === JSON.stringify(state.routeNames);
+      if (!complete) return state; // dropped, as BaseRouter does
+      return {
+        ...next,
+        routes: next.routes.map((route) => (route.state ? route : { ...route, state: { key: 'tabs', index: 0, routes: [{ name: 'index', key: 'index-seeded' }] } })),
+      };
+    }),
+  };
+  const navigate = (href: string) => enqueue((state) => ({ ...state, lastHref: href }));
+  container.addListener = (_event, listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+  return { container, navigate, committed: () => committed };
+}
+
+describe('expo-router 56+ contract (queued commit, lagging root state)', () => {
+  it('waits for the queued reset and navigation to commit, then checks the old stacks are gone', async () => {
+    const before = expoState(['index', 'new'], 'index');
+    const { container, navigate, committed } = expoRouter58Container(before);
+
+    expect(await expoRouterNavigationReset(container, navigate)('/')).toBe(true);
+
+    const root = committed().routes[0];
+    expect(root.key).toBe('__root-key');
+    expect(JSON.stringify(root.state)).not.toContain('new-key');
+    expect(committed().lastHref).toBe('/');
+  });
+
+  it('fails the reset when the queued RESET is dropped', async () => {
+    // A root state that is not complete (no `stale: false`): the router
+    // drops the RESET built from it, and the old stacks stay.
+    const before = { ...expoState(['index', 'new'], 'index'), stale: undefined };
+    const { container, navigate } = expoRouter58Container(before);
+
+    await expect(expoRouterNavigationReset(container, navigate)('/')).rejects.toThrow(/did not apply the navigation reset/);
+  });
+});
+
 describe('React Navigation reset', () => {
   const tabsWithStack: NavigationStateLike = {
     index: 0,

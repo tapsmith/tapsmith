@@ -109,7 +109,7 @@ They do this for the two navigation setups they know, with no code on your side:
 - **expo-router**: the navigation state under the root layout is replaced, keeping the root layout itself mounted. Up to expo-router 55 the new state is the one your routes build for the reset's route, as on a launch from the reset link; from 56 on, every navigator under the root layout starts over on its first screen and the app then navigates to the reset's route, with its query.
 - **React Navigation** with a [`linking`](https://reactnavigation.org/docs/configuring-links) config on the `NavigationContainer`: the whole state is replaced with the one your linking config builds for the reset's route, as on a launch from that link.
 
-Without one of these (React Navigation with no `linking` config, a route your config does not match, another navigation library), navigation is left as it is: reset it in `onReset`.
+Without one of these (React Navigation with no `linking` config, a route your config does not match, another navigation library), navigation is left as it is: reset it in `onReset`, and in `onReload` if you use it.
 
 Nothing outside the hooks remounts, wrapped or not: a provider above them (an auth context, a Redux store, a query cache) keeps its state, so reset it in `onReset`.
 
@@ -146,7 +146,7 @@ Render it inside your auth provider, around the navigator (`<AuthProvider><Hooks
 
 One thing a sign-out in `onReset` did for you that `onReload` has to do itself: **stay signed in throughout.** Refresh the session in place rather than clearing it and reading it back. An auth guard that sees a signed-out or loading state halfway through redirects to the login screen while the reset link is navigating, and that bounce can crash the navigator.
 
-The hooks reset navigation before `onReload` runs, as on every reset (see [Navigation](#navigation)), so `onReload` does not need to.
+The hooks reset navigation before `onReload` runs, as on every reset (see [Navigation](#navigation)), so with expo-router or a React Navigation `linking` config `onReload` does not need to.
 
 What happens, per device:
 
