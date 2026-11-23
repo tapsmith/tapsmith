@@ -311,48 +311,44 @@ struct OcclusionAnalyzer {
     /// How a `.covered` verdict names the system status bar.
     static let statusBarName = "the status bar"
 
-    /// Deepest the status bar reaches down the screen (points): 54 on an
-    /// iPhone with a Dynamic Island, 24–32 on an iPad.
+    /// Deepest the status bar reaches down the screen (points), for a screen
+    /// where it has not been seen yet: 54 on an iPhone with a Dynamic Island,
+    /// 24–32 on an iPad.
     static let maxStatusBarExtent: CGFloat = 70
 
-    /// Whether a target at `frame` can be under the status bar, so where the
-    /// bar is is worth reading (a SpringBoard snapshot): only when its
-    /// on-screen part reaches into the top band, where the bar is drawn on
-    /// an iPhone or iPad, above any navigation bar laid out below the top of
-    /// the screen — iOS puts a navigation bar below the status bar, so its
-    /// buttons and what is under them cannot be under the bar. A target
-    /// anywhere else costs nothing to check.
-    func mayBeUnderStatusBar(_ frame: CGRect) -> Bool {
-        let onScreen = frame.intersection(screen)
-        guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0,
-              onScreen.minY < screen.minY + Self.maxStatusBarExtent else { return false }
-        let navTops = nodes.lazy
-            .filter { $0.elementType == .navigationBar }
-            .map(\.frame.minY)
-            .filter { $0 > self.screen.minY }
-        guard let navTop = navTops.min() else { return true }
-        return onScreen.minY < navTop
-    }
+    /// Which targets the status bar can be over, so where it is is worth
+    /// reading (a SpringBoard snapshot) — kept by the agent across actions.
+    /// Where the bar is drawn is fixed for a screen size (a strip along the
+    /// top, the iPhone Duo's column at the right edge), so it is learned from
+    /// the first read that finds the bar shown and kept, per screen size;
+    /// until then, a target reaching into the top band may be under it.
+    /// Whether the bar is shown changes at any time (an app hides it on one
+    /// screen), so the caller reads that afresh whenever this says yes.
+    struct StatusBarGate {
+        private var learned: [String: CGRect] = [:]
 
+        private static func key(_ screen: CGRect) -> String {
+            "\(Int(screen.width.rounded()))x\(Int(screen.height.rounded()))"
+        }
 
-    /// Where the status bar is, as read for one action (a SpringBoard
-    /// snapshot): read the first time a pass needs it, and again after a pass
-    /// found the target covered by it — the app may be hiding the bar, and
-    /// the wait for a cover to go must see it go. Otherwise kept: the bar
-    /// does not move while one touch is planned.
-    struct StatusBarCache {
-        private var read: CGRect??
+        /// Note what a read found on `screen`: nil (no bar shown, or
+        /// SpringBoard unreadable) teaches nothing. A bar seen larger later
+        /// (an in-call or recording banner) widens what is kept.
+        mutating func learn(_ region: CGRect?, screen: CGRect) {
+            guard let region, !region.isNull, region.width > 0, region.height > 0 else { return }
+            let k = Self.key(screen)
+            learned[k] = learned[k].map { $0.union(region) } ?? region
+        }
 
-        /// Whether the next pass that needs the region must read it.
-        var needsRead: Bool { read == nil }
-        /// The region last read; nil when none is shown, or none was read.
-        var region: CGRect? { read ?? nil }
-
-        mutating func store(_ region: CGRect?) { read = .some(region) }
-
-        /// Note a pass's verdict (nil when no tree could be read).
-        mutating func passEnded(with verdict: Verdict?) {
-            if case .covered(let by)? = verdict, by == OcclusionAnalyzer.statusBarName { read = nil }
+        /// Whether the bar can be over a target at `frame`.
+        func mayCover(_ frame: CGRect, screen: CGRect) -> Bool {
+            let onScreen = frame.intersection(screen)
+            guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 else { return false }
+            if let bar = learned[Self.key(screen)] {
+                let under = onScreen.intersection(bar)
+                return !under.isNull && under.width > 0 && under.height > 0
+            }
+            return onScreen.minY < screen.minY + OcclusionAnalyzer.maxStatusBarExtent
         }
     }
 

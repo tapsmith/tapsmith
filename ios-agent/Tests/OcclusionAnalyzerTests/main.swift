@@ -1010,9 +1010,7 @@ checkPoint("the nav bar's back button below the status bar is not clipped by it"
            analyzer(screenRows()).analyze(button("Back", R(8, 70, 40, 40)), isHittable: true, statusBar: statusBarStrip),
            CGPoint(x: 28, y: 90))
 // The analyzer clips by whatever region it is given — the iPhone Duo shows
-// its status bar as a column at the right edge. (The agent reads the bar only
-// for a target in the top band, `mayBeUnderStatusBar`, so the Duo's column is
-// not checked in practice.)
+// its status bar as a column at the right edge.
 check("a button under a status bar column at the right edge: covered",
       analyzer(screenRows(extra: [(4, .button, "Side", "", R(360, 120, 40, 40))]))
           .analyze(button("Side", R(360, 120, 40, 40)), isHittable: true, statusBar: R(350, 0, 52, 874)),
@@ -1021,54 +1019,50 @@ check("a button under a status bar column at the right edge: covered",
 func checkBool(_ name: String, _ got: Bool, _ want: Bool) {
     if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
 }
-checkBool("a target in the top band of a screen with no header may be under the status bar: SpringBoard is read",
-          edgeToEdge.mayBeUnderStatusBar(underBar), true)
-checkBool("a target reaching up into the top band: read",
-          edgeToEdge.mayBeUnderStatusBar(R(16, 60, 370, 200)), true)
-checkBool("a target well below the top band: not read (most taps pay nothing)",
-          edgeToEdge.mayBeUnderStatusBar(covered), false)
-checkBool("a target off screen above: not read",
-          edgeToEdge.mayBeUnderStatusBar(R(16, -200, 370, 50)), false)
-checkBool("on a landscape screen the same band counts",
-          OcclusionAnalyzer(nodes: [], screen: R(0, 0, 874, 402)).mayBeUnderStatusBar(R(16, 10, 100, 30)), true)
-// iOS lays a navigation bar out below the status bar: what starts at or below
-// its top cannot be under the status bar, so header taps cost nothing more.
-checkBool("the nav bar's back button: not read",
-          analyzer(screenRows()).mayBeUnderStatusBar(R(8, 66, 40, 40)), false)
-checkBool("the nav bar itself: not read",
-          analyzer(screenRows()).mayBeUnderStatusBar(R(0, 62, 402, 54)), false)
-checkBool("content drawn above a transparent header's nav bar (edge to edge): read",
-          analyzer(screenRows(extra: [(4, .button, "Add task", "", R(16, 16, 370, 41))]))
-              .mayBeUnderStatusBar(R(16, 16, 370, 41)), true)
-checkBool("a full-screen container starting at the top, above the nav bar: read",
-          analyzer(screenRows()).mayBeUnderStatusBar(screen), true)
-checkBool("a nav bar at the very top (status bar hidden) exempts nothing: read",
-          analyzer([
-              (0, .application, "App", "", screen),
-              (1, .window, "", "", screen),
-              (2, .navigationBar, "Title", "", R(0, 0, 402, 44)),
-              (3, .button, "Back", "", R(8, 2, 40, 40)),
-          ]).mayBeUnderStatusBar(R(8, 2, 40, 40)), true)
-
-// The status bar as read for one action: once, then again after a pass found
-// the target covered by it, so a bar the app is hiding is seen to go.
+// Where the status bar can be: its place is learned from the first read that
+// finds it shown, per screen size, and kept; until then, the top band.
+// Whether it is shown is read afresh on every pass the gate lets through.
 do {
-    var cache = OcclusionAnalyzer.StatusBarCache()
-    checkBool("nothing read yet: read", cache.needsRead, true)
-    cache.store(statusBarStrip)
-    checkBool("read: not read again on the next pass", cache.needsRead, false)
-    checkBool("…and the region is kept", cache.region == statusBarStrip, true)
-    cache.passEnded(with: .covered(by: "the keyboard"))
-    checkBool("covered by something else: the region is kept", cache.needsRead, false)
-    cache.passEnded(with: .clear(point: .zero, visible: R(0, 54, 10, 10)))
-    checkBool("clear: the region is kept", cache.needsRead, false)
-    cache.passEnded(with: .covered(by: OcclusionAnalyzer.statusBarName))
-    checkBool("covered by the status bar: read again on the next pass, to see it go", cache.needsRead, true)
-    cache.store(nil)
-    checkBool("read again and none shown now: no region", cache.region == nil, true)
-    checkBool("…and not read again", cache.needsRead, false)
-    cache.passEnded(with: nil)
-    checkBool("no tree read: the region is kept", cache.needsRead, false)
+    var gate = OcclusionAnalyzer.StatusBarGate()
+    checkBool("nothing learned: a target in the top band may be under the bar",
+              gate.mayCover(underBar, screen: screen), true)
+    checkBool("nothing learned: a target reaching up into the top band may be",
+              gate.mayCover(R(16, 60, 370, 200), screen: screen), true)
+    checkBool("nothing learned: a nav bar's back button in the top band may be",
+              gate.mayCover(R(8, 66, 40, 40), screen: screen), true)
+    checkBool("a target well below the top band is not (most taps pay nothing)",
+              gate.mayCover(covered, screen: screen), false)
+    checkBool("a target off screen above is not",
+              gate.mayCover(R(16, -200, 370, 50), screen: screen), false)
+    gate.learn(nil, screen: screen)
+    checkBool("a read that found no bar (hidden) teaches nothing: the top band still counts",
+              gate.mayCover(R(8, 66, 40, 40), screen: screen), true)
+    gate.learn(statusBarStrip, screen: screen)
+    checkBool("learned: a header button below the bar is not under it (no read)",
+              gate.mayCover(R(8, 66, 40, 40), screen: screen), false)
+    checkBool("learned: a header starting right at the bar's bottom is not",
+              gate.mayCover(R(0, 54, 402, 54), screen: screen), false)
+    checkBool("learned: a button under the bar is",
+              gate.mayCover(underBar, screen: screen), true)
+    checkBool("learned: a button reaching up into the bar is",
+              gate.mayCover(partlyUnderBar, screen: screen), true)
+    checkBool("learned: a button inside a legacy nav bar laid at y=20 is (the bar reaches 54)",
+              gate.mayCover(R(8, 22, 40, 40), screen: screen), true)
+    let landscape = R(0, 0, 874, 402)
+    checkBool("another screen size learns separately: the top band counts there",
+              gate.mayCover(R(16, 60, 100, 30), screen: landscape), true)
+    // The iPhone Duo's bar is a column at the right edge: once learned, a
+    // target under it anywhere down the screen is checked.
+    let duo = R(0, 0, 466, 951)
+    gate.learn(R(378, 0, 88, 176.33), screen: duo)
+    checkBool("Duo: a target under the column below the top band is",
+              gate.mayCover(R(400, 120, 40, 40), screen: duo), true)
+    checkBool("Duo: a target in the top band away from the column is not",
+              gate.mayCover(R(16, 10, 100, 40), screen: duo), false)
+    // A taller bar seen later (a call or recording banner) widens what is kept.
+    gate.learn(R(0, 0, 402, 80), screen: screen)
+    checkBool("learned regions grow, never shrink",
+              gate.mayCover(R(8, 60, 40, 15), screen: screen), true)
 }
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")

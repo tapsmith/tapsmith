@@ -31,6 +31,9 @@ class CommandHandler {
     /// The screen as the last touch plan's app snapshot saw it (it follows a
     /// rotation, unlike the cached `screenSize`); nil before a plan read one.
     private var plannedScreenSize: CGSize?
+    /// Which targets the status bar can be over, learned from what SpringBoard
+    /// showed (`OcclusionAnalyzer.StatusBarGate`).
+    private var statusBarGate = OcclusionAnalyzer.StatusBarGate()
     /// The whole screen in native portrait space, as `waitForIdle` samples it
     /// (`IdleSettle.screenRegion`). Kept across a rotation, which clears the
     /// cached screen size but leaves the native space as it was.
@@ -960,13 +963,10 @@ class CommandHandler {
             readDeadline: commandReadDeadline,
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
-        // Where the status bar is, read by the passes that need it.
-        var statusBar = OcclusionAnalyzer.StatusBarCache()
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
-            let read = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable, statusBar: &statusBar)
-            statusBar.passEnded(with: read?.verdict)
+            let read = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable)
             // Checked after the pass: a slow pass that ends past the deadline
             // fails now instead of paying for another one.
             try refuseIfLate(clock)
@@ -1117,15 +1117,12 @@ class CommandHandler {
     /// on it holds its touch (`TapTiming`, by its type and what it sits in:
     /// an alert, a segmented control…). nil when no tree could be read.
     ///
-    /// `statusBar` holds where the system status bar is, for the caller's
-    /// later passes (`OcclusionAnalyzer.StatusBarCache`). It is read only for
-    /// a target that may be under it (`OcclusionAnalyzer.mayBeUnderStatusBar`):
-    /// a SpringBoard snapshot.
+    /// Where the system status bar is (a SpringBoard snapshot) is read on
+    /// every pass, but only for a target it can be over (`statusBarGate`).
     private func occlusionVerdict(
         for element: ElementInfo,
         xcElem: XCUIElement?,
-        isHittable: Bool,
-        statusBar: inout OcclusionAnalyzer.StatusBarCache
+        isHittable: Bool
     ) -> (verdict: OcclusionAnalyzer.Verdict, hold: TimeInterval)? {
         let target = occlusionTarget(for: element, xcElem: xcElem)
         let screenSize = snapshotFinder.screenSize
@@ -1135,11 +1132,9 @@ class CommandHandler {
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize, device: ActionExecutor.currentDeviceTurn())
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
         var bar: CGRect?
-        if analyzer.mayBeUnderStatusBar(target.frame) {
-            if statusBar.needsRead {
-                statusBar.store(systemStatusBarRegion(screen: self.screenSize(of: appSnapshot), purpose: "tap"))
-            }
-            bar = statusBar.region
+        if statusBarGate.mayCover(target.frame, screen: analyzer.screen) {
+            bar = systemStatusBarRegion(screen: self.screenSize(of: appSnapshot), purpose: "tap")
+            statusBarGate.learn(bar, screen: analyzer.screen)
         }
         // A target identified from what was cached (its live read was another
         // element's, or none) is judged by the tree alone: the live element's
