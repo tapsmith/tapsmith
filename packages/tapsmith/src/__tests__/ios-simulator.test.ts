@@ -77,6 +77,7 @@ import {
   probeSimulatorHealth,
   filterHealthySimulators,
   cleanupStaleSimulators,
+  staleSimulatorsDeletedMessage,
   killAgentRunnersForSimulators,
   recordClonedSimulators,
   unrecordSimulators,
@@ -806,6 +807,9 @@ describe('cleanupStaleSimulators', () => {
     const result = cleanupStaleSimulators('iPhone 16');
     expect(result.reusable).toEqual(['A']);
     expect(result.killed).toContain('B');
+    // Already gone: dropped from the manifest, not something this run deleted.
+    expect(result.deleted).toEqual([]);
+    expect(staleSimulatorsDeletedMessage(result)).toBeUndefined();
   });
 
   it('deletes orphaned Tapsmith Worker sims not in manifest', () => {
@@ -822,6 +826,18 @@ describe('cleanupStaleSimulators', () => {
 
     const result = cleanupStaleSimulators('iPhone 16');
     expect(result.killed).toContain('ORPHAN');
+    expect(result.deleted).toEqual(['iPhone 16 (Tapsmith Worker 1)']);
+  });
+
+  it('names the clones it deleted, and why they were Tapsmith\'s, rather than just counting them', () => {
+    expect(staleSimulatorsDeletedMessage({ deleted: ['iPhone 16 (Tapsmith Worker 1)', 'iPhone 16 (Tapsmith Worker 2)'] })).toBe(
+      'Deleted 2 stale simulators an earlier Tapsmith run cloned for parallel workers and left behind: '
+      + 'iPhone 16 (Tapsmith Worker 1), iPhone 16 (Tapsmith Worker 2).',
+    );
+    expect(staleSimulatorsDeletedMessage({ deleted: ['iPhone 16 (Tapsmith Worker 1)'] })).toBe(
+      'Deleted 1 stale simulator an earlier Tapsmith run cloned for parallel workers and left behind: iPhone 16 (Tapsmith Worker 1).',
+    );
+    expect(staleSimulatorsDeletedMessage({ deleted: [] })).toBeUndefined();
   });
 
   it('hands back the listing it read, without the simulators it deleted, so the caller need not list again', () => {
