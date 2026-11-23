@@ -324,57 +324,43 @@ describe('no-bare-locator-xpath on real code', () => {
     ]))).toEqual([4]);
   });
 
-  it('does not count a comment above the call an arrow function body starts lines later', () => {
+  it('accepts a comment above a statement whose arrow function holds the call', () => {
     expect(lint(body([
-      '  // Poll the row.',
+      '  // Poll the legacy row.',
       '  await expect.poll(',
       '    () =>',
       "      device.locator({ xpath: '//Row[1]' }).isVisible(),",
       '  ).toBe(true);',
-    ]))).toEqual([5]);
+    ]))).toEqual([]);
   });
 
-  it('does not count a comment about another class field, object property or array element', () => {
+  it('accepts a comment above a const, class field or property whose arrow body wraps', () => {
     const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
     expect(lintFile([
-      '// Login screen.',
-      'export class Login {',
-      '  constructor(device) { this.device = device; }',
-      '  // Submit button.',
-      "  submit = this.device.getByRole('button');",
-      "  row = this.device.locator({ xpath: '//Row[1]' });",
+      '// Legacy rows with no accessible name.',
+      'export const row = (n) =>',
+      '  device.locator({ xpath: `//Row[${n}]` });',
+      'export class Rows {',
+      '  // Legacy rows with no accessible name.',
+      '  row = (n) =>',
+      '    this.device.locator({ xpath: `//Row[${n}]` });',
       '}',
-    ])).toEqual([6]);
-    expect(lintFile([
-      'export default {',
-      '  // The title.',
-      '  title: 1,',
-      "  row: device.locator({ xpath: '//Row[1]' }),",
-      '};',
-    ])).toEqual([4]);
-    expect(lintFile([
-      'const rows = [',
-      '  // The first.',
-      '  first,',
-      "  device.locator({ xpath: '//Row[1]' }),",
-      '];',
-    ])).toEqual([4]);
-  });
-
-  it('accepts a comment above the class field, object property or array element itself', () => {
-    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
-    expect(lintFile([
-      'export class Login {',
-      '  // Legacy row with no accessible name.',
-      '  row = this.device',
-      "    .locator({ xpath: '//Row[1]' });",
-      '}',
-      'export const screen = {',
-      '  // Legacy row with no accessible name.',
-      '  row:',
-      "    device.locator({ xpath: '//Row[1]' }),",
+      'export const rows = {',
+      '  // Legacy rows with no accessible name.',
+      '  row: (n) =>',
+      '    device.locator({ xpath: `//Row[${n}]` }),',
       '};',
     ])).toEqual([]);
+  });
+
+  it('does not count a comment about a sibling argument', () => {
+    expect(lint(body([
+      '  foo(',
+      '    // About the first argument.',
+      '    a,',
+      "    device.locator({ xpath: '//Row[1]' }),",
+      '  );',
+    ]))).toEqual([5]);
   });
 
   it('reports a call with no comment', () => {

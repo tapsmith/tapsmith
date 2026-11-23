@@ -8,7 +8,8 @@
  *   - prefer-role: Warns when `.locator({ className })` is used for standard
  *     Android widgets that have well-known accessibility roles.
  *   - no-bare-locator-xpath: Errors when `.locator({ xpath })` is used without
- *     an explanatory comment on the line before its statement or on its lines.
+ *     an explanatory comment above its statement (or class field, object
+ *     property or array element) or on one of its lines.
  *   - prefer-accessible-locators: Warns when `.getByTestId()` or
  *     `.locator({ id })` is used instead of `getByRole`, `getByText`,
  *     `getByDescription`, etc.
@@ -162,19 +163,23 @@ const preferRole: RuleModule = {
 // ─── no-bare-locator-xpath ───
 
 /**
- * The statement, class field or object property `node` is part of, or its
- * element of an array: the unit a comment above explains. Within an
- * expression-bodied arrow function, the body. The class, object, array or
- * function around these can start lines above the call, with comments about
- * other members in between.
+ * `node` and each node that contains it, up to the unit a comment above
+ * explains: its statement, class field, object property or array element.
+ * Stopping there keeps a comment about another member of a class, object or
+ * array from counting.
  */
-function enclosingStatement(node: ASTNode): ASTNode {
-  let prev = node;
-  for (let n: ASTNode | undefined = node; n; prev = n, n = n.parent) {
-    if (/(Statement|Declaration)$/.test(n.type) || n.type === 'Property' || n.type === 'PropertyDefinition') return n;
-    if (/Function(Expression)?$/.test(n.type) || n.type === 'ArrayExpression') return prev;
+function nodesUpToUnit(node: ASTNode): ASTNode[] {
+  const chain: ASTNode[] = [];
+  for (let n: ASTNode | undefined = node; n; n = n.parent) {
+    chain.push(n);
+    if (/(Statement|Declaration)$/.test(n.type) || n.type === 'Property' || n.type === 'PropertyDefinition') {
+      // `export const row = …`: the comment sits before `export`.
+      if (n.parent && /^Export(Named|Default)Declaration$/.test(n.parent.type)) chain.push(n.parent);
+      break;
+    }
+    if (n.parent?.type === 'ArrayExpression') break;
   }
-  return prev;
+  return chain;
 }
 
 const noBareLocatorXpath: RuleModule = {
@@ -187,7 +192,7 @@ const noBareLocatorXpath: RuleModule = {
     },
     messages: {
       noBareLocatorXpath:
-        'locator({ xpath }) must have an explanatory comment on the line before its statement or on one of its lines. XPath locators are fragile and Android-only — document why this is necessary.',
+        'locator({ xpath }) must have an explanatory comment above its statement (or class field, object property or array element) or on one of its lines. XPath locators are fragile and Android-only — document why this is necessary.',
     },
     schema: [],
   },
@@ -199,20 +204,19 @@ const noBareLocatorXpath: RuleModule = {
         if (getObjectProperty(arg, 'xpath') === undefined) return;
 
         const sourceCode = (context.sourceCode ?? context.getSourceCode?.()) as SourceCode;
-        const comments = sourceCode.getCommentsBefore(node);
-        if (comments.length > 0) return;
+        // A comment directly before the call or before anything that holds
+        // it, up to its unit: so one above `await device.locator(…)`,
+        // `const row =`, a wrapped `expect(` or a class field counts.
+        if (nodesUpToUnit(node).some((n) => sourceCode.getCommentsBefore(n).length > 0)) return;
 
-        // A comment on the line before the statement the call is in, or on
-        // any line from there to the call's end. The comments directly before
-        // the call miss the usual shapes, where an `await`, `const row =` or a
-        // wrapped `expect(` sits between the comment and the call.
-        const startLine = enclosingStatement(node).loc?.start.line;
+        // Or a comment on one of the call's own lines.
+        const startLine = node.loc?.start.line;
         const endLine = node.loc?.end.line ?? startLine;
         if (startLine === undefined || endLine === undefined) return;
         const commented = sourceCode.getAllComments().some((c) => {
           const from = c.loc?.start.line;
           const to = c.loc?.end.line;
-          return from !== undefined && to !== undefined && to >= startLine - 1 && from <= endLine;
+          return from !== undefined && to !== undefined && to >= startLine && from <= endLine;
         });
         if (commented) return;
 

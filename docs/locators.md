@@ -403,7 +403,7 @@ await device.locator({
 }).tap()
 ```
 
-> **Warning:** The ESLint plugin requires an explanatory comment whenever `locator({ xpath })` is used, on the line before the statement, class field or object property it is in, or on one of the call's own lines. If you find yourself reaching for XPath, consider whether adding accessibility attributes to the app would be a better long-term solution.
+> **Warning:** The ESLint plugin requires an explanatory comment whenever `locator({ xpath })` is used, directly above the statement, class field, object property or array element it is in, or on one of the call's own lines. If you find yourself reaching for XPath, consider whether adding accessibility attributes to the app would be a better long-term solution.
 
 An XPath locator is for use on its own. `and()`/`or()` refuse an XPath operand with an error, because the agent reports an XPath match's text and bounds from a different read path than every other selector, so it could never match the other operand. Narrowing one (`filter()`, `first()`/`nth()`) and an XPath `locator()` chained off another locator still answer queries, but **actions** on the XPath match fail at the agent, which cannot act on an XPath match by id. A `getBy*` scoped off an XPath locator resolves its own match, so its actions work.
 
