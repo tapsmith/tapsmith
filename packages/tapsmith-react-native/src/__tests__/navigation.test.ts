@@ -32,6 +32,7 @@ function expoState(tasksStack: string[], focusedTab: 'index' | 'tasks'): Navigat
     key: 'stack-root',
     index: 0,
     stale: false,
+    routeKeySeq: 3,
     routeNames: [EXPO_ROUTER_ROOT_ROUTE],
     routes: [{
       name: EXPO_ROUTER_ROOT_ROUTE,
@@ -49,6 +50,27 @@ function expoState(tasksStack: string[], focusedTab: 'index' | 'tasks'): Navigat
 }
 
 describe('expo-router navigation reset', () => {
+  it('resets through the container\'s reset when it has no resetRoot (expo-router 56 and later)', () => {
+    let state: NavigationStateLike | undefined = expoState(['index', 'new'], 'index');
+    const reset = vi.fn((next: object) => { state = next as NavigationStateLike; });
+    const container: NavigationContainerLike = { isReady: () => true, getRootState: () => state, reset };
+    const navigate = vi.fn();
+
+    expect(expoRouterNavigationReset(container, navigate)('/')).toBe(true);
+    expect(reset).toHaveBeenCalledTimes(1);
+    // A complete root state: key, route names and key sequence kept.
+    expect(state).toMatchObject({ key: 'stack-root', stale: false, routeNames: [EXPO_ROUTER_ROOT_ROUTE], routeKeySeq: 3 });
+    expect(state?.routes).toEqual([{ name: EXPO_ROUTER_ROOT_ROUTE, key: '__root-key' }]);
+    expect(navigate).toHaveBeenCalledWith('/');
+  });
+
+  it('leaves navigation alone when the container can reset nothing', () => {
+    const container: NavigationContainerLike = { isReady: () => true, getRootState: () => expoState(['index'], 'index') };
+    const navigate = vi.fn();
+    expect(expoRouterNavigationReset(container, navigate)('/')).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('keeps the root route and its key, drops every nested state, then navigates to the reset\'s route', () => {
     const container = fakeContainer(expoState(['index', 'new'], 'index'));
     const navigate = vi.fn();

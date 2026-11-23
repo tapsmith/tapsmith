@@ -19,11 +19,25 @@ import { useContext, type Context } from 'react';
 
 declare const require: (id: string) => unknown;
 
-/** The parts of a React Navigation container ref the reset uses. */
+/**
+ * The parts of a React Navigation container ref the reset uses. React
+ * Navigation's has `resetRoot`; expo-router 56 and later keep their own copy
+ * of React Navigation, whose container ref has only `reset` (a RESET action
+ * that the root navigator handles, since only it has the root route).
+ */
 export interface NavigationContainerLike {
   isReady(): boolean;
   getRootState(): NavigationStateLike | undefined;
-  resetRoot(state: object): void;
+  resetRoot?(state: object): void;
+  reset?(state: object): void;
+}
+
+/** Replace the container's whole state; false when it offers no way to. */
+function replaceRootState(container: NavigationContainerLike, state: object): boolean {
+  if (typeof container.resetRoot === 'function') container.resetRoot(state);
+  else if (typeof container.reset === 'function') container.reset(state);
+  else return false;
+  return true;
 }
 
 /** A navigation state, as far as the reset reads it. */
@@ -83,8 +97,11 @@ export function expoRouterNavigationReset(
     const root = container.getRootState();
     const rootRoute = root?.routes.find((route) => route.name === EXPO_ROUTER_ROOT_ROUTE);
     if (!root || !rootRoute) return false;
+    // Everything else at the root level is kept as it is (its key, route
+    // names and key sequence): expo-router 56 and later accept only a
+    // complete root state, and seed the dropped nested state themselves.
     const { state: _nested, ...freshRoot } = rootRoute;
-    container.resetRoot({ ...root, index: 0, routes: [freshRoot] });
+    if (!replaceRootState(container, { ...root, index: 0, routes: [freshRoot] })) return false;
     navigate(href);
     return true;
   };
@@ -107,8 +124,7 @@ export function reactNavigationReset(
     const toState = linking.getStateFromPath ?? getStateFromPath;
     const state = toState?.(href, linking.config);
     if (!state) return false;
-    container.resetRoot(state);
-    return true;
+    return replaceRootState(container, state);
   };
 }
 
