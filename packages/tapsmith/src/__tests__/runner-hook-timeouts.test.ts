@@ -383,6 +383,27 @@ describe('runTestFile — hook failures name the hook', () => {
     ]);
   });
 
+  it('labels one error thrown by two hooks with each hook\'s own location, leaving the first test\'s label alone', async () => {
+    const filePath = writeFile('shared-error.test.mjs', `
+      const shared = new Error('not ready');
+      describe('a', () => {
+        beforeAll(async () => { throw shared; });
+        test('one', async () => {});
+      });
+      describe('b', () => {
+        beforeEach(async () => { throw shared; });
+        test('two', async () => {});
+      });
+    `);
+
+    const results = collectResults(await runTestFile(filePath, makeOpts()));
+
+    expect(results.map((r) => r.error?.message)).toEqual([
+      '"beforeAll" hook at shared-error.test.mjs:10 failed: not ready',
+      '"beforeEach" hook at shared-error.test.mjs:14 failed: not ready',
+    ]);
+  });
+
   it('labels an error whose message is read-only (a DOMException) or that is frozen, without losing it', async () => {
     const filePath = writeFile('readonly.test.mjs', `
       describe('dom', () => {

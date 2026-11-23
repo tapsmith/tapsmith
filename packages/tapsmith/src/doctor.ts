@@ -19,7 +19,7 @@ import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js'
 import { PLAY_IMAGE_CAPTURE_EFFECT, avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { parseSimctlDevicesJson, runningAvds, scanAndroidDevices, simulatorChoices, tryExec } from './env-scan.js';
 import { androidUnusableDeviceFix, parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
-import { isTapsmithNotInstalledError, resolveDeviceGroup, type TapsmithConfig } from './config.js';
+import { isTapsmithNotInstalledError, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from './config.js';
 import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
 import { emulatorNotFoundMessage, resolveEmulatorBinary, type EmulatorBinary } from './emulator.js';
 import { hostArch, nodeUnderRosetta, ROSETTA_NODE_FIX } from './host-arch.js';
@@ -317,12 +317,13 @@ export function summarizeAndroidDevices(devices: AdbDevice[], launch?: AvdSelfLa
 
 /**
  * The AVDs Tapsmith boots itself, when that covers every Android scope (each
- * names an `avd` with `launchEmulators` on); empty when any Android scope
- * needs a device someone else starts.
+ * names an `avd` with `launchEmulators` on and pins no primary device, which a
+ * run would use as given); empty when any Android scope needs a device
+ * someone else starts.
  */
 function selfLaunchedAvds(scopes: readonly TapsmithConfig[]): string[] {
   const android = scopes.filter((scope) => scopePlatform(scope) === 'android');
-  if (android.length === 0 || android.some((scope) => !scope.avd || scope.launchEmulators === false)) return [];
+  if (android.length === 0 || android.some((scope) => !scope.avd || scope.launchEmulators === false || primaryDevicePin(scope) !== undefined)) return [];
   return [...new Set(android.map((scope) => scope.avd as string))];
 }
 

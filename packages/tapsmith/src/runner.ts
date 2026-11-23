@@ -1673,8 +1673,12 @@ async function invokeHook(
   }
 }
 
-/** Errors already prefixed with their hook, so one thrown twice is not labelled twice. */
-const labelledHookErrors = new WeakSet<Error>();
+/**
+ * Errors already prefixed with their hook: the hook label each carries and the
+ * message it was thrown with. One thrown again by the same hook is not
+ * labelled twice; one thrown by another hook gets a copy with that hook's label.
+ */
+const labelledHookErrors = new WeakMap<Error, { label: string; original: string }>();
 
 /**
  * A setup hook's (beforeEach/beforeAll) error, its message prefixed with the
@@ -1686,19 +1690,35 @@ function labelHookError(err: unknown, bound: HookBound, where: string): unknown 
   if (bound.kind !== 'beforeEach' && bound.kind !== 'beforeAll') return err;
   if (isTestSkip(err) || isAbortError(err) || isRunnerTimeoutError(err) || bound.abortSignal?.aborted) return err;
   const error = err instanceof Error ? err : new Error(String(err));
-  if (labelledHookErrors.has(error)) return error;
-  const message = `"${bound.kind}" hook${where} failed: ${error.message}`;
+  const label = `"${bound.kind}" hook${where}`;
+  const earlier = labelledHookErrors.get(error);
+  if (earlier?.label === label) return error;
+  const original = earlier ? earlier.original : error.message;
+  const message = `${label} failed: ${original}`;
   let labelled: Error = error;
-  try {
-    // An own property: a DOMException's `message` is a getter-only accessor.
-    Object.defineProperty(error, 'message', { value: message, writable: true, configurable: true });
-  } catch {
-    // A frozen error cannot take one: report a copy, with the hook's stack.
-    labelled = new Error(message, { cause: error });
-    labelled.stack = error.stack;
+  if (earlier) {
+    // Thrown again by another hook (a shared or memoized error): a copy, so the
+    // test the first hook failed keeps its own label.
+    labelled = hookErrorCopy(error, message);
+  } else {
+    try {
+      // An own property: a DOMException's `message` is a getter-only accessor.
+      Object.defineProperty(error, 'message', { value: message, writable: true, configurable: true });
+    } catch {
+      // A frozen error cannot take one: report a copy, with the hook's stack.
+      labelled = hookErrorCopy(error, message);
+    }
   }
-  labelledHookErrors.add(labelled);
+  labelledHookErrors.set(labelled, { label, original });
   return labelled;
+}
+
+/** A plain Error carrying `message`, with `error`'s name and stack and `error` as its cause. */
+function hookErrorCopy(error: Error, message: string): Error {
+  const copy = new Error(message, { cause: error });
+  copy.name = error.name;
+  copy.stack = error.stack;
+  return copy;
 }
 
 /**

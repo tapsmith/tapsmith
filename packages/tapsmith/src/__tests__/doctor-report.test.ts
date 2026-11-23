@@ -1094,6 +1094,14 @@ describe('doctor Android devices (PILOT-263 item 4)', () => {
     expect(check(json, 'android-devices')).toMatchObject({ status: 'warn', label: 'No Android devices connected' });
   });
 
+  it('nothing attached still warns when the scope pins its device, since a pinned run launches no AVD', async () => {
+    withAdb('List of devices attached\n\n');
+    launchableAvds('Pixel_9');
+    writeConfig("export default { avd: 'Pixel_9', device: 'emulator-5554' }\n");
+    const { json } = await doctorJson();
+    expect(check(json, 'android-devices')).toMatchObject({ status: 'warn', label: 'No Android devices connected' });
+  });
+
   it('an unusable device is still named when Tapsmith would launch the AVD', async () => {
     withAdb('List of devices attached\nR58N123\tunauthorized\n');
     writeConfig("export default { avd: 'Pixel_9' }\n");
