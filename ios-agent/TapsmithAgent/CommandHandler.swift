@@ -960,10 +960,12 @@ class CommandHandler {
             readDeadline: commandReadDeadline,
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
+        // Where the status bar is: read once, on the first pass that needs it.
+        var statusBar: CGRect??
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
-            let read = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable)
+            let read = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable, statusBar: &statusBar)
             // Checked after the pass: a slow pass that ends past the deadline
             // fails now instead of paying for another one.
             try refuseIfLate(clock)
@@ -1113,10 +1115,16 @@ class CommandHandler {
     /// What the UI tree says about touching the element, and how long a tap
     /// on it holds its touch (`TapTiming`, by its type and what it sits in:
     /// an alert, a segmented control…). nil when no tree could be read.
+    ///
+    /// `statusBar` holds where the system status bar is once it has been
+    /// read (`.some(nil)`: none known), for the caller's later passes. It is
+    /// read only for a target in the top band of the screen
+    /// (`OcclusionAnalyzer.mayBeUnderStatusBar`): a SpringBoard snapshot.
     private func occlusionVerdict(
         for element: ElementInfo,
         xcElem: XCUIElement?,
-        isHittable: Bool
+        isHittable: Bool,
+        statusBar: inout CGRect??
     ) -> (verdict: OcclusionAnalyzer.Verdict, hold: TimeInterval)? {
         let target = occlusionTarget(for: element, xcElem: xcElem)
         let screenSize = snapshotFinder.screenSize
@@ -1125,10 +1133,17 @@ class CommandHandler {
         plannedScreenSize = self.screenSize(of: appSnapshot)
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize, device: ActionExecutor.currentDeviceTurn())
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
+        var bar: CGRect?
+        if OcclusionAnalyzer.mayBeUnderStatusBar(target.frame, screen: analyzer.screen) {
+            if statusBar == nil {
+                statusBar = .some(systemStatusBarRegion(screen: self.screenSize(of: appSnapshot), purpose: "tap"))
+            }
+            bar = statusBar ?? nil
+        }
         // A target identified from what was cached (its live read was another
         // element's, or none) is judged by the tree alone: the live element's
         // hit test was not this element's (PILOT-952).
-        return (analyzer.analyze(target, isHittable: target.isLive && isHittable), hold)
+        return (analyzer.analyze(target, isHittable: target.isLive && isHittable, statusBar: bar), hold)
     }
 
     /// The element as the occlusion analyzer identifies it: read live, or from
@@ -1216,6 +1231,8 @@ class CommandHandler {
         if timeoutMs > 0 { message += " (still covered after waiting \(timeoutMs)ms)" }
         if cover == "the keyboard" {
             message += ". Dismiss the keyboard first (device.hideKeyboard()) or scroll the element into view."
+        } else if cover == OcclusionAnalyzer.statusBarName {
+            message += ". The system status bar takes touches in its band: scroll the element down out of it, or lay the screen out below the safe area."
         } else if cover.hasSuffix(OcclusionAnalyzer.plainBarSuffix) {
             message += ". Scroll it out from under the bar first (await locator.scrollIntoView(), or scroll() the list)."
         }
@@ -3763,7 +3780,7 @@ class CommandHandler {
             }
             guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
             let screen = screenSize(of: snapshot)
-            if statusBar == nil { statusBar = .some(systemStatusBarRegion(screen: screen)) }
+            if statusBar == nil { statusBar = .some(systemStatusBarRegion(screen: screen, purpose: "hideKeyboard")) }
             let planner = KeyboardDismissPlanner(
                 snapshot: snapshot, screenSize: screen, device: ActionExecutor.currentDeviceTurn(), statusBar: statusBar ?? nil
             )
@@ -3792,19 +3809,20 @@ class CommandHandler {
     /// Where the system status bar is on the app's screen (`screen`), read
     /// from SpringBoard, which draws it: a strip along the top on an iPhone, a
     /// column at the right edge on the iPhone Duo simulator (PILOT-1262).
-    /// hideKeyboard keeps its touches off it, since a touch there opens
-    /// Control Center. nil when SpringBoard cannot be read; the planner then
-    /// keeps off only the top strip.
-    private func systemStatusBarRegion(screen: CGSize) -> CGRect? {
+    /// A touch there goes to the bar, not the app: hideKeyboard keeps its
+    /// touches off it (it opens Control Center), and an element under it is
+    /// covered by it. nil when SpringBoard cannot be read (`purpose` names the
+    /// caller in the log).
+    private func systemStatusBarRegion(screen: CGSize, purpose: String) -> CGRect? {
         let started = Date()
         guard let snapshot = try? XCUIApplication(bundleIdentifier: "com.apple.springboard").snapshot() else {
-            NSLog("[TapsmithCommand] hideKeyboard: could not read SpringBoard for the status bar; keeping off the top strip only")
+            NSLog("[TapsmithCommand] \(purpose): could not read SpringBoard for the status bar")
             return nil
         }
         let region = KeyboardDismissPlanner.statusBarRegion(
             springboard: OcclusionAnalyzer(snapshot: snapshot, screenSize: screen, device: ActionExecutor.currentDeviceTurn())
         )
-        NSLog("[TapsmithCommand] hideKeyboard: status bar at \(region.map { NSCoder.string(for: $0) } ?? "nowhere known") (\(Int(Date().timeIntervalSince(started) * 1000)) ms)")
+        NSLog("[TapsmithCommand] \(purpose): status bar at \(region.map { NSCoder.string(for: $0) } ?? "nowhere known") (\(Int(Date().timeIntervalSince(started) * 1000)) ms)")
         return region
     }
 

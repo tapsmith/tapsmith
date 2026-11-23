@@ -976,5 +976,58 @@ check("a button in the bar over the row is named before the bar",
           .analyze(rowAt(724), isHittable: false),
       .covered(by: "button \"Pay\""))
 
+// ─── The system status bar ───
+
+// Edge-to-edge content under the status bar of an iPhone 17 Pro (iOS 26.5):
+// SpringBoard draws the bar over the top 54 pt and takes every touch there,
+// though the app's snapshot does not hold it and XCUITest calls what is under
+// it hittable.
+let statusBarStrip = R(0, 0, 402, 54)
+let underBar = R(16, 4, 160, 37)
+let partlyUnderBar = R(226, 25, 160, 93)
+// No header: the screen's content starts at the top of the screen.
+let edgeToEdge = analyzer([
+    (0, .application, "Tapsmith Test App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .button, "Under", "", underBar),
+    (3, .button, "Partly", "", partlyUnderBar),
+    (3, .staticText, "under=0 partly=0", "", R(16, 182, 370, 20)),
+])
+check("a button wholly under the status bar: covered by it, though XCUITest calls it hittable",
+      edgeToEdge.analyze(button("Under", underBar), isHittable: true, statusBar: statusBarStrip),
+      .covered(by: "the status bar"))
+check("…and when it is not hittable",
+      edgeToEdge.analyze(button("Under", underBar), isHittable: false, statusBar: statusBarStrip),
+      .covered(by: "the status bar"))
+check("a button partly under the status bar is touched on the part below it",
+      edgeToEdge.analyze(button("Partly", partlyUnderBar), isHittable: true, statusBar: statusBarStrip),
+      .clear(point: CGPoint(x: 306, y: 86), visible: R(226, 54, 160, 64)))
+checkPoint("no status bar known (none shown, or SpringBoard unreadable): touched where it is",
+           edgeToEdge.analyze(button("Under", underBar), isHittable: true, statusBar: nil),
+           CGPoint(x: 96, y: 22.5))
+checkPoint("the nav bar's back button below the status bar is not clipped by it",
+           analyzer(screenRows()).analyze(button("Back", R(8, 70, 40, 40)), isHittable: true, statusBar: statusBarStrip),
+           CGPoint(x: 28, y: 90))
+// The iPhone Duo shows its status bar as a column at the right edge.
+check("a button under a status bar column at the right edge: covered",
+      analyzer(screenRows(extra: [(4, .button, "Side", "", R(360, 120, 40, 40))]))
+          .analyze(button("Side", R(360, 120, 40, 40)), isHittable: true, statusBar: R(350, 0, 52, 874)),
+      .covered(by: "the status bar"))
+
+func checkBool(_ name: String, _ got: Bool, _ want: Bool) {
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
+}
+checkBool("a target in the top band may be under the status bar: SpringBoard is read",
+          OcclusionAnalyzer.mayBeUnderStatusBar(underBar, screen: screen), true)
+checkBool("a target reaching up into the top band: read",
+          OcclusionAnalyzer.mayBeUnderStatusBar(R(16, 60, 370, 200), screen: screen), true)
+checkBool("a target well below the top band: not read (most taps pay nothing)",
+          OcclusionAnalyzer.mayBeUnderStatusBar(covered, screen: screen), false)
+checkBool("a target off screen above: not read",
+          OcclusionAnalyzer.mayBeUnderStatusBar(R(16, -200, 370, 50), screen: screen), false)
+checkBool("on a landscape screen the same band counts",
+          OcclusionAnalyzer.mayBeUnderStatusBar(R(16, 10, 100, 30), screen: R(0, 0, 874, 402)), true)
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

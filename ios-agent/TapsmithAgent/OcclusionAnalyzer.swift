@@ -20,6 +20,9 @@ import XCTest
 ///   visible part of that area is still tappable: the touch point moves to
 ///   the center of what the keyboard leaves visible, the same way Playwright
 ///   clicks the in-viewport part of a partly scrolled-out element.
+/// - **The system status bar**, when the caller says where it is: SpringBoard
+///   draws it over edge-to-edge content and takes the touches in it. It clips
+///   the visible area like the keyboard.
 /// - **Navigation, tab, and tool bars** the target is not part of, when they
 ///   are drawn over it: over the content of their own container (scroll
 ///   content passes under a nav bar even though the bar comes first in the
@@ -170,7 +173,10 @@ struct OcclusionAnalyzer {
 
     // MARK: - Verdict
 
-    func analyze(_ target: Target, isHittable: Bool) -> Verdict {
+    /// `statusBar` is where the system status bar is on the screen
+    /// (`KeyboardDismissPlanner.statusBarRegion`), or nil when none is shown
+    /// or it was not read: it clips the target like a bar.
+    func analyze(_ target: Target, isHittable: Bool, statusBar: CGRect? = nil) -> Verdict {
         var visible = target.frame.intersection(screen)
         guard !visible.isNull,
               visible.width >= Self.minVisibleExtent,
@@ -206,6 +212,10 @@ struct OcclusionAnalyzer {
         let targetInKeyboard = targetIndex.map { isInKeyboard($0, keyboardWindows: keyboardWindows) } ?? false
 
         var clips: [(rect: CGRect, name: String)] = []
+        // SpringBoard draws the status bar over the app and takes every touch
+        // in it, though the app's snapshot does not hold it and XCUITest's
+        // hit test passes for what is under it (PILOT-1435).
+        if let statusBar { clips.append((statusBar, Self.statusBarName)) }
         if !targetInKeyboard, let region = keyboardRegion(keyboardWindows: keyboardWindows) {
             clips.append((region, "the keyboard"))
         }
@@ -295,6 +305,26 @@ struct OcclusionAnalyzer {
         if let loading { return .covered(by: "a loading overlay (\(describe(nodes[loading])))") }
         return .clear(point: point, visible: visible)
     }
+
+    // MARK: - The system status bar
+
+    /// How a `.covered` verdict names the system status bar.
+    static let statusBarName = "the status bar"
+
+    /// Deepest the status bar reaches down the screen (points): 54 on an
+    /// iPhone with a Dynamic Island, 24–32 on an iPad.
+    static let maxStatusBarExtent: CGFloat = 70
+
+    /// Whether a target at `frame` can be under the status bar, so where the
+    /// bar is is worth reading (a SpringBoard snapshot): only when its
+    /// on-screen part reaches into the top band, where the bar is drawn on
+    /// an iPhone or iPad. A target anywhere else costs nothing to check.
+    static func mayBeUnderStatusBar(_ frame: CGRect, screen: CGRect) -> Bool {
+        let onScreen = frame.intersection(screen)
+        guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 else { return false }
+        return onScreen.minY < screen.minY + maxStatusBarExtent
+    }
+
 
     static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
 
