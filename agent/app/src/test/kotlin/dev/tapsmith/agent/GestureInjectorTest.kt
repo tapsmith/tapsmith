@@ -633,6 +633,27 @@ class GestureInjectorTest {
     }
 
     @Test
+    fun `a step drag that pulls down cancels instead of lifting`() {
+        // A drag that pulls down (toward the top of the content) can end in
+        // a pull at the top of a list, and lifting there starts its
+        // pull-to-refresh.
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).scrollStepDrag(0, 200, 0, 1000, steps = 20))
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+        // It still holds still, past the app's touch prediction, first.
+        val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }
+        assertEquals(GestureInjector.STEP_DRAG_MAX_MOVES + 2, moves.size)
+        assertEquals(
+            PointerState(0, 0, 1002),
+            moves
+                .last()
+                .second.pointers
+                .single(),
+        )
+    }
+
+    @Test
     fun `a step drag's still samples each move the pointer one pixel on along the drag`() {
         // The app's input queue moves a sample at the pointer's last position
         // to its last prediction: still samples at the end point never told
@@ -749,7 +770,7 @@ class GestureInjectorTest {
     @Test
     fun `a step drag whose lift is refused cancels its pointer`() {
         val sink = FakeSink(clock, refuse = { it.action == TouchAction.UP })
-        assertFalse(injector(sink).scrollStepDrag(0, 0, 0, 500, steps = 20))
+        assertFalse(injector(sink).scrollStepDrag(0, 500, 0, 0, steps = 20))
         assertEquals(listOf(TouchAction.UP, TouchAction.CANCEL), sink.actions().takeLast(2))
     }
 
@@ -758,7 +779,7 @@ class GestureInjectorTest {
         var moves = 0
         val sink =
             FakeSink(clock, refuse = { it.action == TouchAction.MOVE && ++moves == GestureInjector.STEP_DRAG_MAX_MOVES + 1 })
-        assertFalse(injector(sink).scrollStepDrag(0, 0, 0, 500, steps = 20))
+        assertFalse(injector(sink).scrollStepDrag(0, 500, 0, 0, steps = 20))
         assertEquals(TouchAction.CANCEL, sink.actions().last())
         assertFalse(TouchAction.UP in sink.actions())
     }
@@ -782,7 +803,7 @@ class GestureInjectorTest {
             }
         try {
             CommandCancellation.runWith(token) {
-                GestureInjector(sink, cancelling) { 8L }.scrollStepDrag(0, 0, 0, 500, steps = 20)
+                GestureInjector(sink, cancelling) { 8L }.scrollStepDrag(0, 500, 0, 0, steps = 20)
             }
             throw AssertionError("expected CommandCancelledException")
         } catch (e: CommandCancelledException) {

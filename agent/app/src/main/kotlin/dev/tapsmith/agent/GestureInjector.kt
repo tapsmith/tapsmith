@@ -560,6 +560,10 @@ class GestureInjector(
      *   momentum events, a paging list's snap) only on a lift. Inside a scroll
      *   view nothing under the finger is clicked: the scroll view takes the
      *   drag over past slop and cancels the touch for the view under it.
+     * - Except a drag that pulls down (toward the top of the content): it is
+     *   cancelled, not lifted. Past the top of a list it is a pull, and a
+     *   lift starts the list's pull-to-refresh (a refresh on almost every
+     *   step at the top of a React Native RefreshControl list on API 36).
      *
      * A refused event stops the drag, and the pointer is cancelled rather
      * than lifted after a drag that did not finish (as is one whose lift is
@@ -634,6 +638,9 @@ class GestureInjector(
             at(end, TouchAction.CANCEL, sync = true)
             return false
         }
+        // A drag that pulls down can end as a pull at the top of a list,
+        // and a lift there starts its pull-to-refresh: it is cancelled.
+        if (y2 > y1) return at(end, TouchAction.CANCEL, sync = true)
         if (at(end, TouchAction.UP, sync = true)) return true
         at(end, TouchAction.CANCEL, sync = true)
         return false

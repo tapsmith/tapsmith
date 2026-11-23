@@ -709,8 +709,9 @@ class ActionExecutor(
 
     /**
      * A scroll step's drag inside [region] ([SwipeGeometry]): vertical ones
-     * are [GestureInjector.scrollStepDrag]s, which hold still before they
-     * lift, so the list stops dead; a sideways one lifts while it still moves
+     * are [GestureInjector.scrollStepDrag]s, which hold still at their end
+     * (then lift, or cancel when they pull down), so the list stops dead; a
+     * sideways one lifts while it still moves
      * ([GestureInjector.stepDrag]), so a pager still turns its page.
      * The scroll events of the view under the drag's start point are
      * recorded from the drag's start until [endScrollStep].
