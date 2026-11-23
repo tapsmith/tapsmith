@@ -18,7 +18,7 @@ import { runTestFile, loadFailureResult, collectResults, type RunDevice, type Te
 import { runFileWithSessionRecovery } from './file-recovery.js';
 import { runnerClaimsUnhandledRejection } from './unhandled-errors.js';
 import { telemetry, readSdkVersion, ensureSessionEnv } from './telemetry.js';
-import { createReporters, ReporterDispatcher, type FullResult } from './reporter.js';
+import { createReporters, ReporterDispatcher, ReporterLoadError, type FullResult } from './reporter.js';
 import { ensureSessionReady } from './session-preflight.js';
 import {
   closeDeviceSession,
@@ -2453,7 +2453,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   }
 
   // Initialize reporters
-  const reporters = await createReporters(config.reporter);
+  const reporters = await createReporters(config.reporter, { rootDir: config.rootDir });
   // Auto-add GitHub Actions reporter when running in GitHub Actions
   if (process.env.GITHUB_ACTIONS) {
     const hasGithub = reporters.some((r) => r.constructor.name === 'GitHubActionsReporter');
@@ -3365,6 +3365,18 @@ main().catch(async (err) => {
     if (process.env.TAPSMITH_DEBUG || process.env.DEBUG) {
       console.error((err as Error)?.stack ?? err);
     }
+    process.exit(1);
+  }
+
+  // A reporter that could not be created: an unknown name's message lists
+  // the built-in reporters, and Tapsmith's own frames would only bury it. A
+  // custom reporter that threw shows its error's stack, which points into
+  // the user's code.
+  if (err instanceof ReporterLoadError) {
+    console.error(red(err.message));
+    const cause = err.cause instanceof Error ? err.cause : undefined;
+    if (err.kind === 'load-failed' && cause?.stack) console.error(dim(cause.stack));
+    else if (process.env.TAPSMITH_DEBUG || process.env.DEBUG) console.error(err.stack);
     process.exit(1);
   }
 

@@ -121,6 +121,7 @@ export class JUnitReporter implements TapsmithReporter {
     const outputPath = path.resolve(this._config?.rootDir ?? process.cwd(), this._outputFile);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, lines.join('\n'));
+    process.stderr.write(`JUnit report written to ${outputPath}\n`);
   }
 }
 

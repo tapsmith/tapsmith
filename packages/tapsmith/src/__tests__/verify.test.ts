@@ -255,6 +255,19 @@ describe('runVerify() outcome by what the run executed', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  // The results file is verify's own, deleted when it is read: the JSON
+  // reporter must not tell the user where it went.
+  it('asks the child\'s JSON reporter not to print where it wrote verify\'s results file', async () => {
+    let env: NodeJS.ProcessEnv | undefined;
+    spawnSyncMock.impl = (opts) => {
+      env = opts.env as NodeJS.ProcessEnv;
+      fs.writeFileSync(env.TAPSMITH_JSON_OUTPUT_FILE!, JSON.stringify(reportOf(['passed'])));
+      return 0;
+    };
+    await runVerify({ json: false });
+    expect(env?.TAPSMITH_JSON_REPORT_QUIET).toBe('1');
+  });
+
   it('--json: a passing run is still the ok result, exit code unset', async () => {
     childReports(['passed', 'skipped']);
     await runVerify({ json: true });

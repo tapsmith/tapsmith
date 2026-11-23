@@ -2532,11 +2532,17 @@ export default defineConfig({
 | --- | --- | --- |
 | `outputFile` | `string` | `"tapsmith-results/results.json"` |
 
+`TAPSMITH_JSON_OUTPUT_FILE`, when set, takes the place of `outputFile`. The file is written at the end of the
+run, and its path is printed on stderr (`JSON report written to …`). Unlike Playwright's JSON reporter, which
+prints to stdout when no file is configured, Tapsmith's always writes the file.
+
 **`junit`**
 
 | Option | Type | Default |
 | --- | --- | --- |
 | `outputFile` | `string` | `"tapsmith-results/results.xml"` |
+
+The path is printed on stderr when the file is written (`JUnit report written to …`).
 
 **`html`**
 
@@ -2599,6 +2605,11 @@ export default defineConfig({
   reporter: [["./my-reporter.ts", {}]],
 });
 ```
+
+A relative path is resolved against `rootDir`, as other paths in the config are, and so is a name such as
+`reporters/custom.js` when a file of that name exists there. Any other name is imported as an installed package. The module's default export is a reporter class, constructed with the
+reporter's options, or a reporter object. A reporter whose module or constructor throws stops the run with
+that error (`tapsmith test` also prints its stack).
 
 ### `TapsmithReporter` interface
 
@@ -2997,17 +3008,23 @@ npx tapsmith test --force-install
 
 Without this flag, Tapsmith skips the install step when the installed build matches the one you built (on a physical iOS device, when the app is installed at all). On iOS the installed app is found by its bundle ID, so without `package` set Tapsmith cannot see it and installs the app every run.
 
-### `tapsmith test --reporter <name>`
+### `tapsmith test --reporter <names>`
 
-Use one reporter for this run instead of the config's `reporter`: a built-in one
+Use these reporters for this run instead of the config's `reporter`, comma-separated as in Playwright: built-in ones
 (`list`, `line`, `dot`, `json`, `junit`, `html`, `github` or `blob`), or the path or package name of a
-custom reporter module (see Custom reporters, under Reporters). For several reporters or reporter
-options, set [`reporter`](configuration.md#reporterconfig) in the config.
+custom reporter module (see Custom reporters, under Reporters). Repeating the flag adds to the list:
+`--reporter list --reporter junit` is the same as `--reporter list,junit`. For reporter options, set
+[`reporter`](configuration.md#reporterconfig) in the config.
 
 ```bash
 npx tapsmith test --reporter dot
+npx tapsmith test --reporter list,junit
 npx tapsmith test --reporter json     # writes tapsmith-results/results.json
 ```
+
+A name that is not a built-in reporter, a file or an installed package stops the run before any device is
+launched, listing the built-in reporters (and the one a misspelling probably meant). The same check applies to
+names in the config.
 
 ### `tapsmith init [options]`
 

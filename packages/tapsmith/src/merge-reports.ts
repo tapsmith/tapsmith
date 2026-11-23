@@ -14,6 +14,7 @@ import {
   type ReporterDescription,
   type TapsmithReporter,
 } from './reporter.js';
+import { parseReporterList } from './reporter-names.js';
 import { BlobMergeError, BlobOutputDirError, BlobReporter, describeMergedBlobs, incompleteMergeMessage, mergeBlobs } from './reporters/blob.js';
 import { bold, dim, green, red } from './reporters/base.js';
 
@@ -40,7 +41,7 @@ function mergeReporterDescriptions(
   cliReporter: string | undefined,
 ): ReporterDescription[] | string {
   if (cliReporter !== undefined) {
-    const names = cliReporter.split(',').map((n) => n.trim()).filter((n) => n !== '');
+    const names = parseReporterList(cliReporter);
     if (names.length === 0) return '--reporter needs at least one reporter name, e.g. --reporter html';
     if (names.includes('blob')) {
       return '--reporter blob is not available here: merge-reports reads blob reports and never writes one';
@@ -86,7 +87,7 @@ export async function runMergeReports(
   }
   let reporters: TapsmithReporter[];
   try {
-    reporters = (await createReporters(descriptions)).filter((r) => !(r instanceof BlobReporter));
+    reporters = (await createReporters(descriptions, { rootDir: config.rootDir })).filter((r) => !(r instanceof BlobReporter));
   } catch (err) {
     console.error(red(`merge-reports: ${err instanceof Error ? err.message : String(err)}`));
     return 1;

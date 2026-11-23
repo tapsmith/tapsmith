@@ -308,7 +308,9 @@ export async function runVerify(args: VerifyArgs): Promise<void> {
       ], {
         stdio: args.json ? ['ignore', 'ignore', 'pipe'] : 'inherit',
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, TAPSMITH_JSON_OUTPUT_FILE: resultsFile },
+        // The results file is verify's own, read and deleted below: the
+        // reporter need not say where it went.
+        env: { ...process.env, TAPSMITH_JSON_OUTPUT_FILE: resultsFile, TAPSMITH_JSON_REPORT_QUIET: '1' },
         timeout: 10 * 60 * 1000,
       });
 

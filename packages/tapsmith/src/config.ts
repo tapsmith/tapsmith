@@ -959,7 +959,7 @@ function describeValue(value: unknown): string {
  * The candidate `input` most likely meant: a case-insensitive match, else the
  * closest within a small edit distance (`timout` → `timeout`, `apkk` → `apk`).
  */
-function suggestFrom(input: string, candidates: readonly string[]): string | undefined {
+export function suggestFrom(input: string, candidates: readonly string[]): string | undefined {
   const lower = input.toLowerCase();
   const sameCase = candidates.find((c) => c.toLowerCase() === lower);
   if (sameCase) return sameCase;
@@ -1840,9 +1840,9 @@ async function importConfigModuleOnce(configPath: string): Promise<Record<string
   let nativeError: unknown;
   try {
     // Not queued: a native import that runs while another load's tsx hooks
-    // are registered is compiled by them, and `unwrapCommonJsConfig` gives
+    // are registered is compiled by them, and `unwrapCommonJsModule` gives
     // the same result either way.
-    return unwrapCommonJsConfig(
+    return unwrapCommonJsModule(
       (await withoutModuleTypeWarnings(() => import(pathToFileURL(configPath).href))) as Record<string, unknown>,
     );
   } catch (err) {
@@ -1862,14 +1862,14 @@ async function importConfigModuleOnce(configPath: string): Promise<Record<string
 }
 
 /**
- * A config compiled to CommonJS — by tsx in a package without
+ * A config (or a custom reporter) compiled to CommonJS — by tsx in a package without
  * `"type": "module"`, or ahead of time (`exports.__esModule = true;
  * exports.default = …`) — comes back with the whole `module.exports` as the
  * namespace's `default`: the `__esModule`-marked object whose own `default`
  * is the config. The tsx binary unwraps that itself; Node and tsx's
  * in-process hooks do not.
  */
-function unwrapCommonJsConfig(mod: Record<string, unknown>): Record<string, unknown> {
+export function unwrapCommonJsModule(mod: Record<string, unknown>): Record<string, unknown> {
   const exportsObject = mod.default as { __esModule?: unknown } | undefined;
   if (exportsObject && typeof exportsObject === 'object' && exportsObject.__esModule === true) {
     return exportsObject as Record<string, unknown>;
@@ -2056,7 +2056,7 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
     // (`fileURLToPath` and `import.meta.dirname` are unaffected).
     const url = `${pathToFileURL(configPath).href}?tapsmith-config=${Date.now()}`;
     const mod = (await import(url)) as Record<string, unknown>;
-    return unwrapCommonJsConfig(mod);
+    return unwrapCommonJsModule(mod);
   } catch (err) {
     throw configLoadError(configPath, err, nativeError);
   } finally {
