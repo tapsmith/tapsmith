@@ -254,7 +254,7 @@ export interface NearMissCheck {
   /** The near-miss sentence ({@link nearMissHint}), or ''. */
   hint: string;
   /**
-   * A listed element's text or description is the locator's words (in any
+   * A hit's text or description is the locator's words (in any
    * case, whitespace-normalized; without trailing punctuation too), so the
    * element asked for is on screen under another locator, not off-screen. A
    * hit that only contains the words is another element.
@@ -294,7 +294,7 @@ function locatorWords(selector: Selector): string | undefined {
   }
 }
 
-/** Whether a listed (non-fallback) hit's text or description is the locator's words ({@link NearMissCheck}). */
+/** Whether a (non-fallback) hit's text or description is the locator's words ({@link NearMissCheck}). */
 function showsWords(selector: Selector, probes: Probe[], response: EvaluateSelectorsResponse): boolean {
   const words = locatorWords(selector);
   if (words === undefined) return false;
