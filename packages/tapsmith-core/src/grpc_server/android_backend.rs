@@ -40,6 +40,21 @@ async fn agent_apks_to_install(
     to_install
 }
 
+/// On a device whose adbd is not root, the error `op` fails with when
+/// `run-as <pkg>` cannot enter the app (a release build, a package that is not
+/// installed), or `None` when it can. Run before anything touches the app's
+/// data, so a refused restore leaves the data as it was.
+async fn run_as_refusal(serial: &str, pkg: &str, op: &str) -> Option<String> {
+    let e = adb::shell(serial, &android_app_state::run_as_probe(pkg))
+        .await
+        .err()?;
+    let refusal = android_app_state::classify_run_as_refusal(&e.to_string());
+    let kind = android_app_state::device_kind(serial).await;
+    Some(android_app_state::run_as_refusal_message(
+        op, pkg, serial, &refusal, kind,
+    ))
+}
+
 pub(super) struct AndroidBackend<'a> {
     pub(super) svc: &'a TapsmithServiceImpl,
 }
@@ -681,6 +696,14 @@ impl DeviceBackend for AndroidBackend<'_> {
             .await
             .map(|out| out.contains("uid=0"))
             .unwrap_or(false);
+        if !is_root {
+            if let Some(message) = run_as_refusal(&serial, pkg, "saveAppState").await {
+                return Ok(self
+                    .svc
+                    .action_error(request_id, "APP_STATE_SAVE_FAILED", message)
+                    .await);
+            }
+        }
 
         // 2b. Capture device-side state that lives OUTSIDE /data/data and
         // is destroyed by `pm clear` (root only), embedding each as a
@@ -723,20 +746,11 @@ impl DeviceBackend for AndroidBackend<'_> {
         // Older Toybox builds (pre-Android 10) lack --exclude, so
         // fall back to archiving everything if the first attempt fails.
         let tar_cmd = |excludes: &str| {
-            let prefix = if is_root {
-                String::new()
-            } else {
-                format!("run-as {pkg} ")
-            };
-            if excludes.is_empty() {
-                format!("{prefix}tar czf {device_tmp} -C {data_dir} .")
-            } else {
-                format!("{prefix}tar czf {device_tmp} {excludes} -C {data_dir} .")
-            }
+            android_app_state::save_command(pkg, &data_dir, &device_tmp, is_root, excludes)
         };
         let tar_result = adb::shell_with_timeout(
             &serial,
-            &tar_cmd("--exclude=./cache --exclude=./code_cache"),
+            &tar_cmd(android_app_state::CACHE_EXCLUDES),
             tar_timeout,
         )
         .await;
@@ -816,6 +830,14 @@ impl DeviceBackend for AndroidBackend<'_> {
             .await
             .map(|out| out.contains("uid=0"))
             .unwrap_or(false);
+        if !is_root {
+            if let Some(message) = run_as_refusal(&serial, pkg, "restoreAppState").await {
+                return Ok(self
+                    .svc
+                    .action_error(request_id, "APP_STATE_RESTORE_FAILED", message)
+                    .await);
+            }
+        }
 
         // 3. Clear the app's data dir IN PLACE, preserving the device
         // keystore. `pm clear` would also wipe the app's AndroidKeyStore
@@ -868,21 +890,12 @@ impl DeviceBackend for AndroidBackend<'_> {
         }
 
         // 5. Extract archive into app data dir
-        let tar_result = if is_root {
-            adb::shell_with_timeout(
-                &serial,
-                &format!("tar xzf {device_tmp} -C {data_dir}"),
-                tar_timeout,
-            )
-            .await
-        } else {
-            adb::shell_with_timeout(
-                &serial,
-                &format!("run-as {pkg} tar xzf {device_tmp} -C {data_dir}"),
-                tar_timeout,
-            )
-            .await
-        };
+        let tar_result = adb::shell_with_timeout(
+            &serial,
+            &android_app_state::restore_command(pkg, &data_dir, &device_tmp, is_root),
+            tar_timeout,
+        )
+        .await;
 
         if let Err(e) = tar_result {
             let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
