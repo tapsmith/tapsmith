@@ -5154,7 +5154,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let events = self.backend().await?.take_system_dialog_events().await?;
+        let events = self
+            .backend()
+            .await?
+            .take_system_dialog_events(req.answer_leftover_alerts)
+            .await?;
         Ok(Response::new(proto::TakeSystemDialogEventsResponse {
             request_id,
             events,

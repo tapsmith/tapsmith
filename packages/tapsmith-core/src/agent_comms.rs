@@ -686,9 +686,14 @@ pub enum AgentCommand {
     },
     HideKeyboard {},
     IsKeyboardShown {},
-    /// Take the system ANR / crash dialogs the Android agent answered on its
-    /// own since the last call (PILOT-977).
-    TakeSystemDialogEvents {},
+    /// Take the system dialogs the agent answered on its own since the last
+    /// call: Android's ANR / crash dialogs, iOS's leftover alerts.
+    TakeSystemDialogEvents {
+        /// First answer any system alert still up, as a leftover: the caller
+        /// is at a test boundary (a test has ended, or an app reset is about
+        /// to begin). Only the iOS agent reads it.
+        answer_leftover_alerts: bool,
+    },
     /// The SpringBoard alert covering the app, if any (iOS).
     GetSystemAlert {},
     /// Cancel a leftover "Open in" prompt before Tapsmith opens a URL (iOS).
@@ -774,7 +779,7 @@ impl AgentCommand {
             AgentCommand::AcceptOpenInAppDialog { .. } => "acceptOpenInAppDialog",
             AgentCommand::HideKeyboard {} => "hideKeyboard",
             AgentCommand::IsKeyboardShown {} => "isKeyboardShown",
-            AgentCommand::TakeSystemDialogEvents {} => "takeSystemDialogEvents",
+            AgentCommand::TakeSystemDialogEvents { .. } => "takeSystemDialogEvents",
             AgentCommand::GetSystemAlert {} => "systemAlert",
             AgentCommand::CancelLeftoverOpenInPrompt {} => "cancelLeftoverOpenInPrompt",
             AgentCommand::SetOrientation { .. } => "setOrientation",
@@ -1185,7 +1190,12 @@ impl AgentCommand {
             }
             AgentCommand::HideKeyboard {} => ("hideKeyboard", json!({})),
             AgentCommand::IsKeyboardShown {} => ("isKeyboardShown", json!({})),
-            AgentCommand::TakeSystemDialogEvents {} => ("takeSystemDialogEvents", json!({})),
+            AgentCommand::TakeSystemDialogEvents {
+                answer_leftover_alerts,
+            } => (
+                "takeSystemDialogEvents",
+                json!({ "answerLeftoverAlerts": answer_leftover_alerts }),
+            ),
             AgentCommand::GetSystemAlert {} => ("systemAlert", json!({})),
             AgentCommand::CancelLeftoverOpenInPrompt {} => {
                 ("cancelLeftoverOpenInPrompt", json!({}))
@@ -1958,7 +1968,9 @@ mod tests {
             AgentCommand::AcceptOpenInAppDialog { timeout_ms: None },
             AgentCommand::GetClipboard {},
             AgentCommand::GetOrientation {},
-            AgentCommand::TakeSystemDialogEvents {},
+            AgentCommand::TakeSystemDialogEvents {
+                answer_leftover_alerts: false,
+            },
             AgentCommand::GetSystemAlert {},
             AgentCommand::CancelLeftoverOpenInPrompt {},
             AgentCommand::CaptureTraceState {
@@ -1974,6 +1986,20 @@ mod tests {
                 cmd.to_json("t")["method"],
                 "method_name() disagrees with to_json for {cmd:?}"
             );
+        }
+    }
+
+    #[test]
+    fn to_json_take_system_dialog_events_says_whether_to_answer_leftovers() {
+        // The iOS agent answers an alert still up only when told it is a
+        // leftover (a test boundary), never on a plain read of the queue.
+        for answer in [true, false] {
+            let j = AgentCommand::TakeSystemDialogEvents {
+                answer_leftover_alerts: answer,
+            }
+            .to_json("r");
+            assert_eq!(j["method"], "takeSystemDialogEvents");
+            assert_eq!(j["params"]["answerLeftoverAlerts"], answer);
         }
     }
 

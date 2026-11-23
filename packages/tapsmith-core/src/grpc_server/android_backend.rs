@@ -228,10 +228,17 @@ impl DeviceBackend for AndroidBackend<'_> {
         self.svc.android_is_keyboard_shown(&serial).await
     }
 
-    async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+    async fn take_system_dialog_events(
+        &self,
+        _answer_leftover_alerts: bool,
+    ) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+        // The Android agent answers its dialogs as they come up; there is no
+        // leftover to answer at a boundary.
         let result = self
             .svc
-            .send_agent_command(&AgentCommand::TakeSystemDialogEvents {})
+            .send_agent_command(&AgentCommand::TakeSystemDialogEvents {
+                answer_leftover_alerts: false,
+            })
             .await?;
         if !result.success {
             return Err(Status::internal(format!(
