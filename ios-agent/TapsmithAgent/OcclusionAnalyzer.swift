@@ -318,11 +318,20 @@ struct OcclusionAnalyzer {
     /// Whether a target at `frame` can be under the status bar, so where the
     /// bar is is worth reading (a SpringBoard snapshot): only when its
     /// on-screen part reaches into the top band, where the bar is drawn on
-    /// an iPhone or iPad. A target anywhere else costs nothing to check.
-    static func mayBeUnderStatusBar(_ frame: CGRect, screen: CGRect) -> Bool {
+    /// an iPhone or iPad, above any navigation bar laid out below the top of
+    /// the screen — iOS puts a navigation bar below the status bar, so its
+    /// buttons and what is under them cannot be under the bar. A target
+    /// anywhere else costs nothing to check.
+    func mayBeUnderStatusBar(_ frame: CGRect) -> Bool {
         let onScreen = frame.intersection(screen)
-        guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 else { return false }
-        return onScreen.minY < screen.minY + maxStatusBarExtent
+        guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0,
+              onScreen.minY < screen.minY + Self.maxStatusBarExtent else { return false }
+        let navTops = nodes.lazy
+            .filter { $0.elementType == .navigationBar }
+            .map(\.frame.minY)
+            .filter { $0 > self.screen.minY }
+        guard let navTop = navTops.min() else { return true }
+        return onScreen.minY < navTop
     }
 
 

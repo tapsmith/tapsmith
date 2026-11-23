@@ -1134,7 +1134,7 @@ class CommandHandler {
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize, device: ActionExecutor.currentDeviceTurn())
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
         var bar: CGRect?
-        if OcclusionAnalyzer.mayBeUnderStatusBar(target.frame, screen: analyzer.screen) {
+        if analyzer.mayBeUnderStatusBar(target.frame) {
             if statusBar == nil {
                 statusBar = .some(systemStatusBarRegion(screen: self.screenSize(of: appSnapshot), purpose: "tap"))
             }

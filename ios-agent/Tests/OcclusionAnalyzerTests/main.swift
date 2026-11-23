@@ -1009,7 +1009,10 @@ checkPoint("no status bar known (none shown, or SpringBoard unreadable): touched
 checkPoint("the nav bar's back button below the status bar is not clipped by it",
            analyzer(screenRows()).analyze(button("Back", R(8, 70, 40, 40)), isHittable: true, statusBar: statusBarStrip),
            CGPoint(x: 28, y: 90))
-// The iPhone Duo shows its status bar as a column at the right edge.
+// The analyzer clips by whatever region it is given — the iPhone Duo shows
+// its status bar as a column at the right edge. (The agent reads the bar only
+// for a target in the top band, `mayBeUnderStatusBar`, so the Duo's column is
+// not checked in practice.)
 check("a button under a status bar column at the right edge: covered",
       analyzer(screenRows(extra: [(4, .button, "Side", "", R(360, 120, 40, 40))]))
           .analyze(button("Side", R(360, 120, 40, 40)), isHittable: true, statusBar: R(350, 0, 52, 874)),
@@ -1018,16 +1021,34 @@ check("a button under a status bar column at the right edge: covered",
 func checkBool(_ name: String, _ got: Bool, _ want: Bool) {
     if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
 }
-checkBool("a target in the top band may be under the status bar: SpringBoard is read",
-          OcclusionAnalyzer.mayBeUnderStatusBar(underBar, screen: screen), true)
+checkBool("a target in the top band of a screen with no header may be under the status bar: SpringBoard is read",
+          edgeToEdge.mayBeUnderStatusBar(underBar), true)
 checkBool("a target reaching up into the top band: read",
-          OcclusionAnalyzer.mayBeUnderStatusBar(R(16, 60, 370, 200), screen: screen), true)
+          edgeToEdge.mayBeUnderStatusBar(R(16, 60, 370, 200)), true)
 checkBool("a target well below the top band: not read (most taps pay nothing)",
-          OcclusionAnalyzer.mayBeUnderStatusBar(covered, screen: screen), false)
+          edgeToEdge.mayBeUnderStatusBar(covered), false)
 checkBool("a target off screen above: not read",
-          OcclusionAnalyzer.mayBeUnderStatusBar(R(16, -200, 370, 50), screen: screen), false)
+          edgeToEdge.mayBeUnderStatusBar(R(16, -200, 370, 50)), false)
 checkBool("on a landscape screen the same band counts",
-          OcclusionAnalyzer.mayBeUnderStatusBar(R(16, 10, 100, 30), screen: R(0, 0, 874, 402)), true)
+          OcclusionAnalyzer(nodes: [], screen: R(0, 0, 874, 402)).mayBeUnderStatusBar(R(16, 10, 100, 30)), true)
+// iOS lays a navigation bar out below the status bar: what starts at or below
+// its top cannot be under the status bar, so header taps cost nothing more.
+checkBool("the nav bar's back button: not read",
+          analyzer(screenRows()).mayBeUnderStatusBar(R(8, 66, 40, 40)), false)
+checkBool("the nav bar itself: not read",
+          analyzer(screenRows()).mayBeUnderStatusBar(R(0, 62, 402, 54)), false)
+checkBool("content drawn above a transparent header's nav bar (edge to edge): read",
+          analyzer(screenRows(extra: [(4, .button, "Add task", "", R(16, 16, 370, 41))]))
+              .mayBeUnderStatusBar(R(16, 16, 370, 41)), true)
+checkBool("a full-screen container starting at the top, above the nav bar: read",
+          analyzer(screenRows()).mayBeUnderStatusBar(screen), true)
+checkBool("a nav bar at the very top (status bar hidden) exempts nothing: read",
+          analyzer([
+              (0, .application, "App", "", screen),
+              (1, .window, "", "", screen),
+              (2, .navigationBar, "Title", "", R(0, 0, 402, 44)),
+              (3, .button, "Back", "", R(8, 2, 40, 40)),
+          ]).mayBeUnderStatusBar(R(8, 2, 40, 40)), true)
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
