@@ -41,6 +41,9 @@ class SnapshotElementFinder {
     private var placeBindings: [String: PlaceIdentity] = [:]
     /// The `placeBindings` not used yet.
     private var unusedPlaceBindings: Set<String> = []
+    /// The `placeBindings` a touch must still find at the frame they were
+    /// found at after their first use (RowBinding.checksFrameAfterFirstUse).
+    private var framePinnedPlaceBindings: Set<String> = []
     /// Ids found through their row's anchor in a collection view, with the
     /// query for the cells holding it and the command it was last checked
     /// in: checked to name one cell once per command (RowAnchor, PILOT-952).
@@ -708,6 +711,7 @@ class SnapshotElementFinder {
         rowBindings.removeAll()
         placeBindings.removeAll()
         unusedPlaceBindings.removeAll()
+        framePinnedPlaceBindings.removeAll()
         anchorChecks.removeAll()
         queryPins.removeAll()
         focusedTextInputHint = nil
@@ -769,6 +773,7 @@ class SnapshotElementFinder {
             rowBindings.remove(candidate)
             placeBindings.removeValue(forKey: candidate)
             unusedPlaceBindings.remove(candidate)
+            framePinnedPlaceBindings.remove(candidate)
             anchorChecks.removeValue(forKey: candidate)
             queryPins.removeValue(forKey: candidate)
             overflow -= 1
@@ -870,9 +875,9 @@ class SnapshotElementFinder {
     /// the live query lists another element at its place. Throws stale when
     /// the element found cannot be told among its lookalikes.
     ///
-    /// **Cost:** one `snapshot()` of the live element; when it is not at the
-    /// found frame, one count of its lookalikes and a `snapshot()` of each,
-    /// `maxLookalikes` at most.
+    /// **Cost:** one `snapshot()` of the live element and one count of its
+    /// lookalikes; when it is not at the found frame, a `snapshot()` of each
+    /// lookalike, `maxLookalikes` at most.
     private func firstUseOfPlaceBinding(
         _ elementId: String, _ elem: XCUIElement, found: CGRect, identity: PlaceIdentity
     ) throws -> XCUIElement {
@@ -880,18 +885,37 @@ class SnapshotElementFinder {
         let liveIsFoundIdentity = live.map { snap in
             identity.matches(label: snap.label, identifier: snap.identifier, placeholder: snap.placeholderValue ?? "")
         } ?? false
+        let query = lookalikeQuery(identity)
         var lookalikes: [XCUIElement] = []
+        var lookalikeCount: Int?
         let use = RowBinding.firstUse(found: found, live: live?.frame, liveIsFoundIdentity: liveIsFoundIdentity) {
-            let query = app.descendants(matching: identity.elementType).matching(NSPredicate(
-                format: "label == %@ AND identifier == %@ AND placeholderValue == %@",
-                identity.label, identity.identifier, identity.placeholder
-            ))
             let count = query.count
-            lookalikes = (0..<min(count, Self.maxLookalikes)).map { query.element(boundBy: $0) }
-            return (lookalikes.map { try? $0.snapshot().frame }, count <= Self.maxLookalikes)
+            // The query leaves out empty attributes, which a nil one would
+            // not equal: each element read is checked for them here.
+            var frames: [CGRect?] = []
+            for index in 0..<min(count, Self.maxLookalikes) {
+                let element = query.element(boundBy: index)
+                guard let snap = try? element.snapshot() else { continue }
+                guard identity.matches(
+                    label: snap.label, identifier: snap.identifier, placeholder: snap.placeholderValue ?? ""
+                ) else { continue }
+                lookalikes.append(element)
+                frames.append(snap.frame)
+            }
+            let complete = count <= Self.maxLookalikes
+            if complete { lookalikeCount = frames.count }
+            return (frames, complete)
         }
+        if use == .keep, lookalikeCount == nil {
+            // Kept at the frame it was found at, its lookalikes unread:
+            // counted, as the query returns them (no fewer than there are).
+            let count = query.count
+            if count == 1 { lookalikeCount = 1 }
+        }
+        let checksFrame = RowBinding.checksFrameAfterFirstUse(use, lookalikes: lookalikeCount)
         lock.lock()
         unusedPlaceBindings.remove(elementId)
+        if checksFrame { framePinnedPlaceBindings.insert(elementId) }
         switch use {
         case .keep:
             lock.unlock()
@@ -914,6 +938,23 @@ class SnapshotElementFinder {
             NSLog("[TapsmithSnapshot] \(elementId) found at \(found) but its live element is \(live.map { "\($0.label) at \($0.frame)" } ?? "unreadable"); dropping it")
             throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
         }
+    }
+
+    /// The elements with `identity`'s type, label, identifier and
+    /// placeholder, and maybe more: an empty one is left out of the query,
+    /// as an element without that attribute reads nil, which equals no
+    /// string.
+    private func lookalikeQuery(_ identity: PlaceIdentity) -> XCUIElementQuery {
+        var predicates: [NSPredicate] = []
+        if !identity.label.isEmpty { predicates.append(NSPredicate(format: "label == %@", identity.label)) }
+        if !identity.identifier.isEmpty {
+            predicates.append(NSPredicate(format: "identifier == %@", identity.identifier))
+        }
+        if !identity.placeholder.isEmpty {
+            predicates.append(NSPredicate(format: "placeholderValue == %@", identity.placeholder))
+        }
+        let all = app.descendants(matching: identity.elementType)
+        return predicates.isEmpty ? all : all.matching(NSCompoundPredicate(andPredicateWithSubpredicates: predicates))
     }
 
     /// What an element bound by its place among others outside any row was
@@ -943,13 +984,15 @@ class SnapshotElementFinder {
     /// count of the cells holding it, as the cells can have changed since
     /// `getElement` checked them in this command). Nor, for one bound by its
     /// place among others outside any row, when the read has another label,
-    /// identifier or placeholder than the element found (no IPC).
+    /// identifier or placeholder than the element found, or, for one among
+    /// lookalikes, is not where it was found (no IPC).
     func isFoundElement(
         _ elementId: String, liveFrame: CGRect, liveLabel: String, liveIdentifier: String, livePlaceholder: String
     ) -> Bool {
         lock.lock()
         let checked = rowBindings.contains(elementId)
         let placeIdentity = placeBindings[elementId]
+        let placeFramePinned = framePinnedPlaceBindings.contains(elementId)
         let anchoredRows = anchorChecks[elementId]?.rows
         let found = boundsCache[elementId]
         let pin = queryPins[elementId] ?? .none
@@ -960,6 +1003,10 @@ class SnapshotElementFinder {
         // can have taken that place.
         if let placeIdentity,
            !placeIdentity.matches(label: liveLabel, identifier: liveIdentifier, placeholder: livePlaceholder) {
+            return false
+        }
+        // Among lookalikes, only its frame tells it from one mounted since.
+        if placeFramePinned, !(found.map { RowBinding.isFoundElement(found: $0, live: liveFrame) } ?? false) {
             return false
         }
         if checked, !(found.map { RowBinding.isFoundElement(found: $0, live: liveFrame) } ?? false) {

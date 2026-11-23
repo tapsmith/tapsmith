@@ -157,6 +157,18 @@ enum RowBinding {
         return .drop
     }
 
+    /// Whether a touch planned on a binding after its first use (`use`)
+    /// must still find its live element at the frame it was found at, as a
+    /// row's must: unless it is the only element with the identity found
+    /// (`lookalikes`: how many have it, nil when not known). Its live query is
+    /// evaluated again on every read, and an element mounted since with the
+    /// same identity can take its place there; only its frame tells the two
+    /// apart. One that is the only such element is followed wherever it
+    /// moves.
+    static func checksFrameAfterFirstUse(_ use: FirstUse, lookalikes: Int?) -> Bool {
+        use != .drop && lookalikes != 1
+    }
+
     /// Whether the live element, read at `live` (nil: it could not be read),
     /// is the match found at `found`. Compared in whole points, as the SDK
     /// keys a target. A found frame with no area matches nothing.

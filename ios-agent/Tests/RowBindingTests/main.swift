@@ -153,6 +153,15 @@ check("two at the found frame, a lookalike elsewhere: dropped", RowBinding.first
     found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([toggle, toggle, firstTab])
 ), FirstUse.drop)
 
+// ─── checksFrameAfterFirstUse ───
+
+check("the only element with its identity: followed", RowBinding.checksFrameAfterFirstUse(.keep, lookalikes: 1), false)
+check("kept among lookalikes: frame-checked", RowBinding.checksFrameAfterFirstUse(.keep, lookalikes: 3), true)
+check("lookalikes not known: frame-checked", RowBinding.checksFrameAfterFirstUse(.keep, lookalikes: nil), true)
+check("re-bound to the only one: followed", RowBinding.checksFrameAfterFirstUse(.rebind(0), lookalikes: 1), false)
+check("re-bound among lookalikes: frame-checked", RowBinding.checksFrameAfterFirstUse(.rebind(1), lookalikes: 2), true)
+check("dropped: no live element to check", RowBinding.checksFrameAfterFirstUse(.drop, lookalikes: 2), false)
+
 // ─── isFoundElement ───
 
 // Row 68's "More Info" button where it was found, and Row 67's, one row
