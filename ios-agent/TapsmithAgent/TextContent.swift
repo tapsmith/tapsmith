@@ -38,7 +38,7 @@ import XCTest
 ///   element whose child matches. A Toggle row, a NavigationLink, an alert
 ///   give way to the static text they hold.
 /// - A checkbox or radio button (`LabelMatch.isChoice`) matched by its label
-///   gives way to another match whose text its label holds
+///   gives way to another match beside it whose text its label holds
 ///   (`withoutChoices`). React Native hides a checkbox's own texts inside it,
 ///   so its label is the only copy of a text it shows and stays text; but a
 ///   text on screen as another element is that element's, and the
@@ -202,24 +202,36 @@ enum TextContent {
         }
     }
 
-    /// getByText's matches without each checkbox or radio button whose label
-    /// holds a text another match shows: that text is the other element's,
-    /// and the label only names the choice after it ("Toggle Buy oat milk"
-    /// beside "Buy oat milk"). `choiceLabel` is a choice's label, nil for
+    /// getByText's matches without each checkbox or radio button beside
+    /// which another match shows a text its label holds: that text is the
+    /// other element's, and the label only names the choice after it
+    /// ("Toggle Buy oat milk" beside "Buy oat milk"). Beside is on the same
+    /// line (`onSameLine`), as a row puts a checkbox and its text. A choice
+    /// with no such neighbour keeps its match: its label is the only copy of
+    /// a text inside it, as for a radio "Medium" whose summary "Medium" sits
+    /// elsewhere on the screen. `choiceLabel` is a choice's label, nil for
     /// anything else; `shownTexts` what a match shows (`shownTexts(label:…)`).
-    /// A choice whose label no other match shows keeps its match: its label
-    /// is the only copy of a text inside it, as for a radio whose "Medium"
-    /// sits beside an unrelated "Size: medium".
     static func withoutChoices<Match>(
-        _ matches: [Match], choiceLabel: (Match) -> String?, shownTexts: (Match) -> [String]
+        _ matches: [Match], choiceLabel: (Match) -> String?, shownTexts: (Match) -> [String],
+        frame: (Match) -> CGRect
     ) -> [Match] {
-        let shown = matches.filter { choiceLabel($0) == nil }.flatMap(shownTexts)
-            .filter { !TextMatch.normalize($0).isEmpty }
-        guard !shown.isEmpty else { return matches }
+        let others = matches.filter { choiceLabel($0) == nil }
+            .map { (frame: frame($0), texts: shownTexts($0).filter { !TextMatch.normalize($0).isEmpty }) }
+            .filter { !$0.texts.isEmpty }
+        guard !others.isEmpty else { return matches }
         return matches.filter { match in
             guard let label = choiceLabel(match) else { return true }
-            return !shown.contains { TextMatch.contains(label, $0) }
+            let own = frame(match)
+            return !others.contains { other in
+                onSameLine(own, other.frame) && other.texts.contains { TextMatch.contains(label, $0) }
+            }
         }
+    }
+
+    /// Whether two frames share a line: their vertical extents overlap. A
+    /// frame with no height shares none.
+    static func onSameLine(_ a: CGRect, _ b: CGRect) -> Bool {
+        a.height > 0 && b.height > 0 && a.minY < b.maxY && b.minY < a.maxY
     }
 
     /// The texts a getByText match shows, as `withoutChoices` compares them:

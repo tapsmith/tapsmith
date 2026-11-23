@@ -348,7 +348,8 @@ class SnapshotElementFinder {
                         elementType: type(match.0), label: match.0["label"] as? String ?? "",
                         title: match.0["title"] as? String ?? "", value: match.0["value"] as? String ?? ""
                     )
-                }
+                },
+                frame: { $0.1 }
             )
         }
 

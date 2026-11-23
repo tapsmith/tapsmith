@@ -194,7 +194,8 @@ class ElementFinder {
                         elementType: type, label: elem.label, title: elem.title,
                         value: type == .staticText ? elem.value as? String ?? "" : ""
                     )
-                }
+                },
+                frame: { $0.frame }
             )
         }
 

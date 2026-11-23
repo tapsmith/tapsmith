@@ -57,22 +57,33 @@ expect("an unlabelled wrapper is not an echo",
        !TextContent.echoesName(wrapperType: .other, wrapperLabel: "",
                                nodeType: .image, nodeLabel: "", sameTarget: true))
 
-// getByText's matches without a checkbox whose label holds another match's text.
-func withoutChoices(_ matches: [(String, Bool)]) -> [String] {
-    TextContent.withoutChoices(matches, choiceLabel: { $0.1 ? $0.0 : nil }, shownTexts: { [$0.0] }).map(\.0)
+// getByText's matches without a checkbox beside which another match shows a
+// text its label holds. Each match is (text, isChoice, line's top).
+func withoutChoices(_ matches: [(String, Bool, CGFloat)]) -> [String] {
+    TextContent.withoutChoices(
+        matches, choiceLabel: { $0.1 ? $0.0 : nil }, shownTexts: { [$0.0] },
+        frame: { CGRect(x: 0, y: $0.2, width: 100, height: 40) }
+    ).map(\.0)
 }
-expect("a checkbox gives way to the text its label holds",
-       withoutChoices([("Toggle Buy oat milk", true), ("Buy oat milk", false)]) == ["Buy oat milk"])
+expect("a checkbox gives way to the text beside it that its label holds",
+       withoutChoices([("Toggle Buy oat milk", true, 100), ("Buy oat milk", false, 110)]) == ["Buy oat milk"])
 expect("the text is compared case-insensitively and whitespace-normalized",
-       withoutChoices([("Toggle Buy  oat milk", true), ("buy oat milk", false)]) == ["buy oat milk"])
+       withoutChoices([("Toggle Buy  oat milk", true, 100), ("buy oat milk", false, 100)]) == ["buy oat milk"])
 expect("a checkbox labelled with the very text beside it gives way",
-       withoutChoices([("Buy oat milk", true), ("Buy oat milk", false)]) == ["Buy oat milk"])
+       withoutChoices([("Buy oat milk", true, 100), ("Buy oat milk", false, 100)]) == ["Buy oat milk"])
 expect("a radio beside an unrelated match keeps its own",
-       withoutChoices([("Medium", true), ("Size: medium", false)]) == ["Medium", "Size: medium"])
+       withoutChoices([("Medium", true, 100), ("Size: medium", false, 100)]) == ["Medium", "Size: medium"])
+expect("a radio keeps its own when its text is shown on another line",
+       withoutChoices([("Medium", false, 0), ("Medium", true, 500)]) == ["Medium", "Medium"])
+expect("lines that only touch are not one line",
+       withoutChoices([("Toggle Buy oat milk", true, 100), ("Buy oat milk", false, 140)])
+           == ["Toggle Buy oat milk", "Buy oat milk"])
 expect("only checkboxes matching are all kept",
-       withoutChoices([("Small", true), ("Medium", true)]) == ["Small", "Medium"])
-expect("an empty text holds nothing", withoutChoices([("Small", true), ("", false)]) == ["Small", ""])
+       withoutChoices([("Small", true, 0), ("Medium", true, 60)]) == ["Small", "Medium"])
+expect("an empty text holds nothing", withoutChoices([("Small", true, 0), ("", false, 0)]) == ["Small", ""])
 expect("no matches stay none", withoutChoices([]).isEmpty)
+expect("a frame with no height shares no line",
+       !TextContent.onSameLine(CGRect(x: 0, y: 10, width: 10, height: 0), CGRect(x: 0, y: 0, width: 10, height: 40)))
 expect("a static text shows its value", TextContent.shownTexts(
     elementType: .staticText, label: "", title: "", value: "Buy oat milk") == ["", "", "Buy oat milk"])
 expect("a button's value is not shown text", TextContent.shownTexts(
