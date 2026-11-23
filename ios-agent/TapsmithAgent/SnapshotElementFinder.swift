@@ -889,22 +889,17 @@ class SnapshotElementFinder {
         var lookalikes: [XCUIElement] = []
         var lookalikeCount: Int?
         let use = RowBinding.firstUse(found: found, live: live?.frame, liveIsFoundIdentity: liveIsFoundIdentity) {
-            let count = query.count
             // The query leaves out empty attributes, which a nil one would
             // not equal: each element read is checked for them here.
-            var frames: [CGRect?] = []
-            for index in 0..<min(count, Self.maxLookalikes) {
-                let element = query.element(boundBy: index)
-                guard let snap = try? element.snapshot() else { continue }
-                guard identity.matches(
+            let read = RowBinding.readLookalikes(count: query.count, max: Self.maxLookalikes) { index in
+                guard let snap = try? query.element(boundBy: index).snapshot() else { return nil }
+                return (snap.frame, identity.matches(
                     label: snap.label, identifier: snap.identifier, placeholder: snap.placeholderValue ?? ""
-                ) else { continue }
-                lookalikes.append(element)
-                frames.append(snap.frame)
+                ))
             }
-            let complete = count <= Self.maxLookalikes
-            if complete { lookalikeCount = frames.count }
-            return (frames, complete)
+            lookalikes = read.indices.map { query.element(boundBy: $0) }
+            if read.complete { lookalikeCount = read.frames.count }
+            return (read.frames, read.complete)
         }
         if use == .keep, lookalikeCount == nil {
             // Kept at the frame it was found at, its lookalikes unread:

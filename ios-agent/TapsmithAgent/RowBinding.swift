@@ -157,6 +157,30 @@ enum RowBinding {
         return .drop
     }
 
+    /// The lookalikes of an element found, from a query that returned
+    /// `count` elements, of which at most `max` are read: `read(i)` reads
+    /// the i-th one's frame and whether it has the identity found (nil: it
+    /// could not be read). Their frames, their indices in the query, and
+    /// whether every lookalike was read: not when the query returned more
+    /// than `max`, or one could not be read (it could be the element found).
+    static func readLookalikes(
+        count: Int, max: Int, read: (Int) -> (frame: CGRect, isLookalike: Bool)?
+    ) -> (frames: [CGRect?], indices: [Int], complete: Bool) {
+        var frames: [CGRect?] = []
+        var indices: [Int] = []
+        var complete = count <= max
+        for index in 0..<Swift.max(0, Swift.min(count, max)) {
+            guard let element = read(index) else {
+                complete = false
+                continue
+            }
+            guard element.isLookalike else { continue }
+            frames.append(element.frame)
+            indices.append(index)
+        }
+        return (frames, indices, complete)
+    }
+
     /// Whether a touch planned on a binding after its first use (`use`)
     /// must still find its live element at the frame it was found at, as a
     /// row's must: unless it is the only element with the identity found

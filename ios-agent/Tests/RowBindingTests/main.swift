@@ -153,6 +153,25 @@ check("two at the found frame, a lookalike elsewhere: dropped", RowBinding.first
     found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([toggle, toggle, firstTab])
 ), FirstUse.drop)
 
+// ─── readLookalikes ───
+
+typealias Read = (frame: CGRect, isLookalike: Bool)
+func reads(_ rs: [Read?]) -> (Int) -> Read? { { rs[$0] } }
+let allRead = RowBinding.readLookalikes(count: 3, max: 32, read: reads([
+    (firstTab, true), (elsewhere, false), (toggle, true),
+]))
+check("all read: their frames", allRead.frames, [firstTab, toggle])
+check("all read: their indices in the query", allRead.indices, [0, 2])
+check("all read: complete", allRead.complete, true)
+// The element found could be the one that could not be read.
+let unreadable = RowBinding.readLookalikes(count: 2, max: 32, read: reads([(firstTab, true), nil]))
+check("one unreadable: not complete", unreadable.complete, false)
+check("one unreadable: the rest still read", unreadable.frames, [firstTab])
+var readsMade = 0
+let capped = RowBinding.readLookalikes(count: 40, max: 32) { _ in readsMade += 1; return (elsewhere, true) }
+check("over the cap: not complete", capped.complete, false)
+check("over the cap: no more than the cap read", readsMade, 32)
+
 // ─── checksFrameAfterFirstUse ───
 
 check("the only element with its identity: followed", RowBinding.checksFrameAfterFirstUse(.keep, lookalikes: 1), false)
