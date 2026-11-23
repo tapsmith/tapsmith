@@ -196,6 +196,16 @@ let row67 = CGRect(x: 349, y: 771.33, width: 22, height: 22)
 check("the button where it was found", RowBinding.isFoundElement(found: row68, live: row68), true)
 check("another row's button", RowBinding.isFoundElement(found: row68, live: row67), false)
 check("no live element", RowBinding.isFoundElement(found: row68, live: nil), false)
+// A lookalike or live read with no geometry is not where anything was found
+// (and must not crash the agent converting it to points).
+check("a null live frame", RowBinding.isFoundElement(found: row68, live: .null), false)
+check("an infinite live frame", RowBinding.isFoundElement(found: row68, live: .infinite), false)
+check("a live frame beyond any screen", RowBinding.isFoundElement(
+    found: row68, live: CGRect(x: 1e300, y: 0, width: 22, height: 22)
+), false)
+check("a non-finite found frame", RowBinding.isFoundElement(
+    found: CGRect(x: CGFloat.nan, y: 0, width: 22, height: 22), live: row68
+), false)
 // Frames are compared in whole points, as the SDK keys a target: a read
 // that differs below a point is the same element.
 check("sub-point difference", RowBinding.isFoundElement(

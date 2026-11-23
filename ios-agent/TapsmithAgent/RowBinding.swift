@@ -79,8 +79,10 @@ enum RowBinding {
         var throughAnchor = false
         /// Checked on every use to be at the frame it was found at.
         var checkFrame = false
-        /// Checked once, on its first use, to be at the frame it was found
-        /// at, and trusted from then on.
+        /// Outside any row: checked on its first use to be the element found,
+        /// and bound again if need be (`firstUse`); after that, a touch
+        /// planned on it checks its identity, and its frame too unless it is
+        /// the only element with that identity (`checksFrameAfterFirstUse`).
         var checkFrameOnce = false
         /// Checked once per command that its anchor still names one row.
         var checkAnchor = false
@@ -200,11 +202,17 @@ enum RowBinding {
     /// Whether the live element, read at `live` (nil: it could not be read),
     /// is the match found at `found`. Compared in whole points, as the SDK
     /// keys a target. A found frame with no area matches nothing.
+    /// A frame with no geometry (an element XCTest reports `.null` or
+    /// infinite) matches nothing: converting it to points would crash.
     static func isFoundElement(found: CGRect, live: CGRect?) -> Bool {
         guard let live, found.width > 0, found.height > 0 else { return false }
-        func points(_ r: CGRect) -> [Int] {
-            [Int(r.minX), Int(r.minY), Int(r.maxX), Int(r.maxY)]
+        func points(_ r: CGRect) -> [Int]? {
+            let edges = [r.minX, r.minY, r.maxX, r.maxY]
+            // 100k pt is far beyond any screen, and well inside Int.
+            guard edges.allSatisfy({ $0.isFinite && abs($0) < 100_000 }) else { return nil }
+            return edges.map { Int($0) }
         }
-        return points(found) == points(live)
+        guard let foundPoints = points(found), let livePoints = points(live) else { return false }
+        return foundPoints == livePoints
     }
 }
