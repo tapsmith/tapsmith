@@ -60,8 +60,11 @@ const serials = new WeakMap<Device, string>();
 function afterAppLaunch(client: TapsmithGrpcClient, device: Device, serial: string | undefined): (pkg: string) => Promise<void> {
   return async (packageName) => {
     const { connectDevClientForTool } = await import('../session-preflight.js');
+    const { devClientProjectFor } = await import('./connection.js');
+    const platform = device.platform === 'ios' ? 'ios' : 'android';
     await connectDevClientForTool({
-      client, device, packageName, platform: device.platform === 'ios' ? 'ios' : 'android', serial, rootDir: process.cwd(),
+      client, device, packageName, platform, serial,
+      ...(devClientProjectFor(packageName, platform) ?? { rootDir: process.cwd() }),
     });
   };
 }

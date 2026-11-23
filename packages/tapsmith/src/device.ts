@@ -935,7 +935,11 @@ export class Device {
    * reports which rung actually ran.
    */
   async resetApp(options: AppResetOptions = {}): Promise<AppResetResult> {
-    return this._resetApp(this.requirePackageName(), options);
+    const pkg = this.requirePackageName();
+    const result = await this._resetApp(pkg, options);
+    // A reset that relaunched the app lands where a launch does.
+    if (result.coldLaunch && !this._sessionLaunches) await this._afterAppLaunch?.(pkg);
+    return result;
   }
 
   /** @internal — runner/preflight entry point with policy inputs. */

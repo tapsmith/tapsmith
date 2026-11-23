@@ -1662,10 +1662,9 @@ function mayBeDevClient(ctx: DevClientContext): { look: boolean; scheme?: string
 
 /**
  * Connect a dev client after a launch made outside any test session (the MCP
- * server's own tools), the way a session's launches do. The project is the
- * one in `rootDir` (the MCP server's working folder); with no installed build
- * to read, the check runs only for a project that depends on
- * `expo-dev-client`.
+ * server's own tools), the way a session's launches do. `rootDir` and the
+ * build come from the server's config; with no build to read, the check runs
+ * only for a project that depends on `expo-dev-client`.
  */
 export function connectDevClientForTool(target: {
   client: SessionPreflightContext['client']
@@ -1674,9 +1673,15 @@ export function connectDevClientForTool(target: {
   platform: 'android' | 'ios'
   serial?: string
   rootDir: string
+  /** The config's build for this app, relative to `rootDir`, when it names one. */
+  apk?: string
+  app?: string
 }): Promise<void> {
   return connectDevClient({
-    config: { package: target.packageName, platform: target.platform, rootDir: target.rootDir, device: target.serial } as SessionPreflightContext['config'],
+    config: {
+      package: target.packageName, platform: target.platform, rootDir: target.rootDir, device: target.serial,
+      ...(target.apk ? { apk: target.apk } : {}), ...(target.app ? { app: target.app } : {}),
+    } as SessionPreflightContext['config'],
     client: target.client,
     device: target.device,
     deviceSerial: target.serial,
@@ -1770,14 +1775,18 @@ async function checkReactNativeDevServer(ctx: SessionPreflightContext): Promise<
  */
 async function settledDevClientScreen(ctx: DevClientContext, pkg: string, platform: 'android' | 'ios'): Promise<DevClientScreen | undefined> {
   const start = Date.now();
+  let budget = APP_RENDER_READY_TIMEOUT_MS;
   for (;;) {
     const xml = await readHierarchyXml(ctx);
     if (xml) {
       const screen = devClientScreen(xml);
-      if (screen) return screen;
-      if (platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg)) return undefined;
+      // A bundle still loading (a relaunch reloading the last server): wait
+      // for what it brings up, for as long as a bundle may take.
+      if (screen === 'loading') budget = DEV_BUNDLE_LOAD_TIMEOUT_MS;
+      else if (screen) return screen;
+      else if (platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg)) return undefined;
     }
-    if (Date.now() - start >= APP_RENDER_READY_TIMEOUT_MS) return undefined;
+    if (Date.now() - start >= budget) return undefined;
     await delay(HIERARCHY_POLL_INTERVAL_MS);
   }
 }
@@ -1793,6 +1802,8 @@ async function waitForDevBundle(ctx: DevClientContext, pkg: string, platform: 'a
       if (last === 'load-error' || last === 'no-dev-server') {
         throw devServerError(pkg, last, `the app could not load from ${serverUrl}`);
       }
+      // The loading banner is drawn in the app's own window over its splash:
+      // not done until it is gone and the app's UI is there.
       const rendered = platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg);
       if (!last && rendered) return;
     }
@@ -1800,7 +1811,7 @@ async function waitForDevBundle(ctx: DevClientContext, pkg: string, platform: 'a
   }
   throw new Error(
     `${pkg} is an Expo development build: Tapsmith pointed it at Metro (${serverUrl}), but after `
-    + `${Math.round(DEV_BUNDLE_LOAD_TIMEOUT_MS / 1000)} s it still showed ${last ? `its ${last === 'launcher' ? 'dev launcher' : 'dev menu'}` : 'no app content'}. `
+    + `${Math.round(DEV_BUNDLE_LOAD_TIMEOUT_MS / 1000)} s it still showed ${last === 'loading' ? 'the bundle loading' : last ? `its ${last === 'launcher' ? 'dev launcher' : 'dev menu'}` : 'no app content'}. `
     + `Check the Metro terminal for a bundling error. See ${GETTING_STARTED_DEV_CLIENT}`,
   );
 }

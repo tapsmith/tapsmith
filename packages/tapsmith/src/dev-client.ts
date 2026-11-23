@@ -31,8 +31,11 @@ import { readIosUrlSchemes } from './ios-app-bundle.js';
  *   project." screen (the server is down or the bundle failed).
  * - `no-dev-server`: React Native's red screen for a Debug build that could
  *   not reach Metro (a bare React Native app, or a dev client's last server).
+ * - `loading`: React Native's dev loading banner ("Loading from …",
+ *   "Bundling 45%…", "Refreshing..."): the bundle is still on its way, so
+ *   whatever else is on screen is not the app yet.
  */
-export type DevClientScreen = 'launcher' | 'dev-menu' | 'load-error' | 'no-dev-server';
+export type DevClientScreen = 'launcher' | 'dev-menu' | 'load-error' | 'no-dev-server' | 'loading';
 
 /** Every text-bearing attribute value in a hierarchy dump (Android or iOS), decoded. */
 function hierarchyTexts(hierarchyXml: string): Set<string> {
@@ -43,6 +46,18 @@ function hierarchyTexts(hierarchyXml: string): Set<string> {
   }
   return texts;
 }
+
+/**
+ * React Native's dev loading banner, as its native views word it
+ * (RCTDevLoadingView / RCTJavaScriptLoader on iOS, DevSupportManagerBase /
+ * BundleDownloader on Android) and as expo-dev-launcher words its own.
+ */
+const LOADING_BANNER: RegExp[] = [
+  /^Loading from \S+(…|\.\.\.)$/,
+  /^(Bundling|Downloading)\b.*\d+(\.\d+)?%/,
+  /^Refreshing\.\.\.$/,
+  /^Connecting to the development server\.\.\.$/,
+];
 
 /**
  * Which development-build screen the hierarchy shows, if any. Read from the
@@ -65,6 +80,7 @@ export function devClientScreen(hierarchyXml: string): DevClientScreen | undefin
   if (['Unable to load script.', 'No bundle URL present', 'Could not connect to development server', 'No script URL provided'].some(hasPrefix)) {
     return 'no-dev-server';
   }
+  if ([...texts].some((t) => LOADING_BANNER.some((re) => re.test(t)))) return 'loading';
   return undefined;
 }
 

@@ -100,6 +100,21 @@ describe('connectDevClient', () => {
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
   });
 
+  it('waits out the loading banner before calling the app ready', async () => {
+    const banner = `<hierarchy><node package="${PKG}" text="Bundling 12%…" /></hierarchy>`;
+    const { ctx, device, client } = makeContext([LAUNCHER, LAUNCHER, banner, banner, APP]);
+    await connectDevClient(ctx, { fetch: metro });
+    expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(5);
+  });
+
+  it('waits through a relaunch that is still loading the last server, then handles what comes up', async () => {
+    const banner = `<hierarchy><node package="${PKG}" text="Loading from 10.0.2.2:8081…" /></hierarchy>`;
+    const { ctx, device } = makeContext([banner, banner, DEV_MENU, APP]);
+    await connectDevClient(ctx, { fetch: metro });
+    expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+  });
+
   it('reloads through the link when the dev menu opened over the app', async () => {
     const { ctx, device } = makeContext([DEV_MENU, APP]);
     await connectDevClient(ctx, { fetch: metro });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import { sdkDeviceFor } from '../sdk-device.js';
+import { devClientProjectFor } from '../connection.js';
 import { connectDevClientForTool } from '../../session-preflight.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { actionResult } from './device-actions.js';
@@ -27,8 +28,10 @@ export function registerAppControlTools(server: McpServer, dispatcher?: TestDisp
       // Metro, as the launch in a test run does, so the tool shows the app.
       try {
         const sdkDevice = await sdkDeviceFor(client, serial);
+        const platform = sdkDevice.platform === 'ios' ? 'ios' : 'android';
         await connectDevClientForTool({
-          client, device: sdkDevice, packageName: pkg, platform: sdkDevice.platform === 'ios' ? 'ios' : 'android', serial, rootDir: process.cwd(),
+          client, device: sdkDevice, packageName: pkg, platform, serial,
+          ...(devClientProjectFor(pkg, platform) ?? { rootDir: process.cwd() }),
         });
       } catch (err) {
         return actionResult(false, err instanceof Error ? err.message : String(err));

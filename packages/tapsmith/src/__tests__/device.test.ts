@@ -668,6 +668,23 @@ describe('Device: a test\'s own launches bring a dev client to the app', () => {
     expect(hook).not.toHaveBeenCalled();
   });
 
+  it('runs it after a resetApp() that relaunched the app, not after an in-app one', async () => {
+    const reply = (coldLaunch: boolean) => ({
+      requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
+      modeRequested: 'APP_RESET_MODE_CLEAR', modeUsed: coldLaunch ? 'APP_RESET_MODE_CLEAR' : 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch,
+      reason: '', durationMs: 100, hooksDetected: !coldLaunch, epochBefore: 0, epochAfter: 1, steps: [], targetReached: false,
+    });
+    const resetApp = vi.fn(async () => reply(true));
+    const device = new Device(makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>), { package: 'com.example.app' } as never);
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    await device.resetApp({ mode: 'clear' });
+    expect(hook).toHaveBeenCalledWith('com.example.app');
+    resetApp.mockImplementation(async () => reply(false));
+    await device.resetApp();
+    expect(hook).toHaveBeenCalledTimes(1);
+  });
+
   it('fails the launch with the hook\'s error (Metro not running)', async () => {
     const device = new Device(makeMockClient());
     device._afterAppLaunch = async () => { throw new Error('no Metro server answered'); };

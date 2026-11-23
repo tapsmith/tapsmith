@@ -151,6 +151,26 @@ export function configureMcpConnection(options?: {
   _uiDaemonPorts = options?.uiDaemonPorts;
 }
 
+/**
+ * Where the session's config says `packageName` lives: the folder and the
+ * build the dev-client check reads. Undefined without a loaded config.
+ */
+export function devClientProjectFor(packageName: string, platform: string): { rootDir: string; apk?: string; app?: string } | undefined {
+  return _discoveredConfig ? devClientProjectIn(_discoveredConfig, packageName, platform) : undefined;
+}
+
+/** {@link devClientProjectFor} for a given config: the top level or the project that names the app. */
+export function devClientProjectIn(
+  config: Pick<TapsmithConfig, 'rootDir' | 'package' | 'platform' | 'apk' | 'app' | 'projects'>,
+  packageName: string,
+  platform: string,
+): { rootDir: string; apk?: string; app?: string } {
+  const uses = [config, ...(config.projects ?? []).map((p) => ({ ...config, ...p.use }))];
+  const use = uses.find((u) => u.package === packageName && (u.platform ?? platform) === platform) ?? uses.find((u) => u.package === packageName);
+  if (!use) return { rootDir: config.rootDir };
+  return { rootDir: config.rootDir, ...(use.apk ? { apk: use.apk } : {}), ...(use.app ? { app: use.app } : {}) };
+}
+
 export function getSessionDeviceSerials(): Set<string> | null {
   return _sessionDevices;
 }
@@ -2577,6 +2597,20 @@ async function startAgentFromConfig(
     }
   }
   log('Agent started');
+  // The iOS agent launches the app as it starts: an Expo development build is
+  // then on its dev launcher, so connect it to Metro as a test run would.
+  // Best effort: a device tool still works on whatever is on screen.
+  if (config?.platform === 'ios' && config.package) {
+    try {
+      const [{ Device }, { connectDevClientForTool }] = await Promise.all([import('../device.js'), import('../session-preflight.js')]);
+      await connectDevClientForTool({
+        client, device: new Device(client, { platform: 'ios' }), packageName: config.package, platform: 'ios', serial: options?.serial,
+        rootDir, ...(config.app ? { app: config.app } : {}),
+      });
+    } catch (err) {
+      log(`Warning: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 /**

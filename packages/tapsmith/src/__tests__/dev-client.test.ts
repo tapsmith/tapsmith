@@ -51,6 +51,16 @@ describe('devClientScreen', () => {
     expect(devClientScreen(fixture('android-dev-client-app.xml'))).toBeUndefined();
   });
 
+  it('recognises React Native\'s dev loading banner on both platforms', () => {
+    const node = (t: string): string => `<hierarchy><node package="x" text="${t}" /></hierarchy>`;
+    for (const t of ['Loading from 10.0.2.2:8081…', 'Loading from Metro…', 'Bundling 45%…', 'Downloading 100%…', 'Refreshing...', 'Connecting to the development server...']) {
+      expect(devClientScreen(node(t))).toBe('loading');
+    }
+    // An app's own progress copy is not the banner.
+    expect(devClientScreen(node('Downloading your files'))).toBeUndefined();
+    expect(devClientScreen(node('Loading from your library'))).toBeUndefined();
+  });
+
   it('leaves an app\'s own screen alone, even one that says "Reload" or "Development servers" in passing', () => {
     expect(devClientScreen('<hierarchy><node text="Welcome to Expo" package="x"/><node text="Reload" package="x"/></hierarchy>')).toBeUndefined();
     expect(devClientScreen('<hierarchy><node text="Development servers" package="x"/><node text="Settings" package="x"/></hierarchy>')).toBeUndefined();
