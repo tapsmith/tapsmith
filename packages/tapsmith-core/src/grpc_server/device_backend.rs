@@ -141,9 +141,13 @@ pub(super) trait DeviceBackend: Send + Sync {
     async fn is_keyboard_shown(&self) -> Result<bool, Status>;
     async fn hide_keyboard(&self, request_id: String) -> ActionResult;
     /// System dialogs the agent answered on its own since the last call:
-    /// Android's ANR / crash dialogs (PILOT-977), iOS's leftover "Open in"
-    /// prompts.
-    async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+    /// Android's ANR / crash dialogs (PILOT-977), iOS's leftover alerts. With
+    /// `answer_leftover_alerts` (a test boundary), iOS first answers any
+    /// alert still up; Android ignores it.
+    async fn take_system_dialog_events(
+        &self,
+        _answer_leftover_alerts: bool,
+    ) -> Result<Vec<proto::SystemDialogEvent>, Status> {
         Ok(Vec::new())
     }
     /// The system alert covering the app, which locators cannot see. Only

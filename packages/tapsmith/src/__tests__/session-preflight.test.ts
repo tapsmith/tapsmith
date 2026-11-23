@@ -380,27 +380,59 @@ describe('session-preflight', () => {
     expect(report.reason).toMatch(/satisfied by startup launch at .* \(took 9\.8s\)/);
   });
 
-  it('on iOS, a prepared device still has the agent look for a leftover "Open in" prompt before the first test', async () => {
-    // A run that starts on an app prepared earlier (UI mode's background
-    // preparation, the startup launch) sends the agent no launch and no link,
-    // the other points where it cancels such a prompt.
-    const ctx = makeContext({ config: { package: 'com.example.app', platform: 'ios' } });
-    const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'background preparation' };
+  describe('leftover system alerts on iOS (an earlier test or run raised them and never answered)', () => {
+    const IOS = { package: 'com.example.app', platform: 'ios' as const };
 
-    const report = await executeAppReset(ctx, { mode: 'restart', scope: 'file' }, { phase: 'file reset', prepared });
+    it('every reset first has the agent answer an alert still up, before any step can launch the app', async () => {
+      const ctx = makeContext({ config: IOS });
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
 
-    expect(report.origin).toBe('prepared');
-    expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', expect.any(Number), expect.any(Number));
-    expect(report.steps.map((s) => s.name)).toContain('leftoverPromptCheck');
+      const report = await executeAppReset(ctx, { mode: 'restart', scope: 'test' }, { phase: 'before test', forceCold: true });
+
+      expect(ctx.client.takeSystemDialogEvents).toHaveBeenCalledWith(expect.any(Number), { answerLeftoverAlerts: true });
+      expect(report.steps[0].name).toBe('leftoverAlertCheck');
+      const answered = vi.mocked(ctx.client.takeSystemDialogEvents).mock.invocationCallOrder[0];
+      expect(answered).toBeLessThan(vi.mocked(ctx.device._resetApp).mock.invocationCallOrder[0]);
+    });
+
+    it('so does a prepared device (UI mode between runs, the startup launch)', async () => {
+      const ctx = makeContext({ config: IOS });
+      const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'background preparation' };
+
+      const report = await executeAppReset(ctx, { mode: 'restart', scope: 'file' }, { phase: 'file reset', prepared });
+
+      expect(report.origin).toBe('prepared');
+      expect(report.steps.map((s) => s.name)).toEqual(['leftoverAlertCheck', 'ensureSessionReady']);
+      expect(ctx.client.takeSystemDialogEvents).toHaveBeenCalledWith(expect.any(Number), { answerLeftoverAlerts: true });
+    });
+
+    it('and appReset: none', async () => {
+      const ctx = makeContext({ config: IOS });
+
+      await executeAppReset(ctx, { mode: 'none', scope: 'file' }, { phase: 'file reset' });
+
+      expect(ctx.client.takeSystemDialogEvents).toHaveBeenCalledWith(expect.any(Number), { answerLeftoverAlerts: true });
+    });
+
+    it('reports what it answered, and a failed check does not fail the reset', async () => {
+      const ctx = makeContext({ config: IOS });
+      vi.mocked(ctx.client.takeSystemDialogEvents).mockRejectedValueOnce(new Error('12 UNIMPLEMENTED'));
+
+      const report = await executeAppReset(ctx, { mode: 'none', scope: 'file' }, { phase: 'file reset' });
+
+      expect(report.steps[0]).toMatchObject({ name: 'leftoverAlertCheck', ok: true });
+      expect(ctx.notices).toEqual([]);
+    });
   });
 
-  it('on Android, a prepared device makes no extra call', async () => {
+  it('on Android, a reset makes no extra call', async () => {
     const ctx = makeContext();
     const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'background preparation' };
 
     const report = await executeAppReset(ctx, { mode: 'restart', scope: 'file' }, { phase: 'file reset', prepared });
 
-    expect(report.steps.map((s) => s.name)).not.toContain('leftoverPromptCheck');
+    expect(report.steps.map((s) => s.name)).toEqual(['ensureSessionReady']);
+    expect(ctx.client.takeSystemDialogEvents).not.toHaveBeenCalled();
   });
 
   it('a prepared device that does not satisfy the policy is ignored', async () => {
@@ -488,7 +520,7 @@ describe('session-preflight', () => {
     expect(ctx.device.restartApp).not.toHaveBeenCalled();
     expect(ctx.device.clearAppData).not.toHaveBeenCalled();
     expect(report).toMatchObject({ origin: 'inline', modeUsed: 'warm', fellBack: false });
-    expect(report.steps.map((s) => s.name)).toEqual(['warm-deep-link', 'resetApp', 'settle', 'ensureSessionReady', 'waitForAppReady']);
+    expect(report.steps.map((s) => s.name)).toEqual(['leftoverAlertCheck', 'warm-deep-link', 'resetApp', 'settle', 'ensureSessionReady', 'waitForAppReady']);
   });
 
   describe('start route (appResetRoute, PILOT-1064)', () => {
@@ -2014,7 +2046,7 @@ describe('session-preflight', () => {
     expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ mode: 'clear' }));
     expect(ctx.device.clearAppData).not.toHaveBeenCalled();
     expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
-    expect(report.steps.map((s) => s.name)).toEqual(['clear', 'resetApp', 'ensureSessionReady', 'waitForAppReady']);
+    expect(report.steps.map((s) => s.name)).toEqual(['leftoverAlertCheck', 'clear', 'resetApp', 'ensureSessionReady', 'waitForAppReady']);
   });
   it('startup/recovery launch never uses the warm hook', async () => {
     const ctx = makeContext({
@@ -2897,7 +2929,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
   it('turns another app\'s answered dialog into a foreign-dialog notice', async () => {
     const ctx = makeContext();
     vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({ requestId: '1', events: [event()] });
-    await collectAnsweredSystemDialogs(ctx);
+    await collectAnsweredSystemDialogs(ctx, 'test-end');
     expect(ctx.notices).toEqual([{
       kind: 'foreign-dialog',
       title: 'Pixel Launcher isn\'t responding',
@@ -2914,7 +2946,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
       requestId: '1',
       events: [event({ title: 'Example isn\'t responding', owner: 'com.example.app', ownedByTarget: true, button: 'Wait' })],
     });
-    await collectAnsweredSystemDialogs(ctx);
+    await collectAnsweredSystemDialogs(ctx, 'test-end');
     expect(ctx.notices).toHaveLength(1);
     expect(ctx.notices[0]).toMatchObject({ kind: 'app-dialog', owner: 'com.example.app', title: 'Example isn\'t responding' });
     expect(ctx.notices[0].message).toBe(
@@ -2929,7 +2961,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
       requestId: '1',
       events: [event({ owner: '', title: 'A isn\'t responding' }), event({ title: 'B keeps stopping', kind: 'crash' })],
     });
-    await collectAnsweredSystemDialogs(ctx);
+    await collectAnsweredSystemDialogs(ctx, 'test-end');
     expect(ctx.notices.map((n) => n.title)).toEqual(['A isn\'t responding', 'B keeps stopping']);
     expect(ctx.notices[0].owner).toBeUndefined();
     expect(ctx.notices[0].message).toContain('"A isn\'t responding". Tapsmith pressed Close app.');
@@ -2939,7 +2971,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
     const ctx = makeContext();
     vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({ requestId: '1', events: [event({ title: '', timestampMs: 0 })] });
     const before = Date.now();
-    await collectAnsweredSystemDialogs(ctx);
+    await collectAnsweredSystemDialogs(ctx, 'test-end');
     expect(ctx.notices[0].title).toBe('an app isn\'t responding or keeps stopping');
     expect(ctx.notices[0].timestamp).toBeGreaterThanOrEqual(before);
   });
@@ -2947,7 +2979,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
   it('is best effort: a failed call (an older agent, a dead daemon) adds nothing and does not throw', async () => {
     const ctx = makeContext();
     vi.mocked(ctx.client.takeSystemDialogEvents).mockRejectedValueOnce(new Error('12 UNIMPLEMENTED'));
-    await expect(collectAnsweredSystemDialogs(ctx)).resolves.toBeUndefined();
+    await expect(collectAnsweredSystemDialogs(ctx, 'test-end')).resolves.toBeUndefined();
     expect(ctx.notices).toEqual([]);
   });
 
@@ -2964,7 +2996,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
     });
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      await collectAnsweredSystemDialogs(ctx);
+      await collectAnsweredSystemDialogs(ctx, 'test-end');
       const message = 'A system alert left on the device, "Open in “priya-app”?", was covering the app; '
         + 'Tapsmith pressed Cancel before using the app. Something outside the test opened a link to the app '
         + '(npx expo run:ios does when it finishes).';
@@ -2986,18 +3018,95 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
     vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({ requestId: '1', events: [event()] });
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      await collectAnsweredSystemDialogs(ctx);
+      await collectAnsweredSystemDialogs(ctx, 'test-end');
       expect(stderr).not.toHaveBeenCalled();
     } finally {
       stderr.mockRestore();
     }
   });
 
-  it('asks with a short deadline, so a wedged agent cannot hold the end of the test', async () => {
+  it('on Android, asks with a short deadline, so a wedged agent cannot hold the end of the test', async () => {
     const ctx = makeContext();
-    await collectAnsweredSystemDialogs(ctx);
-    const [deadline] = vi.mocked(ctx.client.takeSystemDialogEvents).mock.calls[0] as unknown as [number];
+    await collectAnsweredSystemDialogs(ctx, 'test-end');
+    const [deadline, options] = vi.mocked(ctx.client.takeSystemDialogEvents).mock.calls[0] as unknown as [number, unknown];
     expect(deadline).toBeGreaterThan(0);
     expect(deadline).toBeLessThanOrEqual(5_000);
+    // Its agent answers dialogs as they come up: nothing is left over.
+    expect(options).toEqual({ answerLeftoverAlerts: false });
+  });
+
+  describe('on iOS, an alert still up at the boundary is a leftover', () => {
+    const IOS = { package: 'com.example.app', platform: 'ios' as const };
+    const notification = (button = 'Allow') => event({
+      title: '“Example” Would Like to Send You Notifications',
+      owner: 'com.apple.springboard',
+      kind: 'leftover-alert',
+      button,
+    });
+
+    it('at the end of a test the agent answers it, with time for a few queued alerts', async () => {
+      const ctx = makeContext({ config: IOS });
+      await collectAnsweredSystemDialogs(ctx, 'test-end');
+      const [deadline, options] = vi.mocked(ctx.client.takeSystemDialogEvents).mock.calls[0] as unknown as [number, unknown];
+      expect(options).toEqual({ answerLeftoverAlerts: true });
+      // Each press waits up to 2 s for the alert to close, plus a settle, for up to three alerts.
+      expect(deadline).toBeGreaterThanOrEqual(10_000);
+      expect(deadline).toBeLessThanOrEqual(20_000);
+    });
+
+    it('says the test left it up, and how to answer one inside the test', async () => {
+      const ctx = makeContext({ config: IOS });
+      vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({ requestId: '1', events: [notification()] });
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await collectAnsweredSystemDialogs(ctx, 'test-end');
+        const message = 'A system alert was still up when the test ended: "“Example” Would Like to Send You Notifications". '
+          + 'Tapsmith pressed Allow, so it does not cover the app in the next test. '
+          + 'A test that raises an alert should answer it before it ends (device.tapXY() on its button).';
+        expect(ctx.notices).toEqual([{
+          kind: 'foreign-dialog',
+          title: '“Example” Would Like to Send You Notifications',
+          owner: 'com.apple.springboard',
+          message,
+          timestamp: 1_793_463_831_403,
+        }]);
+        expect(stderr).toHaveBeenCalledWith(`[tapsmith] ${message}\n`);
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it('before a reset, says an earlier test or run left it up', async () => {
+      const ctx = makeContext({ config: IOS });
+      vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({
+        requestId: '1',
+        events: [notification('Allow While Using App')],
+      });
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await collectAnsweredSystemDialogs(ctx, 'reset-start');
+        expect(ctx.notices[0].message).toBe(
+          'A system alert left on the device, "“Example” Would Like to Send You Notifications", was covering the app; '
+          + 'Tapsmith pressed Allow While Using App before resetting the app. An earlier test or run raised it and never answered it.',
+        );
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it('an "Open in" prompt answered at the boundary keeps its own explanation', async () => {
+      const ctx = makeContext({ config: IOS });
+      vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({
+        requestId: '1',
+        events: [event({ title: 'Open in “priya-app”?', owner: 'com.apple.springboard', kind: 'open-in-prompt', button: 'Cancel' })],
+      });
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await collectAnsweredSystemDialogs(ctx, 'reset-start');
+        expect(ctx.notices[0].message).toContain('(npx expo run:ios does when it finishes)');
+      } finally {
+        stderr.mockRestore();
+      }
+    });
   });
 });

@@ -6,8 +6,9 @@ import Foundation
 /// Locators only see the app under test, so an alert SpringBoard draws over
 /// it (an "Open in “App”?" prompt a dev tool left behind, a permission
 /// prompt) hides every element underneath without appearing in the app's
-/// hierarchy. The agent names it in the errors such an alert causes, and
-/// cancels a leftover "Open in" prompt before it launches the app.
+/// hierarchy. The agent names it in the errors such an alert causes, cancels
+/// a leftover "Open in" prompt before it launches the app, and answers any
+/// alert still up at a test boundary (`leftoverAnswer`).
 struct SystemAlert: Equatable {
     let title: String
     let buttons: [String]
@@ -19,6 +20,25 @@ struct SystemAlert: Equatable {
     /// daemon's own deep-link handling of the same prompt.
     var isOpenInPrompt: Bool {
         title.hasPrefix("Open in ") && buttons.contains("Cancel") && buttons.contains("Open")
+    }
+
+    /// The button that answers this alert when it is a leftover: one still up
+    /// when a test has ended, or when an app reset begins, so nothing the
+    /// next test does can have raised it. An "Open in" prompt is cancelled
+    /// (see `cancelLeftoverOpenInPrompt`); anything else is answered per
+    /// SystemDialogPolicy: the first allow-style label it has, in the
+    /// policy's order, else the first dismissive one. Labels match whole, so
+    /// a denial ("Don’t Allow") is never pressed: iOS asks for a permission
+    /// once per bundle id, and a denial stays until the app is reinstalled.
+    /// Nil when no button is safe to press; the alert then stays up and is
+    /// named in the errors it causes.
+    var leftoverAnswer: String? {
+        if isOpenInPrompt { return "Cancel" }
+        for label in SystemDialogPolicy.allowButtonLabels + SystemDialogPolicy.dismissButtonLabels
+        where buttons.contains(label) {
+            return label
+        }
+        return nil
     }
 
     /// `"Title" (buttons: A, B)`, for error messages and logs.
@@ -65,13 +85,19 @@ struct SystemAlertEvents {
         self.capacity = capacity
     }
 
-    /// Record a cancelled "Open in" prompt.
-    mutating func record(title: String, button: String, timestampMs: Int64) {
+    /// The kind of a leftover "Open in" prompt cancelled before a launch.
+    static let openInPromptKind = "open-in-prompt"
+    /// The kind of an alert answered at a test boundary
+    /// (`SystemAlert.leftoverAnswer`).
+    static let leftoverAlertKind = "leftover-alert"
+
+    /// Record an alert the agent answered with `button`.
+    mutating func record(title: String, button: String, kind: String = openInPromptKind, timestampMs: Int64) {
         events.append([
             "title": title,
             "owner": "com.apple.springboard",
             "ownedByTarget": false,
-            "kind": "open-in-prompt",
+            "kind": kind,
             "button": button,
             "timestampMs": timestampMs,
         ])
