@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { initArgsFromOptions, resolveInitPlan, executeInitPlan, assertConfigWritable, assertProjectWritable, InitError, type DetectFns } from '../init-noninteractive.js';
 import { findApkCandidates, findIosAppCandidates, type ExpoProject } from '../init-detect.js';
 import { generateConfig, needsSimulatorAgent } from '../init.js';
-import { simulatorChoices, type EnvScan } from '../env-scan.js';
+import { simulatorChoices, simulatorPickerChoices, type EnvScan } from '../env-scan.js';
 import type { InitCommandOptions } from '../cli-program.js';
 
 /** `tapsmith init` flags as the CLI hands them over: every boolean present, value flags (and --[no-]network-capture) only when given. */
@@ -1448,6 +1448,22 @@ describe('simulatorChoices() (PILOT-562)', () => {
     // A UDID or unknown name is left alone: init cannot judge it.
     const udid = resolveInitPlan(initArgs({ yes: true, platform: 'ios', simulator: 'SOME-UDID' }), { ...baseEnv, simulators: [persona] }, detectStubs);
     expect(udid.ios?.simulatorDeviceType).toBeUndefined();
+  });
+
+  it('the wizard lists a booted custom-named simulator near the top, keeping the stock default first', () => {
+    const custom = (name: string, state = 'Shutdown') => ({ ...sim(name, 'iOS 18.5', state), deviceTypeName: 'iPhone 16' });
+    const stock = Array.from({ length: 30 }, (_, i) => ({ ...sim(`iPhone ${i}`, 'iOS 26.5'), deviceTypeName: `iPhone ${i}` }));
+    const sims = [custom('Old Custom'), ...stock, custom('Onboard-A iPhone 16', 'Booted')];
+    const names = simulatorPickerChoices(sims).map((s) => s.name);
+    expect(names.slice(0, 2)).toEqual(['iPhone 0', 'Onboard-A iPhone 16']);
+    expect(names.at(-1)).toBe('Old Custom');
+    expect(names).toHaveLength(32);
+    // After every booted stock simulator, which choosing avoids a boot as well.
+    const booted = [{ ...sim('iPhone 16', 'iOS 26.5', 'Booted'), deviceTypeName: 'iPhone 16' }, ...stock, custom('Mine', 'Booted')];
+    expect(simulatorPickerChoices(booted).map((s) => s.name).slice(0, 3)).toEqual(['iPhone 16', 'Mine', 'iPhone 0']);
+    // Nothing to move: the order is simulatorChoices'.
+    expect(simulatorPickerChoices(stock)).toEqual(simulatorChoices(stock));
+    expect(simulatorPickerChoices([custom('Mine', 'Booted')]).map((s) => s.name)).toEqual(['Mine']);
   });
 
   it('init --yes picks the booted simulator over the newest iPhone', () => {

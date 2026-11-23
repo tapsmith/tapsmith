@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Enquirer from 'enquirer';
 import figlet from 'figlet';
-import { isCustomSimulatorName, runningAvds, scanEnvironment, simulatorChoices, type ConnectedAndroidDevice, type EnvScan } from './env-scan.js';
+import { isCustomSimulatorName, runningAvds, scanEnvironment, simulatorChoices, simulatorPickerChoices, type ConnectedAndroidDevice, type EnvScan } from './env-scan.js';
 import type { SeStatus } from './setup-ios.js';
 import {
   detectAndroidPackage,
@@ -587,8 +587,8 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
   let simulatorDeviceType: string | undefined;
   if (useSimulators) {
     // Every simulator, stock names first, then a booted one, the first
-    // selected (PILOT-562, PILOT-721).
-    const choices = simulatorChoices(env.simulators);
+    // selected (PILOT-562, PILOT-721); a booted custom-named one near the top.
+    const choices = simulatorPickerChoices(env.simulators);
     if (choices.length > 0) {
       simulator = await ask<string>({
         type: 'select',

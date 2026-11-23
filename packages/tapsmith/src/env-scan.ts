@@ -102,11 +102,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * A readable runtime name from a simctl runtime id:
  * `com.apple.CoreSimulator.SimRuntime.iOS-26-5` is `iOS 26.5` (PILOT-562).
- * An id not shaped `<os>-<n>-<n>…` keeps its words, hyphens as spaces.
+ * A device-specific runtime (`iOS-27-2-iPhone19-4`) is named by its version
+ * alone. An id not shaped `<os>-<n>-<n>…` keeps its words, hyphens as spaces.
  */
 function simRuntimeName(id: string): string {
   const bare = id.replace(/^com\.apple\.CoreSimulator\.SimRuntime\./, '');
-  const versioned = /^([A-Za-z]+)-(\d+(?:-\d+)*)$/.exec(bare);
+  // A runtime built for one device model names it after the version
+  // (`iOS-27-2-iPhone19-4`): the version is what tells runtimes apart here.
+  const versioned = /^([A-Za-z]+)-(\d+(?:-\d+)*)(?:-[A-Za-z][\w-]*)?$/.exec(bare);
   return versioned ? `${versioned[1]} ${versioned[2].replace(/-/g, '.')}` : bare.replace(/-/g, ' ');
 }
 
@@ -198,6 +201,23 @@ export function simulatorChoices(simulators: SimulatorInfo[]): SimulatorInfo[] {
     || Number(b.state === 'Booted') - Number(a.state === 'Booted')
     || Number(b.name.startsWith('iPhone')) - Number(a.name.startsWith('iPhone'))
     || newestFirst(a, b));
+}
+
+/**
+ * {@link simulatorChoices} as the wizard lists them: a booted custom-named
+ * simulator moves up to sit after the booted stock ones (or after the
+ * default, when none is booted), so the simulator someone is already using
+ * is a keypress away rather than at the end of a long list. The first choice,
+ * which the wizard selects and `init --yes` takes, stays the stock one.
+ */
+export function simulatorPickerChoices(simulators: SimulatorInfo[]): SimulatorInfo[] {
+  const choices = simulatorChoices(simulators);
+  const bootedCustom = choices.filter((s) => s.state === 'Booted' && isCustomSimulatorName(s));
+  if (bootedCustom.length === 0 || bootedCustom.length === choices.length) return choices;
+  const rest = choices.filter((s) => !bootedCustom.includes(s));
+  const firstUnbooted = rest.findIndex((s) => s.state !== 'Booted');
+  const at = Math.max(1, firstUnbooted === -1 ? rest.length : firstUnbooted);
+  return [...rest.slice(0, at), ...bootedCustom, ...rest.slice(at)];
 }
 
 /** Booted first, then the newer runtime. */
