@@ -102,6 +102,40 @@ expect("an unanswered testmanagerd request may have fallen back: assume it can",
        SystemAlert.deliveryMayRaiseOwnPrompt("daemon-timeout"))
 expect("so may anything unknown", SystemAlert.deliveryMayRaiseOwnPrompt("none"))
 
+// What a leftover alert is answered with at a test boundary
+// (answerLeftoverSystemAlerts): SystemDialogPolicy, never a denial.
+expect("a leftover Open-in prompt is cancelled, not opened",
+       openIn.leftoverAnswer == "Cancel")
+expect("a notification prompt is allowed",
+       SystemAlert(title: "“Example” Would Like to Send You Notifications",
+                   buttons: ["Don’t Allow", "Allow"]).leftoverAnswer == "Allow")
+expect("a location prompt is allowed while using the app, in the policy's order",
+       SystemAlert(title: "Allow “Example” to use your location?",
+                   buttons: ["Allow Once", "Allow While Using App", "Don’t Allow"]).leftoverAnswer
+           == "Allow While Using App")
+expect("an alert with an OK button is acknowledged",
+       SystemAlert(title: "Cannot Connect", buttons: ["OK"]).leftoverAnswer == "OK")
+expect("an alert with no allow-style button is dismissed",
+       SystemAlert(title: "Save Password?", buttons: ["Not Now", "Save Password"]).leftoverAnswer == "Not Now")
+expect("an alert whose only button is a denial is left up",
+       SystemAlert(title: "“Example” Would Like to Access the Camera",
+                   buttons: ["Don’t Allow"]).leftoverAnswer == nil)
+expect("so is one with buttons the policy does not know",
+       SystemAlert(title: "Software Update", buttons: ["Later", "Install Now"]).leftoverAnswer == nil)
+expect("and one with no buttons",
+       SystemAlert(title: "Updating", buttons: []).leftoverAnswer == nil)
+expect("labels match whole, so a denial that contains an allow label is never pressed",
+       SystemAlert(title: "x", buttons: ["Don't Allow", "Don’t Allow", "Allow Full Access?"]).leftoverAnswer == nil)
+
+do {
+    var queue = SystemAlertEvents(capacity: 3)
+    queue.record(title: "“Example” Would Like to Send You Notifications", button: "Allow",
+                 kind: SystemAlertEvents.leftoverAlertKind, timestampMs: 7)
+    let taken = queue.take()
+    expect("a leftover alert is recorded with its own kind",
+           taken.first?["kind"] as? String == "leftover-alert" && taken.first?["button"] as? String == "Allow")
+}
+
 expect("one check cancels a few stacked leftover prompts, not an unbounded number",
        SystemAlert.maxLeftoverPromptsPerCheck == 3)
 
