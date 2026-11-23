@@ -179,11 +179,23 @@ class ElementFinder {
         // A checkbox's label gives way to a text on screen as anything else
         // (TextContent.withoutChoices), as the snapshot walk decides it.
         func withoutChoices(_ elements: [XCUIElement]) -> [XCUIElement] {
-            TextContent.withoutChoices(elements) { elem in
-                let type = elem.elementType
-                guard type == .other || type == .checkBox || type == .radioButton else { return false }
-                return LabelMatch.isChoice(elementType: type, value: type == .other ? elem.value as? String : nil)
-            }
+            TextContent.withoutChoices(
+                elements,
+                choiceLabel: { elem in
+                    let type = elem.elementType
+                    guard type == .other || type == .checkBox || type == .radioButton,
+                          LabelMatch.isChoice(elementType: type, value: type == .other ? elem.value as? String : nil)
+                    else { return nil }
+                    return elem.label
+                },
+                shownTexts: { elem in
+                    let type = elem.elementType
+                    return TextContent.shownTexts(
+                        elementType: type, label: elem.label, title: elem.title,
+                        value: type == .staticText ? elem.value as? String ?? "" : ""
+                    )
+                }
+            )
         }
 
         // Text selector — search across all element types

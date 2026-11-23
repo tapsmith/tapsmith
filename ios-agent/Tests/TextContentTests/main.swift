@@ -57,14 +57,26 @@ expect("an unlabelled wrapper is not an echo",
        !TextContent.echoesName(wrapperType: .other, wrapperLabel: "",
                                nodeType: .image, nodeLabel: "", sameTarget: true))
 
-// getByText's matches without the checkboxes when anything else matched.
-let mixed: [(String, Bool)] = [("Toggle Buy oat milk", true), ("Buy oat milk", false)]
-expect("a checkbox gives way to another match",
-       TextContent.withoutChoices(mixed) { $0.1 }.map(\.0) == ["Buy oat milk"])
-let onlyChoices: [(String, Bool)] = [("Small", true), ("Medium", true)]
+// getByText's matches without a checkbox whose label holds another match's text.
+func withoutChoices(_ matches: [(String, Bool)]) -> [String] {
+    TextContent.withoutChoices(matches, choiceLabel: { $0.1 ? $0.0 : nil }, shownTexts: { [$0.0] }).map(\.0)
+}
+expect("a checkbox gives way to the text its label holds",
+       withoutChoices([("Toggle Buy oat milk", true), ("Buy oat milk", false)]) == ["Buy oat milk"])
+expect("the text is compared case-insensitively and whitespace-normalized",
+       withoutChoices([("Toggle Buy  oat milk", true), ("buy oat milk", false)]) == ["buy oat milk"])
+expect("a checkbox labelled with the very text beside it gives way",
+       withoutChoices([("Buy oat milk", true), ("Buy oat milk", false)]) == ["Buy oat milk"])
+expect("a radio beside an unrelated match keeps its own",
+       withoutChoices([("Medium", true), ("Size: medium", false)]) == ["Medium", "Size: medium"])
 expect("only checkboxes matching are all kept",
-       TextContent.withoutChoices(onlyChoices) { $0.1 }.map(\.0) == ["Small", "Medium"])
-expect("no matches stay none", TextContent.withoutChoices([(String, Bool)]()) { $0.1 }.isEmpty)
+       withoutChoices([("Small", true), ("Medium", true)]) == ["Small", "Medium"])
+expect("an empty text holds nothing", withoutChoices([("Small", true), ("", false)]) == ["Small", ""])
+expect("no matches stay none", withoutChoices([]).isEmpty)
+expect("a static text shows its value", TextContent.shownTexts(
+    elementType: .staticText, label: "", title: "", value: "Buy oat milk") == ["", "", "Buy oat milk"])
+expect("a button's value is not shown text", TextContent.shownTexts(
+    elementType: .button, label: "Save", title: "", value: "1") == ["Save", ""])
 
 let fixturePath = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]

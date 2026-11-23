@@ -1104,7 +1104,7 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   }
 
   const innermost = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
-  // A checkbox's label gives way to a text on screen as anything else, as
+  // A checkbox's label gives way to another match whose text it holds, as
   // the agent's TextContent.withoutChoices decides.
   const kept = iosText ? iosWithoutChoices(innermost) : innermost;
   // A WebView's nodes are its DOM elements, each one the page counts, never

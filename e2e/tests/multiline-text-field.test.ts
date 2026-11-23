@@ -33,7 +33,9 @@ describe("a multi-line text field", () => {
   test("is found by its label while empty", async ({ keyboardScreen }) => {
     // While it is empty, React Native on iOS appends the placeholder to a
     // multi-line input's label ("Multiline input Multiline input"); a
-    // placeholder that repeats the label still leaves the label.
+    // placeholder that repeats the label still leaves the label. The file
+    // resets the app once, so empty the field an earlier test typed into.
+    await keyboardScreen.multilineInput.clear()
     await expect(keyboardScreen.multilineInputByLabel).toBeVisible()
     expect(await keyboardScreen.multilineInputByLabel.boundingBox()).toEqual(await keyboardScreen.multilineInput.boundingBox())
   })

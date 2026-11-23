@@ -38,12 +38,13 @@ import XCTest
 ///   element whose child matches. A Toggle row, a NavigationLink, an alert
 ///   give way to the static text they hold.
 /// - A checkbox or radio button (`LabelMatch.isChoice`) matched by its label
-///   gives way to any other match (`withoutChoices`). React Native hides a
-///   checkbox's own texts inside it, so its label is the only copy of a text
-///   it shows and stays text; but a text on screen as another element is
-///   that element's, and the checkbox's label only names it ("Toggle Buy oat
-///   milk" beside the row's "Buy oat milk"), as Android's getByText never
-///   reads a CheckBox's content description.
+///   gives way to another match whose text its label holds
+///   (`withoutChoices`). React Native hides a checkbox's own texts inside it,
+///   so its label is the only copy of a text it shows and stays text; but a
+///   text on screen as another element is that element's, and the
+///   checkbox's label only names it ("Toggle Buy oat milk" beside the row's
+///   "Buy oat milk"), as Android's getByText never reads a CheckBox's
+///   content description.
 ///
 /// One rule shared by the snapshot walk and the trace viewer's offline
 /// matcher (`trace-viewer/components/text-content.ts`), pinned by the SDK's
@@ -201,11 +202,32 @@ enum TextContent {
         }
     }
 
-    /// getByText's matches without the checkboxes and radio buttons among
-    /// them when anything else matched too: then the text is that element's.
-    /// When only choices match, their labels are the only copies of the text.
-    static func withoutChoices<Match>(_ matches: [Match], isChoice: (Match) -> Bool) -> [Match] {
-        matches.contains { !isChoice($0) } ? matches.filter { !isChoice($0) } : matches
+    /// getByText's matches without each checkbox or radio button whose label
+    /// holds a text another match shows: that text is the other element's,
+    /// and the label only names the choice after it ("Toggle Buy oat milk"
+    /// beside "Buy oat milk"). `choiceLabel` is a choice's label, nil for
+    /// anything else; `shownTexts` what a match shows (`shownTexts(label:…)`).
+    /// A choice whose label no other match shows keeps its match: its label
+    /// is the only copy of a text inside it, as for a radio whose "Medium"
+    /// sits beside an unrelated "Size: medium".
+    static func withoutChoices<Match>(
+        _ matches: [Match], choiceLabel: (Match) -> String?, shownTexts: (Match) -> [String]
+    ) -> [Match] {
+        let shown = matches.filter { choiceLabel($0) == nil }.flatMap(shownTexts)
+            .filter { !TextMatch.normalize($0).isEmpty }
+        guard !shown.isEmpty else { return matches }
+        return matches.filter { match in
+            guard let label = choiceLabel(match) else { return true }
+            return !shown.contains { TextMatch.contains(label, $0) }
+        }
+    }
+
+    /// The texts a getByText match shows, as `withoutChoices` compares them:
+    /// its label and title, and a static text's value.
+    static func shownTexts(
+        elementType: XCUIElement.ElementType, label: String, title: String, value: String
+    ) -> [String] {
+        elementType == .staticText ? [label, title, value] : [label, title]
     }
 
     /// getByText(string): a case-insensitive substring of the label, title or value.

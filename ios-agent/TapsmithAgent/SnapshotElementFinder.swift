@@ -334,12 +334,22 @@ class SnapshotElementFinder {
         // A checkbox's label gives way to a text on screen as anything else
         // (TextContent.withoutChoices).
         if selector.matchesInnermostOnly {
-            matches = TextContent.withoutChoices(matches) { match in
-                let raw = SnapshotElementFinder.parseUInt(match.0["elementType"]) ?? 0
-                return LabelMatch.isChoice(
-                    elementType: XCUIElement.ElementType(rawValue: raw) ?? .other, value: match.0["value"] as? String
-                )
+            func type(_ node: [String: Any]) -> XCUIElement.ElementType {
+                XCUIElement.ElementType(rawValue: SnapshotElementFinder.parseUInt(node["elementType"]) ?? 0) ?? .other
             }
+            matches = TextContent.withoutChoices(
+                matches,
+                choiceLabel: { match in
+                    LabelMatch.isChoice(elementType: type(match.0), value: match.0["value"] as? String)
+                        ? match.0["label"] as? String ?? "" : nil
+                },
+                shownTexts: { match in
+                    TextContent.shownTexts(
+                        elementType: type(match.0), label: match.0["label"] as? String ?? "",
+                        title: match.0["title"] as? String ?? "", value: match.0["value"] as? String ?? ""
+                    )
+                }
+            )
         }
 
         let screenSize = self.screenSize

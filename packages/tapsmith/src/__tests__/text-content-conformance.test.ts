@@ -486,6 +486,20 @@ describe('iOS getByText beside a React Native checkbox or radio', () => {
     expect(matchTypes(radios, 'device.getByText("Small", { exact: true })')).toEqual([`${T.other}:Small`]);
   });
 
+  it('a radio beside an unrelated match keeps its match, as Android finds its text too', () => {
+    const toggles = node(T.other, '', [
+      node(T.other, 'Medium', [], { value: 'radio button, checked' }),
+      node(T.text, 'Size: medium'),
+    ]);
+    expect(matchTypes(toggles, 'device.getByText("Medium")')).toEqual([`${T.other}:Medium`, `${T.text}:Size: medium`]);
+    expect(matchTypes(toggles, 'device.getByText(/medium/i)')).toEqual([`${T.other}:Medium`, `${T.text}:Size: medium`]);
+  });
+
+  it('a static text\'s value counts as the text it shows', () => {
+    const valued = node(T.other, '', [checkbox('Toggle Buy oat milk'), node(T.text, '', [], { value: 'Buy oat milk' })]);
+    expect(matchTypes(valued, 'device.getByText("oat milk")')).toEqual([`${T.text}:`]);
+  });
+
   it('when only checkboxes match, they are all kept', () => {
     expect(matchTypes(list, 'device.getByText("Toggle")')).toEqual([`${T.other}:Toggle Buy oat milk`, `${T.other}:Toggle Walk the dog`]);
   });

@@ -24,7 +24,8 @@ enum LabelMatch {
 
     /// Whether an element is a checkbox or radio button: its native type, or
     /// a generic view React Native describes as one. getByLabel finds it, and
-    /// getByText gives way on its label (`TextContent.withoutChoices`).
+    /// getByText gives way on its label to another match whose text it holds
+    /// (`TextContent.withoutChoices`).
     static func isChoice(elementType: XCUIElement.ElementType, value: String?) -> Bool {
         if elementType == .checkBox || elementType == .radioButton { return true }
         guard elementType == .other, let described = RoleMapping.describedRole(in: value) else { return false }
