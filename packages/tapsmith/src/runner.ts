@@ -1048,6 +1048,10 @@ function validateScopeTimeoutAndRetries(options: { timeout?: number; retries?: n
   }
 }
 
+/** How to keep a Playwright tag without the details object. */
+const TAG_HINT = (title: string): string =>
+  `To keep a tag, put it in the title ('${title} @smoke') and run the tagged tests with --grep @smoke.`;
+
 /**
  * The title and test function of a `test()` or `test.only()` declaration,
  * refusing the call shapes Tapsmith does not support at load time. Without
@@ -1055,10 +1059,6 @@ function validateScopeTimeoutAndRetries(options: { timeout?: number; retries?: n
  * object as the test function and drops the callback, and fails only when
  * the test runs, with a raw TypeError.
  */
-/** How to keep a Playwright tag without the details object. */
-const TAG_HINT = (title: string): string =>
-  `To keep a tag, put it in the title ('${title} @smoke') and run the tagged tests with --grep @smoke.`;
-
 function testDeclaration(api: string, args: unknown[]): [string, TestCallback] {
   const [name, second, third] = args;
   if (typeof name !== 'string') {

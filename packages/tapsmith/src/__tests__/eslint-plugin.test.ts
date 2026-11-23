@@ -390,6 +390,39 @@ describe('no-bare-locator-xpath on real code', () => {
     ]))).toEqual([3]);
   });
 
+  it('accepts a comment above a getter, method or function that only returns the locator', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lintFile([
+      'export class Rows {',
+      '  // Legacy row with no accessible name.',
+      "  get row() { return this.device.locator({ xpath: '//Row[1]' }); }",
+      '  // Legacy rows with no accessible name.',
+      '  rowAt(i) {',
+      '    return this.device.locator({ xpath: `//Row[${i}]` });',
+      '  }',
+      '}',
+      'export const screen = {',
+      '  // Legacy row with no accessible name.',
+      "  get row() { return device.locator({ xpath: '//Row[1]' }); },",
+      '};',
+      '// Legacy row with no accessible name.',
+      'export function row() {',
+      "  return device.locator({ xpath: '//Row[1]' });",
+      '}',
+    ])).toEqual([]);
+  });
+
+  it('does not count a comment above a function for an xpath among its other statements', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lintFile([
+      '// Logs in.',
+      'export async function logIn(device) {',
+      "  await device.getByLabel('Email').type('a@b.c');",
+      "  await device.locator({ xpath: '//Submit' }).tap();",
+      '}',
+    ])).toEqual([4]);
+  });
+
   it('reports a call with no comment', () => {
     expect(lint(body(["  await device.locator({ xpath: '//Button[2]' }).tap();"]))).toEqual([2]);
   });

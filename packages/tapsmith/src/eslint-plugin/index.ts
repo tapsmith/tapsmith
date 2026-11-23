@@ -178,9 +178,16 @@ function isDirective(comment: Comment): boolean {
  */
 function nodesUpToUnit(node: ASTNode): ASTNode[] {
   const chain: ASTNode[] = [];
-  for (let n: ASTNode | undefined = node; n; n = n.parent) {
+  for (let n: ASTNode | undefined = node; n; n = n?.parent) {
     chain.push(n);
-    if (/(Statement|Declaration)$/.test(n.type) || n.type === 'Property' || n.type === 'PropertyDefinition') {
+    if (/(Statement|Declaration)$/.test(n.type) || n.type === 'Property' || n.type === 'PropertyDefinition' || n.type === 'MethodDefinition') {
+      // A getter, method or function whose body is just this statement (a
+      // screen object's `get row() { return … }`): the comment above the
+      // member or function explains it.
+      if (isOnlyStatementOfFunction(n)) {
+        n = n.parent; // the block; the loop goes on to the function
+        continue;
+      }
       // `export const row = …`: the comment sits before `export`.
       if (n.parent && /^Export(Named|Default)Declaration$/.test(n.parent.type)) chain.push(n.parent);
       break;
@@ -188,6 +195,14 @@ function nodesUpToUnit(node: ASTNode): ASTNode[] {
     if (n.parent?.type === 'ArrayExpression') break;
   }
   return chain;
+}
+
+/** `statement` is the whole block body of a function. */
+function isOnlyStatementOfFunction(statement: ASTNode): boolean {
+  const block = statement.parent;
+  return block?.type === 'BlockStatement'
+    && Array.isArray(block.body) && block.body.length === 1
+    && !!block.parent && /Function(Expression|Declaration)?$/.test(block.parent.type);
 }
 
 const noBareLocatorXpath: RuleModule = {
