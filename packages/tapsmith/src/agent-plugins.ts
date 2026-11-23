@@ -25,8 +25,9 @@ const AGENTS: ReadonlyArray<{ agent: CodingAgent; markers: string[]; cli: string
     cli: 'codex',
     running: (env) => ['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_THREAD_ID'].some((name) => !!env[name]),
   },
-  // Cursor's agent sets CURSOR_AGENT; its integrated terminal, CURSOR_TRACE_ID.
-  { agent: 'cursor', markers: ['.cursor', '.cursorrules'], cli: 'cursor', running: (env) => !!env['CURSOR_AGENT'] || !!env['CURSOR_TRACE_ID'] },
+  // Cursor's agent sets CURSOR_AGENT. Not CURSOR_TRACE_ID: Cursor's editor
+  // terminal sets that too, for a person who may use another agent.
+  { agent: 'cursor', markers: ['.cursor', '.cursorrules'], cli: 'cursor', running: (env) => !!env['CURSOR_AGENT'] },
 ];
 
 /** Whether `name` is an executable file in a directory of `env.PATH`. */

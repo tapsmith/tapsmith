@@ -304,12 +304,34 @@ describe('no-bare-locator-xpath on real code', () => {
     ]))).toEqual([]);
   });
 
+  it('accepts a comment on the line before a statement the call is wrapped inside', () => {
+    expect(lint(body([
+      '  // Legacy view with no accessible name.',
+      '  await expect(',
+      "    device.locator({ xpath: '//Row[1]' }),",
+      '  ).toBeVisible();',
+      '  // Legacy view with no accessible name.',
+      '  const row =',
+      "    device.locator({ xpath: '//Row[1]' });",
+    ]))).toEqual([]);
+  });
+
   it('reports a call whose nearest comment is two lines up behind other code', () => {
     expect(lint(body([
       '  // About the next line only.',
       "  await device.getByText('Menu').tap();",
       "  await device.locator({ xpath: '//Button[2]' }).tap();",
     ]))).toEqual([4]);
+  });
+
+  it('does not count a comment above the call an arrow function body starts lines later', () => {
+    expect(lint(body([
+      '  // Poll the row.',
+      '  await expect.poll(',
+      '    () =>',
+      "      device.locator({ xpath: '//Row[1]' }).isVisible(),",
+      '  ).toBe(true);',
+    ]))).toEqual([5]);
   });
 
   it('reports a call with no comment', () => {

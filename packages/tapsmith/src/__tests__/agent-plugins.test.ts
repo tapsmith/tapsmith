@@ -581,6 +581,14 @@ describe('detectCodingAgents', () => {
     expect(detectCodingAgents(tmp, { env: { CURSOR_AGENT: '1' }, onPath: () => false })).toEqual(['cursor']);
   });
 
+  it('does not take Cursor\'s editor terminal for its agent', () => {
+    write('.git/HEAD', '');
+    // A person running init by hand in Cursor's terminal, using Claude Code.
+    expect(detectCodingAgents(tmp, { env: { CURSOR_TRACE_ID: 'abc' }, onPath: (cli) => cli === 'claude' })).toEqual(['claude']);
+    // Claude Code running inside Cursor's terminal.
+    expect(detectCodingAgents(tmp, { env: { CLAUDECODE: '1', CURSOR_TRACE_ID: 'abc' }, onPath: () => true })).toEqual(['claude']);
+  });
+
   it('counts a command on PATH only when nothing else names an agent', () => {
     write('.git/HEAD', '');
     expect(detectCodingAgents(tmp, { env: {}, onPath: (cli) => cli === 'codex' })).toEqual(['codex']);

@@ -8,7 +8,7 @@
  *   - prefer-role: Warns when `.locator({ className })` is used for standard
  *     Android widgets that have well-known accessibility roles.
  *   - no-bare-locator-xpath: Errors when `.locator({ xpath })` is used without
- *     an explanatory comment on the line before it or on its own lines.
+ *     an explanatory comment on the line before its statement or on its lines.
  *   - prefer-accessible-locators: Warns when `.getByTestId()` or
  *     `.locator({ id })` is used instead of `getByRole`, `getByText`,
  *     `getByDescription`, etc.
@@ -36,6 +36,8 @@ interface ASTNode {
   expression?: ASTNode;
   argument?: ASTNode;
   params?: ASTNode[];
+  /** Set by ESLint on every node but the Program. */
+  parent?: ASTNode;
 }
 
 interface Comment {
@@ -159,6 +161,20 @@ const preferRole: RuleModule = {
 
 // ─── no-bare-locator-xpath ───
 
+/**
+ * The statement or declaration `node` is part of. Within an expression-bodied
+ * arrow function, the body: the statement around the function can start
+ * lines above the call.
+ */
+function enclosingStatement(node: ASTNode): ASTNode {
+  let prev = node;
+  for (let n: ASTNode | undefined = node; n; prev = n, n = n.parent) {
+    if (/(Statement|Declaration)$/.test(n.type)) return n;
+    if (/Function(Expression)?$/.test(n.type)) return prev;
+  }
+  return prev;
+}
+
 const noBareLocatorXpath: RuleModule = {
   meta: {
     type: 'problem',
@@ -169,7 +185,7 @@ const noBareLocatorXpath: RuleModule = {
     },
     messages: {
       noBareLocatorXpath:
-        'locator({ xpath }) must have an explanatory comment on the line before it or on one of its own lines. XPath locators are fragile and Android-only — document why this is necessary.',
+        'locator({ xpath }) must have an explanatory comment on the line before its statement or on one of its lines. XPath locators are fragile and Android-only — document why this is necessary.',
     },
     schema: [],
   },
@@ -184,10 +200,11 @@ const noBareLocatorXpath: RuleModule = {
         const comments = sourceCode.getCommentsBefore(node);
         if (comments.length > 0) return;
 
-        // A comment on the line before the call, or on any line of it. The
-        // comments directly before the call miss the usual shapes, where an
-        // `await` or `const row =` sits between the comment and the call.
-        const startLine = node.loc?.start.line;
+        // A comment on the line before the statement the call is in, or on
+        // any line from there to the call's end. The comments directly before
+        // the call miss the usual shapes, where an `await`, `const row =` or a
+        // wrapped `expect(` sits between the comment and the call.
+        const startLine = enclosingStatement(node).loc?.start.line;
         const endLine = node.loc?.end.line ?? startLine;
         if (startLine === undefined || endLine === undefined) return;
         const commented = sourceCode.getAllComments().some((c) => {
