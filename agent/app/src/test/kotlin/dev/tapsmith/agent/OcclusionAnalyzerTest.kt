@@ -512,6 +512,14 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `a touch surface filling the whole wrapper is its own too`() {
+        // What clipping makes of a surface laid out as big as its wrapper.
+        val control = SplitControl(surfaceBounds = Box(923, 78, 1038, 194))
+        root(FakeNode(screen).add(control.header))
+        assertClearAt(analyze(control.wrapper), 980, 136)
+    }
+
+    @Test
     fun `a touchable target is still covered by a touchable sibling over it`() {
         val control = SplitControl(wrapperTakesTouches = true)
         root(FakeNode(screen).add(control.header))
@@ -520,7 +528,8 @@ class OcclusionAnalyzerTest {
 
     @Test
     fun `a sibling reaching beyond the wrapper still covers it`() {
-        // Bounds unclipped: the sibling is not wholly inside the target.
+        // Bounds unclipped (as Compose reports them): the sibling is not
+        // wholly inside the target. A View's would be clipped to the shell.
         val control = SplitControl(surfaceBounds = Box(900, 60, 1060, 220))
         root(FakeNode(screen).add(control.header))
         assertCoveredBy(analyze(control.wrapper), "an unlabelled ViewGroup")

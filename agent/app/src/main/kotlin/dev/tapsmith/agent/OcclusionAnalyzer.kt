@@ -86,9 +86,11 @@ data class Box(
  *   target touches. Only that level is exempt: anything painted over the
  *   parent (a dialog, a full-screen modal, a loading overlay) still covers,
  *   and so does a later sibling of a target that takes touches itself, has
- *   content of its own, or is smaller than its parent. The cost: an empty,
- *   untouchable view with a touchable sibling laid over its middle in a
- *   same-sized container is taken for one control too.
+ *   content of its own, or is smaller than its parent. (A View's bounds are
+ *   clipped to its parent's, so there every such node lies inside the
+ *   target; the bounds check matters only where they are not, as in
+ *   Compose.) The cost: an empty, untouchable view with a touchable sibling
+ *   laid over it in a same-sized container is taken for one control too.
  * - **A loading overlay** (PILOT-979): a node painted after the target, over
  *   the touch point, that is a progress indicator (a ProgressBar — React
  *   Native's ActivityIndicator is one) or holds a visible one. Apps lay one
