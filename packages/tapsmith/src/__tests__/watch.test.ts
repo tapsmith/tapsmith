@@ -255,6 +255,7 @@ describe('watch-run IPC protocol', () => {
       networkApisInRun: false,
       proxyStartedBeforeLaunch: false,
       installedBuilds: {},
+      reportedCaptureFailures: [],
       grep: { grep: [], grepInvert: [], projectGrep: [], projectGrepInvert: [] },
       config: {
         timeout: 30_000,
@@ -295,6 +296,7 @@ describe('watch-run IPC protocol', () => {
         durationMs: 1234,
       },
       installedBuilds: {},
+      reportedCaptureFailures: [],
     };
 
     expect(msg.type).toBe('file-done');

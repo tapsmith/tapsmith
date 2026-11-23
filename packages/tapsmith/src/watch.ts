@@ -40,6 +40,7 @@ import { isIgnoredWatchModePath } from './test-file-discovery.js';
 import { type DeviceGroupEntry } from './config.js';
 import { startDaemon } from './device-session.js';
 import { knownInstalledBuilds, rememberInstalledBuilds } from './installed-builds.js';
+import { knownCaptureFailures, rememberCaptureFailures } from './capture-warnings.js';
 import type {
   UIWorkerMessage,
   UIWorkerChildMessage,
@@ -1303,6 +1304,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         proxyStartedBeforeLaunch: state.appBehindProxy ?? ctx.networkApisInRun,
         resetCapabilities: ctx.resetCapabilities,
         installedBuilds: knownInstalledBuilds(),
+        reportedCaptureFailures: knownCaptureFailures(),
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {
           groupMembers: ctx.groupMembers.map((m) => ({
             name: m.name,
@@ -1338,6 +1340,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
             }
             if (response.appBehindProxy !== undefined) state.appBehindProxy = response.appBehindProxy;
             rememberInstalledBuilds(response.installedBuilds);
+            rememberCaptureFailures(response.reportedCaptureFailures);
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolve({ results, suite });

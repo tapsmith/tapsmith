@@ -23,6 +23,7 @@ import {
 } from './worker-protocol.js';
 import { closeDeviceSession, consumePrepared, openDeviceGroup, sessionsForRun } from './device-session.js';
 import { knownInstalledBuilds, rememberInstalledBuilds } from './installed-builds.js';
+import { knownCaptureFailures, rememberCaptureFailures } from './capture-warnings.js';
 import { currentSession } from './device-claims.js';
 
 // ─── IPC protocol ───
@@ -124,6 +125,13 @@ export interface WatchRunMessage {
    * that dropped it would pay for the full comparison on every run.
    */
   installedBuilds: Record<string, string>
+  /**
+   * The parent's `knownCaptureFailures()`: network-capture failures an
+   * earlier run of the session already printed, which this child reports in
+   * one line instead of in full. Required, like `installedBuilds`: a parent
+   * that dropped it would reprint the whole failure on every re-run.
+   */
+  reportedCaptureFailures: string[]
 }
 
 export interface WatchRunTestEndMessage {
@@ -149,6 +157,8 @@ export interface WatchRunFileDoneMessage {
   appBehindProxy?: boolean
   /** The child's `installedBuilds` after its build check, for the parent's next run. */
   installedBuilds: Record<string, string>
+  /** The child's `knownCaptureFailures()`, for the parent's next run. */
+  reportedCaptureFailures: string[]
 }
 
 export interface WatchRunErrorMessage {
@@ -194,6 +204,7 @@ function sendEmptyFileDone(filePath: string): void {
     results: [],
     suite: serializeSuiteResult(emptySuite, 0),
     installedBuilds: knownInstalledBuilds(),
+    reportedCaptureFailures: knownCaptureFailures(),
   });
 }
 
@@ -203,6 +214,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
   const label = msg.label ?? 'Watch';
   const members = msg.groupMembers ?? [];
   rememberInstalledBuilds(msg.installedBuilds);
+  rememberCaptureFailures(msg.reportedCaptureFailures);
 
   // Every daemon already holds its device with the agent running (the CLI's
   // startup, or a previous run): attach rather than provision. Without a
@@ -311,6 +323,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       groupResetCapabilities: Object.fromEntries(sessions.map((s) => [s.serial, s.capabilities])),
       ...(sessions[0].device._appBehindProxy === undefined ? {} : { appBehindProxy: sessions[0].device._appBehindProxy }),
       installedBuilds: knownInstalledBuilds(),
+      reportedCaptureFailures: knownCaptureFailures(),
     });
   } finally {
     disposeActionProgressPrinter();

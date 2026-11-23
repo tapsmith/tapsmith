@@ -115,36 +115,29 @@ You installed the SE but haven't approved it yet. Go to **System Settings → Ge
 
 ### SE control-channel timeout
 
-Error text:
+Error text (one line, printed once per session; a later watch or MCP run of the same session says only that capture is still unavailable):
 
 ```
-[tapsmith] Network capture disabled: Mitmproxy Redirector System Extension did not connect within 10s.
+[tapsmith] Network capture disabled: iOS network capture unavailable for <udid>: Mitmproxy Redirector System Extension did not connect within 10–20 s …
 ```
 
-Tapsmith waits up to 10 s for the macOS System Extension to dial back into its per-daemon Unix socket after spawning the redirector launcher. If that doesn't happen, capture is disabled for the session (tests still run, just without network data in the trace).
+After spawning the redirector launcher, Tapsmith waits for the macOS System Extension to dial back into this daemon's Unix socket (`/tmp/tapsmith-redirector-<daemon-pid>.sock`). The wait is 10 s on an idle Mac and grows with the host's load average, up to 20 s. If the extension has not dialled back by then, capture is off for that test (tests that don't use the network still run normally; `device.route()`, `waitForRequest()` and `waitForResponse()` fail with `Network capture disabled`).
 
-**Usual cause.** A previous Tapsmith session left a stuck `Mitmproxy Redirector` process behind — typically one that got orphaned when tapsmith-core was SIGKILL'd (crash, IDE restart, `pkill node`). Stuck redirectors often sit in `UE` or `Z` state and can wedge the SE's ability to accept a new control-channel connection.
+**Capture comes back by itself.** Tapsmith keeps the launch and its socket: when the extension dials back late, which is the usual case on a busy Mac, the next test's capture start picks the session up. If it still has not dialled back a minute later, the next test launches the redirector again. Each Tapsmith session (each `--workers` worker, each concurrent `tapsmith test`) has its own socket and redirector, and their launches are serialised across the Mac, so one session's retries never disturb another's capture.
 
-Tapsmith now **auto-cleans orphaned redirectors at startup** (looks for redirector processes whose owning tapsmith-core PID is dead and `kill -9`s them before spawning a new one). That handles the common case invisibly. If you still hit the timeout, try in order:
+When the extension was installed and approved before the launch, `tapsmith doctor` reports it as enabled, because it is: it was only late, and the message carries the advice below instead of pointing at doctor. (When it was not enabled yet, as on a first run whose approval prompt was dismissed, the message says to approve it, and points at `npx tapsmith doctor` and `npx tapsmith ios network setup-simulator`.) If the timeout keeps happening with the extension enabled:
 
-1. **Force-clean manually:**
+1. **Check system load.** `uptime` shows the load averages. On a Mac running parallel simulators, Xcode builds or emulators, the extension can need well over 10 s. Quit other heavy processes or run fewer workers.
+
+2. **Stop this session's redirector only.** The error names this session's socket; stop the redirector launched for it with:
    ```sh
-   pkill -9 -f 'Mitmproxy Redirector'
-   rm -f /tmp/tapsmith-redirector-*.sock
+   pkill -9 -f '/tmp/tapsmith-redirector-<daemon-pid>.sock'
    ```
-   Then re-run `tapsmith test`.
+   Don't kill every `Mitmproxy Redirector` process: that stops the network capture of every other Tapsmith session on the Mac. Redirectors left behind by a Tapsmith daemon that has died (a crash, a SIGKILL'd IDE) are already cleaned up automatically before each launch.
 
-2. **Check system load.** On a busy machine (load average > 10), the SE can genuinely need more than 10 s to respond. Quit other heavy processes (Xcode builds, other emulators) and retry. `uptime` will show the load averages.
+3. **Reboot macOS.** The Network Extension's state can drift over long uptime or across macOS updates. A reboot resets both the extension and any lingering kernel state.
 
-3. **Reboot macOS.** The Network Extension's state can drift over long uptime or across macOS updates. A reboot resets both the SE and any lingering kernel state.
-
-4. **Re-run setup.**
-   ```sh
-   npx tapsmith ios network setup-simulator
-   ```
-   It re-checks the extension's state and, if approval is pending, opens System Settings and waits for it. It does not register the extension itself: that happens on the next simulator test run with network capture.
-
-Verify success on the next run by looking for `System Extension control channel connected` in the daemon debug logs (`RUST_LOG=tapsmith_core=debug`).
+Verify success on the next run by looking for `System Extension control channel connected` (or, after a late dial-back, `connected late; network capture recovered`) in the daemon debug logs (`RUST_LOG=tapsmith_core=debug`).
 
 ### Network entries missing from the trace (`network.json` not in the archive)
 
@@ -232,7 +225,7 @@ Verify the fix is in place: run with debug logs and look for `tapsmith_core::ios
 
 ### When the Network Extension is unavailable
 
-If the redirector cannot be started (the extension is not approved, or its control channel does not connect within 10 s), the daemon can fall back to setting the **macOS system HTTP/HTTPS proxy** on the active network service. This is what CI runners use, where a System Extension cannot be approved. It is host-wide: the trace records whatever any process on the Mac sends (browser preconnects, `trustd` OCSP checks, other apps), and `localhost` and `127.0.0.1` are on the bypass list, so requests to a server on the Mac's loopback interface are *not* captured, as they are not through the Network Extension either (see [Requests to localhost are not captured](#requests-to-localhost-are-not-captured)).
+If the redirector cannot be started (the extension is not approved, or its control channel does not connect within its 10–20 s wait), the daemon can fall back to setting the **macOS system HTTP/HTTPS proxy** on the active network service. This is what CI runners use, where a System Extension cannot be approved. It is host-wide: the trace records whatever any process on the Mac sends (browser preconnects, `trustd` OCSP checks, other apps), and `localhost` and `127.0.0.1` are on the bypass list, so requests to a server on the Mac's loopback interface are *not* captured, as they are not through the Network Extension either (see [Requests to localhost are not captured](#requests-to-localhost-are-not-captured)).
 
 **The fallback is used on CI only.** When the `CI` environment variable is set (as it is on GitHub Actions, GitLab, CircleCI, Buildkite and most other CI systems), the daemon falls back and prints, once per device:
 
@@ -240,7 +233,7 @@ If the redirector cannot be started (the extension is not approved, or its contr
 [tapsmith] Network capture warning: <udid>: capturing through the macOS system-proxy fallback (the Network Extension redirector is unavailable). This is host-wide: …
 ```
 
-On a developer Mac the Network Extension is available, so an NE failure there is a real problem to fix, not something to paper over by recording your own browsing. Capture is disabled instead, with `Network capture disabled: … the Network Extension redirector failed (…)` and a pointer to `npx tapsmith doctor`. The daemon retries the redirector at most once a minute (each failed attempt costs a 10 s wait), so once you fix the extension, capture comes back within a minute without restarting UI mode. To allow the fallback locally anyway, or to refuse it on CI, set:
+On a developer Mac the Network Extension is available, so an NE failure there is a real problem to fix, not something to paper over by recording your own browsing. Capture is disabled instead, with `Network capture disabled: iOS network capture unavailable for <udid>: …` saying why, and a pointer to `npx tapsmith doctor` when the cause is one doctor checks (the extension missing or not approved; a [control-channel timeout](#se-control-channel-timeout) carries its own advice). The daemon launches the redirector again at most once a minute (each failed launch costs a 10–20 s wait), picking up a late dial-back from the previous launch on any test in between, so once you fix the extension, capture comes back within a minute without restarting UI mode. To allow the fallback locally anyway, or to refuse it on CI, set:
 
 | `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK` | Effect |
 | --- | --- |
@@ -259,9 +252,9 @@ Once a daemon has fallen back it keeps the fallback (and the same proxy port) ac
 
 ### Multi-device groups
 
-Each device of a [device group](multi-device.md) captures on its own daemon, and the runner labels every entry with the device that captured it. That label is only honest on a per-device route, so for a group the runner asks each daemon to **require isolation**: the system-proxy fallback above is refused and that device's capture is disabled with a message naming the device (`Network capture disabled: [bob] …`), instead of recording the whole Mac's traffic under one device's name. The other members keep capturing, and the disabled member retries the redirector on its next test rather than staying disabled for the run — a single-device run remembers the failure for a minute and skips the 10 s redirector wait on the tests in between, going straight to the system proxy on CI or straight to "capture disabled" locally.
+Each device of a [device group](multi-device.md) captures on its own daemon, and the runner labels every entry with the device that captured it. That label is only honest on a per-device route, so for a group the runner asks each daemon to **require isolation**: the system-proxy fallback above is refused and that device's capture is disabled with a message naming the device (`Network capture disabled: [bob] …`), instead of recording the whole Mac's traffic under one device's name. The other members keep capturing, and the disabled member retries the redirector on its next test rather than staying disabled for the run — a single-device run remembers the failure for a minute and skips the 10–20 s redirector wait on the tests in between (taking a late dial-back if one arrived), going straight to the system proxy on CI or straight to "capture disabled" locally.
 
-The stock mitmproxy launcher reuses any `mitmproxy` extension configuration that is not yet connected, so two daemons launching within the same ~150 ms used to overwrite each other's socket path, and the second one silently lost the extension. Every daemon on the Mac (group members, `--workers N`, UI mode, a concurrent headless run) now takes a per-user lock (`~/.tapsmith/ios-redirector-launch.lock`) from spawning the launcher until the extension has connected back and accepted its first configuration and the launcher process has exited, plus half a second; the capture itself starts as soon as the extension connects, and the lock is released in the background. So launches don't overlap; the runner also starts a group's captures one at a time. The lock is best-effort: if it cannot be taken (other launches have held it for 25 s, which takes a queue of failing or unusually slow launches, or the lock file cannot be locked at all), the daemon launches anyway and logs `serialised=false`. If a device still reports `Network Extension redirector unavailable`, look for `serialised=true` on the `spawning redirector launcher` line and `System Extension control channel connected` in each daemon's debug log.
+The stock mitmproxy launcher reuses any `mitmproxy` extension configuration that is not yet connected, so two daemons launching within the same ~150 ms used to overwrite each other's socket path, and the second one silently lost the extension. Every daemon on the Mac (group members, `--workers N`, UI mode, a concurrent headless run) now takes a per-user lock (`~/.tapsmith/ios-redirector-launch.lock`) from spawning the launcher until the extension has connected back and accepted its first configuration (or the dial-back wait ran out) and the launcher process has exited (it is stopped if it has not, 5 s later), plus half a second; the capture itself starts as soon as the extension connects, and the lock is released in the background. So launches don't overlap; the runner also starts a group's captures one at a time. The lock is best-effort: if it cannot be taken (other launches have held it for 30 s, which takes a queue of failing or unusually slow launches, or the lock file cannot be locked at all), the daemon launches anyway and logs `serialised=false`. If a device still reports `Network Extension redirector unavailable`, look for `serialised=true` on the `spawning redirector launcher` line and `System Extension control channel connected` in each daemon's debug log.
 
 ### Physical iOS device network capture
 

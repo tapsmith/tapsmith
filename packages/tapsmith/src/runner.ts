@@ -59,6 +59,7 @@ import { filterEntriesByHosts } from './trace/filter-hosts.js';
 import { TlsRejectWarnings, osServiceTlsRejectNote, tlsRejectWarning } from './tls-reject-warning.js';
 import { loopbackCaptureWarning, loopbackUnfiredRouteReason } from './loopback-capture-warning.js';
 import { defineStandIns, notSupportedYet } from './not-supported.js';
+import { captureFailureNotice } from './capture-warnings.js';
 
 // ─── Trace Device Info ───
 
@@ -346,7 +347,16 @@ async function startNetworkCaptureOn(d: Device, multiDevice: boolean, httpPorts:
   try {
     const res = await d._startNetworkCapture({ requireIsolation: multiDevice, httpPorts });
     if (!res.success && res.errorMessage) {
-      _warnCaptureOnce('Network capture disabled', forDevice(res.errorMessage));
+      // Once per session: in full the first time, in one line on the first
+      // start of a later run (a watch or MCP re-run is a fresh process).
+      const notice = captureFailureNotice(forDevice(res.errorMessage));
+      if (notice === 'full') {
+        console.warn(`[tapsmith] Network capture disabled: ${forDevice(res.errorMessage)}`);
+      } else if (notice === 'repeat') {
+        console.warn(`[tapsmith] Network capture disabled: ${forDevice(
+          'still unavailable, for the reason an earlier run of this session printed (tried again on each test)',
+        )}`);
+      }
     } else if (res.errorMessage) {
       // The daemon joins independent warnings with newlines, and which ones
       // appear varies between the first start and the per-test reuse of a

@@ -853,11 +853,12 @@ fn still_applied_blocking(h: &dyn Host, lease: &SystemProxyLease) -> Option<bool
 // ─── Capture policy (used by start_network_capture) ───
 
 /// How long a Network Extension failure is trusted before the redirector is
-/// tried again. Every attempt on a broken extension waits out its 10 s
-/// control-channel timeout, so retrying on every test would add 10 s per
-/// test; never retrying would keep capture off after a one-off failure (two
-/// daemons launching the redirector at once) or after the user fixes the
-/// extension mid-session (UI mode). One retry a minute bounds both.
+/// launched again. Every launch on a broken extension waits out its 10–20 s
+/// dial-back wait, so relaunching on every test would add that much per
+/// test; never relaunching would keep capture off after a one-off failure
+/// or after the user fixes the extension mid-session (UI mode). One launch a
+/// minute bounds both. A launch that was only late is still picked up in
+/// between (`ios_redirect::PendingRedirect`).
 pub const NE_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// The daemon's memory of its last Network Extension failure.
@@ -865,6 +866,10 @@ pub const NE_RETRY_AFTER: Duration = Duration::from_secs(60);
 pub struct NeFailure {
     pub message: String,
     pub at: Instant,
+    /// An enabled extension did not dial back in time
+    /// (`ios_redirect::StartError::is_connect_timeout`): `tapsmith doctor`
+    /// reports nothing wrong, so its advice is left out.
+    pub connect_timeout: bool,
 }
 
 /// The cached failure to act on instead of launching the redirector, if any.
@@ -878,13 +883,56 @@ pub fn cached_ne_failure(
     cache: Option<&NeFailure>,
     require_isolation: bool,
     now: Instant,
-) -> Option<String> {
+) -> Option<NeFailure> {
     if require_isolation {
         return None;
     }
     cache
         .filter(|f| now.saturating_duration_since(f.at) < NE_RETRY_AFTER)
-        .map(|f| f.message.clone())
+        .cloned()
+}
+
+/// A message on one line: an error with a multi-line body (or an `anyhow`
+/// chain printed with `{:#}`) is joined with spaces, so the runner's warning
+/// and a test's "Network capture disabled" error stay one readable line.
+pub fn one_line(message: &str) -> String {
+    message.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Why capture is off for a simulator whose Network Extension redirector
+/// failed, when the system-proxy fallback is refused (`decision` is one of the
+/// two refusals). `failure` is the redirector's error. `tapsmith doctor` and
+/// setup are suggested only for failures they can see: a dial-back timeout
+/// happens with the extension installed and enabled, so doctor would report
+/// all green; that error carries its own advice instead.
+///
+/// The runner (`worker-protocol.ts`, `DETERMINISTIC_CAPTURE_REFUSALS`) matches
+/// "so it is only used on CI" and "it is refused for multi-device runs".
+pub fn ne_refusal_message(
+    decision: FallbackDecision,
+    serial: &str,
+    failure: &str,
+    connect_timeout: bool,
+) -> String {
+    let failure = one_line(failure);
+    let failure = failure.trim_end_matches('.');
+    let doctor = if connect_timeout {
+        ""
+    } else {
+        " Run `npx tapsmith doctor` and `npx tapsmith ios network setup-simulator` to fix it."
+    };
+    match decision {
+        FallbackDecision::RefuseIsolation => format!(
+            "iOS network capture unavailable for {serial}: {failure}.{doctor} The macOS \
+             system-proxy fallback is not device-isolated, so it is refused for multi-device \
+             runs. See docs/ios-network-capture.md#multi-device-groups"
+        ),
+        _ => format!(
+            "iOS network capture unavailable for {serial}: {failure}.{doctor} The macOS \
+             system-proxy fallback would record all traffic on this Mac, so it is only used on \
+             CI; set {FALLBACK_ENV}=1 to allow it here anyway. See docs/ios-network-capture.md"
+        ),
+    }
 }
 
 /// What to do once the Network Extension redirector is unavailable.
@@ -1669,16 +1717,48 @@ mod tests {
         let f = NeFailure {
             message: "SE did not connect".into(),
             at: t0,
+            connect_timeout: true,
         };
-        assert_eq!(
-            cached_ne_failure(Some(&f), false, t0 + Duration::from_secs(5)).as_deref(),
-            Some("SE did not connect")
+        let cached = cached_ne_failure(Some(&f), false, t0 + Duration::from_secs(5)).unwrap();
+        assert_eq!(cached.message, "SE did not connect");
+        assert!(cached.connect_timeout);
+        assert!(cached_ne_failure(Some(&f), false, t0 + NE_RETRY_AFTER).is_none());
+        assert!(cached_ne_failure(None, false, t0).is_none());
+    }
+
+    #[test]
+    fn a_dial_back_timeout_refusal_is_one_line_without_doctor() {
+        let failure = "Mitmproxy Redirector System Extension did not connect within 10–20 s. \
+                       stop this session's redirector with `pkill -9 -f '/tmp/tapsmith-redirector-42.sock'`";
+        let msg = ne_refusal_message(FallbackDecision::RefuseLocal, "SIM-1", failure, true);
+        assert!(!msg.contains('\n'), "{msg}");
+        assert!(!msg.contains("doctor"), "{msg}");
+        assert!(
+            !msg.contains("(Mitmproxy"),
+            "the failure is not wrapped in a parenthesis: {msg}"
         );
-        assert_eq!(
-            cached_ne_failure(Some(&f), false, t0 + NE_RETRY_AFTER),
-            None
+        assert!(
+            msg.starts_with("iOS network capture unavailable for SIM-1: Mitmproxy"),
+            "{msg}"
         );
-        assert_eq!(cached_ne_failure(None, false, t0), None);
+        // The runner's deterministic-refusal pattern.
+        assert!(msg.contains("so it is only used on CI"), "{msg}");
+        let group = ne_refusal_message(FallbackDecision::RefuseIsolation, "SIM-1", failure, true);
+        assert!(
+            group.contains("it is refused for multi-device runs"),
+            "{group}"
+        );
+        assert!(!group.contains("doctor"), "{group}");
+    }
+
+    #[test]
+    fn a_setup_failure_refusal_points_at_doctor_on_one_line() {
+        let failure =
+            "locating Mitmproxy Redirector.app: not found.\n\nSearched:\n  /Applications/x";
+        let msg = ne_refusal_message(FallbackDecision::RefuseLocal, "SIM-1", failure, false);
+        assert!(!msg.contains('\n'), "{msg}");
+        assert!(msg.contains("npx tapsmith doctor"), "{msg}");
+        assert!(msg.contains("Searched: /Applications/x."), "{msg}");
     }
 
     #[test]
@@ -1687,8 +1767,9 @@ mod tests {
         let f = NeFailure {
             message: "x".into(),
             at: t0,
+            connect_timeout: false,
         };
-        assert_eq!(cached_ne_failure(Some(&f), true, t0), None);
+        assert!(cached_ne_failure(Some(&f), true, t0).is_none());
     }
 
     #[test]
