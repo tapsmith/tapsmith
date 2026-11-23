@@ -277,7 +277,7 @@ describe('no-bare-locator-xpath on real code', () => {
     plugins: { tapsmith: plugin as unknown as ESLint.Plugin },
     rules: { 'tapsmith/no-bare-locator-xpath': 'error' },
     languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
-  }], 'tests/x.tapsmith.js').map((m) => m.line);
+  }], 'tests/x.tapsmith.js').filter((m) => m.ruleId === 'tapsmith/no-bare-locator-xpath').map((m) => m.line);
 
   const body = (lines: string[]) => `async function t(device) {\n${lines.join('\n')}\n}\n`;
 
@@ -361,6 +361,33 @@ describe('no-bare-locator-xpath on real code', () => {
       "    device.locator({ xpath: '//Row[1]' }),",
       '  );',
     ]))).toEqual([5]);
+  });
+
+  it('does not count a comment that ends the line before, after other code', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lint(body([
+      "  await device.getByRole('button').tap(); // go to step 2",
+      "  await device.locator({ xpath: '//Button[3]' }).tap();",
+    ]))).toEqual([3]);
+    expect(lint(body([
+      '  const a = 1; // about a',
+      "  const row = device.locator({ xpath: '//Row[1]' });",
+    ]))).toEqual([3]);
+    expect(lintFile([
+      'export class Login {',
+      "  bare = this.device.getByText('ok'); // ok",
+      "  row = this.device.locator({ xpath: '//Row[1]' });",
+      '}',
+      'const s = { x: 1, // the x',
+      "  y: device.locator({ xpath: '//y' }) };",
+    ])).toEqual([3, 6]);
+  });
+
+  it('does not count a lint or type-check directive as the explanation', () => {
+    expect(lint(body([
+      '  // eslint-disable-next-line no-console',
+      "  await device.locator({ xpath: '//Button[3]' }).tap();",
+    ]))).toEqual([3]);
   });
 
   it('reports a call with no comment', () => {

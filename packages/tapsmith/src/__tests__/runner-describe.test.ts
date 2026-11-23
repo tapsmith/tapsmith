@@ -112,7 +112,8 @@ describe('test() call shapes', () => {
     const ctx = pushContext();
     try {
       expect(() => (tapsmithTest as unknown as Loose)('x', { tag: '@smoke' }, async () => {}))
-        .toThrow("test('x', details, callback): the details object (tag, annotation) isn't supported yet. Drop it and call test('x', async () => { ... }).");
+        .toThrow("test('x', details, callback): the details object (tag, annotation) isn't supported yet. Drop it and call test('x', async () => { ... }). "
+          + 'To keep a tag, put it in the title (\'x @smoke\') and run the tagged tests with --grep @smoke.');
       expect(() => (tapsmithTest.only as unknown as Loose)('x', { annotation: { type: 'issue' } }, async () => {}))
         .toThrow(/^test\.only\('x', details, callback\): the details object \(tag, annotation\) isn't supported yet/);
       // A fixture-extended test shares the same checks.

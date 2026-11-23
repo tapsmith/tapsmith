@@ -42,12 +42,15 @@ interface ASTNode {
 }
 
 interface Comment {
+  value?: string;
   loc?: { start: { line: number }; end: { line: number } };
 }
 
 interface SourceCode {
   getCommentsBefore(node: ASTNode): Comment[];
   getAllComments(): Comment[];
+  /** The code token before a node or comment (comments skipped). */
+  getTokenBefore?(nodeOrComment: ASTNode | Comment): { loc?: { end: { line: number } } } | null;
 }
 
 interface RuleContext {
@@ -162,6 +165,11 @@ const preferRole: RuleModule = {
 
 // ─── no-bare-locator-xpath ───
 
+/** `// eslint-disable-next-line …`, `// @ts-expect-error`, `// prettier-ignore` and the like. */
+function isDirective(comment: Comment): boolean {
+  return /^\s*(eslint[-\s]|eslint$|@ts-|prettier-ignore|global\s|globals\s|istanbul\s|c8\s)/.test(comment.value ?? '');
+}
+
 /**
  * `node` and each node that contains it, up to the unit a comment above
  * explains: its statement, class field, object property or array element.
@@ -192,7 +200,7 @@ const noBareLocatorXpath: RuleModule = {
     },
     messages: {
       noBareLocatorXpath:
-        'locator({ xpath }) must have an explanatory comment above its statement (or class field, object property or array element) or on one of its lines. XPath locators are fragile and Android-only — document why this is necessary.',
+        'locator({ xpath }) must have an explanatory comment on its own line above its statement (or class field, object property or array element), or on one of its lines. XPath locators are fragile and Android-only — document why this is necessary.',
     },
     schema: [],
   },
@@ -206,8 +214,15 @@ const noBareLocatorXpath: RuleModule = {
         const sourceCode = (context.sourceCode ?? context.getSourceCode?.()) as SourceCode;
         // A comment directly before the call or before anything that holds
         // it, up to its unit: so one above `await device.locator(…)`,
-        // `const row =`, a wrapped `expect(` or a class field counts.
-        if (nodesUpToUnit(node).some((n) => sourceCode.getCommentsBefore(n).length > 0)) return;
+        // `const row =`, a wrapped `expect(` or a class field counts. Not one
+        // that ends the line before after other code, which is about that
+        // code, and not a lint or type-check directive.
+        const explains = (c: Comment): boolean => {
+          if (isDirective(c)) return false;
+          const before = sourceCode.getTokenBefore?.(c);
+          return !before?.loc || before.loc.end.line < (c.loc?.start.line ?? 0);
+        };
+        if (nodesUpToUnit(node).some((n) => sourceCode.getCommentsBefore(n).some(explains))) return;
 
         // Or a comment on one of the call's own lines.
         const startLine = node.loc?.start.line;
@@ -216,7 +231,7 @@ const noBareLocatorXpath: RuleModule = {
         const commented = sourceCode.getAllComments().some((c) => {
           const from = c.loc?.start.line;
           const to = c.loc?.end.line;
-          return from !== undefined && to !== undefined && to >= startLine && from <= endLine;
+          return from !== undefined && to !== undefined && to >= startLine && from <= endLine && !isDirective(c);
         });
         if (commented) return;
 

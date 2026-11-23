@@ -1055,6 +1055,10 @@ function validateScopeTimeoutAndRetries(options: { timeout?: number; retries?: n
  * object as the test function and drops the callback, and fails only when
  * the test runs, with a raw TypeError.
  */
+/** How to keep a Playwright tag without the details object. */
+const TAG_HINT = (title: string): string =>
+  `To keep a tag, put it in the title ('${title} @smoke') and run the tagged tests with --grep @smoke.`;
+
 function testDeclaration(api: string, args: unknown[]): [string, TestCallback] {
   const [name, second, third] = args;
   if (typeof name !== 'string') {
@@ -1064,7 +1068,7 @@ function testDeclaration(api: string, args: unknown[]): [string, TestCallback] {
   if (second !== null && typeof second === 'object' && typeof third === 'function') {
     throw new Error(
       `${api}('${name}', details, callback): the details object (tag, annotation) isn't supported yet. `
-      + `Drop it and call ${api}('${name}', async () => { ... }).`,
+      + `Drop it and call ${api}('${name}', async () => { ... }). ${TAG_HINT(name)}`,
     );
   }
   throw new Error(
@@ -1186,7 +1190,7 @@ function applySkipModifier(args: unknown[]): void {
   if (typeof condition === 'string' && description !== null && typeof description === 'object' && typeof args[2] === 'function') {
     throw new Error(
       `test.skip('${condition}', details, callback): the details object (tag, annotation) isn't supported yet. `
-      + `Drop it and call test.skip('${condition}', async () => { ... }).`,
+      + `Drop it and call test.skip('${condition}', async () => { ... }). ${TAG_HINT(condition)}`,
     );
   }
   // A title with something other than a function or a description after it
@@ -1236,7 +1240,7 @@ function registerSuite(api: string, args: unknown[], flags: Pick<SuiteEntry, 'on
     if (second !== null && typeof second === 'object' && typeof third === 'function') {
       throw new Error(
         `${api}('${name}', details, callback): the details object (tag, annotation) isn't supported yet. `
-        + `Drop it and call ${api}('${name}', () => { ... }).`,
+        + `Drop it and call ${api}('${name}', () => { ... }). ${TAG_HINT(name)}`,
       );
     }
     throw new Error(`${api}('${name}') needs a callback: ${api}('${name}', () => { ... }).`);
