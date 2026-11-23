@@ -17,23 +17,41 @@ import type { NetworkCaptureRoute } from './trace/types.js';
 
 // ─── Types mirroring proto messages ───
 
+/** An element as the device reported it: what `elementHandle.find()` returns. */
 export interface ElementInfo {
+  /** The agent's identifier for the element; it does not outlive the screen. */
   elementId: string;
+  /** The native class name (Android `android.widget.Button`). */
   className: string;
+  /** The element's visible text. */
   text: string;
+  /** The accessibility description (Android `contentDescription`, iOS `accessibilityLabel`). */
   contentDescription: string;
+  /** The native id (Android resource id, iOS `accessibilityIdentifier`). */
   resourceId: string;
+  /** Whether the element is enabled. */
   enabled: boolean;
+  /** Whether the element is visible. */
   visible: boolean;
+  /** Whether the element is clickable. */
   clickable: boolean;
+  /** Whether the element can take focus. */
   focusable: boolean;
+  /** Whether the element scrolls. */
   scrollable: boolean;
+  /** The element's bounding rectangle on screen. */
   bounds?: { left: number; top: number; right: number; bottom: number };
+  /** A text field's placeholder (Android hint). */
   hint: string;
+  /** Whether the element is checked. */
   checked: boolean;
+  /** Whether the element is selected. */
   selected: boolean;
+  /** Whether the element has input focus. */
   focused: boolean;
+  /** The accessibility role (`button`, `textfield`, …). */
   role: string;
+  /** The fraction of the element inside the viewport, 0 to 1. */
   viewportRatio: number;
   /**
    * iOS: the element is a native alert or inside one. Scoping
@@ -106,11 +124,15 @@ export interface EvaluateSelectorsResponse {
   errorMessage: string;
 }
 
+/** A screenshot: what `device.takeScreenshot()` returns. */
 export interface ScreenshotResponse {
+  /** The request's identifier, for matching it in daemon logs. */
   requestId: string;
+  /** Whether the screenshot was taken; when not, `errorMessage` says why. */
   success: boolean;
   /** PNG, upright as the screen shows it. */
   data: Buffer;
+  /** Why the screenshot failed; empty on success. */
   errorMessage: string;
   /**
    * iOS: how the device was turned ("portrait", "landscapeLeft",

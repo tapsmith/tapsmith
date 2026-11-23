@@ -10,13 +10,35 @@ import * as path from 'node:path';
 export const AGENTS_BEGIN = '<!-- tapsmith:begin -->';
 export const AGENTS_END = '<!-- tapsmith:end -->';
 
-export function renderAgentsSection(): string {
+/** Where the docs are when Tapsmith is installed in the project itself, as a path from it. */
+export const DEFAULT_DOCS_DIR = 'node_modules/tapsmith/docs';
+
+/**
+ * The docs of the Tapsmith that `import "tapsmith"` finds from `cwd`, as a
+ * path from `cwd` with forward slashes: the nearest `node_modules/tapsmith`
+ * in `cwd` or a folder above it, as Node looks. A workspace that hoists the
+ * install to its root (`npm i -D tapsmith -w e2e`) has none in the package
+ * itself. The `node_modules` path is kept for a symlinked (pnpm) install.
+ * With no install yet, {@link DEFAULT_DOCS_DIR}.
+ */
+export function installedDocsDir(cwd: string): string {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    const pkg = path.join(dir, 'node_modules', 'tapsmith');
+    if (fs.existsSync(path.join(pkg, 'package.json'))) {
+      return path.relative(path.resolve(cwd), path.join(pkg, 'docs')).split(path.sep).join('/');
+    }
+    if (path.dirname(dir) === dir) return DEFAULT_DOCS_DIR;
+  }
+}
+
+/** The AGENTS.md section; `docsDir` is where the installed docs are, from the project ({@link installedDocsDir}). */
+export function renderAgentsSection(docsDir: string = DEFAULT_DOCS_DIR): string {
   return `${AGENTS_BEGIN}
 ## Mobile testing with Tapsmith
 
 This project uses [Tapsmith](https://github.com/tapsmith/tapsmith) for mobile E2E tests (Playwright-style API).
 
-The docs for the installed Tapsmith version ship in the package: read \`node_modules/tapsmith/docs/<page>.md\` (start with \`api-reference.md\`, \`writing-tests.md\` and \`locators.md\`) rather than guessing the API or relying on docs for another version.
+The docs for the installed Tapsmith version ship in the package: read \`${docsDir}/<page>.md\` (start with \`api-reference.md\`, \`writing-tests.md\` and \`locators.md\`) rather than guessing the API or relying on docs for another version.
 
 ### Running and debugging
 
@@ -33,7 +55,7 @@ The docs for the installed Tapsmith version ship in the package: read \`node_mod
 
 ### MCP workflow
 
-The Tapsmith plugin for Claude Code, Codex and Cursor registers one MCP server, \`tapsmith\` (run from this project's Tapsmith install), and adds a skill for writing and debugging tests; \`node_modules/tapsmith/docs/mcp-server.md\` says how to install it. That server works in the user's running \`npx tapsmith test --ui\` session when there is one, so they can watch, and headless otherwise; \`tapsmith_session_info\` says which. With the plugin installed, nothing below needs registering.
+The Tapsmith plugin for Claude Code, Codex and Cursor registers one MCP server, \`tapsmith\` (run from this project's Tapsmith install), and adds a skill for writing and debugging tests; \`${docsDir}/mcp-server.md\` says how to install it. That server works in the user's running \`npx tapsmith test --ui\` session when there is one, so they can watch, and headless otherwise; \`tapsmith_session_info\` says which. With the plugin installed, nothing below needs registering.
 
 Without the plugin, register by hand the server the plugin uses, under the name \`tapsmith\`. It works in the user's UI session whenever one is running and headless otherwise, so no URL is needed:
 
@@ -133,6 +155,25 @@ export function mergeAgentsMd(existing: string | undefined, section: string): st
 export function writeAgentsMd(cwd: string): string {
   const filePath = path.join(cwd, 'AGENTS.md');
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : undefined;
-  fs.writeFileSync(filePath, mergeAgentsMd(existing, renderAgentsSection()));
+  fs.writeFileSync(filePath, mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd))));
   return filePath;
+}
+
+/**
+ * Rewrite the Tapsmith section of `<cwd>/AGENTS.md` with the docs path as it
+ * is now. The wizard writes AGENTS.md before it offers to install Tapsmith,
+ * and an install from a workspace package lands in the workspace root. A
+ * file without exactly one well-formed section is left alone.
+ */
+export function refreshAgentsMdDocsDir(cwd: string): void {
+  const filePath = path.join(cwd, 'AGENTS.md');
+  if (!fs.existsSync(filePath)) return;
+  const existing = fs.readFileSync(filePath, 'utf8');
+  // Only a single, well-formed section: with a stray marker the section's
+  // extent is a guess, and replacing it could take the user's own text.
+  const begins = existing.split(AGENTS_BEGIN).length - 1;
+  const ends = existing.split(AGENTS_END).length - 1;
+  if (begins !== 1 || ends !== 1 || existing.indexOf(AGENTS_END) < existing.indexOf(AGENTS_BEGIN)) return;
+  const updated = mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd)));
+  if (updated !== existing) fs.writeFileSync(filePath, updated);
 }

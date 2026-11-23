@@ -1058,15 +1058,46 @@ function validateScopeTimeoutAndRetries(options: { timeout?: number; retries?: n
   }
 }
 
+/** How to keep a Playwright tag without the details object. */
+const TAG_HINT = (title: string): string =>
+  `To keep a tag, put it in the title ('${title} @smoke') and run the tagged tests with --grep @smoke.`;
+
+/**
+ * The title and test function of a `test()` or `test.only()` declaration,
+ * refusing the call shapes Tapsmith does not support at load time. Without
+ * this, Playwright's `(title, details, callback)` form stores the details
+ * object as the test function and drops the callback, and fails only when
+ * the test runs, with a raw TypeError.
+ */
+function testDeclaration(api: string, args: unknown[]): [string, TestCallback] {
+  const [name, second, third] = args;
+  if (typeof name !== 'string') {
+    throw new Error(`${api}() takes a title string and a test function: ${api}('my test', async () => { ... }).`);
+  }
+  if (typeof second === 'function') return [name, second as TestCallback];
+  if (second !== null && typeof second === 'object' && typeof third === 'function') {
+    throw new Error(
+      `${api}('${name}', details, callback): the details object (tag, annotation) isn't supported yet. `
+      + `Drop it and call ${api}('${name}', async () => { ... }). ${TAG_HINT(name)}`,
+    );
+  }
+  throw new Error(
+    `${api}('${name}') needs a test function: ${api}('${name}', async () => { ... }). `
+    + `Got ${second === null ? 'null' : typeof second} instead.`,
+  );
+}
+
 function createTestFn<F extends object = TestFixtures>(registry: FixtureRegistry): TestFn<F> {
   const syncRegistry = () => { setActiveFixtureRegistry(registry); };
   const fn = Object.assign(
-    (name: string, testFn: TestCallback) => {
+    (...args: unknown[]) => {
+      const [name, testFn] = testDeclaration('test', args);
       syncRegistry();
       currentContext().tests.push({ name, fn: testFn, only: false, skip: false, registry, declaredIn: hookLocation()?.file });
     },
     {
-      only: (name: string, testFn: TestCallback) => {
+      only: (...args: unknown[]) => {
+        const [name, testFn] = testDeclaration('test.only', args);
         syncRegistry();
         currentContext().tests.push({ name, fn: testFn, only: true, skip: false, registry, declaredIn: hookLocation()?.file });
       },
@@ -1169,7 +1200,7 @@ function applySkipModifier(args: unknown[]): void {
   if (typeof condition === 'string' && description !== null && typeof description === 'object' && typeof args[2] === 'function') {
     throw new Error(
       `test.skip('${condition}', details, callback): the details object (tag, annotation) isn't supported yet. `
-      + `Drop it and call test.skip('${condition}', async () => { ... }).`,
+      + `Drop it and call test.skip('${condition}', async () => { ... }). ${TAG_HINT(condition)}`,
     );
   }
   // A title with something other than a function or a description after it
@@ -1219,7 +1250,7 @@ function registerSuite(api: string, args: unknown[], flags: Pick<SuiteEntry, 'on
     if (second !== null && typeof second === 'object' && typeof third === 'function') {
       throw new Error(
         `${api}('${name}', details, callback): the details object (tag, annotation) isn't supported yet. `
-        + `Drop it and call ${api}('${name}', () => { ... }).`,
+        + `Drop it and call ${api}('${name}', () => { ... }). ${TAG_HINT(name)}`,
       );
     }
     throw new Error(`${api}('${name}') needs a callback: ${api}('${name}', () => { ... }).`);

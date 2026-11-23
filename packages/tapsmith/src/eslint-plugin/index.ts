@@ -8,7 +8,8 @@
  *   - prefer-role: Warns when `.locator({ className })` is used for standard
  *     Android widgets that have well-known accessibility roles.
  *   - no-bare-locator-xpath: Errors when `.locator({ xpath })` is used without
- *     an explanatory comment on the same or preceding line.
+ *     an explanatory comment above its statement (or class field, object
+ *     property or array element) or on one of its lines.
  *   - prefer-accessible-locators: Warns when `.getByTestId()` or
  *     `.locator({ id })` is used instead of `getByRole`, `getByText`,
  *     `getByDescription`, etc.
@@ -36,15 +37,20 @@ interface ASTNode {
   expression?: ASTNode;
   argument?: ASTNode;
   params?: ASTNode[];
+  /** Set by ESLint on every node but the Program. */
+  parent?: ASTNode;
 }
 
 interface Comment {
+  value?: string;
   loc?: { start: { line: number }; end: { line: number } };
 }
 
 interface SourceCode {
   getCommentsBefore(node: ASTNode): Comment[];
   getAllComments(): Comment[];
+  /** The code token before a node or comment (comments skipped). */
+  getTokenBefore?(nodeOrComment: ASTNode | Comment): { loc?: { end: { line: number } } } | null;
 }
 
 interface RuleContext {
@@ -159,6 +165,46 @@ const preferRole: RuleModule = {
 
 // ─── no-bare-locator-xpath ───
 
+/** `// eslint-disable-next-line …`, `// @ts-expect-error`, `// prettier-ignore` and the like. */
+function isDirective(comment: Comment): boolean {
+  return /^\s*(eslint[-\s]|eslint$|@ts-|prettier-ignore|global\s|globals\s|istanbul\s|c8\s)/.test(comment.value ?? '');
+}
+
+/**
+ * `node` and each node that contains it, up to the unit a comment above
+ * explains: its statement, class field, object property or array element.
+ * Stopping there keeps a comment about another member of a class, object or
+ * array from counting.
+ */
+function nodesUpToUnit(node: ASTNode): ASTNode[] {
+  const chain: ASTNode[] = [];
+  for (let n: ASTNode | undefined = node; n; n = n?.parent) {
+    chain.push(n);
+    if (/(Statement|Declaration)$/.test(n.type) || n.type === 'Property' || n.type === 'PropertyDefinition' || n.type === 'MethodDefinition') {
+      // A getter, method or function whose body is just this statement (a
+      // screen object's `get row() { return … }`): the comment above the
+      // member or function explains it.
+      if (isOnlyStatementOfFunction(n)) {
+        n = n.parent; // the block; the loop goes on to the function
+        continue;
+      }
+      // `export const row = …`: the comment sits before `export`.
+      if (n.parent && /^Export(Named|Default)Declaration$/.test(n.parent.type)) chain.push(n.parent);
+      break;
+    }
+    if (n.parent?.type === 'ArrayExpression') break;
+  }
+  return chain;
+}
+
+/** `statement` is the whole block body of a function. */
+function isOnlyStatementOfFunction(statement: ASTNode): boolean {
+  const block = statement.parent;
+  return block?.type === 'BlockStatement'
+    && Array.isArray(block.body) && block.body.length === 1
+    && !!block.parent && /Function(Expression|Declaration)?$/.test(block.parent.type);
+}
+
 const noBareLocatorXpath: RuleModule = {
   meta: {
     type: 'problem',
@@ -169,7 +215,7 @@ const noBareLocatorXpath: RuleModule = {
     },
     messages: {
       noBareLocatorXpath:
-        'locator({ xpath }) must have an explanatory comment on the same or preceding line. XPath locators are fragile and Android-only — document why this is necessary.',
+        'locator({ xpath }) must have an explanatory comment on its own line above its statement (or class field, object property or array element), or on one of its lines. XPath locators are fragile and Android-only — document why this is necessary.',
     },
     schema: [],
   },
@@ -181,15 +227,28 @@ const noBareLocatorXpath: RuleModule = {
         if (getObjectProperty(arg, 'xpath') === undefined) return;
 
         const sourceCode = (context.sourceCode ?? context.getSourceCode?.()) as SourceCode;
-        const comments = sourceCode.getCommentsBefore(node);
-        if (comments.length > 0) return;
+        // A comment directly before the call or before anything that holds
+        // it, up to its unit: so one above `await device.locator(…)`,
+        // `const row =`, a wrapped `expect(` or a class field counts. Not one
+        // that ends the line before after other code, which is about that
+        // code, and not a lint or type-check directive.
+        const explains = (c: Comment): boolean => {
+          if (isDirective(c)) return false;
+          const before = sourceCode.getTokenBefore?.(c);
+          return !before?.loc || before.loc.end.line < (c.loc?.start.line ?? 0);
+        };
+        if (nodesUpToUnit(node).some((n) => sourceCode.getCommentsBefore(n).some(explains))) return;
 
-        const allComments = sourceCode.getAllComments();
-        const nodeLine = node.loc?.start.line;
-        const hasInlineComment = allComments.some(
-          (c) => c.loc?.start.line === nodeLine || c.loc?.end.line === nodeLine,
-        );
-        if (hasInlineComment) return;
+        // Or a comment on one of the call's own lines.
+        const startLine = node.loc?.start.line;
+        const endLine = node.loc?.end.line ?? startLine;
+        if (startLine === undefined || endLine === undefined) return;
+        const commented = sourceCode.getAllComments().some((c) => {
+          const from = c.loc?.start.line;
+          const to = c.loc?.end.line;
+          return from !== undefined && to !== undefined && to >= startLine && from <= endLine && !isDirective(c);
+        });
+        if (commented) return;
 
         context.report({ node, messageId: 'noBareLocatorXpath' });
       },

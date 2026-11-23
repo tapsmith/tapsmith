@@ -550,15 +550,56 @@ describe('the inline launcher', () => {
 });
 
 describe('detectCodingAgents', () => {
+  const none = { env: {}, onPath: () => false };
+
   it('finds an agent by its project files', () => {
+    write('.git/HEAD', '');
     write('CLAUDE.md', '# notes');
     write('.cursor/rules/x.mdc', '');
-    expect(detectCodingAgents(tmp, () => false)).toEqual(['claude', 'cursor']);
+    expect(detectCodingAgents(tmp, none)).toEqual(['claude', 'cursor']);
   });
 
-  it('finds an agent by its command on PATH', () => {
-    expect(detectCodingAgents(tmp, (cli) => cli === 'codex')).toEqual(['codex']);
-    expect(detectCodingAgents(tmp, () => false)).toEqual([]);
+  it('finds project files in a folder above, up to the git root', () => {
+    write('repo/.git/HEAD', '');
+    write('repo/.codex/config.toml', '');
+    write('.cursor/rules/x.mdc', ''); // above the git root: another project's
+    fs.mkdirSync(path.join(tmp, 'repo/e2e'));
+    expect(detectCodingAgents(path.join(tmp, 'repo/e2e'), none)).toEqual(['codex']);
+  });
+
+  it('looks only in the folder itself outside a git repository', () => {
+    write('.claude/settings.json', '{}');
+    fs.mkdirSync(path.join(tmp, 'e2e'));
+    expect(detectCodingAgents(path.join(tmp, 'e2e'), none)).toEqual([]);
+  });
+
+  it('lists the agent running init first, from its environment', () => {
+    write('.git/HEAD', '');
+    write('.cursor/rules/x.mdc', '');
+    expect(detectCodingAgents(tmp, { env: { CLAUDECODE: '1' }, onPath: () => false })).toEqual(['claude', 'cursor']);
+    expect(detectCodingAgents(tmp, { env: { CODEX_SANDBOX: 'seatbelt' }, onPath: () => false })).toEqual(['codex', 'cursor']);
+    expect(detectCodingAgents(tmp, { env: { CURSOR_AGENT: '1' }, onPath: () => false })).toEqual(['cursor']);
+  });
+
+  it('does not take Cursor\'s editor terminal for its agent', () => {
+    write('.git/HEAD', '');
+    // A person running init by hand in Cursor's terminal, using Claude Code.
+    expect(detectCodingAgents(tmp, { env: { CURSOR_TRACE_ID: 'abc' }, onPath: (cli) => cli === 'claude' })).toEqual(['claude']);
+    // Claude Code running inside Cursor's terminal.
+    expect(detectCodingAgents(tmp, { env: { CLAUDECODE: '1', CURSOR_TRACE_ID: 'abc' }, onPath: () => true })).toEqual(['claude']);
+  });
+
+  it('counts a command on PATH only when nothing else names an agent', () => {
+    write('.git/HEAD', '');
+    expect(detectCodingAgents(tmp, { env: {}, onPath: (cli) => cli === 'codex' })).toEqual(['codex']);
+    expect(detectCodingAgents(tmp, { env: { CLAUDECODE: '1' }, onPath: () => true })).toEqual(['claude']);
+    write('CLAUDE.md', '# notes');
+    expect(detectCodingAgents(tmp, { env: {}, onPath: () => true })).toEqual(['claude']);
+    expect(detectCodingAgents(tmp, none)).toEqual(['claude']);
+  });
+
+  it('finds nothing with no environment, project files or command', () => {
+    expect(detectCodingAgents(tmp, none)).toEqual([]);
   });
 });
 

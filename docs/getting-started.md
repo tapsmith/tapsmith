@@ -27,8 +27,8 @@ ADB comes with the Android SDK. If you don't have one yet, install
 to `PATH`.
 
 If you are using a single emulator or device, you can start it yourself and let
-Tapsmith detect it automatically. Tapsmith can also launch emulator instances for you
-when configured with `launchEmulators` and `avd`.
+Tapsmith detect it automatically. Tapsmith can also launch emulator instances for you:
+set `avd` (which turns `launchEmulators` on unless you set it to `false`).
 
 ### iOS
 
@@ -189,7 +189,7 @@ The wizard walks through these steps:
 
    No build yet? Press Enter at an empty build or ID question, or choose **Skip for now** where the wizard offers a build or ID it found, to leave it for later. With both platforms chosen, one you skip entirely (no build and no package or bundle ID) is left out of the config, and the wizard says how to add it; the same goes for an iOS simulator or physical-device target beside one that is set up. Otherwise the config gets the missing keys as commented-out placeholders (`// apk: '<path to your .apk>'`, `// package: '<applicationId>'`, `// app: '<path to your simulator build>.app'`), and a next step says which to fill in once you've built the app. A package name with no APK is a complete setup: Tapsmith launches and resets the installed app, but can't install it
 
-5. **Network capture** — optionally record HTTP/HTTPS traffic; saying yes writes `trace: { mode: 'retain-on-failure' }`, which [`device.route()`](network.md#prerequisites) needs, and lists the per-platform setup still to do
+5. **Network capture** — optionally record HTTP/HTTPS traffic in traces; saying yes writes `trace: { mode: 'retain-on-failure' }` and lists the per-platform setup still to do. Mocking with [`device.route()`](network.md#prerequisites) needs no trace and no config either way
 6. **iOS simulator agent** — if no simulator agent build is found, offers to build it now (~30 s)
 7. **Example test** — optionally creates `tests/example.tapsmith.ts`, a smoke test that checks the app from your config is running in the foreground. It asserts nothing about the screen, so it passes whatever the app is built with; add assertions on your app's first screen as your first real test
 8. **AGENTS.md** — optionally adds a Tapsmith section to `AGENTS.md` for AI coding agents
@@ -407,9 +407,9 @@ Tapsmith will:
 4. Discover the test files your config's `testMatch` matches (`**/*.tapsmith.ts` in a config from `tapsmith init`; `**/*.test.ts`, `**/*.spec.ts` and `**/*.tapsmith.ts` when the config doesn't set it).
 5. Run each test sequentially and report results.
 
-For multi-worker runs, Tapsmith will assign one device per worker. If
-`launchEmulators: true` is configured, it will launch additional emulator
-instances automatically. If `avd` is set, those instances will use that AVD.
+For multi-worker runs, Tapsmith will assign one device per worker. When `avd`
+is set, it launches additional instances of that AVD automatically
+(`launchEmulators` defaults to `true` then; set it to `false` to turn that off).
 
 ### Run a specific file
 

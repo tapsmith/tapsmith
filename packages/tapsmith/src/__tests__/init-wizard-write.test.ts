@@ -56,6 +56,23 @@ vi.mock('../init-detect.js', async (importOriginal) => ({
   detectExpoProject: () => undefined,
 }));
 
+// The wizard's install offer runs the package manager; a test that accepts
+// it stands in for the install with `installHook`.
+let installHook: ((cwd: string) => void) | undefined;
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawnSync: ((command: string, args: readonly string[], options?: { cwd?: string }) => {
+      if (installHook && args.includes('tapsmith')) {
+        installHook(options?.cwd ?? process.cwd());
+        return { status: 0, signal: null, output: [], pid: 0, stdout: '', stderr: '' };
+      }
+      return actual.spawnSync(command, args, options as never);
+    }) as typeof actual.spawnSync,
+  };
+});
+
 const { runInit } = await import('../init.js');
 
 // ─── Harness ───
@@ -249,5 +266,58 @@ describe('init wizard in a Yarn Plug\'n\'Play project (PILOT-778)', () => {
     expect(output.slice(warning)).toContain('nodeLinker: node-modules');
     const next = output.slice(output.indexOf('Next steps'));
     expect(next).toMatch(/Next steps\n\s+Switch Yarn to node_modules:\s+add `nodeLinker: node-modules` to \.yarnrc\.yml, then run `yarn install`/);
+  });
+});
+
+describe('init wizard in a workspace package that hoists its install', () => {
+  let root: string;
+
+  /** A Tapsmith install in `<at>/node_modules/tapsmith` that `import "tapsmith"` resolves. */
+  const installAt = (at: string): void => {
+    const pkg = path.join(at, 'node_modules', 'tapsmith');
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'tapsmith', version: '0.0.0', main: 'index.js' }));
+    fs.writeFileSync(path.join(pkg, 'index.js'), 'module.exports = {};\n');
+  };
+
+  beforeEach(() => {
+    // `dir` becomes <root>/e2e, a workspace package.
+    root = dir;
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root', private: true, workspaces: ['e2e'] }));
+    dir = path.join(root, 'e2e');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'e2e', private: true }));
+    process.chdir(dir);
+    vi.stubEnv('CURSOR_AGENT', '1');
+  });
+
+  afterEach(() => {
+    installHook = undefined;
+    vi.unstubAllEnvs();
+    dir = root; // the outer afterEach removes it
+  });
+
+  it('repoints AGENTS.md at the root install its own install just made, as the next steps do', async () => {
+    // Ahead of the default `Install` answer: the first matching pattern answers.
+    const rest = [...answers].filter(([k]) => k.source !== 'Install it now');
+    answers.clear();
+    answers.set(/Install it now/, true);
+    for (const [k, v] of rest) answers.set(k, v);
+    installHook = () => installAt(root);
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    expect(output).toContain('✓ Tapsmith installed');
+    const agentsMd = fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
+    expect(agentsMd).toContain('`../node_modules/tapsmith/docs/<page>.md`');
+    expect(agentsMd).not.toMatch(/[^/]node_modules\/tapsmith\/docs/);
+    expect(output).toMatch(/Cursor plugin:\s+see "Install the plugin" in \.\.\/node_modules\/tapsmith\/docs\/mcp-server\.md/);
+  });
+
+  it('notes the example test beside a Playwright config', async () => {
+    installAt(root);
+    fs.writeFileSync(path.join(dir, 'playwright.config.ts'), 'export default {};\n');
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    expect(output).toContain('tests/example.tapsmith.ts is in tests/ beside the tests of Playwright (playwright.config.ts).');
   });
 });

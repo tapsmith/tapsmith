@@ -271,6 +271,163 @@ describe('no-bare-locator-xpath rule', () => {
   });
 });
 
+describe('no-bare-locator-xpath on real code', () => {
+  const linter = new Linter({ configType: 'flat' });
+  const lint = (code: string) => linter.verify(code, [{
+    plugins: { tapsmith: plugin as unknown as ESLint.Plugin },
+    rules: { 'tapsmith/no-bare-locator-xpath': 'error' },
+    languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
+  }], 'tests/x.tapsmith.js').filter((m) => m.ruleId === 'tapsmith/no-bare-locator-xpath').map((m) => m.line);
+
+  const body = (lines: string[]) => `async function t(device) {\n${lines.join('\n')}\n}\n`;
+
+  it('accepts a comment on the line before an awaited call', () => {
+    expect(lint(body([
+      '  // The button has no accessible name or id; only its position identifies it.',
+      "  await device.locator({ xpath: '//Button[2]' }).tap();",
+    ]))).toEqual([]);
+  });
+
+  it('accepts a comment on the line before an assignment', () => {
+    expect(lint(body([
+      '  // No accessible name: legacy view.',
+      "  const row = device.locator({ xpath: '//Row[1]' });",
+    ]))).toEqual([]);
+  });
+
+  it('accepts a comment on the call\'s own lines', () => {
+    expect(lint(body([
+      "  await device.locator({ xpath: '//Button[2]' }).tap(); // legacy view",
+      '  await device.locator({',
+      "    xpath: '//Row[1]', // no accessible name",
+      '  }).tap();',
+    ]))).toEqual([]);
+  });
+
+  it('accepts a comment on the line before a statement the call is wrapped inside', () => {
+    expect(lint(body([
+      '  // Legacy view with no accessible name.',
+      '  await expect(',
+      "    device.locator({ xpath: '//Row[1]' }),",
+      '  ).toBeVisible();',
+      '  // Legacy view with no accessible name.',
+      '  const row =',
+      "    device.locator({ xpath: '//Row[1]' });",
+    ]))).toEqual([]);
+  });
+
+  it('reports a call whose nearest comment is two lines up behind other code', () => {
+    expect(lint(body([
+      '  // About the next line only.',
+      "  await device.getByText('Menu').tap();",
+      "  await device.locator({ xpath: '//Button[2]' }).tap();",
+    ]))).toEqual([4]);
+  });
+
+  it('accepts a comment above a statement whose arrow function holds the call', () => {
+    expect(lint(body([
+      '  // Poll the legacy row.',
+      '  await expect.poll(',
+      '    () =>',
+      "      device.locator({ xpath: '//Row[1]' }).isVisible(),",
+      '  ).toBe(true);',
+    ]))).toEqual([]);
+  });
+
+  it('accepts a comment above a const, class field or property whose arrow body wraps', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lintFile([
+      '// Legacy rows with no accessible name.',
+      'export const row = (n) =>',
+      '  device.locator({ xpath: `//Row[${n}]` });',
+      'export class Rows {',
+      '  // Legacy rows with no accessible name.',
+      '  row = (n) =>',
+      '    this.device.locator({ xpath: `//Row[${n}]` });',
+      '}',
+      'export const rows = {',
+      '  // Legacy rows with no accessible name.',
+      '  row: (n) =>',
+      '    device.locator({ xpath: `//Row[${n}]` }),',
+      '};',
+    ])).toEqual([]);
+  });
+
+  it('does not count a comment about a sibling argument', () => {
+    expect(lint(body([
+      '  foo(',
+      '    // About the first argument.',
+      '    a,',
+      "    device.locator({ xpath: '//Row[1]' }),",
+      '  );',
+    ]))).toEqual([5]);
+  });
+
+  it('does not count a comment that ends the line before, after other code', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lint(body([
+      "  await device.getByRole('button').tap(); // go to step 2",
+      "  await device.locator({ xpath: '//Button[3]' }).tap();",
+    ]))).toEqual([3]);
+    expect(lint(body([
+      '  const a = 1; // about a',
+      "  const row = device.locator({ xpath: '//Row[1]' });",
+    ]))).toEqual([3]);
+    expect(lintFile([
+      'export class Login {',
+      "  bare = this.device.getByText('ok'); // ok",
+      "  row = this.device.locator({ xpath: '//Row[1]' });",
+      '}',
+      'const s = { x: 1, // the x',
+      "  y: device.locator({ xpath: '//y' }) };",
+    ])).toEqual([3, 6]);
+  });
+
+  it('does not count a lint or type-check directive as the explanation', () => {
+    expect(lint(body([
+      '  // eslint-disable-next-line no-console',
+      "  await device.locator({ xpath: '//Button[3]' }).tap();",
+    ]))).toEqual([3]);
+  });
+
+  it('accepts a comment above a getter, method or function that only returns the locator', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lintFile([
+      'export class Rows {',
+      '  // Legacy row with no accessible name.',
+      "  get row() { return this.device.locator({ xpath: '//Row[1]' }); }",
+      '  // Legacy rows with no accessible name.',
+      '  rowAt(i) {',
+      '    return this.device.locator({ xpath: `//Row[${i}]` });',
+      '  }',
+      '}',
+      'export const screen = {',
+      '  // Legacy row with no accessible name.',
+      "  get row() { return device.locator({ xpath: '//Row[1]' }); },",
+      '};',
+      '// Legacy row with no accessible name.',
+      'export function row() {',
+      "  return device.locator({ xpath: '//Row[1]' });",
+      '}',
+    ])).toEqual([]);
+  });
+
+  it('does not count a comment above a function for an xpath among its other statements', () => {
+    const lintFile = (lines: string[]) => lint(`${lines.join('\n')}\n`);
+    expect(lintFile([
+      '// Logs in.',
+      'export async function logIn(device) {',
+      "  await device.getByLabel('Email').type('a@b.c');",
+      "  await device.locator({ xpath: '//Submit' }).tap();",
+      '}',
+    ])).toEqual([4]);
+  });
+
+  it('reports a call with no comment', () => {
+    expect(lint(body(["  await device.locator({ xpath: '//Button[2]' }).tap();"]))).toEqual([2]);
+  });
+});
+
 // ─── prefer-accessible-locators ───
 
 describe('prefer-accessible-locators rule', () => {

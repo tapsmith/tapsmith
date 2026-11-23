@@ -52,7 +52,7 @@ iOS alike.
 |     |     |
 | --- | --- |
 | ⏳ **Auto-waiting, everywhere** | Every action waits for its element to be visible, enabled and stable, and every assertion retries until it passes. You never write a sleep. |
-| 🎯 **Accessible locators** | `getByRole`, `getByText`, `getByLabel` and `getByPlaceholder`, with strings or `RegExp`, the same on both platforms. A bundled ESLint plugin steers you toward the robust ones. |
+| 🎯 **Accessible locators** | `getByRole`, `getByText`, `getByLabel` and `getByPlaceholder`, the same on both platforms. `getByText`, `getByLabel` and a role's `name` also take a `RegExp`. A bundled ESLint plugin steers you toward the robust ones. |
 | 🌐 **Network mocking in one line** | `device.route()` mocks, modifies or aborts HTTP/HTTPS calls on a proxy Tapsmith starts for you the moment a test mocks, with no config. [Prerequisites](docs/network.md#prerequisites) |
 | 🎞️ **Trace viewer** | Replay a failure instead of reconstructing it: every action with before and after screenshots, the view hierarchy, logs and network traffic. |
 | 🧪 **UI and watch modes** | Pick locators on a live device, run tests one at a time and step through them, or re-run on save. |

@@ -969,7 +969,7 @@ The `ElementInfo` object contains:
 | `role` | `string` | Accessibility role (e.g. "button", "textfield") |
 | `viewportRatio` | `number` | Fraction of element visible in viewport (0.0-1.0) |
 | `inAlert` | `boolean \| undefined` | iOS: the element is a native alert or inside one. Always `false` on Android |
-| `bounds` | `Bounds` | Element bounding rectangle |
+| `bounds` | `{ left: number; top: number; right: number; bottom: number } \| undefined` | Element bounding rectangle |
 
 #### `elementHandle.exists(): Promise<boolean>`
 
@@ -1233,7 +1233,7 @@ await device.getByText("Item 1", { exact: true }).longPress({ duration: 2000, ti
 
 Type text into this element.
 
-- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay). On iOS a delay above `0` also checks what arrived; with no delay, a few keys lost on the way into an empty field are typed again (see [`typingDelay`](configuration.md)). iOS empties a secure (password) field that already holds text when it is typed into after taking focus. On iOS, `type()` with a delay then fails rather than leave the field holding something else. Appending to a secure field that still has focus works. Use `clearAndType()` to replace a password.
+- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay). On iOS a delay above `0` also checks what arrived; with no delay, a few keys lost on the way into an empty field are typed again (see [`typingDelay` on iOS](configuration.md#typingdelay-on-ios)). iOS empties a secure (password) field that already holds text when it is typed into after taking focus. On iOS, `type()` with a delay then fails rather than leave the field holding something else. Appending to a secure field that still has focus works. Use `clearAndType()` to replace a password.
 - `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
@@ -2130,7 +2130,7 @@ Any other option throws.
 
 ### Playwright APIs not supported yet
 
-These Playwright names exist so that a test which uses one fails with a clear error rather than `test.step is not a function`. They are not part of the TypeScript types, so the type checker reports them as missing.
+These Playwright names exist so that a test which uses one fails with a clear error rather than `test.step is not a function`. They are not part of the TypeScript types, so the type checker reports them as missing. Playwright's `(title, details, callback)` call form is refused the same way, when the test file loads.
 
 | API | Error suggests |
 |---|---|
@@ -2141,6 +2141,7 @@ These Playwright names exist so that a test which uses one fails with a clear er
 | `test.info()` | — |
 | `test.describe.fixme()` | `test.describe.skip(title, fn)` |
 | `test.describe.parallel()` | `test.describe()` (and `--workers` for parallel files) |
+| The details object of `test()`, `test.only()`, `test.skip()` and `test.describe()` (`{ tag, annotation }`) | drop it: `test(title, fn)`. Put a tag in the title (`test('logs in @smoke', …)`) and select it with `--grep @smoke` |
 | `expect.configure()` | `{ timeout }` on the assertion, or `timeout` in the config / `test.use()` |
 | `expect.extend()` | — |
 | `expect(fn).toPass()` | `expect.poll(fn)` |
@@ -2498,13 +2499,9 @@ Configure reporters in `tapsmith.config.ts`:
 import { defineConfig } from "tapsmith";
 
 export default defineConfig({
-  // Single reporter
-  reporter: "list",
-
-  // Reporter with options
-  reporter: ["json", { outputFile: "results.json" }],
-
-  // Multiple reporters
+  // One reporter:              reporter: "list",
+  // One reporter with options: reporter: ["json", { outputFile: "results.json" }],
+  // Several reporters:
   reporter: ["list", ["json", { outputFile: "results.json" }]],
 });
 ```
@@ -2577,11 +2574,10 @@ another's blob. Playwright behaves the same way.
 Implement the `TapsmithReporter` interface:
 
 ```typescript
-import type { TapsmithReporter, FullResult, RunStartInfo } from "tapsmith";
-import type { TestResult } from "tapsmith";
+import type { TapsmithReporter, TapsmithConfig, FullResult, RunStartInfo, TestResult } from "tapsmith";
 
 class MyReporter implements TapsmithReporter {
-  onRunStart(config, fileCount, info?: RunStartInfo) {
+  onRunStart(config: TapsmithConfig, fileCount: number, info?: RunStartInfo) {
     // `tapsmith merge-reports` runs no tests, so it has no file count.
     if (!info?.merge) console.log(`Running ${fileCount} test files`);
   }
@@ -3028,7 +3024,43 @@ names in the config.
 
 ### `tapsmith init [options]`
 
-Set up a project. With no options, in a terminal, it runs the interactive wizard: it detects your environment (ADB, Xcode, simulators, emulators), offers the app builds it finds in the project (any Gradle module's `build/outputs/apk/`, any `*-iphonesimulator/` or `*-iphoneos/` products folder, searched in `android/` and `ios/` in a React Native project and from the root in a native one; with no build of the kind asked for (simulator or device) in the project, this project's builds in Xcode's default DerivedData, marked as this Mac's only; a typed path must exist), walks you through platform and app configuration, and generates a `tapsmith.config.ts`, an example test (`tests/example.tapsmith.ts`) and an `AGENTS.md` section. When the project has no `tsconfig.json` or `jsconfig.json`, it writes a minimal `tsconfig.json` that includes `tapsmith.config.ts`, `tests/` and every `*.tapsmith.ts` file, which the [ESLint plugin](locators.md#eslint-plugin)'s type-aware rules need (one it cannot write is a warning). It adds `tapsmith-results/` (traces, screenshots, JSON and JUnit results), `tapsmith-report/` (the HTML report) and `node_modules/` (which a native iOS or Android project's `.gitignore` lacks) to the project's `.gitignore` (creating one if there is none), skipping any git already ignores (a `.gitignore` it cannot update is a warning, not an error). Before writing anything it checks it can write every file (and, before its setup questions or the iOS agent build, that it can write to the project directory), and it writes the config last, replacing any existing one only once the new one is complete: a file it cannot write stops init with exit code 1 and `WRITE_FAILED`, naming the file and anything already written, in the wizard as with `--yes`. Ctrl-C or Esc at a wizard question stops it with "Setup cancelled." and exit code 130, before it has written anything (at the install offer, which comes after the files are written, the message says so and gives the install command). In the wizard, the platform question defaults to one that can run here (Android needs ADB; iOS needs Xcode and a simulator), narrowed by the project's layout as `--platform` infers it below, and hints the ones that can't (`adb not on PATH` when an Android SDK has adb but PATH doesn't), and a project with both narrows to the one that has a build; every build, package and bundle ID question can be skipped: Enter at an empty one, or **Skip for now** where it offers a build or ID it found (a known ID is offered first, not typed in for you): with two platforms, one skipped entirely is left out of the config; otherwise the config gets commented-out placeholders for what was skipped and a next step names them (the same rule leaves out an iOS simulator or physical-device target set up with nothing beside one that is); for Android it offers each running emulator first, selected (one another Tapsmith session is using is left out), then another emulator, whose AVD list marks the running ones, physical devices, or both; it offers every iOS simulator, with a booted one selected unless it has a custom name (stock names such as `iPhone 16` come first, since a renamed simulator exists only on your Mac); and its next steps start with `npx tapsmith verify`. The AVD and simulator defaults below apply to the wizard's pre-selection too. Next steps and hints use the project's package manager to run Tapsmith (`pnpm exec tapsmith`, `yarn tapsmith` with Yarn 2 or later, `bunx tapsmith`, else `npx tapsmith`). The network capture summary checks mitmproxy as `doctor` does and lists only the iOS simulator step still missing. The config's `testMatch` is `['**/*.tapsmith.ts']`, a suffix Jest and Vitest don't run by default (outside a `__tests__` folder, where Jest runs every file), so the project's own unit-test run doesn't pick up Tapsmith tests and Tapsmith doesn't pick up its unit tests; when the project already has Tapsmith tests named `*.test.ts` or `*.spec.ts` (from an older init, say), init warns that the new config won't run them. Run outside a project that has Tapsmith installed (`npx tapsmith init` before `npm i -D tapsmith`, or a global install), it offers to install it with the project's package manager, since the files it writes import `tapsmith`; declined, it prints the command as the first next step. In a directory without a `package.json` it does not offer the install, since a bare `npm i -D tapsmith` would install into the nearest parent directory that has one (a monorepo root, say): it warns, naming that directory (run the install there if it is the project's root), and the next step creates the `package.json` first (`npm init -y && npm i -D tapsmith`, or the package manager's equivalent). `doctor`, `verify` and the config-load error give the same command. An install that exits non-zero but leaves `tapsmith` importable counts as done: pnpm 11 and later exit 1 over the dependency build scripts they skipped, and for pnpm init then prints the `allowBuilds` snippet that silences that error (see [Package manager notes](getting-started.md#pnpm-err_pnpm_ignored_builds)). In an Expo project (`expo` among the dependencies, plus `app.json` or `app.config.*`) it gives the Expo build commands when it finds no build (`npx expo prebuild`, then a release `./gradlew assembleRelease` or `xcodebuild` build, with `EXPO_PUBLIC_TAPSMITH_HOOKS=1` when the app uses `@tapsmith/react-native`, which the app must pass to the hooks' `enabled` prop itself), and pre-fills the package and bundle ID prompts from the app config when it can't read them from the build (in any Android project, the package prompt otherwise from `applicationId` in `app/build.gradle(.kts)`). In a Yarn Plug'n'Play project (`.pnp.cjs` beside it, or run by `yarn` under Plug'n'Play) the wizard and `--yes` warn up front that tests can't run there, and the first next step switches the project to `nodeLinker: node-modules`; init itself still writes its files.
+Set up a project. With no options, in a terminal, it runs the interactive wizard, which detects your environment (ADB, Xcode, simulators, emulators), walks you through platform and app configuration, and writes the files below. The flags further down run it non-interactively instead.
+
+**What it writes**
+
+- **`tapsmith.config.ts`**, with `testMatch: ['**/*.tapsmith.ts']`. Jest and Vitest don't run that suffix by default (outside a `__tests__` folder, where Jest runs every file), so the project's own unit-test run doesn't pick up Tapsmith tests and Tapsmith doesn't pick up its unit tests. When the project already has Tapsmith tests named `*.test.ts` or `*.spec.ts` (from an older init, say), init warns that the new config won't run them.
+- **An example test**, `tests/example.tapsmith.ts`. When the project has a Playwright config, init notes that the example sits beside Playwright's tests, and that neither runner picks up the other's files.
+- **An `AGENTS.md` section** for coding agents. Its paths to the docs point at the Tapsmith the project resolves, so in a workspace that hoists it (`npm i -D tapsmith -w e2e`) they lead to the root's `node_modules/tapsmith/docs/`. That holds when Tapsmith is installed before init or by the wizard's install offer. If you install it yourself afterwards, correct the two `docs` paths in the section by hand: running init again stops at the existing config, and `--force` also rewrites `tapsmith.config.ts`.
+- **A minimal `tsconfig.json`**, when the project has no `tsconfig.json` or `jsconfig.json`. It includes `tapsmith.config.ts`, `tests/` and every `*.tapsmith.ts` file, which the [ESLint plugin](locators.md#eslint-plugin)'s type-aware rules need. One it cannot write is a warning.
+- **`.gitignore` entries** for `tapsmith-results/` (traces, screenshots, JSON and JUnit results), `tapsmith-report/` (the HTML report) and `node_modules/` (which a native iOS or Android project's `.gitignore` lacks), creating the file if there is none and skipping any entry git already ignores. A `.gitignore` it cannot update is a warning, not an error.
+
+Before writing anything it checks it can write every file (and, before its setup questions or the iOS agent build, that it can write to the project directory). It writes the config last, replacing any existing one only once the new one is complete. A file it cannot write stops init with exit code 1 and `WRITE_FAILED`, naming the file and anything already written, in the wizard as with `--yes`. Ctrl-C or Esc at a wizard question stops it with "Setup cancelled." and exit code 130, before it has written anything (at the install offer, which comes after the files are written, the message says so and gives the install command).
+
+**The wizard's questions**
+
+- **Builds.** It offers the app builds it finds in the project: any Gradle module's `build/outputs/apk/`, and any `*-iphonesimulator/` or `*-iphoneos/` products folder, searched in `android/` and `ios/` in a React Native project and from the root in a native one. With no build of the kind asked for (simulator or device) in the project, it offers this project's builds in Xcode's default DerivedData, marked as this Mac's only. A typed path must exist.
+- **Platform.** The question defaults to one that can run here (Android needs ADB; iOS needs Xcode and a simulator), narrowed by the project's layout as `--platform` infers it below, and hints the ones that can't (`adb not on PATH` when an Android SDK has adb but PATH doesn't). A project with both narrows to the one that has a build.
+- **Skipping.** Every build, package and bundle ID question can be skipped: Enter at an empty one, or **Skip for now** where it offers a build or ID it found (a known ID is offered first, not typed in for you). With two platforms, one skipped entirely is left out of the config. Otherwise the config gets commented-out placeholders for what was skipped, and a next step names them. The same rule leaves out an iOS simulator or physical-device target set up with nothing beside one that is.
+- **Android devices.** It offers each running emulator first, selected (one another Tapsmith session is using is left out), then another emulator, whose AVD list marks the running ones, physical devices, or both.
+- **iOS simulators.** It offers every iOS simulator, with a booted one selected unless it has a custom name. Stock names such as `iPhone 16` come first, since a renamed simulator exists only on your Mac.
+
+The AVD and simulator defaults in the flag table below apply to the wizard's pre-selection too.
+
+**Next steps and installing Tapsmith**
+
+- The next steps start with `npx tapsmith verify`. Next steps and hints use the project's package manager to run Tapsmith (`pnpm exec tapsmith`, `yarn tapsmith` with Yarn 2 or later, `bunx tapsmith`, else `npx tapsmith`).
+- They include the install of the Tapsmith plugin for the coding agents the project uses: the agent running `init` (Claude Code, Codex or Cursor, from its environment) comes first, then any whose project files (`.claude/`, `CLAUDE.md`, `.codex/`, `.cursor/`, `.cursorrules`) are in the project folder or a folder above it, up to the git root. Only when none is found does a command on PATH (`claude`, `codex`, `cursor`) count. With no agent found, `--yes` lists registering the MCP server by hand instead.
+- The network capture summary checks mitmproxy as `doctor` does and lists only the iOS simulator step still missing.
+- Run outside a project that has Tapsmith installed (`npx tapsmith init` before `npm i -D tapsmith`, or a global install), it offers to install it with the project's package manager, since the files it writes import `tapsmith`. Declined, it prints the command as the first next step.
+- In a directory without a `package.json` it does not offer the install, since a bare `npm i -D tapsmith` would install into the nearest parent directory that has one (a monorepo root, say). It warns, naming that directory (run the install there if it is the project's root), and the next step creates the `package.json` first (`npm init -y && npm i -D tapsmith`, or the package manager's equivalent). `doctor`, `verify` and the config-load error give the same command.
+- An install that exits non-zero but leaves `tapsmith` importable counts as done: pnpm 11 and later exit 1 over the dependency build scripts they skipped, and for pnpm init then prints the `allowBuilds` snippet that silences that error (see [Package manager notes](getting-started.md#pnpm-err_pnpm_ignored_builds)).
+
+**Expo and Yarn Plug'n'Play projects**
+
+- **Expo** (`expo` among the dependencies, plus `app.json` or `app.config.*`): with no build found, init gives the Expo build commands: `npx expo prebuild`, then a release `./gradlew assembleRelease` or `xcodebuild` build, with `EXPO_PUBLIC_TAPSMITH_HOOKS=1` when the app uses `@tapsmith/react-native` (which the app must pass to the hooks' `enabled` prop itself). It pre-fills the package and bundle ID prompts from the app config when it can't read them from the build. In any Android project, the package prompt is otherwise pre-filled from `applicationId` in `app/build.gradle(.kts)`.
+- **Yarn Plug'n'Play** (`.pnp.cjs` beside it, or run by `yarn` under Plug'n'Play): the wizard and `--yes` warn up front that tests can't run there, and the first next step switches the project to `nodeLinker: node-modules`. Init itself still writes its files.
+
+**Non-interactive setup**
 
 Pass `--yes` or any setup flag below (every flag but `--json`) to run non-interactively instead, for scripts and AI agents: anything not given is auto-detected, and a choice that cannot be made (two APKs, say) exits 1 naming the candidates and the flag that picks one. `--json` only changes the output, so an agent passes `--yes --json`. Without a terminal and without `--yes` or a setup flag, `init` exits 1 rather than waiting for input. iOS physical devices need the interactive wizard, for its code-signing preflight.
 
