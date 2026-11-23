@@ -82,6 +82,12 @@ export interface ResetCapabilities {
    * daemon cannot pass a keep request on (one older than the SDK).
    */
   appStateKeep?: { noWrites?: boolean; writingKeeps?: number; daemonCannotKeep?: boolean };
+  /**
+   * The app showed an Expo development-build screen (dev launcher or dev
+   * menu) after a launch: an `expo-dev-client` build, which every later
+   * launch connects to Metro. Only needed when no installed build says so.
+   */
+  devClientSeen?: boolean;
 }
 
 /**
@@ -94,6 +100,7 @@ export function forgetBuildCapabilities(caps: ResetCapabilities): void {
   delete caps.hooksDetected;
   delete caps.hooksUrlPrefix;
   delete caps.hooksRemount;
+  delete caps.devClientSeen;
   if (caps.appStateKeep) {
     delete caps.appStateKeep.noWrites;
     delete caps.appStateKeep.writingKeeps;

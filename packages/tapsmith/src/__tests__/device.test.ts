@@ -640,6 +640,41 @@ describe('Device.launchApp()', () => {
   });
 });
 
+describe('Device: a test\'s own launches bring a dev client to the app', () => {
+  it('runs the session\'s after-launch hook after launchApp() and restartApp()', async () => {
+    const device = new Device(makeMockClient(), { package: 'com.example.app' } as never);
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    await device.launchApp('com.example.app', { clearData: true });
+    await device.restartApp();
+    expect(hook.mock.calls).toEqual([['com.example.app'], ['com.example.app']]);
+  });
+
+  it('skips it when the caller asked not to wait for the app', async () => {
+    const device = new Device(makeMockClient());
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    await device.launchApp('com.example.app', { waitForIdle: false });
+    await device.restartApp('com.example.app', { waitForIdle: false });
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('leaves the session layer\'s own launches to its readiness checks', async () => {
+    const device = new Device(makeMockClient());
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    device._sessionLaunches = 1;
+    await device.launchApp('com.example.app');
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('fails the launch with the hook\'s error (Metro not running)', async () => {
+    const device = new Device(makeMockClient());
+    device._afterAppLaunch = async () => { throw new Error('no Metro server answered'); };
+    await expect(device.launchApp('com.example.app')).rejects.toThrow('no Metro server answered');
+  });
+});
+
 // ─── openDeepLink() ───
 
 describe('Device.openDeepLink()', () => {

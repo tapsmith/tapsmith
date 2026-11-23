@@ -44,3 +44,13 @@ export function readIosAppInfo(appPath: string): IosAppInfo {
     platforms: Array.isArray(platforms) && platforms.every((p) => typeof p === 'string') ? platforms : undefined,
   };
 }
+
+/** Every URL scheme the `.app` at `appPath` registers (`CFBundleURLTypes`), empty when none can be read. */
+export function readIosUrlSchemes(appPath: string): string[] {
+  const types = extractArray(path.join(appPath, 'Info.plist'), 'CFBundleURLTypes');
+  if (!Array.isArray(types)) return [];
+  return types.flatMap((t: unknown) => {
+    const schemes = (t as { CFBundleURLSchemes?: unknown } | null)?.CFBundleURLSchemes;
+    return Array.isArray(schemes) ? schemes.filter((s): s is string => typeof s === 'string') : [];
+  });
+}

@@ -27,6 +27,7 @@ import {
   startAgentWithRetry,
 } from './worker-protocol.js';
 import {
+  connectDevClient,
   ensureSessionReady,
   launchConfiguredApp,
   startAndroidLaunchEarly,
@@ -876,6 +877,10 @@ export async function openDeviceSession(
     ownsClient: !opts.client,
     adopted: !!opts.adopt,
   };
+
+  // A test's own launches of the app land where the session's do: on the app,
+  // not on an Expo development build's dev launcher or dev menu.
+  device._afterAppLaunch = (pkg) => (pkg === config.package ? connectDevClient(session.context) : Promise.resolve());
 
   // Whether this open holds the session's claim on the device. A failed open
   // gives back this process's hold, so a long-lived session (UI, watch, an MCP
