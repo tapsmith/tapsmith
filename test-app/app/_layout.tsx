@@ -59,6 +59,7 @@ export default function RootLayout() {
             <Stack.Screen name="profile" options={{ title: "Profile" }} />
             <Stack.Screen name="list" options={{ title: "List" }} />
             <Stack.Screen name="toggles" options={{ title: "Toggles" }} />
+            <Stack.Screen name="checklist" options={{ title: "Checklist" }} />
             <Stack.Screen name="spinner" options={{ title: "Spinner" }} />
             <Stack.Screen name="gestures" options={{ title: "Gestures", gestureEnabled: false }} />
             <Stack.Screen name="drag" options={{ title: "Drag and Drop", gestureEnabled: false }} />

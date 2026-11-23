@@ -378,6 +378,24 @@ export function iosDescribedRole(value: string | undefined): string {
 }
 
 /**
+ * The React Native roles whose described generic view is a choice: a
+ * getByLabel input, as Android's CheckBox and RadioButton classes are, whose
+ * label getByText gives way on — the agent's `LabelMatch.describedChoiceRoles`,
+ * which `label-conformance.test.ts` pins.
+ */
+export const IOS_DESCRIBED_CHOICE_ROLES: ReadonlySet<string> = new Set(['checkbox', 'radiobutton']);
+
+/**
+ * Whether an iOS element is a checkbox or radio button, the way the agent's
+ * `LabelMatch.isChoice` decides it: its native type, or a generic view React
+ * Native describes as one in its value ("checkbox, unchecked").
+ */
+export function iosIsChoice(type: string, value: string | undefined): boolean {
+  if (type === 'XCUIElementTypeCheckBox' || type === 'XCUIElementTypeRadioButton') return true;
+  return type === 'XCUIElementTypeOther' && IOS_DESCRIBED_CHOICE_ROLES.has(iosDescribedRole(value));
+}
+
+/**
  * What finds an iOS native widget with one of React Native's generic-view
  * roles, for the unnamed-role miss hint (PILOT-702). XCUITest shows an open
  * SwiftUI or UIKit menu's items as buttons, never as menu items.

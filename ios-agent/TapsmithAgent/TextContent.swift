@@ -37,6 +37,14 @@ import XCTest
 ///   contains another match is dropped, as Playwright's text engine drops an
 ///   element whose child matches. A Toggle row, a NavigationLink, an alert
 ///   give way to the static text they hold.
+/// - A checkbox or radio button (`LabelMatch.isChoice`) matched by its label
+///   gives way to another match beside it whose text its label holds
+///   (`withoutChoices`). React Native hides a checkbox's own texts inside it,
+///   so its label is the only copy of a text it shows and stays text; but a
+///   text on screen as another element is that element's, and the
+///   checkbox's label only names it ("Toggle Buy oat milk" beside the row's
+///   "Buy oat milk"), as Android's getByText never reads a CheckBox's
+///   content description.
 ///
 /// One rule shared by the snapshot walk and the trace viewer's offline
 /// matcher (`trace-viewer/components/text-content.ts`), pinned by the SDK's
@@ -192,6 +200,46 @@ enum TextContent {
         case let value as String: return UInt(value)
         default: return nil
         }
+    }
+
+    /// getByText's matches without each checkbox or radio button beside
+    /// which another match shows a text its label holds: that text is the
+    /// other element's, and the label only names the choice after it
+    /// ("Toggle Buy oat milk" beside "Buy oat milk"). Beside is on the same
+    /// line (`onSameLine`), as a row puts a checkbox and its text. A choice
+    /// with no such neighbour keeps its match: its label is the only copy of
+    /// a text inside it, as for a radio "Medium" whose summary "Medium" sits
+    /// elsewhere on the screen. `choiceLabel` is a choice's label, nil for
+    /// anything else; `shownTexts` what a match shows (`shownTexts(label:…)`).
+    static func withoutChoices<Match>(
+        _ matches: [Match], choiceLabel: (Match) -> String?, shownTexts: (Match) -> [String],
+        frame: (Match) -> CGRect
+    ) -> [Match] {
+        let others = matches.filter { choiceLabel($0) == nil }
+            .map { (frame: frame($0), texts: shownTexts($0).filter { !TextMatch.normalize($0).isEmpty }) }
+            .filter { !$0.texts.isEmpty }
+        guard !others.isEmpty else { return matches }
+        return matches.filter { match in
+            guard let label = choiceLabel(match) else { return true }
+            let own = frame(match)
+            return !others.contains { other in
+                onSameLine(own, other.frame) && other.texts.contains { TextMatch.contains(label, $0) }
+            }
+        }
+    }
+
+    /// Whether two frames share a line: their vertical extents overlap. A
+    /// frame with no height shares none.
+    static func onSameLine(_ a: CGRect, _ b: CGRect) -> Bool {
+        a.height > 0 && b.height > 0 && a.minY < b.maxY && b.minY < a.maxY
+    }
+
+    /// The texts a getByText match shows, as `withoutChoices` compares them:
+    /// its label and title, and a static text's value.
+    static func shownTexts(
+        elementType: XCUIElement.ElementType, label: String, title: String, value: String
+    ) -> [String] {
+        elementType == .staticText ? [label, title, value] : [label, title]
     }
 
     /// getByText(string): a case-insensitive substring of the label, title or value.

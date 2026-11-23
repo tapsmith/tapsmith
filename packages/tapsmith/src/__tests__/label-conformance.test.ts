@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { ANDROID_LABEL_FIELD_ROLES, IOS_LABEL_FIELD_TYPES } from '../trace-viewer/components/hierarchy-utils.js';
+import { IOS_DESCRIBED_CHOICE_ROLES } from '../roles.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
 import { escapeJsString } from '../js-string-escape.js';
 import { translateRegex } from '../text-regex.js';
@@ -34,6 +35,8 @@ interface Case {
   label?: string
   title?: string
   contentDesc?: string
+  /** iOS: the accessibility value, where React Native describes a generic view's role ("checkbox, unchecked"). */
+  value?: string
   /** Android: the text of the node's children, each a TextView. */
   childTexts?: string[]
   /** Android: the name a nameless control takes from its row (`tapsmith-name`, the agent's RowName.name). */
@@ -69,6 +72,25 @@ const CASES: Case[] = [
   { why: 'a button is not an input', platform: 'ios', type: 'XCUIElementTypeButton', label: 'Email', query: 'Email', matches: false },
   { why: 'static text is not an input', platform: 'ios', type: 'XCUIElementTypeStaticText', label: 'Email', query: 'Email', matches: false },
   { why: 'a generic view is not an input', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Email', query: 'Email', matches: false },
+  // iOS: React Native's checkbox and radio are generic views it describes in their value ("checkbox, unchecked"),
+  // inputs as Android's CheckBox and RadioButton classes are.
+  { why: 'React Native checkbox', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Toggle Buy oat milk', value: 'checkbox, unchecked', query: 'Toggle Buy oat milk', matches: true },
+  { why: 'React Native checked checkbox', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Toggle Buy oat milk', value: 'checkbox, checked', query: 'Toggle Buy oat milk', matches: true },
+  { why: 'React Native radio button', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Small', value: 'radio button, unchecked', query: 'Small', matches: true },
+  { why: 'RegExp on a React Native checkbox', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Toggle Buy oat milk', value: 'checkbox, unchecked', query: { source: 'oat milk$', flags: '' }, matches: true },
+  { why: 'a React Native checkbox is compared whole', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Toggle Buy oat milk', value: 'checkbox, unchecked', query: 'Buy oat milk', matches: false },
+  { why: 'a React Native combo box is not an input', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Country', value: 'combo box', query: 'Country', matches: false },
+  { why: 'a React Native alert is not an input', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Saved', value: 'alert', query: 'Saved', matches: false },
+  { why: 'only the value\'s lead part describes the role', platform: 'ios', type: 'XCUIElementTypeOther', label: 'Plan', value: 'Basic, checkbox', query: 'Plan', matches: false },
+  { why: 'a button described as a checkbox is still a button', platform: 'ios', type: 'XCUIElementTypeButton', label: 'Remember me', value: 'checkbox, unchecked', query: 'Remember me', matches: false },
+  // iOS: React Native appends an empty multi-line input's placeholder to its label ("Notes Notes" while empty).
+  { why: 'an empty React Native multi-line input whose placeholder repeats its label', platform: 'ios', type: 'XCUIElementTypeTextView', label: 'Multiline input Multiline input', query: 'Multiline input', matches: true },
+  { why: 'one word, repeated', platform: 'ios', type: 'XCUIElementTypeTextView', label: 'Notes Notes', query: 'Notes', matches: true },
+  { why: 'the repeated label whole still names it', platform: 'ios', type: 'XCUIElementTypeTextView', label: 'Notes Notes', query: 'Notes Notes', matches: true },
+  { why: 'RegExp tests the label without its repeat', platform: 'ios', type: 'XCUIElementTypeTextView', label: 'Notes Notes', query: { source: '^notes$', flags: 'i' }, matches: true },
+  { why: 'another placeholder is not stripped', platform: 'ios', type: 'XCUIElementTypeTextView', label: 'Notes Add a note', query: 'Notes', matches: false },
+  { why: 'a single-line field is never repeated', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Notes Notes', query: 'Notes', matches: false },
+  { why: 'an odd repeat is no repeat', platform: 'ios', type: 'XCUIElementTypeTextView', label: 'Notes Notes Notes', query: 'Notes', matches: false },
   // iOS: the name is the label or the title, compared whole and whitespace-normalized.
   { why: 'the title names the input too', platform: 'ios', type: 'XCUIElementTypeTextField', label: '', title: 'Email', query: 'Email', matches: true },
   { why: 'NBSP in the label is a space', platform: 'ios', type: 'XCUIElementTypeTextField', label: `Full${NBSP}name`, query: 'Full name', matches: true },
@@ -128,7 +150,7 @@ const CASES: Case[] = [
 /** The case's element as a hierarchy node, the way each agent's dump writes it. */
 function nodeFor(c: Case): HierarchyNode {
   const attrs: Record<string, string> = c.platform === 'ios'
-    ? { type: c.type, label: c.label ?? '', identifier: '', value: '' }
+    ? { type: c.type, label: c.label ?? '', identifier: '', value: c.value ?? '' }
     : { class: c.type, text: '', 'resource-id': '' };
   if (c.title !== undefined) attrs.title = c.title;
   if (c.contentDesc !== undefined) attrs['content-desc'] = c.contentDesc;
@@ -202,5 +224,12 @@ describe('getByLabel fields match the agents\' sources (PILOT-666)', () => {
       .map((m) => `XCUIElementType${m[1][0].toUpperCase()}${m[1].slice(1)}`);
     expect(types.length).toBeGreaterThan(0);
     expect([...types].sort()).toEqual([...IOS_LABEL_FIELD_TYPES].sort());
+  });
+
+  it('iOS: LabelMatch.describedChoiceRoles', () => {
+    const block = between(read('ios-agent/TapsmithAgent/LabelMatch.swift'), 'static let describedChoiceRoles', '\n');
+    const roles = [...block.matchAll(/"(\w+)"/g)].map((m) => m[1]);
+    expect(roles.length).toBeGreaterThan(0);
+    expect([...roles].sort()).toEqual([...IOS_DESCRIBED_CHOICE_ROLES].sort());
   });
 });

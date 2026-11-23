@@ -176,16 +176,39 @@ class ElementFinder {
                 .matching(NSCompoundPredicate(andPredicateWithSubpredicates: [notNameOnly, predicate]))
         }
 
+        // A checkbox's label gives way to a text on screen as anything else
+        // (TextContent.withoutChoices), as the snapshot walk decides it.
+        func withoutChoices(_ elements: [XCUIElement]) -> [XCUIElement] {
+            TextContent.withoutChoices(
+                elements,
+                choiceLabel: { elem in
+                    let type = elem.elementType
+                    guard type == .other || type == .checkBox || type == .radioButton,
+                          LabelMatch.isChoice(elementType: type, value: type == .other ? elem.value as? String : nil)
+                    else { return nil }
+                    return elem.label
+                },
+                shownTexts: { elem in
+                    let type = elem.elementType
+                    return TextContent.shownTexts(
+                        elementType: type, label: elem.label, title: elem.title,
+                        value: type == .staticText ? elem.value as? String ?? "" : ""
+                    )
+                },
+                frame: { $0.frame }
+            )
+        }
+
         // Text selector — search across all element types
         if let text = selector.text {
             let predicate = NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern(text))
-            return allElements(from: textQuery(predicate))
+            return withoutChoices(allElements(from: textQuery(predicate)))
         }
 
         // TextContains selector
         if let textContains = selector.textContains {
             let predicate = NSPredicate(format: "label MATCHES %@", TextMatch.containsPattern(textContains))
-            return allElements(from: textQuery(predicate))
+            return withoutChoices(allElements(from: textQuery(predicate)))
         }
 
         // getByText(RegExp) (PILOT-520): the raw label, title or value, as the
@@ -196,7 +219,7 @@ class ElementFinder {
                 format: "label MATCHES %@ OR title MATCHES %@ OR value MATCHES %@",
                 pattern, pattern, pattern
             )
-            return allElements(from: textQuery(predicate))
+            return withoutChoices(allElements(from: textQuery(predicate)))
         }
 
         // ContentDesc selector (maps to accessibilityLabel on iOS)
@@ -237,20 +260,42 @@ class ElementFinder {
             return []
         }
 
-        // Label selector: input elements whose label or title matches
-        // (LabelMatch). Single query on .any avoids multiple expensive IPC
-        // calls per element type.
+        // Label selector: inputs and React Native checkboxes and radios
+        // whose label or title matches (LabelMatch), or a text view's
+        // repeated label (LabelMatch.unrepeated). Single query on .any
+        // avoids multiple expensive IPC calls per element type; LabelMatch
+        // decides each candidate, reading a generic view's value.
+        func isInput(_ elem: XCUIElement) -> Bool {
+            let type = elem.elementType
+            return LabelMatch.inputTypes.contains(type)
+                || (type == .other && LabelMatch.isChoice(elementType: type, value: elem.value as? String))
+        }
         if let label = selector.label {
             let pattern = TextMatch.exactPattern(label)
-            let predicate = NSPredicate(format: "label MATCHES %@ OR title MATCHES %@", pattern, pattern)
+            let repeated = TextMatch.exactPattern(label + " " + label)
+            let predicate = NSPredicate(
+                format: "label MATCHES %@ OR title MATCHES %@ OR (elementType == %lu AND label MATCHES %@)",
+                pattern, pattern, XCUIElement.ElementType.textView.rawValue, repeated
+            )
             let query = root.descendants(matching: .any).matching(predicate)
-            return allElements(from: query).filter { LabelMatch.inputTypes.contains($0.elementType) }
+            return allElements(from: query).filter(isInput)
         }
         if let labelRegex = selector.labelRegex {
             let pattern = labelRegex.fullMatchPattern
-            let predicate = NSPredicate(format: "label MATCHES %@ OR title MATCHES %@", pattern, pattern)
+            let predicate = NSPredicate(
+                format: "label MATCHES %@ OR title MATCHES %@ OR elementType == %lu",
+                pattern, pattern, XCUIElement.ElementType.textView.rawValue
+            )
             let query = root.descendants(matching: .any).matching(predicate)
-            return allElements(from: query).filter { LabelMatch.inputTypes.contains($0.elementType) }
+            return allElements(from: query).filter { elem in
+                guard isInput(elem) else { return false }
+                if elem.elementType != .textView { return true }
+                // A text view the predicate took for its type: its label,
+                // title or repeated label must match (LabelMatch).
+                return LabelMatch.matches(
+                    elementType: .textView, label: elem.label, title: elem.title, regex: labelRegex
+                )
+            }
         }
 
         throw AgentError.invalidSelector("No valid selector criteria provided")
