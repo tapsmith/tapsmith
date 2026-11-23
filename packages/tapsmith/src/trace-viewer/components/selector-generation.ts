@@ -304,19 +304,21 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   const named = (value: string): string => (value.trim() ? value : '');
   const rowLabel = named(node.attributes.get('tapsmith-label') ?? '');
   const tabName = node.attributes.has('tapsmith-label') ? undefined : node.attributes.get('tapsmith-name');
+  // An empty React Native multi-line input repeats its label as its
+  // placeholder ("Notes Notes"): it is named by the label alone
+  // (iosUnrepeatedLabel), which getByRole's substring match and getByLabel
+  // both still find once it holds text.
+  const unrepeated = ios && (node.attributes.get('type') ?? node.tagName) === 'XCUIElementTypeTextView' ? iosUnrepeatedLabel(label) : '';
   const fullName = tabName !== undefined
     ? named(tabName)
     : ios
-      ? (rowLabel || named(label) || placeholderName(node))
+      ? (rowLabel || unrepeated || named(label) || placeholderName(node))
       : (named(contentDesc) || placeholderName(node) || text || rowLabel);
   const accessibleName = roleNameFor(fullName) || fullName;
   // getByLabel matches Android's content-desc (or a labelling view, which
   // the dump does not carry, or a nameless control's row title) — never the
   // field's own text, which is its typed value or hint — and iOS's label or
-  // title, or a settings row's title — for a text view whose label repeats
-  // its placeholder, the label alone (iosUnrepeatedLabel), which still
-  // finds it once it holds text.
-  const unrepeated = ios && (node.attributes.get('type') ?? node.tagName) === 'XCUIElementTypeTextView' ? iosUnrepeatedLabel(label) : '';
+  // title, or a settings row's title, or a repeated label's single copy.
   const labelName = ios ? (rowLabel || unrepeated || label || (node.attributes.get('title') ?? '')) : (contentDesc || rowLabel);
 
   // Demote role-based selectors when the role is generic OR when it came from

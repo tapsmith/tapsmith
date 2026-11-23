@@ -241,6 +241,8 @@ describe('generateNativeSelectors priority order', () => {
       type: 'XCUIElementTypeTextView', label: 'Notes Notes', value: '', 'tapsmith-role': 'textfield',
     });
     expect(generateSelectors(notes).filter((s) => s.label === 'Label').map((s) => s.code)).toEqual(['device.getByLabel("Notes")']);
+    // The top suggestion names it by the label alone too, so it still finds the field once it holds text.
+    expect(generateSelectors(notes)[0].code).toBe('device.getByRole("textfield", { name: "Notes" })');
   });
 
   it('does not suggest getByLabel when no accessible name', () => {
