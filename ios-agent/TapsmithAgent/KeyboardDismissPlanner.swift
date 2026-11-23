@@ -473,16 +473,19 @@ struct KeyboardDismissPlanner {
     /// touch it would otherwise spend the target's tap on. The innermost such
     /// scroll view is tried first, then the ones around it.
     ///
-    /// Not a scroll view the focused field (at `focusedFrame`) is drawn after
-    /// and outside of: that field sits in a sheet, modal or bar over or
-    /// beside the list, and a touch on the list behind a sheet lands on its
-    /// backdrop. What holds the scroll view never blocks (React Native wraps
-    /// a list with an accessibility label in a labeled view of its size);
-    /// the target itself always does, and so does anything else that is not
-    /// a plain container. A spot clear of every other row's container comes
-    /// first — a row can take a touch without showing as an element (its
-    /// container is then plain) — and only a list with no such spot (packed
-    /// with rows) gets one in a row's plain margin.
+    /// Not a scroll view that the focused field (at `focusedFrame`) is drawn
+    /// over: the field is drawn after it, outside it, in containers of its
+    /// own that overlap it — a sheet or modal, where a touch on the list
+    /// behind lands on the backdrop. A bar beside the list (a chat composer
+    /// below it) is no cover.
+    ///
+    /// What holds the scroll view never blocks (React Native wraps a list
+    /// with an accessibility label in a labeled view of its size). The
+    /// target's own row never takes the spot, and anything that is not a
+    /// plain container blocks. A spot clear of every row comes first; only a
+    /// list with none (packed with rows) gets one in a row's plain margin,
+    /// and then only a row that shows a control of its own — a row holding
+    /// only text or images may itself be the control.
     ///
     /// nil when the target or the focused field is not found in the tree,
     /// the target is in no such scroll view, or none has a spot on screen.
@@ -490,23 +493,29 @@ struct KeyboardDismissPlanner {
         let area = touchableArea
         guard !area.isNull, let t = analyzer.locate(target), let field = fieldIndex(focusedFrame) else { return nil }
         let up = analyzer.ancestors(of: t)
-        let targetSubtree = t..<nodes[t].subtreeEnd
-        // The target's containers that hold other content too: the list's
-        // own (its content view), not the target's row.
-        let listContainers = Set(up.filter { a in
-            ((a + 1)..<nodes[a].subtreeEnd).contains { !targetSubtree.contains($0) && !up.contains($0) }
-        })
+        let fieldUp = analyzer.ancestors(of: field)
         for scroller in up where OcclusionAnalyzer.keyboardEatingScrollerTypes.contains(nodes[scroller].elementType) {
             let inside = (scroller + 1)..<nodes[scroller].subtreeEnd
-            if field > scroller, !inside.contains(field) { continue }
             let rect = clippedToScrollers(nodes[scroller].frame.intersection(area), around: scroller)
             if rect.isNull { continue }
             let holders = Set([scroller] + analyzer.ancestors(of: scroller))
-            let keepOut = (statusBar.map { [$0] } ?? []) + [nodes[t].frame]
+            if field > scroller, !inside.contains(field) {
+                // The field's own containers: below what it shares with the list.
+                let own = [field] + fieldUp.prefix { !holders.contains($0) }
+                if own.contains(where: { nodes[$0].frame.intersects(rect) }) { continue }
+            }
+            // The list's own containers: its content view, and the target's
+            // containers that hold more than one row. The rest of them are
+            // the target's row.
+            let rowOfTarget = up.filter { inside.contains($0) && nodes[$0].parent != scroller && !isListContainer($0) }
+            let keepOut = (statusBar.map { [$0] } ?? []) + [nodes[t].frame] + rowOfTarget.map { nodes[$0].frame }
             let blocks = { (i: Int, strict: Bool) -> Bool in
                 if holders.contains(i) || i == t { return false }
-                if strict, inside.contains(i), !listContainers.contains(i) { return true }
-                return !isPlain(i)
+                if inside.contains(i), !up.contains(i) {
+                    if strict { return true }
+                    if self.isPlain(i), self.holdsContentButNoControl(i) { return true }
+                }
+                return !self.isPlain(i)
             }
             if let point = clearestPoint(in: rect, avoiding: keepOut, blockers: { blocks($0, true) })
                 ?? clearestPoint(in: rect, avoiding: keepOut, blockers: { blocks($0, false) }) {
@@ -514,6 +523,28 @@ struct KeyboardDismissPlanner {
             }
         }
         return nil
+    }
+
+    /// Whether node `i` holds more than one row: two or more children that
+    /// are containers with something not plain in them.
+    private func isListContainer(_ i: Int) -> Bool {
+        var rows = 0
+        var c = i + 1
+        while c < nodes[i].subtreeEnd {
+            if nodes[c].subtreeEnd > c + 1, ((c + 1)..<nodes[c].subtreeEnd).contains(where: { !isPlain($0) }) {
+                rows += 1
+                if rows >= 2 { return true }
+            }
+            c = nodes[c].subtreeEnd
+        }
+        return false
+    }
+
+    /// Whether node `i` holds something not plain but no control: a row
+    /// that may take a touch itself without showing as an element.
+    private func holdsContentButNoControl(_ i: Int) -> Bool {
+        let content = ((i + 1)..<nodes[i].subtreeEnd).filter { !isPlain($0) }
+        return !content.isEmpty && !content.contains { OcclusionAnalyzer.interactiveTypes.contains(nodes[$0].elementType) }
     }
 
     // MARK: - 4. Return key

@@ -1279,12 +1279,30 @@ do {
     // The focused field unknown: no spot (which list is the field's can't be told).
     check("focused field unknown: none",
           planner(listScreen(rows: 1)).blankPointInScroller(of: rowTarget(0), focusedFrame: nil), nil)
-    // A composer below a chat list (drawn after it): the list is not tapped,
-    // as for a sheet — the step falls back to the tap beside the field.
-    let composer = R(16, 470, 370, 44)
-    check("field drawn after the list: none",
-          planner(listScreen(rows: 1, overlay: [(4, .textField, "Message", "", composer)]))
-              .blankPointInScroller(of: rowTarget(0), focusedFrame: composer), nil)
+    // A field drawn after the list and laid over it (a bar over its
+    // bottom): the list behind it is not tapped.
+    let overBar = R(16, 470, 370, 44)
+    check("field laid over the list: none",
+          planner(listScreen(rows: 1, overlay: [(4, .textField, "Message", "", overBar)]))
+              .blankPointInScroller(of: rowTarget(0), focusedFrame: overBar), nil)
+    // A chat composer below the list (drawn after it, beside it): the list
+    // is still tapped.
+    let composer = R(16, 477, 370, 44)
+    let chat: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 350)),
+        (5, .other, "", "", R(0, 116, 402, 132)),
+        (6, .other, "", "", R(16, 124, 300, 58)),
+        (7, .button, "Reply", "", R(16, 124, 300, 58)),
+        (6, .other, "", "", R(16, 190, 300, 58)),
+        (7, .button, "Reply", "", R(16, 190, 300, 58)),
+        (4, .other, "", "", R(0, 470, 402, 59)),
+        (5, .textField, "Message", "", composer),
+    ] + keyboardWindows()
+    let cp = planner(chat).blankPointInScroller(
+        of: .init(frame: R(16, 124, 300, 58), elementType: .button, label: "Reply", identifier: ""), focusedFrame: composer)
+    checkTrue("composer below the list: a spot in the list",
+              cp.map { R(0, 116, 402, 350).contains($0) && notInside($0, [R(16, 124, 300, 58), R(16, 190, 300, 58)]) } ?? false,
+              "\(String(describing: cp))")
     // An empty full-screen view, then an overlay holding a floating button,
     // after the screen: neither covers the list but the button.
     let fab = R(330, 440, 56, 56)
@@ -1317,10 +1335,31 @@ do {
     let p = planner(hiddenRows(2)).blankPointInScroller(of: rowText(1), focusedFrame: listSearchField)
     checkTrue("hidden rows with room below: the spot is below them, in no row",
               p.map { listViewport.contains($0) && $0.y > 243 + 2 * 66 } ?? false, "\(String(describing: p))")
-    // Packed with such rows, only a row's plain margin is left (a known
-    // limit: such a row can take the touch).
-    checkTrue("hidden rows packed: a spot in a row's margin",
-              planner(hiddenRows(10)).blankPointInScroller(of: rowText(1), focusedFrame: listSearchField) != nil)
+    // Packed with such rows, no spot: a row holding only text may itself
+    // take the touch, so its margin is not blank.
+    check("hidden rows packed: none",
+          planner(hiddenRows(10)).blankPointInScroller(of: rowText(1), focusedFrame: listSearchField), nil)
+}
+
+do {
+    // The target's own row holding more than the target (a title and a
+    // subtitle): never its spot.
+    let rows: [Row] = appHead + [
+        (4, .other, "", "", R(16, 132, 370, 45)),
+        (5, .searchField, "Search", "search-input", listSearchField),
+        (4, .scrollView, "", "", R(0, 243, 402, 631)),
+        (5, .other, "", "", R(0, 243, 402, 132)),
+        (6, .other, "", "", R(0, 243, 402, 66)),
+        (7, .staticText, "Row 1", "", R(16, 250, 80, 20)),
+        (7, .staticText, "Subtitle 1", "", R(16, 280, 120, 20)),
+        (6, .other, "", "", R(0, 309, 402, 66)),
+        (7, .staticText, "Row 2", "", R(16, 316, 80, 20)),
+        (7, .staticText, "Subtitle 2", "", R(16, 346, 120, 20)),
+    ] + keyboardWindows()
+    let p = planner(rows).blankPointInScroller(
+        of: .init(frame: R(16, 316, 80, 20), elementType: .staticText, label: "Row 2", identifier: ""), focusedFrame: listSearchField)
+    checkTrue("target's row with a subtitle: the spot is in no row",
+              p.map { $0.y > 375 } ?? false, "\(String(describing: p))")
 }
 
 do {
