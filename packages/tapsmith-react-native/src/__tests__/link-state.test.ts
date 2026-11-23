@@ -18,6 +18,7 @@ describe('per-process link state', () => {
     await handleIncomingUrl(RESET, { initial: false, isDisposed, run });
 
     expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ nonce: expect.any(String) }), RESET);
     expect(currentResetEpoch()).toBe(before + 1);
   });
 
