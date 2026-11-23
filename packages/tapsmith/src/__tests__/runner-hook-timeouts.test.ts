@@ -347,3 +347,101 @@ describe('runTestFile — hook timeouts (PILOT-583)', () => {
     expect(result.error?.name).toBe('AbortError');
   });
 });
+
+// A hook that throws fails its test(s) under the test's name; the message
+// names the hook, since an SDK error's stack may carry no frame of the hook.
+describe('runTestFile — hook failures name the hook', () => {
+  it('labels a throwing beforeEach with the hook and its location, and runs the next test', async () => {
+    const filePath = writeFile('each-throws.test.mjs', `
+      let calls = 0;
+      beforeEach(async () => { if (calls++ === 0) throw new Error('boom'); });
+      test('first', async () => {});
+      test('second', async () => {});
+    `);
+
+    const results = collectResults(await runTestFile(filePath, makeOpts()));
+
+    expect(results.map((r) => [r.fullName, r.status])).toEqual([['first', 'failed'], ['second', 'passed']]);
+    expect(results[0].error!.message).toBe('"beforeEach" hook at each-throws.test.mjs:9 failed: boom');
+    expect(results[0].error!.stack).toContain(`${filePath}:9`);
+  });
+
+  it('labels every test a throwing beforeAll fails', async () => {
+    const filePath = writeFile('all-throws.test.mjs', `
+      describe('scope', () => {
+        beforeAll(async () => { throw new Error('no login'); });
+        test('one', async () => {});
+        test('two', async () => {});
+      });
+    `);
+
+    const results = collectResults(await runTestFile(filePath, makeOpts()));
+
+    expect(results.map((r) => r.error?.message)).toEqual([
+      '"beforeAll" hook at all-throws.test.mjs:9 failed: no login',
+      '"beforeAll" hook at all-throws.test.mjs:9 failed: no login',
+    ]);
+  });
+
+  it('labels one error thrown by two hooks with each hook\'s own location, leaving the first test\'s label alone', async () => {
+    const filePath = writeFile('shared-error.test.mjs', `
+      const shared = new Error('not ready');
+      describe('a', () => {
+        beforeAll(async () => { throw shared; });
+        test('one', async () => {});
+      });
+      describe('b', () => {
+        beforeEach(async () => { throw shared; });
+        test('two', async () => {});
+      });
+    `);
+
+    const results = collectResults(await runTestFile(filePath, makeOpts()));
+
+    expect(results.map((r) => r.error?.message)).toEqual([
+      '"beforeAll" hook at shared-error.test.mjs:10 failed: not ready',
+      '"beforeEach" hook at shared-error.test.mjs:14 failed: not ready',
+    ]);
+  });
+
+  it('labels an error whose message is read-only (a DOMException) or that is frozen, without losing it', async () => {
+    const filePath = writeFile('readonly.test.mjs', `
+      describe('dom', () => {
+        beforeEach(() => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); });
+        test('a', async () => {});
+      });
+      describe('frozen', () => {
+        beforeEach(() => { throw Object.freeze(new Error('frozen one')); });
+        test('b', async () => {});
+      });
+    `);
+
+    const results = collectResults(await runTestFile(filePath, makeOpts()));
+    const byName = Object.fromEntries(results.map((r) => [r.fullName, r.error]));
+
+    expect(byName['dom > a']!.message).toBe('"beforeEach" hook at readonly.test.mjs:9 failed: The operation was aborted due to timeout');
+    expect(byName['frozen > b']!.message).toBe('"beforeEach" hook at readonly.test.mjs:13 failed: frozen one');
+    expect(byName['frozen > b']!.stack).toContain(`${filePath}:13`);
+  });
+
+  it('labels a non-Error throw, keeps every line of a multi-line message, and leaves body errors alone', async () => {
+    const filePath = writeFile('mixed.test.mjs', `
+      describe('string', () => {
+        beforeEach(() => { throw 'plain string'; });
+        test('a', async () => {});
+      });
+      describe('multi', () => {
+        beforeEach(() => { throw new Error('line one\\nline two'); });
+        test('b', async () => {});
+      });
+      test('body', async () => { throw new Error('from the body'); });
+    `);
+
+    const results = collectResults(await runTestFile(filePath, makeOpts()));
+    const byName = Object.fromEntries(results.map((r) => [r.fullName, r.error?.message]));
+
+    expect(byName['string > a']).toBe('"beforeEach" hook at mixed.test.mjs:9 failed: plain string');
+    expect(byName['multi > b']).toBe('"beforeEach" hook at mixed.test.mjs:13 failed: line one\nline two');
+    expect(byName.body).toBe('from the body');
+  });
+});

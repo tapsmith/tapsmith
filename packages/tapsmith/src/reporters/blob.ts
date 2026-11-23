@@ -39,6 +39,8 @@ interface SerializedTest {
   firstAttemptError?: { message: string; stack?: string }
   failedAttemptArtifacts?: { screenshot?: boolean; trace?: boolean; video?: boolean }
   warnings?: string[]
+  /** Scope setup counted in this (first) test's duration. */
+  setupMs?: number
   /** The entry stands for a whole file that failed to load (PILOT-545). */
   fileLevelFailure?: boolean
   screenshotKey?: string
@@ -165,6 +167,7 @@ export class BlobReporter implements TapsmithReporter {
           : undefined,
         failedAttemptArtifacts: t.failedAttemptArtifacts,
         warnings: t.warnings,
+        ...(t.setupMs ? { setupMs: t.setupMs } : {}),
         ...(t.fileLevelFailure ? { fileLevelFailure: true } : {}),
         screenshotKey,
         traceKey,
@@ -513,6 +516,7 @@ function restoreTest(t: SerializedTest, blobDir: string): TestResult {
       : undefined,
     failedAttemptArtifacts: t.failedAttemptArtifacts,
     warnings: t.warnings,
+    ...(t.setupMs ? { setupMs: t.setupMs } : {}),
     ...(t.fileLevelFailure ? { fileLevelFailure: true } : {}),
     screenshotPath: t.screenshotKey ? path.join(blobDir, t.screenshotKey) : undefined,
     tracePath: t.traceKey ? path.join(blobDir, t.traceKey) : undefined,

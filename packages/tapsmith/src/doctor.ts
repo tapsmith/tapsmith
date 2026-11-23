@@ -19,7 +19,7 @@ import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js'
 import { PLAY_IMAGE_CAPTURE_EFFECT, avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { parseSimctlDevicesJson, runningAvds, scanAndroidDevices, simulatorChoices, tryExec } from './env-scan.js';
 import { androidUnusableDeviceFix, parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
-import { isTapsmithNotInstalledError, resolveDeviceGroup, type TapsmithConfig } from './config.js';
+import { isTapsmithNotInstalledError, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from './config.js';
 import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
 import { emulatorNotFoundMessage, resolveEmulatorBinary, type EmulatorBinary } from './emulator.js';
 import { hostArch, nodeUnderRosetta, ROSETTA_NODE_FIX } from './host-arch.js';
@@ -266,12 +266,19 @@ export interface AndroidDevicesSummary {
   fix?: string;
 }
 
+/** The AVDs Tapsmith would boot for this config, and whether it can: their absence on disk, and the emulator binary. */
+export interface AvdSelfLaunch {
+  avds: readonly string[];
+  missing: readonly string[];
+  emulatorFound: boolean;
+}
+
 /**
  * Judge `adb devices`: a device adb lists but cannot use (unauthorized,
  * offline, no permissions) is named with its state and the fix, never
  * counted as "no devices" — the inventory lists it, so doctor must too.
  */
-export function summarizeAndroidDevices(devices: AdbDevice[]): AndroidDevicesSummary {
+export function summarizeAndroidDevices(devices: AdbDevice[], launch?: AvdSelfLaunch): AndroidDevicesSummary {
   const ready = devices.filter((d) => d.state === 'device');
   const unusable = devices.filter((d) => d.state !== 'device');
   const unusableList = unusable.map((d) => `${d.serial} (${d.state})`).join(', ');
@@ -292,16 +299,55 @@ export function summarizeAndroidDevices(devices: AdbDevice[]): AndroidDevicesSum
         fix,
       };
   }
+  // Nothing to start by hand when Tapsmith boots the configured AVD itself —
+  // once the AVD exists. Without an emulator binary, the android-emulator row
+  // beside this one says so, and this one stays the plain warning.
+  if (launch && launch.avds.length > 0 && launch.emulatorFound) {
+    if (launch.missing.length > 0) {
+      return {
+        status: 'warn',
+        label: `No Android devices connected, and ${launch.missing.join(', ')} ${launch.missing.length === 1 ? 'is' : 'are'} not on this machine for Tapsmith to launch`,
+        fix: `Run: ${launch.missing.map((name) => `npx tapsmith create-avd --name ${name}`).join(' && ')}`,
+      };
+    }
+    return { status: 'pass', label: `No Android device running — Tapsmith launches ${launch.avds.join(', ')} when a run needs it` };
+  }
   return { status: 'warn', label: 'No Android devices connected', fix: 'Start an emulator or connect a device with USB debugging enabled' };
 }
 
-function checkConnectedDevices(report: Reporter): void {
+/**
+ * The AVDs Tapsmith boots itself, when that covers every Android scope (each
+ * names an `avd` with `launchEmulators` on and pins no primary device, which a
+ * run would use as given); empty when any Android scope needs a device
+ * someone else starts.
+ */
+function selfLaunchedAvds(scopes: readonly TapsmithConfig[]): string[] {
+  const android = scopes.filter((scope) => scopePlatform(scope) === 'android');
+  if (android.length === 0 || android.some((scope) => !scope.avd || scope.launchEmulators === false || primaryDevicePin(scope) !== undefined)) return [];
+  return [...new Set(android.map((scope) => scope.avd as string))];
+}
+
+/** What launching `avds` needs on this machine: the AVDs on disk and the emulator binary. */
+function avdSelfLaunch(avds: readonly string[]): AvdSelfLaunch | undefined {
+  if (avds.length === 0) return undefined;
+  try {
+    const onDisk = new Set(scanAvdImageTags().map((a) => a.name));
+    return { avds, missing: avds.filter((name) => !onDisk.has(name)), emulatorFound: resolveEmulatorBinary().found };
+  } catch {
+    return undefined;
+  }
+}
+
+function checkConnectedDevices(report: Reporter, scopes: readonly TapsmithConfig[]): void {
   const output = run(report, 'adb', ['devices']);
   if (output === undefined) {
     warn(report, 'android-devices', 'Could not list Android devices', 'Run `adb devices` to see the error; `adb kill-server` restarts a stuck adb server');
     return;
   }
-  const summary = summarizeAndroidDevices(parseAdbDevicesOutput(output));
+  const devices = parseAdbDevicesOutput(output);
+  // Only consulted with nothing attached, so the scans run only then.
+  const launch = devices.length === 0 ? avdSelfLaunch(selfLaunchedAvds(scopes)) : undefined;
+  const summary = summarizeAndroidDevices(devices, launch);
   if (summary.status === 'pass') pass(report, 'android-devices', summary.label, summary.detail);
   else warn(report, 'android-devices', summary.label, summary.fix, summary.detail);
 }
@@ -1494,7 +1540,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
     androidChecked = adbOk || !!targets;
     if (androidChecked) {
       checkAndroidHome(report);
-      if (adbOk) checkConnectedDevices(report);
+      if (adbOk) checkConnectedDevices(report, scopes);
       await checkAgentApks(report, config?.rootDir ?? process.cwd());
       // With adb here, Android runs on this machine, so its APK must exist.
       checkAppApk(report, config, androidPlan.required || (adbOk && !!targets));

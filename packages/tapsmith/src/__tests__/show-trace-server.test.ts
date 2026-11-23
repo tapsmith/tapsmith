@@ -10,6 +10,7 @@ import { vi } from 'vitest';
 vi.mock('open', () => ({ default: vi.fn() }));
 
 import { showTrace } from '../trace/show-trace-server.js';
+import { TRACE_FORMAT_VERSION } from '../trace/trace-format.js';
 
 describe('showTrace', () => {
   let cleanup: (() => void) | undefined;
@@ -25,7 +26,7 @@ describe('showTrace', () => {
 
   function createDummyTrace(): string {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-trace-test-'));
-    const metadata = { version: 1, testName: 'test', testStatus: 'passed', testDuration: 100, device: { serial: 'emu' } };
+    const metadata = { version: TRACE_FORMAT_VERSION, testName: 'test', testStatus: 'passed', testDuration: 100, device: { serial: 'emu' } };
     const zipData = zipSync({
       'metadata.json': new TextEncoder().encode(JSON.stringify(metadata)),
       'trace.json': new TextEncoder().encode(''),
@@ -95,6 +96,50 @@ describe('showTrace', () => {
 
   it('throws for non-existent trace file', async () => {
     await expect(showTrace({ tracePath: '/tmp/nonexistent.zip' })).rejects.toThrow('not found');
+  });
+
+  it('returns the URL it opened, which loads the trace', async () => {
+    const tracePath = createDummyTrace();
+    const result = await showTrace({ tracePath, port: 0 });
+    cleanup = result.close;
+
+    expect(result.url).toBe(`http://127.0.0.1:${result.port}/?trace=/trace.zip`);
+    const open = (await import('open')).default as unknown as ReturnType<typeof vi.fn>;
+    expect(open).toHaveBeenLastCalledWith(result.url);
+  });
+
+  function writeTraceFile(name: string, data: Uint8Array | string): string {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-trace-test-'));
+    const file = path.join(tempDir, name);
+    fs.writeFileSync(file, data);
+    return file;
+  }
+
+  it('refuses a corrupt archive before starting a server or opening a browser', async () => {
+    const open = (await import('open')).default as unknown as ReturnType<typeof vi.fn>;
+    open.mockClear();
+    const tracePath = writeTraceFile('bad.zip', 'this is not a zip archive');
+    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Not a readable trace archive: .*bad\.zip/);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('refuses a zip that is not a Tapsmith trace', async () => {
+    const open = (await import('open')).default as unknown as ReturnType<typeof vi.fn>;
+    open.mockClear();
+    const tracePath = writeTraceFile('other.zip', zipSync({ 'readme.txt': new TextEncoder().encode('hi') }));
+    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Not a Tapsmith trace: the archive has no metadata\.json/);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('refuses a trace in a newer format version, naming the upgrade', async () => {
+    const metadata = { version: TRACE_FORMAT_VERSION + 1, tapsmithVersion: '99.0.0' };
+    const tracePath = writeTraceFile('newer.zip', zipSync({ 'metadata.json': new TextEncoder().encode(JSON.stringify(metadata)) }));
+    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Upgrade Tapsmith/);
+  });
+
+  it('refuses a trace whose metadata.json is not JSON', async () => {
+    const tracePath = writeTraceFile('badmeta.zip', zipSync({ 'metadata.json': new TextEncoder().encode('{not json') }));
+    await expect(showTrace({ tracePath, port: 0 })).rejects.toThrow(/Not a Tapsmith trace: its metadata\.json is not valid JSON/);
   });
 
   it('throws for non-zip file', async () => {

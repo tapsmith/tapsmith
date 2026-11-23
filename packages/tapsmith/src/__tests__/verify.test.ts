@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { SpawnSyncOptions, SpawnSyncReturns } from 'node:child_process';
-import { pickVerifyTarget, formatVerifyFailure, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport, noTestsRanError, grepRefusalError, runVerify, stderrTail, configLoadFix } from '../verify.js';
+import { pickVerifyTarget, formatVerifyFailure, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport, noTestsRanError, grepRefusalError, runVerify, stderrTail, configLoadFix, runFailedFix } from '../verify.js';
 import { TapsmithNotInstalledError } from '../config.js';
 
 // runVerify spawns the real `tapsmith test`; the tests below replace that
@@ -420,5 +420,24 @@ describe('grepRefusalError()', () => {
   it('leaves any other failure, and uncaptured stderr, to RUN_FAILED', () => {
     expect(grepRefusalError('Error: daemon failed to start', 'tests/a.test.ts', false)).toBeUndefined();
     expect(grepRefusalError(undefined, 'tests/a.test.ts', false)).toBeUndefined();
+  });
+});
+
+describe('runFailedFix()', () => {
+  const ipc = "The temp directory's path is too long for tsx …";
+
+  it('names TMPDIR, not doctor, when a TypeScript run could not start tsx', () => {
+    const fix = runFailedFix({ tsxProblem: ipc, files: ['/p/tests/a.test.ts'] });
+    expect(fix).toMatch(/TMPDIR=\/tmp npx tapsmith verify/);
+    expect(fix).not.toMatch(/doctor/);
+  });
+
+  it('counts a TypeScript config as needing tsx', () => {
+    expect(runFailedFix({ tsxProblem: ipc, files: ['/p/tests/a.test.js', '/p/tapsmith.config.ts'] })).toMatch(/TMPDIR/);
+  });
+
+  it('keeps the doctor advice when nothing needed tsx, or the temp directory is fine', () => {
+    expect(runFailedFix({ tsxProblem: ipc, files: ['/p/tests/a.test.js', '/p/tapsmith.config.mjs'] })).toMatch(/doctor --json/);
+    expect(runFailedFix({ tsxProblem: undefined, files: ['/p/tests/a.test.ts'] })).toMatch(/doctor --json/);
   });
 });

@@ -72,7 +72,10 @@ Open [trace.tapsmith.dev](https://trace.tapsmith.dev) and drag a `.zip` trace fi
 npx tapsmith show-trace tapsmith-results/traces/trace-my_test-1767225600000.zip
 ```
 
-This starts a local server and opens the trace viewer in your browser.
+This starts a local server and opens the trace viewer in your browser. It also prints the URL it
+opened (`http://127.0.0.1:<port>/?trace=/trace.zip`), for opening the trace in another browser or
+again after closing the tab; the server runs until you press Ctrl+C. A file that is not a readable
+Tapsmith trace is refused in the terminal instead.
 
 ## Trace Viewer Panels
 

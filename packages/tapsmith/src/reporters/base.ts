@@ -39,6 +39,20 @@ export function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Setup shorter than this is entering a scope with no real setup work, not worth a label. */
+const SETUP_LABEL_MIN_MS = 100;
+
+/**
+ * A test's duration for its result line. The first test of a scope counts
+ * the scope's setup (app reset, beforeAll hooks) in its duration, as
+ * Playwright counts fixture setup; the label says how much of it that was.
+ */
+export function formatTestDuration(test: { durationMs: number; setupMs?: number }): string {
+  const total = formatDuration(test.durationMs);
+  const setup = test.setupMs ?? 0;
+  return setup >= SETUP_LABEL_MIN_MS ? `${total}, incl. ${formatDuration(setup)} setup` : total;
+}
+
 export function statusIcon(status: 'passed' | 'failed' | 'skipped'): string {
   switch (status) {
     case 'passed': return green('✓');

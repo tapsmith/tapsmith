@@ -236,6 +236,8 @@ Tapsmith Doctor
 14 checks passed, 1 warning
 ```
 
+The `No Android devices connected` warning only appears when a run needs a device someone else starts. When every Android project names an `avd` (and pins no `device`, with `launchEmulators` left on), Tapsmith launches that emulator itself, so the check passes with nothing running, once the Android emulator is installed and the AVD exists on the machine (if the AVD is missing, the warning names the `npx tapsmith create-avd` command that makes it).
+
 A warning (`⚠`) or error (`✗`) that Tapsmith knows how to fix is followed by a `↳` line saying how, often the exact command to run. `tapsmith doctor --json` prints the same checks for scripts and AI agents, with a `fix` field wherever there is one. The command exits 1 if any check is an error, including when neither Android nor iOS can run on the machine. Run it whenever tests fail in unexpected ways to rule out setup issues.
 
 Then prove the whole loop works before writing tests:

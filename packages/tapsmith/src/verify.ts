@@ -14,6 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { formatJson, jsonError, stripAnsi } from './cli-json.js';
 import { isTapsmithNotInstalledError } from './config.js';
+import { needsTsxLoader, tsxIpcPathProblem } from './child-scripts.js';
 import { minimatch } from 'minimatch';
 import { NO_TESTS_MATCH_FILTER_PREFIX } from './test-filter.js';
 
@@ -230,6 +231,19 @@ function emitError(json: boolean, code: string, message: string, fix?: string): 
 
 
 /**
+ * The next step after a run that produced no results. When the run needed
+ * tsx (a TypeScript test file or config) and this temp directory is too long
+ * for tsx's socket, the run has already said so: the fix is TMPDIR, which
+ * doctor does not check. Otherwise, doctor.
+ */
+export function runFailedFix(opts: { tsxProblem: string | undefined; files: readonly string[] }): string {
+  if (opts.tsxProblem && needsTsxLoader([], [...opts.files])) {
+    return 'Point TMPDIR at a shorter directory and re-run, e.g. TMPDIR=/tmp npx tapsmith verify';
+  }
+  return 'Run: npx tapsmith doctor --json to diagnose the environment';
+}
+
+/**
  * The fix for a config that could not be loaded: the install command when
  * the project lacks Tapsmith itself, else the config.
  */
@@ -326,9 +340,10 @@ export async function runVerify(args: VerifyArgs): Promise<void> {
           ? `Failed to execute test process: ${child.error.message}`
           : `Test run produced no results (exit code ${child.status ?? 'unknown'})`;
         const stderr = child.stderr ? stderrTail(child.stderr.toString()) : undefined;
+        const configFile = findConfigFile(process.cwd(), args.config);
         emitError(args.json, 'RUN_FAILED',
           `${reason}${stderr ? `: ${stderr}` : ''}`,
-          'Run: npx tapsmith doctor --json to diagnose the environment');
+          runFailedFix({ tsxProblem: tsxIpcPathProblem(), files: configFile ? [target, configFile] : [target] }));
         return;
       }
 

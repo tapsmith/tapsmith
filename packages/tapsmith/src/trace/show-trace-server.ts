@@ -7,7 +7,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { unzipSync } from 'fflate';
 import { createLocalHttpServer } from '../local-server-guard.js';
+import { traceFormatProblem } from './trace-format.js';
 
 const VIEWER_HTML_PATH = path.resolve(import.meta.dirname, '../trace-viewer/index.html');
 
@@ -20,9 +22,37 @@ export interface ShowTraceOptions {
 }
 
 /**
- * Start the trace viewer server, open the browser, and return a cleanup function.
+ * Why the viewer cannot open this archive, or `undefined` when it can: not a
+ * zip, no readable `metadata.json`, or a format this version cannot read.
+ * Checked before any server starts or browser opens, so the error lands in
+ * the terminal rather than in a viewer page.
  */
-export async function showTrace(options: ShowTraceOptions): Promise<{ port: number; close: () => void }> {
+function traceArchiveProblem(resolvedTrace: string): string | undefined {
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(new Uint8Array(fs.readFileSync(resolvedTrace)), {
+      filter: (file) => file.name === 'metadata.json',
+    });
+  } catch (err) {
+    return `Not a readable trace archive: ${resolvedTrace} (${err instanceof Error ? err.message : String(err)})`;
+  }
+  const raw = files['metadata.json'];
+  if (!raw) return `Not a Tapsmith trace: the archive has no metadata.json (${resolvedTrace})`;
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(new TextDecoder().decode(raw));
+  } catch {
+    return `Not a Tapsmith trace: its metadata.json is not valid JSON (${resolvedTrace})`;
+  }
+  const problem = traceFormatProblem(metadata);
+  return problem ? `${problem} (${resolvedTrace})` : undefined;
+}
+
+/**
+ * Start the trace viewer server, open the browser, and return the URL it
+ * opened (the one that loads this trace) and a cleanup function.
+ */
+export async function showTrace(options: ShowTraceOptions): Promise<{ port: number; url: string; close: () => void }> {
   const { tracePath, port: preferredPort } = options;
   const resolvedTrace = path.resolve(tracePath);
 
@@ -33,6 +63,9 @@ export async function showTrace(options: ShowTraceOptions): Promise<{ port: numb
   if (!resolvedTrace.endsWith('.zip')) {
     throw new Error(`Expected a .zip file, got: ${resolvedTrace}`);
   }
+
+  const archiveProblem = traceArchiveProblem(resolvedTrace);
+  if (archiveProblem) throw new Error(archiveProblem);
 
   // Check if bundled viewer exists
   let viewerHtml: string;
@@ -105,11 +138,12 @@ export async function showTrace(options: ShowTraceOptions): Promise<{ port: numb
     const open = await import('open');
     await open.default(viewerUrl);
   } catch {
-    console.log(`Open: ${viewerUrl}`);
+    // The caller prints the URL to open by hand.
   }
 
   return {
     port: actualPort,
+    url: viewerUrl,
     close: () => server.close(),
   };
 }

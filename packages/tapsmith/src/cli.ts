@@ -1910,7 +1910,7 @@ const cliHandlers: CliHandlers = {
       console.log(dim(path.resolve(file)));
       const server = await showTrace({ tracePath: file });
       console.log(green('✓ trace viewer ready'));
-      console.log(dim(`Trace viewer running at http://127.0.0.1:${server.port}/`));
+      console.log(`Trace viewer running at ${server.url}`);
       console.log(dim('Press Ctrl+C to stop.'));
       // Keep alive until Ctrl+C
       process.on('SIGINT', () => {

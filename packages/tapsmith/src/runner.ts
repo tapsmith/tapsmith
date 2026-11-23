@@ -1710,8 +1710,56 @@ async function invokeHook(
   } catch (err) {
     // The traced action the hook was stuck in ends failed in the trace.
     if (isRunnerTimeoutError(err)) bound.traceCollector?.failPendingOperation(err.message);
-    throw err;
+    throw labelHookError(err, bound, where);
   }
+}
+
+/**
+ * Errors already prefixed with their hook: the hook label each carries and the
+ * message it was thrown with. One thrown again by the same hook is not
+ * labelled twice; one thrown by another hook gets a copy with that hook's label.
+ */
+const labelledHookErrors = new WeakMap<Error, { label: string; original: string }>();
+
+/**
+ * A setup hook's (beforeEach/beforeAll) error, its message prefixed with the
+ * hook and where it was registered: the error is reported under the test's
+ * name, and an SDK error's stack may hold no frame of the hook. A skip, a
+ * stop and a hook timeout (whose message already names the hook) pass through.
+ */
+function labelHookError(err: unknown, bound: HookBound, where: string): unknown {
+  if (bound.kind !== 'beforeEach' && bound.kind !== 'beforeAll') return err;
+  if (isTestSkip(err) || isAbortError(err) || isRunnerTimeoutError(err) || bound.abortSignal?.aborted) return err;
+  const error = err instanceof Error ? err : new Error(String(err));
+  const label = `"${bound.kind}" hook${where}`;
+  const earlier = labelledHookErrors.get(error);
+  if (earlier?.label === label) return error;
+  const original = earlier ? earlier.original : error.message;
+  const message = `${label} failed: ${original}`;
+  let labelled: Error = error;
+  if (earlier) {
+    // Thrown again by another hook (a shared or memoized error): a copy, so the
+    // test the first hook failed keeps its own label.
+    labelled = hookErrorCopy(error, message);
+  } else {
+    try {
+      // An own property: a DOMException's `message` is a getter-only accessor.
+      Object.defineProperty(error, 'message', { value: message, writable: true, configurable: true });
+    } catch {
+      // A frozen error cannot take one: report a copy, with the hook's stack.
+      labelled = hookErrorCopy(error, message);
+    }
+  }
+  labelledHookErrors.set(labelled, { label, original });
+  return labelled;
+}
+
+/** A plain Error carrying `message`, with `error`'s name and stack and `error` as its cause. */
+function hookErrorCopy(error: Error, message: string): Error {
+  const copy = new Error(message, { cause: error });
+  copy.name = error.name;
+  copy.stack = error.stack;
+  return copy;
 }
 
 /**
