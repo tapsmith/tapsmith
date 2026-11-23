@@ -37,6 +37,11 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Cover input" puts a tappable overlay ("Input cover") over the top
 //   input. A field that already has focus keeps getting the input under a
 //   control on its own screen, so typing into it must not tap the cover.
+// - "header-menu-button" is a header menu button built the way apps build
+//   one on react-native-context-menu-view: the testID sits on an empty plain
+//   View, and the touches are taken by a view laid inside its bounds. Android
+//   reports the two as siblings, so the touch surface looks like something
+//   drawn over the button. A tap on the button must open the menu.
 
 export default function OcclusionScreen() {
   const [text, setText] = useState("")
@@ -54,6 +59,7 @@ export default function OcclusionScreen() {
   const [bottomText, setBottomText] = useState("")
   const [tallInput, setTallInput] = useState(false)
   const [avoidKeyboard, setAvoidKeyboard] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // A warm reset navigates here rather than remounting, so clear local state
@@ -77,6 +83,7 @@ export default function OcclusionScreen() {
     setBottomText("")
     setTallInput(false)
     setAvoidKeyboard(false)
+    setMenuOpen(false)
   }, [resetEpoch])
 
   // Covers "Covered action" for 1.5 s, for a tap that has to wait out a
@@ -191,7 +198,15 @@ export default function OcclusionScreen() {
             {inputCovered ? "Uncover input" : "Cover input"}
           </Text>
         </TouchableOpacity>
+        <View style={styles.menuShell} collapsable={false}>
+          <View style={styles.menuWrapper} testID="header-menu-button" collapsable={false} />
+          <TouchableOpacity style={styles.menuSurface} onPress={() => setMenuOpen((o) => !o)}>
+            <Text style={styles.menuIcon}>⋮</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {menuOpen && <Text testID="header-menu">Header menu open</Text>}
 
       <View style={styles.stack}>
         {replaced ? (
@@ -371,5 +386,24 @@ const styles = StyleSheet.create({
   },
   bottomButtonTall: {
     height: 400,
+  },
+  menuShell: {
+    width: 56,
+    height: 44,
+  },
+  menuWrapper: {
+    ...fill,
+  },
+  menuSurface: {
+    position: "absolute",
+    top: 4,
+    left: 14,
+    width: 28,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuIcon: {
+    fontSize: 20,
   },
 })

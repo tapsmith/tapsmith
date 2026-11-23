@@ -29,6 +29,9 @@ export class OcclusionScreen {
   get inputCover() { return this.device.getByRole("button", { name: "Input cover" }) }
   get passThroughAction() { return this.device.getByRole("button", { name: "Pass-through action" }) }
   get termsLink() { return this.device.getByRole("link", { name: "terms" }) }
+  /** An empty wrapper View with the testID, its touch surface laid inside it as a sibling. */
+  get headerMenuButton() { return this.device.getByTestId("header-menu-button") }
+  get headerMenu() { return this.device.getByTestId("header-menu") }
 
   /** Focus the input so the software keyboard covers the bottom of the screen. */
   async openKeyboard() {
