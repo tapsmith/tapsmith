@@ -34,9 +34,12 @@ class SnapshotElementFinder {
     /// every use (RowBinding, PILOT-952).
     private var rowBindings: Set<String> = []
     /// Ids whose live element is bound by its place in a query that returns
-    /// other nodes too, outside any row, not yet checked against where it was
-    /// found: checked on their first use, then trusted (RowBinding).
-    private var uncheckedBindings: Set<String> = []
+    /// other nodes too, outside any row: checked, and bound again if need
+    /// be, on their first use (`RowBinding.firstUse`); a touch planned on one
+    /// later checks the live element has the identity found.
+    private var placeBindings: Set<String> = []
+    /// The `placeBindings` not used yet.
+    private var unusedPlaceBindings: Set<String> = []
     /// Ids found through their row's anchor in a collection view, with the
     /// query for the cells holding it and the command it was last checked
     /// in: checked to name one cell once per command (RowAnchor, PILOT-952).
@@ -702,7 +705,8 @@ class SnapshotElementFinder {
         identityCache.removeAll()
         cacheOrder.removeAll()
         rowBindings.removeAll()
-        uncheckedBindings.removeAll()
+        placeBindings.removeAll()
+        unusedPlaceBindings.removeAll()
         anchorChecks.removeAll()
         queryPins.removeAll()
         focusedTextInputHint = nil
@@ -762,7 +766,8 @@ class SnapshotElementFinder {
             boundsCache.removeValue(forKey: candidate)
             identityCache.removeValue(forKey: candidate)
             rowBindings.remove(candidate)
-            uncheckedBindings.remove(candidate)
+            placeBindings.remove(candidate)
+            unusedPlaceBindings.remove(candidate)
             anchorChecks.removeValue(forKey: candidate)
             queryPins.removeValue(forKey: candidate)
             overflow -= 1
@@ -782,7 +787,8 @@ class SnapshotElementFinder {
     /// the element found (the query behind it is evaluated again on every
     /// read, so a check made once would not hold while a table moves and
     /// reuses its cells within one touch); one bound that way outside any
-    /// row takes one on its first call only; one found through its row's
+    /// row costs what `firstUseOfPlaceBinding` does, on its first call only;
+    /// one found through its row's
     /// anchor in a collection view takes one count of the cells holding the
     /// anchor, once per command.
     func getElement(_ elementId: String) throws -> XCUIElement {
@@ -791,8 +797,9 @@ class SnapshotElementFinder {
         if cached != nil {
             touchLocked(elementId)
         }
-        let checked = cached != nil
-            && (rowBindings.contains(elementId) || uncheckedBindings.contains(elementId))
+        let checked = cached != nil && rowBindings.contains(elementId)
+        let firstUse = cached != nil && unusedPlaceBindings.contains(elementId)
+        let identity = identityCache[elementId]
         let anchorCheck = cached != nil ? anchorChecks[elementId] : nil
         let serial = commandSerial
         let found = boundsCache[elementId]
@@ -821,24 +828,24 @@ class SnapshotElementFinder {
         if let elem = cached, checked {
             let live = try? elem.snapshot().frame
             let bound = found.map { RowBinding.isFoundElement(found: $0, live: live) } ?? false
-            lock.lock()
-            // Checked once outside a row: either way, never again.
-            uncheckedBindings.remove(elementId)
             if !bound {
+                lock.lock()
                 rowBindings.remove(elementId)
                 elementCache.removeValue(forKey: elementId)
+                lock.unlock()
             }
-            lock.unlock()
             if !bound {
-                // Another element (another row's, the live query's order
-                // having changed as the table reused its cells, or one the
-                // query lists in another order than the tree), or none: keep
-                // no live element, so a touch goes to the frame it was found
-                // at, checked against a fresh tree (OcclusionAnalyzer), as a
-                // row's accessory indicator's does.
+                // Another row's element (the live query's order changed as
+                // the table reused its cells), or none: keep no live element,
+                // so a touch goes to the frame it was found at, checked
+                // against a fresh tree (OcclusionAnalyzer), as a row's
+                // accessory indicator's does.
                 NSLog("[TapsmithSnapshot] \(elementId) found at \(found.map { "\($0)" } ?? "nil") but its live element is at \(live.map { "\($0)" } ?? "nothing"); dropping it")
                 throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
             }
+        }
+        if let elem = cached, firstUse, let found {
+            return try firstUseOfPlaceBinding(elementId, elem, found: found, identity: identity)
         }
         if let elem = cached {
             return elem
@@ -851,6 +858,67 @@ class SnapshotElementFinder {
         throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
     }
 
+    /// Most lookalikes read to find an element bound by its place among
+    /// others again (`firstUseOfPlaceBinding`): each read is one IPC.
+    private static let maxLookalikes = 32
+
+    /// The first use of `elementId`, bound by its place among others outside
+    /// any row and found at `found` with `identity` (RowBinding.firstUse):
+    /// its live element, bound again to the lookalike at the found frame when
+    /// the live query lists another element at its place. Throws stale when
+    /// the element found cannot be told among its lookalikes.
+    ///
+    /// **Cost:** one `snapshot()` of the live element; when it is not at the
+    /// found frame, one count of its lookalikes and a `snapshot()` of each,
+    /// `maxLookalikes` at most.
+    private func firstUseOfPlaceBinding(
+        _ elementId: String, _ elem: XCUIElement, found: CGRect, identity: CachedIdentity?
+    ) throws -> XCUIElement {
+        let live = try? elem.snapshot()
+        let liveIsFoundIdentity = live.map { snap in
+            identity.map { Self.hasIdentity(label: snap.label, identifier: snap.identifier, $0) } ?? false
+        } ?? false
+        var lookalikes: [XCUIElement] = []
+        let use = RowBinding.firstUse(found: found, live: live?.frame, liveIsFoundIdentity: liveIsFoundIdentity) {
+            guard let identity else { return [] }
+            let query = app.descendants(matching: identity.elementType).matching(NSPredicate(
+                format: "label == %@ AND identifier == %@", identity.label, identity.identifier
+            ))
+            lookalikes = (0..<min(query.count, Self.maxLookalikes)).map { query.element(boundBy: $0) }
+            return lookalikes.map { try? $0.snapshot().frame }
+        }
+        lock.lock()
+        unusedPlaceBindings.remove(elementId)
+        switch use {
+        case .keep:
+            lock.unlock()
+            return elem
+        case .rebind(let index):
+            elementCache[elementId] = lookalikes[index]
+            // Found by its own type, label and identifier now.
+            queryPins[elementId] = LiveQueryPin.none
+            lock.unlock()
+            NSLog("[TapsmithSnapshot] \(elementId)'s live element is at \(live.map { "\($0.frame)" } ?? "nothing"), not \(found); bound to the lookalike there")
+            return lookalikes[index]
+        case .drop:
+            placeBindings.remove(elementId)
+            elementCache.removeValue(forKey: elementId)
+            lock.unlock()
+            // Another element, listed at its place by a live query that does
+            // not follow the tree's order: keep no live element, so a touch
+            // goes to the frame it was found at, checked against a fresh tree
+            // (OcclusionAnalyzer).
+            NSLog("[TapsmithSnapshot] \(elementId) found at \(found) but its live element is \(live.map { "\($0.label) at \($0.frame)" } ?? "unreadable"); dropping it")
+            throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
+        }
+    }
+
+    /// Whether a live read with `label` and `identifier` has the label and
+    /// identifier `identity` was found with.
+    private static func hasIdentity(label: String, identifier: String, _ identity: CachedIdentity) -> Bool {
+        label == identity.label && identifier == identity.identifier
+    }
+
     /// Whether a live read of `elementId` at `liveFrame`, with `liveLabel`,
     /// `liveIdentifier` and `livePlaceholder`, which a touch is about to be planned on, is the
     /// element it was found as. Not when the read contradicts the query it
@@ -861,17 +929,26 @@ class SnapshotElementFinder {
     /// was found (no IPC), or one found through its row's anchor in a tree
     /// with a collection view no longer has its anchor name one cell (one
     /// count of the cells holding it, as the cells can have changed since
-    /// `getElement` checked them in this command).
+    /// `getElement` checked them in this command). Nor, for one bound by its
+    /// place among others outside any row, when the read has another label
+    /// or identifier than the element found (no IPC).
     func isFoundElement(
         _ elementId: String, liveFrame: CGRect, liveLabel: String, liveIdentifier: String, livePlaceholder: String
     ) -> Bool {
         lock.lock()
-        let checked = rowBindings.contains(elementId) || uncheckedBindings.contains(elementId)
+        let checked = rowBindings.contains(elementId)
+        let placeIdentity = placeBindings.contains(elementId) ? identityCache[elementId] : nil
         let anchoredRows = anchorChecks[elementId]?.rows
         let found = boundsCache[elementId]
         let pin = queryPins[elementId] ?? .none
         lock.unlock()
         if !pin.admits(label: liveLabel, identifier: liveIdentifier, placeholder: livePlaceholder) { return false }
+        // Bound by its place among others outside any row: the query behind
+        // it is evaluated again on every read, and an element mounted since
+        // can have taken that place.
+        if let placeIdentity, !Self.hasIdentity(label: liveLabel, identifier: liveIdentifier, placeIdentity) {
+            return false
+        }
         if checked, !(found.map { RowBinding.isFoundElement(found: $0, live: liveFrame) } ?? false) {
             return false
         }
@@ -2477,7 +2554,10 @@ class SnapshotElementFinder {
             elementCache[elementId] = element
             queryPins[elementId] = pin
             if plan.checkFrame { rowBindings.insert(elementId) }
-            if plan.checkFrameOnce { uncheckedBindings.insert(elementId) }
+            if plan.checkFrameOnce {
+                placeBindings.insert(elementId)
+                unusedPlaceBindings.insert(elementId)
+            }
             if plan.checkAnchor, let anchoredRows { anchorChecks[elementId] = (anchoredRows, nil) }
             lock.unlock()
         }

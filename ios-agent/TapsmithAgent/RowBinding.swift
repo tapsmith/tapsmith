@@ -101,10 +101,11 @@ enum RowBinding {
     /// order. On a React Navigation screen it listed the bottom tab bar's
     /// buttons before the header's drawer toggle, which comes first in the
     /// tree, so `getByRole("button").first()` was bound to the first tab, and
-    /// its tap touched that tab and reported success. That order does not
-    /// change as an element moves, unlike a table's as it reuses its cells,
-    /// so a binding that was the element found on its first use stays it: a
-    /// field that moves once typing has focused it is still read live.
+    /// its tap touched that tab and reported success. On its first use, such
+    /// a binding is checked and, if need be, bound again (`firstUse`); then
+    /// it is followed wherever it moves (a field the keyboard pushes up is
+    /// still read live), and only a touch planned on it checks that the live
+    /// element still has the identity found.
     static func plan(bound: Bool, inRow: Bool, uniqueInQuery: Bool, tags: Tags, treeHasLazyList: Bool) -> Plan {
         guard bound else { return Plan() }
         guard inRow else { return Plan(checkFrameOnce: !uniqueInQuery) }
@@ -114,6 +115,40 @@ enum RowBinding {
             throughAnchor: true, checkFrame: tags.nested,
             checkAnchor: !tags.anchorListExposesEveryRow || treeHasLazyList
         )
+    }
+
+    /// What becomes of a binding by place among others outside any row on
+    /// its first use.
+    enum FirstUse: Equatable {
+        /// It is the element found (or that element, moved since): keep it.
+        case keep
+        /// It is another element; the element found is the lookalike at this
+        /// index: bind that instead.
+        case rebind(Int)
+        /// It is another element, and the one found cannot be told among its
+        /// lookalikes: keep no live element.
+        case drop
+    }
+
+    /// The first use of a binding by place among others outside any row,
+    /// whose live element is read at `live` (nil: it could not be read). One
+    /// still at the frame it was found at is kept. One elsewhere is either
+    /// another element, listed at that place because the live query does not
+    /// follow the tree's order, or the element found, moved since (a panel
+    /// still sliding in, a field the keyboard pushed up): the element found
+    /// is looked for at its frame among its lookalikes (`lookalikeFrames`,
+    /// the live frames of the elements with its type, label and identifier,
+    /// read only then), and bound if it is the one there. Otherwise one with
+    /// the identity found (`liveIsFoundIdentity`) is taken to have moved,
+    /// and kept; any other is dropped.
+    static func firstUse(
+        found: CGRect, live: CGRect?, liveIsFoundIdentity: Bool, lookalikeFrames: () -> [CGRect?]
+    ) -> FirstUse {
+        guard live != nil else { return .drop }
+        if isFoundElement(found: found, live: live) { return .keep }
+        let atFound = lookalikeFrames().enumerated().filter { isFoundElement(found: found, live: $0.element) }
+        if atFound.count == 1 { return .rebind(atFound[0].offset) }
+        return liveIsFoundIdentity ? .keep : .drop
     }
 
     /// Whether the live element, read at `live` (nil: it could not be read),

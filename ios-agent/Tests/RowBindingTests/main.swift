@@ -97,6 +97,50 @@ check("no anchor, unique in a table: as before",
 check("no anchor, unique in a collection view: frame-checked",
       RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorList, treeHasLazyList: false), Plan(checkFrame: true))
 
+// ─── firstUse (a binding by place among others, outside any row) ───
+
+typealias FirstUse = RowBinding.FirstUse
+let toggle = CGRect(x: 5, y: 61.33, width: 50, height: 40)
+let firstTab = CGRect(x: 0, y: 873.33, width: 146.67, height: 48.67)
+var lookalikesRead = 0
+func lookalikes(_ frames: [CGRect?]) -> () -> [CGRect?] {
+    { lookalikesRead += 1; return frames }
+}
+lookalikesRead = 0
+check("bound where it was found: kept", RowBinding.firstUse(
+    found: toggle, live: toggle, liveIsFoundIdentity: true, lookalikeFrames: lookalikes([])
+), FirstUse.keep)
+check("bound where it was found: nothing else read", lookalikesRead, 0)
+// The live query listed the tab bar's buttons first: index 0 is a tab. The
+// toggle is the one element with its type, label and identifier at the frame
+// it was found at.
+check("bound to another element: re-bound to the one at the found frame", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: false, lookalikeFrames: lookalikes([CGRect(x: 300, y: 61.33, width: 50, height: 40), toggle])
+), FirstUse.rebind(1))
+// Two unnamed buttons, listed out of order: same identity, other frame.
+check("bound to a lookalike: re-bound", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikeFrames: lookalikes([firstTab, toggle])
+), FirstUse.rebind(1))
+// The element moved since it was found (a panel still sliding in, a field the
+// keyboard pushed up): nothing is at the found frame, and the live element is
+// the one found. Followed, as before.
+check("moved since found: kept", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikeFrames: lookalikes([firstTab])
+), FirstUse.keep)
+check("another element, nothing at the found frame: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: false, lookalikeFrames: lookalikes([CGRect(x: 0, y: 500, width: 50, height: 40)])
+), FirstUse.drop)
+check("unreadable live element: dropped", RowBinding.firstUse(
+    found: toggle, live: nil, liveIsFoundIdentity: false, lookalikeFrames: lookalikes([])
+), FirstUse.drop)
+// Two lookalikes at the found frame cannot be told apart.
+check("two at the found frame, another element: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: false, lookalikeFrames: lookalikes([toggle, toggle])
+), FirstUse.drop)
+check("two at the found frame, the one found moved: kept", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikeFrames: lookalikes([toggle, toggle])
+), FirstUse.keep)
+
 // ─── isFoundElement ───
 
 // Row 68's "More Info" button where it was found, and Row 67's, one row
