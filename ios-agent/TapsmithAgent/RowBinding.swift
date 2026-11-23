@@ -92,8 +92,16 @@ enum RowBinding {
     /// somewhere, which can load a cell with the same anchor later: the
     /// query for the anchor's row looks at every cell of the app, so even a
     /// UITableView's anchor is then checked.
+    ///
+    /// Outside any row, a binding by place among others is frame-checked
+    /// too: XCTest's live query need not list nodes in the snapshot's order.
+    /// On a React Navigation screen it listed the bottom tab bar's buttons
+    /// before the header's drawer toggle, which comes first in the tree, so
+    /// `getByRole("button").first()` was bound to the first tab, and its tap
+    /// touched that tab and reported success.
     static func plan(bound: Bool, inRow: Bool, uniqueInQuery: Bool, tags: Tags, treeHasLazyList: Bool) -> Plan {
-        guard bound, inRow else { return Plan() }
+        guard bound else { return Plan() }
+        guard inRow else { return Plan(checkFrame: !uniqueInQuery) }
         if uniqueInQuery && tags.listExposesEveryRow { return Plan() }
         guard tags.anchor != nil else { return Plan(checkFrame: true) }
         return Plan(

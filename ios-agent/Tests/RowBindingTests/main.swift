@@ -60,7 +60,17 @@ let nestedRow = Tags(anchor: "t\u{1}Featured", index: 4, nested: true,
                      anchorListExposesEveryRow: true, listExposesEveryRow: false)
 let noAnchorTable = Tags(listExposesEveryRow: true)
 let noAnchorList = Tags(listExposesEveryRow: false)
-check("outside a row: as before", RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false), Plan())
+// Outside any row, XCTest's live query still need not return nodes in the
+// snapshot's order (it listed a React Navigation tab bar's buttons before the
+// header's toggle, which comes first in the tree): a binding by place among
+// others is checked, one its query alone returns stands.
+check("outside a row, by place among others: frame-checked",
+      RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false),
+      Plan(checkFrame: true))
+check("outside a row, unique in its query: as before",
+      RowBinding.plan(bound: true, inRow: false, uniqueInQuery: true, tags: Tags(), treeHasLazyList: false), Plan())
+check("outside a row, no live element on purpose stays none",
+      RowBinding.plan(bound: false, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false), Plan())
 check("no live element on purpose stays none",
       RowBinding.plan(bound: false, inRow: true, uniqueInQuery: false, tags: tableRow, treeHasLazyList: false), Plan())
 check("a table row's repeated button goes through its row",

@@ -29,9 +29,9 @@ class SnapshotElementFinder {
     /// it from a same-frame cover.
     private var identityCache: [String: CachedIdentity] = [:]
     private var cacheOrder: [String] = []
-    /// Ids whose live element is a row's, bound by its place in a query that
-    /// returns other nodes too, so checked against where it was found on
-    /// every use (RowBinding, PILOT-952).
+    /// Ids whose live element is bound by its place in a query that returns
+    /// other nodes too (a row's, or any outside a row), so checked against
+    /// where it was found on every use (RowBinding, PILOT-952).
     private var rowBindings: Set<String> = []
     /// Ids found through their row's anchor in a collection view, with the
     /// query for the cells holding it and the command it was last checked
@@ -770,9 +770,9 @@ class SnapshotElementFinder {
 
     /// Get a cached XCUIElement by its stable ID (for actions like tap).
     ///
-    /// **Cost:** no IPC, except for a row's live element checked as
+    /// **Cost:** no IPC, except for a live element checked as
     /// `RowBinding.plan` says (PILOT-952): one bound by its place among
-    /// others takes one `snapshot()` of it on each call, to check it is still
+    /// others, in a row or not, takes one `snapshot()` of it on each call, to check it is still
     /// the element found (the query behind it is evaluated again on every
     /// read, so a check made once would not hold while a table moves and
     /// reuses its cells within one touch); one found through its row's
@@ -820,11 +820,12 @@ class SnapshotElementFinder {
                 lock.unlock()
             }
             if !bound {
-                // Another row's element (the live query's order changed as
-                // the table reused its cells), or none: keep no live element,
-                // so a touch goes to the frame it was found at, checked
-                // against a fresh tree (OcclusionAnalyzer), as a row's
-                // accessory indicator's does.
+                // Another element (another row's, the live query's order
+                // having changed as the table reused its cells, or one the
+                // query lists in another order than the tree), or none: keep
+                // no live element, so a touch goes to the frame it was found
+                // at, checked against a fresh tree (OcclusionAnalyzer), as a
+                // row's accessory indicator's does.
                 NSLog("[TapsmithSnapshot] \(elementId) found at \(found.map { "\($0)" } ?? "nil") but its live element is at \(live.map { "\($0)" } ?? "nothing"); dropping it")
                 throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
             }
@@ -2425,7 +2426,9 @@ class SnapshotElementFinder {
 
         // In a row: found through the row's anchor instead, and checked,
         // as RowBinding.plan says (PILOT-952). Once a table has scrolled, a
-        // place among others can be another row's.
+        // place among others can be another row's. Outside a row, a place
+        // among others is checked too: the live query need not list nodes
+        // in the tree's order.
         let inRow = snapshotNode?[SnapshotElementFinder.inRowKey] as? Bool ?? false
         let tags = snapshotNode.map(SnapshotElementFinder.rowTags(of:)) ?? RowBinding.Tags()
         let plan = RowBinding.plan(
