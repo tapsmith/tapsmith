@@ -785,9 +785,39 @@ do {
         (2, .other, "", "", R(0, -60, 402, 54)),
         (2, .other, "", "", R(0, 0, 0, 0)),
     ]
-    check("status bar items off screen or empty count for nothing beyond the bar itself",
+    check("a status bar with nothing on screen in it is not shown: none",
           Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(offScreen), screen: screen)),
+          nil)
+    // Recorded on an iPhone 17 Pro / iOS 26.5 over an app's edge-to-edge
+    // screen: SpringBoard lists a status bar deep in its tree holding the
+    // items, and a second, empty one near the root, both 402×54. An app that
+    // hides the status bar leaves both listed, with nothing in either, and
+    // touches in the band then reach the app.
+    func recordedSpringBoard(items: Bool) -> [Row] {
+        var rows: [Row] = [
+            (0, .application, "SpringBoard", "", screen),
+            (1, .window, "", "", screen),
+            (2, .other, "", "", screen),
+            (3, .statusBar, "", "", R(0, 0, 402, 54)),
+        ]
+        if items {
+            rows += [
+                (4, .other, "", "", R(0, 0, 402, 54)),
+                (5, .other, "", "", R(0, 0, 402, 54)),
+                (6, .staticText, "05:59", "", R(50, 22.33, 48.33, 20.33)),
+                (6, .other, "Mobile Service", "", R(288.33, 26.33, 19.33, 12.33)),
+                (6, .other, "100 battery power", "", R(339.33, 26, 27.33, 13)),
+            ]
+        }
+        rows.append((1, .statusBar, "", "", R(0, 0, 402, 54)))
+        return rows
+    }
+    check("recorded shown status bar: the top strip",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(recordedSpringBoard(items: true)), screen: screen)),
           R(0, 0, 402, 54))
+    check("recorded hidden status bar (listed, with no items): none",
+          Planner.statusBarRegion(springboard: OcclusionAnalyzer(nodes: tree(recordedSpringBoard(items: false)), screen: screen)),
+          nil)
 }
 
 // MARK: - 3. Blank spot

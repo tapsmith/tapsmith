@@ -20,6 +20,9 @@ import XCTest
 ///   visible part of that area is still tappable: the touch point moves to
 ///   the center of what the keyboard leaves visible, the same way Playwright
 ///   clicks the in-viewport part of a partly scrolled-out element.
+/// - **The system status bar**, when the caller says where it is: SpringBoard
+///   draws it over edge-to-edge content and takes the touches in it. It clips
+///   the visible area like the keyboard.
 /// - **Navigation, tab, and tool bars** the target is not part of, when they
 ///   are drawn over it: over the content of their own container (scroll
 ///   content passes under a nav bar even though the bar comes first in the
@@ -170,7 +173,10 @@ struct OcclusionAnalyzer {
 
     // MARK: - Verdict
 
-    func analyze(_ target: Target, isHittable: Bool) -> Verdict {
+    /// `statusBar` is where the system status bar is on the screen
+    /// (`KeyboardDismissPlanner.statusBarRegion`), or nil when none is shown
+    /// or it was not read: it clips the target like a bar.
+    func analyze(_ target: Target, isHittable: Bool, statusBar: CGRect? = nil) -> Verdict {
         var visible = target.frame.intersection(screen)
         guard !visible.isNull,
               visible.width >= Self.minVisibleExtent,
@@ -206,6 +212,10 @@ struct OcclusionAnalyzer {
         let targetInKeyboard = targetIndex.map { isInKeyboard($0, keyboardWindows: keyboardWindows) } ?? false
 
         var clips: [(rect: CGRect, name: String)] = []
+        // SpringBoard draws the status bar over the app and takes every touch
+        // in it, though the app's snapshot does not hold it and XCUITest's
+        // hit test passes for what is under it (PILOT-1435).
+        if let statusBar { clips.append((statusBar, Self.statusBarName)) }
         if !targetInKeyboard, let region = keyboardRegion(keyboardWindows: keyboardWindows) {
             clips.append((region, "the keyboard"))
         }
@@ -294,6 +304,52 @@ struct OcclusionAnalyzer {
         if let cover, loading.map({ cover > $0 }) ?? true { return .covered(by: describe(nodes[cover])) }
         if let loading { return .covered(by: "a loading overlay (\(describe(nodes[loading])))") }
         return .clear(point: point, visible: visible)
+    }
+
+    // MARK: - The system status bar
+
+    /// How a `.covered` verdict names the system status bar.
+    static let statusBarName = "the status bar"
+
+    /// Deepest the status bar reaches down the screen (points), for a screen
+    /// where it has not been seen yet: 54 on an iPhone with a Dynamic Island,
+    /// 24–32 on an iPad.
+    static let maxStatusBarExtent: CGFloat = 70
+
+    /// Which targets the status bar can be over, so where it is is worth
+    /// reading (a SpringBoard snapshot) — kept by the agent across actions.
+    /// Where the bar is drawn is fixed for a screen size (a strip along the
+    /// top, the iPhone Duo's column at the right edge), so it is learned from
+    /// the first read that finds the bar shown and kept, per screen size;
+    /// until then, a target reaching into the top band may be under it.
+    /// Whether the bar is shown changes at any time (an app hides it on one
+    /// screen), so the caller reads that afresh whenever this says yes.
+    struct StatusBarGate {
+        private var learned: [String: CGRect] = [:]
+
+        private static func key(_ screen: CGRect) -> String {
+            "\(Int(screen.width.rounded()))x\(Int(screen.height.rounded()))"
+        }
+
+        /// Note what a read found on `screen`: nil (no bar shown, or
+        /// SpringBoard unreadable) teaches nothing. A bar seen larger later
+        /// (an in-call or recording banner) widens what is kept.
+        mutating func learn(_ region: CGRect?, screen: CGRect) {
+            guard let region, !region.isNull, region.width > 0, region.height > 0 else { return }
+            let k = Self.key(screen)
+            learned[k] = learned[k].map { $0.union(region) } ?? region
+        }
+
+        /// Whether the bar can be over a target at `frame`.
+        func mayCover(_ frame: CGRect, screen: CGRect) -> Bool {
+            let onScreen = frame.intersection(screen)
+            guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 else { return false }
+            if let bar = learned[Self.key(screen)] {
+                let under = onScreen.intersection(bar)
+                return !under.isNull && under.width > 0 && under.height > 0
+            }
+            return onScreen.minY < screen.minY + OcclusionAnalyzer.maxStatusBarExtent
+        }
     }
 
     static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
