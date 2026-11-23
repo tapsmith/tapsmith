@@ -108,6 +108,17 @@ pub fn run_as_refusal_message(
     refusal: &RunAsRefusal,
     kind: DeviceKind,
 ) -> String {
+    let why = match refusal {
+        RunAsRefusal::UnknownPackage => {
+            return format!(
+                "{op} can't find {pkg}: it is not installed on {serial}. Install the app first."
+            );
+        }
+        RunAsRefusal::NotDebuggable => {
+            format!("{pkg} is not debuggable, so run-as can't reach its data")
+        }
+        RunAsRefusal::Other(raw) => format!("run-as can't reach {pkg}'s data ({raw})"),
+    };
     let no_root = match kind {
         DeviceKind::Rootable => format!("adbd on {serial} is not running as root"),
         DeviceKind::ProductionEmulator => format!(
@@ -115,23 +126,15 @@ pub fn run_as_refusal_message(
         ),
         DeviceKind::Physical => format!("{serial} is a physical device, which can't run adbd as root"),
     };
-    let why = match refusal {
-        RunAsRefusal::NotDebuggable => {
-            format!("{pkg} is not debuggable, so run-as can't reach its data")
-        }
-        RunAsRefusal::UnknownPackage => format!("{pkg} is not installed on {serial}"),
-        RunAsRefusal::Other(raw) => format!("run-as can't reach {pkg}'s data ({raw})"),
-    };
-    let fix = match (refusal, kind) {
-        (RunAsRefusal::UnknownPackage, _) => format!("Install the app on {serial} first."),
-        (_, DeviceKind::Rootable) => format!(
+    let fix = match kind {
+        DeviceKind::Rootable => format!(
             "Run `adb -s {serial} root` and try again, or install a debuggable build of {pkg}."
         ),
-        (_, DeviceKind::ProductionEmulator) => format!(
+        DeviceKind::ProductionEmulator => format!(
             "Use a Google APIs emulator image (`npx tapsmith create-avd`), or install a debuggable \
              build of {pkg} (a debug build, or `debuggable true` on the build type you test)."
         ),
-        (_, DeviceKind::Physical) => format!(
+        DeviceKind::Physical => format!(
             "Install a debuggable build of {pkg} (a debug build, or `debuggable true` on the \
              build type you test)."
         ),
@@ -263,8 +266,11 @@ mod tests {
             &RunAsRefusal::UnknownPackage,
             DeviceKind::ProductionEmulator,
         );
-        assert!(msg.contains("com.example.app is not installed on emulator-5554"));
-        assert!(msg.ends_with("Install the app on emulator-5554 first."));
+        assert_eq!(
+            msg,
+            "saveAppState can't find com.example.app: it is not installed on emulator-5554. \
+             Install the app first."
+        );
     }
 
     #[test]
