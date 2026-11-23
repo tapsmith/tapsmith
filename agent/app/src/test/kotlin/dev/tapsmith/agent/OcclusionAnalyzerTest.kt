@@ -467,6 +467,109 @@ class OcclusionAnalyzerTest {
         assertClearAt(analyze(button), 540, 855)
     }
 
+    // ─── One control split in two: an empty wrapper and its touch surface ───
+
+    /**
+     * A React Native header menu button: `testID` on a plain wrapper View
+     * around a native menu view that takes the touches itself. The tree
+     * reports the two as siblings under a parent with the wrapper's bounds,
+     * the wrapper empty and not touchable (copied from a real dump).
+     */
+    private class SplitControl(
+        wrapperTakesTouches: Boolean = false,
+        surfaceBounds: Box = Box(952, 89, 1010, 183),
+    ) {
+        val icon = FakeNode(Box(952, 90, 1010, 148), drawingOrder = 1, name = "an unlabelled TextView")
+        val wrapper =
+            FakeNode(
+                Box(923, 78, 1038, 194),
+                drawingOrder = 1,
+                takesTouches = wrapperTakesTouches,
+                isNamed = true,
+                name = "element \"HeaderMenuButton\"",
+            )
+        val surface = FakeNode(surfaceBounds, drawingOrder = 2, takesTouches = true, name = "an unlabelled ViewGroup").add(icon)
+        val shell = FakeNode(Box(923, 78, 1038, 194), drawingOrder = 4).add(wrapper, surface)
+        val back = FakeNode(Box(0, 63, 147, 210), drawingOrder = 1, takesTouches = true, name = "button \"Navigate up\"")
+        val title = FakeNode(Box(189, 101, 453, 172), drawingOrder = 2, isNamed = true, name = "text \"Add Wallet\"")
+        val header = FakeNode(Box(0, 0, 1080, 210), drawingOrder = 1).add(back, title, shell)
+    }
+
+    @Test
+    fun `an empty wrapper is not covered by its own touch surface laid beside it`() {
+        val control = SplitControl()
+        root(FakeNode(screen).add(control.header))
+        assertClearAt(analyze(control.wrapper), 980, 136)
+    }
+
+    @Test
+    fun `a touch surface nested in the wrapper's later sibling is its own too`() {
+        val surface = FakeNode(Box(952, 89, 1010, 183), drawingOrder = 1, takesTouches = true, name = "surface")
+        val holder = FakeNode(Box(952, 89, 1010, 183), drawingOrder = 2).add(surface)
+        val wrapper = FakeNode(Box(923, 78, 1038, 194), drawingOrder = 1, isNamed = true)
+        root(FakeNode(screen).add(FakeNode(Box(923, 78, 1038, 194), drawingOrder = 4).add(wrapper, holder)))
+        assertClearAt(analyze(wrapper), 980, 136)
+    }
+
+    @Test
+    fun `a touch surface filling the whole wrapper is its own too`() {
+        // What clipping makes of a surface laid out as big as its wrapper.
+        val control = SplitControl(surfaceBounds = Box(923, 78, 1038, 194))
+        root(FakeNode(screen).add(control.header))
+        assertClearAt(analyze(control.wrapper), 980, 136)
+    }
+
+    @Test
+    fun `a touchable target is still covered by a touchable sibling over it`() {
+        val control = SplitControl(wrapperTakesTouches = true)
+        root(FakeNode(screen).add(control.header))
+        assertCoveredBy(analyze(control.wrapper), "an unlabelled ViewGroup")
+    }
+
+    @Test
+    fun `a sibling reaching beyond the wrapper still covers it`() {
+        // Bounds unclipped (as Compose reports them): the sibling is not
+        // wholly inside the target. A View's would be clipped to the shell.
+        val control = SplitControl(surfaceBounds = Box(900, 60, 1060, 220))
+        root(FakeNode(screen).add(control.header))
+        assertCoveredBy(analyze(control.wrapper), "an unlabelled ViewGroup")
+    }
+
+    @Test
+    fun `an overlay in a parent larger than the wrapper still covers it`() {
+        val wrapper = FakeNode(Box(923, 78, 1038, 194), drawingOrder = 1, isNamed = true)
+        val overlay = FakeNode(Box(940, 80, 1030, 190), drawingOrder = 2, takesTouches = true, name = "button \"Overlay\"")
+        root(FakeNode(Box(0, 0, 1080, 210), drawingOrder = 1).add(wrapper, overlay))
+        assertCoveredBy(analyze(wrapper), "button \"Overlay\"")
+    }
+
+    @Test
+    fun `a wrapper with content of its own is still covered by a touchable sibling`() {
+        // Not an empty wrapper: a card whose label is drawn, with a button laid over it.
+        val label = FakeNode(Box(930, 100, 1030, 170), drawingOrder = 1, isNamed = true)
+        val card = FakeNode(Box(923, 78, 1038, 194), drawingOrder = 1).add(label)
+        val overlay = FakeNode(Box(952, 89, 1010, 183), drawingOrder = 2, takesTouches = true, name = "button \"Overlay\"")
+        root(FakeNode(Box(923, 78, 1038, 194), drawingOrder = 1).add(card, overlay))
+        assertCoveredBy(analyze(card), "button \"Overlay\"")
+    }
+
+    @Test
+    fun `a full-screen modal over the split control still covers it`() {
+        val control = SplitControl()
+        val modal = FakeNode(screen, drawingOrder = 2, takesTouches = true, name = "scrim")
+        root(FakeNode(screen, drawingOrder = 1).add(control.header), modal)
+        assertCoveredBy(analyze(control.wrapper), "scrim")
+    }
+
+    @Test
+    fun `a spinner over the split control is still a loading overlay`() {
+        val control = SplitControl()
+        val spinner = FakeNode(Box(500, 1100, 580, 1180), isProgressIndicator = true)
+        val overlay = FakeNode(screen, drawingOrder = 2, name = "veil").add(spinner)
+        root(FakeNode(screen, drawingOrder = 1).add(control.header), overlay)
+        assertEquals(OcclusionAnalyzer.CoverKind.LOADING, coverKind(analyze(control.wrapper)))
+    }
+
     @Test
     fun `a touchable node nested in a later non-touchable container covers the target`() {
         val dismiss = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true, name = "button \"Dismiss\"")

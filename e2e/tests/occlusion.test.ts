@@ -266,6 +266,16 @@ describe("Occlusion", () => {
     await expect(occlusionScreen.counts).toHaveText(counts({ passThrough: 1 }))
   })
 
+  // PILOT-1447: a testID on an empty wrapper View whose touches are taken by
+  // a view laid inside it (a react-native-context-menu-view header button).
+  // Android reports the touch surface as the wrapper's sibling, and the tap
+  // was refused as covered by it.
+  test("tap() on an empty wrapper reaches the touch surface inside it", async ({ occlusionScreen }) => {
+    await occlusionScreen.headerMenuButton.tap({ timeout: 5_000 })
+
+    await expect(occlusionScreen.headerMenu).toBeVisible()
+  })
+
   test("tap() on a link nested in a text run still works", async ({ occlusionScreen }) => {
     await occlusionScreen.termsLink.tap()
 
