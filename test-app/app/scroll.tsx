@@ -1,4 +1,5 @@
-import { ScrollView, StyleSheet, Text, View } from "react-native"
+import { useState } from "react"
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native"
 
 const SECTIONS = [
   {
@@ -20,6 +21,7 @@ const SECTIONS = [
 ]
 
 export default function ScrollScreen() {
+  const [bottomPresses, setBottomPresses] = useState(0)
   return (
     <ScrollView style={styles.container} testID="main-scroll">
       <Text style={styles.heading} accessibilityRole="header">
@@ -54,6 +56,20 @@ export default function ScrollScreen() {
           ))}
         </View>
       ))}
+
+      {/* The last control in the content: scrolling it into view takes the
+          list to its end (PILOT-1444). */}
+      <Pressable
+        style={styles.bottomButton}
+        onPress={() => setBottomPresses((n) => n + 1)}
+        accessibilityRole="button"
+        testID="scroll-bottom-button"
+      >
+        <Text style={styles.bottomButtonText}>Bottom button</Text>
+      </Pressable>
+      <Text style={styles.bottomPresses} testID="scroll-bottom-presses">
+        Bottom button presses: {bottomPresses}
+      </Text>
 
       <View style={styles.footer} testID="scroll-footer">
         <Text style={styles.footerText}>End of list</Text>
@@ -105,6 +121,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#888",
     marginTop: 2,
+  },
+  bottomButton: {
+    margin: 16,
+    marginBottom: 4,
+    padding: 14,
+    borderRadius: 8,
+    alignItems: "center",
+    backgroundColor: "#1a73e8",
+  },
+  bottomButtonText: {
+    fontSize: 16,
+    color: "#fff",
+    fontWeight: "600",
+  },
+  bottomPresses: {
+    fontSize: 14,
+    color: "#666",
+    paddingHorizontal: 16,
   },
   footer: {
     padding: 24,
