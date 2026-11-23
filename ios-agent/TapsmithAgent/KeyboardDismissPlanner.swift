@@ -526,12 +526,15 @@ struct KeyboardDismissPlanner {
     }
 
     /// Whether node `i` holds more than one row: two or more children that
-    /// are containers with something not plain in them.
+    /// are controls (XCUITest often lists a React Native list's rows straight
+    /// under one wrapper) or containers with something not plain in them. A
+    /// row's own texts (a title and a subtitle) are not rows.
     private func isListContainer(_ i: Int) -> Bool {
         var rows = 0
         var c = i + 1
         while c < nodes[i].subtreeEnd {
-            if nodes[c].subtreeEnd > c + 1, ((c + 1)..<nodes[c].subtreeEnd).contains(where: { !isPlain($0) }) {
+            if OcclusionAnalyzer.interactiveTypes.contains(nodes[c].elementType)
+                || (nodes[c].subtreeEnd > c + 1 && ((c + 1)..<nodes[c].subtreeEnd).contains(where: { !isPlain($0) })) {
                 rows += 1
                 if rows >= 2 { return true }
             }

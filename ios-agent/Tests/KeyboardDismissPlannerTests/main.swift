@@ -1100,7 +1100,8 @@ do {
 let listSearchField = R(17, 133, 368, 43)
 /// /list with the keyboard up, as recorded on an iPhone 17 / iOS 26.5
 /// simulator: a search field and two counts above a FlatList whose rows
-/// (React Native touchables) keep a 16 pt margin either side and 8 pt apart.
+/// (React Native touchables) keep a 16 pt margin either side and 8 pt apart,
+/// listed straight under one wrapper in the list's content view.
 /// The list's accessibility label puts it in a labeled view of its size; its
 /// scroll bars are labeled views inside it; full-screen wrappers and the
 /// test-hooks marker are drawn after the screen. `overlay` goes right after
@@ -1116,12 +1117,10 @@ func listScreen(
         (4, .staticText, "0 selected", "selected-count", R(0, 218, 402, 25)),
         (4, .other, "Shopping list", "", R(0, 243, 402, 631)),
         (5, .scrollView, "", "", R(0, 243, 402, 631)),
-        (6, .other, "", "", R(0, 243, 402, max(631, Double(count) * 66))),
-    ] + (0..<count).flatMap { i -> [Row] in
-        [
-            (7, .other, "", "", rowFrame(i)),
-            (8, .button, "Item \(i + 1)", "item-\(i + 1)", rowFrame(i)),
-        ]
+        (6, .other, "", "", R(0, 243, 402, Double(count) * 66)),
+        (7, .other, "", "", R(0, 243, 402, Double(count) * 66)),
+    ] + (0..<count).map { i -> Row in
+        (8, .button, "Item \(i + 1)", "item-\(i + 1)", rowFrame(i))
     } + [
         (6, .other, "Vertical scroll bar, 1 page", "", R(369, 271, 30, 541)),
         (7, .other, "", "", R(396, 274, 3, 221)),
@@ -1197,7 +1196,7 @@ do {
 do {
     // A bar from elsewhere drawn over the list blocks the spot under it;
     // the list above it is still blank.
-    let bar = R(0, 330, 402, 199)
+    let bar = R(0, 360, 402, 169)
     let p = planner(listScreen(rows: 1, overlay: [(4, .button, "Floating action", "", bar)])).blankPointInScroller(of: rowTarget(0), focusedFrame: listSearchField)
     checkTrue("bar over the list: a spot beside it",
               p.map { listViewport.contains($0) && notInside($0, [bar, R(16, 243, 370, 58)]) } ?? false,
