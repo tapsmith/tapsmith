@@ -482,8 +482,9 @@ struct KeyboardDismissPlanner {
     /// What holds the scroll view never blocks (React Native wraps a list
     /// with an accessibility label in a labeled view of its size). The
     /// target's own row (its container under the innermost container holding
-    /// two or more rows) never takes the spot, and anything that is not a
-    /// plain container blocks. A spot clear of every row comes first; only a
+    /// two or more rows) is kept out — a row holding two controls of its own
+    /// counts as such a container, so then only the target is — and
+    /// anything that is not a plain container blocks. A spot clear of every row comes first; only a
     /// list with none (packed with rows) gets one in a row's plain margin,
     /// and then only a row that shows a control of its own — a row holding
     /// only text or images may itself be the control.
