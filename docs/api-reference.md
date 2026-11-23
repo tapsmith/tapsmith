@@ -2974,7 +2974,7 @@ npx tapsmith test --project android tests/login.tapsmith.ts
 
 ### `tapsmith test --watch` / `tapsmith test -w`
 
-Watch test files for changes and re-run them automatically. The daemon, device, and agent are kept alive across re-runs, so only the app reset + test execution cost is paid (~1-2s per re-run).
+Watch test files for changes and re-run them automatically. The daemon, device, and agent are kept alive across re-runs, so a re-run pays only the app reset and the tests themselves, not a cold run's setup ([Watch mode](watch-mode.md) says what each reset costs).
 
 ```bash
 npx tapsmith test --watch
