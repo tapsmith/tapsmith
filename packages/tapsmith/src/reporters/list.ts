@@ -16,7 +16,7 @@ import {
   dim,
   bold,
   red,
-  formatDuration,
+  formatTestDuration,
   formatError,
   formatWarnings,
   formatSummaryLine,
@@ -90,7 +90,7 @@ export class ListReporter implements TapsmithReporter {
     if (this._isTTY) this._clearInProgress();
 
     if (test._willRetry) {
-      const duration = dim(`(${formatDuration(test.durationMs)})`);
+      const duration = dim(`(${formatTestDuration(test)})`);
       const counter = dim(`[${this._testIndex + 1}]`);
       const worker = this._multipleWorkers ? workerTag(test.workerIndex) : '';
       const project = this._showProjectTags ? projectTag(test.project) : '';
@@ -119,7 +119,7 @@ export class ListReporter implements TapsmithReporter {
     this._testIndex++;
 
     const icon = statusIcon(test.status);
-    const duration = dim(`(${formatDuration(test.durationMs)})`);
+    const duration = dim(`(${formatTestDuration(test)})`);
     const counter = dim(`[${this._testIndex}]`);
     const worker = this._multipleWorkers ? workerTag(test.workerIndex) : '';
     const project = this._showProjectTags ? projectTag(test.project) : '';

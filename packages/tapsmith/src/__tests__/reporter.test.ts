@@ -404,6 +404,21 @@ describe('ListReporter', () => {
     expect(lines[2]).toContain('flaky test (retry #2) (1.2s)');
   });
 
+  // The first test of a file counts the file's setup (app reset, beforeAll)
+  // in its duration, as Playwright does; the line says so, since the reset
+  // is also shown on its own "Reset app (8.0s)" line.
+  it('says how much of a first test\'s duration was its scope\'s setup', () => {
+    reporter.onRunStart!(makeConfig(), 1);
+    const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
+    reporter.onTestEnd!(makeTestResult({ status: 'passed', fullName: 'first test', durationMs: 8500, setupMs: 7950 }));
+    reporter.onTestEnd!(makeTestResult({ status: 'passed', fullName: 'second test', durationMs: 600 }));
+    reporter.onTestEnd!(makeTestResult({ status: 'failed', fullName: 'retried', durationMs: 2000, setupMs: 1500, error: new Error('x'), _willRetry: true, retry: 0 }));
+    const out = strip(stdoutSpy.mock.calls.map((c: unknown[]) => c[0]).join(''));
+    expect(out).toContain('first test (8.5s, incl. 8.0s setup)');
+    expect(out).toContain('second test (600ms)');
+    expect(out).toContain('retried (2.0s, incl. 1.5s setup)');
+  });
+
   it('prints the first-attempt error and trace in the flaky summary', () => {
     reporter.onRunStart!(makeConfig(), 1);
     const flakyTest = makeTestResult({

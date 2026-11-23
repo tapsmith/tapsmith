@@ -39,6 +39,16 @@ export function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/**
+ * A test's duration for its result line. The first test of a scope counts
+ * the scope's setup (app reset, beforeAll hooks) in its duration, as
+ * Playwright counts fixture setup; the label says how much of it that was.
+ */
+export function formatTestDuration(test: { durationMs: number; setupMs?: number }): string {
+  const total = formatDuration(test.durationMs);
+  return test.setupMs && test.setupMs > 0 ? `${total}, incl. ${formatDuration(test.setupMs)} setup` : total;
+}
+
 export function statusIcon(status: 'passed' | 'failed' | 'skipped'): string {
   switch (status) {
     case 'passed': return green('✓');

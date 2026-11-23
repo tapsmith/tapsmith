@@ -46,6 +46,12 @@ describe('worker-protocol serialization', () => {
       expect(serializeTestResult({ ...result, fileLevelFailure: undefined }, 0)).not.toHaveProperty('fileLevelFailure');
     });
 
+    it('round-trips setupMs, so --workers shows the first test\'s setup share', () => {
+      const result: TestResult = { name: 't', fullName: 't', status: 'passed', durationMs: 8500, setupMs: 8000 };
+      expect(deserializeTestResult(serializeTestResult(result, 0)).setupMs).toBe(8000);
+      expect(serializeTestResult({ ...result, setupMs: undefined }, 0)).not.toHaveProperty('setupMs');
+    });
+
     it('round-trips warnings (PILOT-398)', () => {
       const result: TestResult = { name: 't', fullName: 't', status: 'passed', durationMs: 1, warnings: ['The app under test (com.example.app) showed "Example keeps stopping"; Tapsmith dismissed it.'] };
       expect(deserializeTestResult(serializeTestResult(result, 0)).warnings).toEqual(['The app under test (com.example.app) showed "Example keeps stopping"; Tapsmith dismissed it.']);

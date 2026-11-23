@@ -2641,7 +2641,8 @@ interface TestResult {
   name: string;
   fullName: string;
   status: "passed" | "failed" | "skipped";
-  durationMs: number;
+  durationMs: number; // for the first test of a scope, includes the scope's setup (see setupMs)
+  setupMs?: number; // scope setup (app reset, beforeAll hooks) counted in this first test's durationMs, as Playwright counts fixture setup
   error?: Error;
   firstAttemptError?: Error; // on a flaky (passed-on-retry) result: the first failed attempt's error
   failedAttemptArtifacts?: { screenshot?: boolean; trace?: boolean; video?: boolean }; // which linked artifacts came from the failed attempt
@@ -2669,6 +2670,13 @@ when any file fails to load, it reports these results to every reporter, prints
 `No tests ran: <n> test file(s) failed to load.`, and exits with code 1 without running any test. UI
 mode, watch mode and the MCP server's `run_tests` keep running the other files, since they wait for
 the edit that fixes the broken one.
+
+The first test to run in a file (or in a `describe` with its own app reset or `beforeAll`
+hooks) counts that setup in `durationMs`, and `setupMs` says how much of it was setup. The `list`
+reporter shows it on the test's line, e.g. `(8.5s, incl. 8.0s setup)`.
+
+When a `beforeEach` or `beforeAll` hook throws, the error reported for the test names the hook:
+`"beforeEach" hook at login.test.ts:12 failed: <the hook's error>`.
 
 For a **flaky** test (failed, then passed on retry) the final result links the
 **first failed attempt's** trace, screenshot, and video — the failure is what
