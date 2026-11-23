@@ -335,6 +335,12 @@ const CASES: Case[] = [
   { why: 'exact compares it whole', platform: 'android', type: A.button, role: 'button', text: 'Sign In', name: 'Sign', exact: true, matches: false },
   { why: 'exact matches the whole name', platform: 'android', type: A.button, role: 'button', text: 'Sign In', name: 'Sign In', exact: true, matches: true },
   { why: 'exact is case-sensitive', platform: 'android', type: A.button, role: 'button', text: 'Sign In', name: 'sign in', exact: true, matches: false },
+  // Android's all-caps transform: rendered text also matches the query
+  // upper-cased; a content description is what the app wrote, so stays exact.
+  { why: 'exact matches all-caps text', platform: 'android', type: A.button, role: 'button', text: 'SIGN IN', name: 'Sign In', exact: true, matches: true },
+  { why: 'and all-caps child text', platform: 'android', type: A.button, role: 'button', childTexts: ['YES, DELETE'], name: 'Yes, delete', exact: true, matches: true },
+  { why: 'but not a mixed-case text', platform: 'android', type: A.button, role: 'button', text: 'Sign in', name: 'Sign In', exact: true, matches: false },
+  { why: 'nor an all-caps content description', platform: 'android', type: A.imageButton, role: 'button', contentDesc: 'CLOSE', name: 'Close', exact: true, matches: false },
   { why: 'NBSP in the text is a space', platform: 'android', type: A.button, role: 'button', text: `Sign${NBSP}In`, name: 'Sign In', exact: true, matches: true },
   { why: 'the content description is a name', platform: 'android', type: A.imageButton, role: 'button', contentDesc: 'Close', name: 'Close', exact: true, matches: true },
   { why: 'the children\'s text names a Pressable', platform: 'android', type: A.button, role: 'button', childTexts: ['Sign In'], name: 'Sign In', exact: true, matches: true },

@@ -43,6 +43,34 @@ class TextMatchTest {
     }
 
     @Test
+    fun `exact pattern also matches the all-caps rendering of the query`() {
+        // textAllCaps (every AlertDialog button, React Native's <Button>)
+        // reports "YES, DELETE" for the text "Yes, delete": Detox and
+        // Playwright match the text before the transform.
+        assertTrue(exact("Yes, delete", "YES, DELETE"))
+        assertTrue(exact("Yes,  delete", "YES,\u00A0DELETE"))
+        assertTrue(exact("YES, DELETE", "YES, DELETE"))
+        assertTrue(exact("Straße", "STRASSE"))
+        // Mixed-case text still matches case-sensitively.
+        assertFalse(exact("Yes, delete", "Yes, Delete"))
+        assertFalse(exact("YES, DELETE", "Yes, delete"))
+        // Whole text only.
+        assertFalse(exact("Yes", "YES, DELETE"))
+    }
+
+    @Test
+    fun `the all-caps rendering ignores the default locale`() {
+        val saved = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr"))
+            assertTrue(exact("Sign in", "SIGN IN"))
+            assertTrue(TextMatch.nameMatches("SIGN IN", "Sign in", exact = true, allCaps = true))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test
     fun `contains pattern matches a substring across whitespace variants`() {
         assertTrue(contains("to Expo", "Welcome to Expo"))
         assertTrue(contains("Welcome", "Welcome to Expo"))
@@ -119,6 +147,18 @@ class TextMatchTest {
         assertFalse(TextMatch.nameMatches("SIGN IN", "Sign In", exact = true))
         assertFalse(TextMatch.nameMatches("Sign In now", "Sign In", exact = true))
         assertFalse(TextMatch.nameMatches(null, "Sign In", exact = true))
+    }
+
+    @Test
+    fun `an exact name read from text also matches its all-caps rendering`() {
+        assertTrue(TextMatch.nameMatches("SIGN IN", "Sign In", exact = true, allCaps = true))
+        assertFalse(TextMatch.nameMatches("Sign in", "Sign In", exact = true, allCaps = true))
+        assertFalse(TextMatch.nameMatches("SIGN IN NOW", "Sign In", exact = true, allCaps = true))
+        // A button's text, or a React Native button's child text, is rendered
+        // text; its content description is what the app wrote, so stays exact.
+        assertTrue(TextMatch.accessibleNameMatches(null, "SIGN IN", false, { null }, "Sign In", exact = true))
+        assertTrue(TextMatch.accessibleNameMatches(null, null, false, { "SIGN IN" }, "Sign In", exact = true))
+        assertFalse(TextMatch.accessibleNameMatches("SIGN IN", null, false, { null }, "Sign In", exact = true))
     }
 
     @Test

@@ -226,9 +226,11 @@ describe('getByRole name matching in the playground (PILOT-549)', () => {
     expect(findMatchingNodes(roots, parsed)).toEqual([show, showBriefly]);
   });
 
-  it('matches case-sensitively and whole with { exact: true }', () => {
-    const { roots, showBriefly } = overlayScreen();
-    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("button", { name: "Show overlay", exact: true })')!)).toEqual([]);
+  it('matches case-sensitively and whole with { exact: true }, but for Android\'s all-caps rendering', () => {
+    const { roots, show, showBriefly } = overlayScreen();
+    // textAllCaps shows "Show overlay" as SHOW OVERLAY, which Detox and Playwright match.
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("button", { name: "Show overlay", exact: true })')!)).toEqual([show]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("button", { name: "show overlay briefly", exact: true })')!)).toEqual([]);
     expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("button", { name: "Show  overlay briefly", exact: true })')!))
       .toEqual([showBriefly]);
   });
@@ -806,21 +808,39 @@ describe('substring getByText ignores case in the playground, like the agents (P
     }
   });
 
-  it('keeps { exact: true } case-sensitive', () => {
+  it('keeps { exact: true } case-sensitive, but for Android\'s all-caps rendering', () => {
     for (const roots of [androidRoots, iosRoots]) {
-      expect(count(roots, 'device.getByText("get started", { exact: true })')).toBe(0);
       expect(count(roots, 'device.getByText("GET STARTED", { exact: true })')).toBe(1);
+      expect(count(roots, 'device.getByText("get startedx", { exact: true })')).toBe(0);
     }
+    // Android reports the all-caps transform's output, so the text as written matches it.
+    expect(count(androidRoots, 'device.getByText("Get started", { exact: true })')).toBe(1);
+    expect(count(iosRoots, 'device.getByText("Get started", { exact: true })')).toBe(0);
+    // Mixed-case text stays case-sensitive.
+    const mixed = [makeNode('node', { class: 'android.widget.FrameLayout' }, [
+      makeNode('node', { class: 'android.widget.TextView', text: 'Get Started' }),
+    ])];
+    expect(count(mixed, 'device.getByText("Get started", { exact: true })')).toBe(0);
   });
 
   it('upgrades a suggestion that now also matches differently-cased text to { exact: true }', () => {
-    const header = makeNode('node', { class: 'android.widget.TextView', text: 'SIGN IN' });
+    const header = makeNode('node', { class: 'android.widget.TextView', text: 'Sign In' });
     const button = makeNode('node', { class: 'android.widget.TextView', text: 'Sign in' });
     const root = makeNode('node', { class: 'android.widget.FrameLayout' }, [header, button]);
     const suggestion = [{ code: 'device.getByText("Sign in")', label: 'Text', priority: 6 }];
     expect(count([root], suggestion[0].code)).toBe(2);
     const result = disambiguateSelectors([root], button, suggestion);
     expect(result[0].code).toBe('device.getByText("Sign in", { exact: true })');
+  });
+
+  it('does not offer { exact: true } when an Android all-caps text matches it too', () => {
+    // On Android "Sign in" exactly also matches SIGN IN (the all-caps rendering).
+    const header = makeNode('node', { class: 'android.widget.TextView', text: 'SIGN IN', bounds: '[0,0][100,50]' });
+    const button = makeNode('node', { class: 'android.widget.TextView', text: 'Sign in', bounds: '[0,60][100,110]' });
+    const root = makeNode('node', { class: 'android.widget.FrameLayout' }, [header, button]);
+    expect(count([root], 'device.getByText("Sign in", { exact: true })')).toBe(2);
+    const result = disambiguateSelectors([root], button, [{ code: 'device.getByText("Sign in")', label: 'Text', priority: 6 }]);
+    expect(result[0].code).toBe('device.getByText("Sign in").last()');
   });
 });
 

@@ -1644,6 +1644,48 @@
       "matches": false
     },
     {
+      "why": "exact matches all-caps text",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "role": "button",
+      "text": "SIGN IN",
+      "name": "Sign In",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "and all-caps child text",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "role": "button",
+      "childTexts": [
+        "YES, DELETE"
+      ],
+      "name": "Yes, delete",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "but not a mixed-case text",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "role": "button",
+      "text": "Sign in",
+      "name": "Sign In",
+      "exact": true,
+      "matches": false
+    },
+    {
+      "why": "nor an all-caps content description",
+      "platform": "android",
+      "type": "android.widget.ImageButton",
+      "role": "button",
+      "contentDesc": "CLOSE",
+      "name": "Close",
+      "exact": true,
+      "matches": false
+    },
+    {
       "why": "NBSP in the text is a space",
       "platform": "android",
       "type": "android.widget.Button",

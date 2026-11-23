@@ -476,6 +476,20 @@ function normalizeWhitespace(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Whether Android rendered text equals a getByText or exact getByRole `name`
+ * query, both whitespace-normalized (`query` already is): as written, or
+ * upper-cased. Android's all-caps transform (`textAllCaps`: every AlertDialog
+ * button, React Native's `<Button>`) reports the transformed text, while
+ * Detox and Playwright match the text before it, so `"Yes, delete"` finds a
+ * button shown as `YES, DELETE`. `toUpperCase()` ignores the locale, as the
+ * agent's `uppercase()` does.
+ */
+function androidTextEquals(text: string, query: string): boolean {
+  const value = normalizeWhitespace(text);
+  return value === query || value === query.toUpperCase();
+}
+
 // The Android agent's MAX_DESCENDANT_TEXT_DEPTH.
 const MAX_DESCENDANT_TEXT_DEPTH = 6;
 
@@ -510,11 +524,16 @@ function descendantText(node: HierarchyNode, depth = 0): string[] {
  * Flutter tab, queried as a tab (`tabQuery`), also by its label alone
  * ({@link flutterTabName}): as a button it keeps its whole description, so
  * an exact button name does not also find the tab bar's item with that label.
+ * Android text and descendant text compared whole also match their all-caps
+ * rendering ({@link androidTextEquals}).
  */
 function roleNameMatches(node: HierarchyNode, name: string, exact: boolean, tabQuery: boolean): boolean {
   const query = normalizeWhitespace(name);
-  const matches = (actual: string | undefined, wholeOnly: boolean): boolean => {
+  // `renderedText`: Android text, which an all-caps transform may have
+  // upper-cased ({@link androidTextEquals}); a description is as written.
+  const matches = (actual: string | undefined, wholeOnly: boolean, renderedText = false): boolean => {
     if (actual === undefined || actual === '') return false;
+    if (wholeOnly && renderedText) return androidTextEquals(actual, query);
     const value = normalizeWhitespace(actual);
     return wholeOnly ? value === query : value.toLowerCase().includes(query.toLowerCase());
   };
@@ -530,9 +549,9 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean, tabQ
   return matches(node.attributes.get('content-desc'), exact)
     || matches(node.attributes.get('label'), exact)
     || matches(node.attributes.get('title'), exact)
-    || (!textIsHint(node) && matches(text, exact || textIsValue))
+    || (!textIsHint(node) && matches(text, exact || textIsValue, isAndroid))
     || (!isAndroid && (iosChildLabel(node.attributes.get('label')) || iosChildLabel(node.attributes.get('title'))))
-    || (isAndroid && matches(descendantText(node).join(' '), exact))
+    || (isAndroid && matches(descendantText(node).join(' '), exact, true))
     || matches(placeholderName(node), exact)
     || matches(backButtonName(node), exact);
 }
@@ -712,7 +731,10 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector, pare
   // Native selector types match native nodes
   switch (selector.type) {
     case 'text':
-      return normalizeWhitespace(getNodeText(node)) === normalizeWhitespace(selector.value);
+      // On Android, also the text's all-caps rendering (androidTextEquals).
+      return node.attributes.has('class')
+        ? androidTextEquals(getNodeText(node), normalizeWhitespace(selector.value))
+        : normalizeWhitespace(getNodeText(node)) === normalizeWhitespace(selector.value);
     case 'textContains':
       // Case-insensitive, like Playwright's non-exact getByText and the
       // agents (PILOT-522); { exact: true } stays case-sensitive.

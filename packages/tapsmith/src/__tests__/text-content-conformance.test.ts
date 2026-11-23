@@ -84,6 +84,7 @@ const CASES: Case[] = [
   // Labels are text content…
   { why: 'static text by its label', platform: 'ios', type: T.text, label: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: true },
   { why: 'a button by its label', platform: 'ios', type: T.button, label: 'Sign In', query: { exact: 'Sign In' }, matches: true },
+  { why: 'exact stays case-sensitive (iOS has no all-caps transform)', platform: 'ios', type: T.button, label: 'SIGN IN', query: { exact: 'Sign In' }, matches: false },
   { why: 'an alert by its title label', platform: 'ios', type: T.alert, label: 'Delete file?', query: { exact: 'Delete file?' }, matches: true },
   { why: 'a generic view by its label', platform: 'ios', type: T.other, label: 'Card', query: { exact: 'Card' }, matches: true },
   { why: 'a text field by its label', platform: 'ios', type: T.field, label: 'Full name', query: { substring: 'full name' }, matches: true },
@@ -202,7 +203,18 @@ const CASES: Case[] = [
   { why: 'a RegExp tests the raw label', platform: 'ios', type: T.text, label: 'Line one\nLine two', query: { source: '^Line two$', flags: 'm' }, matches: true },
   // ─── Android: the node's text, as UIAutomator's walk reads it ───
   { why: 'exact matches the whole text', platform: 'android', type: A.textView, text: 'Sign In', query: { exact: 'Sign In' }, matches: true },
-  { why: 'exact is case-sensitive', platform: 'android', type: A.textView, text: 'GET STARTED', query: { exact: 'get started' }, matches: false },
+  { why: 'exact is case-sensitive', platform: 'android', type: A.textView, text: 'Get Started', query: { exact: 'get started' }, matches: false },
+  // Android's all-caps transform (textAllCaps: every AlertDialog button, React
+  // Native's <Button>) reports the transformed text, so an exact query also
+  // matches its upper-cased rendering, as Detox and Playwright match the text
+  // before the transform.
+  { why: 'exact matches the all-caps rendering', platform: 'android', type: A.button, text: 'YES, DELETE', query: { exact: 'Yes, delete' }, matches: true },
+  { why: 'whatever case the query is in', platform: 'android', type: A.textView, text: 'GET STARTED', query: { exact: 'get started' }, matches: true },
+  { why: 'whitespace-normalized', platform: 'android', type: A.button, text: 'YES,\u00a0DELETE', query: { exact: 'Yes,  delete' }, matches: true },
+  { why: 'upper-cased without the device locale', platform: 'android', type: A.textView, text: 'STRASSE', query: { exact: 'Straße' }, matches: true },
+  { why: 'but not a mixed-case text', platform: 'android', type: A.button, text: 'Yes, Delete', query: { exact: 'Yes, delete' }, matches: false },
+  { why: 'nor a capitalized query of lower-case text', platform: 'android', type: A.textView, text: 'yes, delete', query: { exact: 'YES, DELETE' }, matches: false },
+  { why: 'nor part of an all-caps text', platform: 'android', type: A.button, text: 'YES, DELETE', query: { exact: 'Yes' }, matches: false },
   { why: 'exact is not a substring', platform: 'android', type: A.textView, text: 'Sign In', query: { exact: 'Sign' }, matches: false },
   { why: 'substring ignores case', platform: 'android', type: A.textView, text: 'GET STARTED', query: { substring: 'get started' }, matches: true },
   { why: 'substring ignores non-ASCII case', platform: 'android', type: A.textView, text: 'ÉTÉ', query: { substring: 'été' }, matches: true },

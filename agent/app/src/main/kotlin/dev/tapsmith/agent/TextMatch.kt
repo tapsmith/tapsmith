@@ -35,20 +35,34 @@ object TextMatch {
     ): Boolean = actual != null && normalize(actual.toString()) == normalize(expected)
 
     /**
+     * The all-caps rendering of [query]: what Android's all-caps transform
+     * (`textAllCaps` — every AlertDialog button, React Native's `<Button>`)
+     * shows for it, and what accessibility then reports as the view's text.
+     * Detox and Playwright match the text before the transform, so an exact
+     * match also accepts this. [String.uppercase] is locale-independent, as
+     * the SDK's `toUpperCase()` is.
+     */
+    private fun allCapsRendering(query: String): String = query.uppercase()
+
+    /**
      * Whether [actual] (null = no text) matches the accessible-name [query]
      * the way Playwright's getByRole `name` does (PILOT-549): by default a
      * case-insensitive substring match, with [exact] a case-sensitive
      * whole-string match. Whitespace is normalized either way. Case folding
      * uses [String.lowercase], which is locale-independent, so a Turkish
-     * device locale doesn't break "LOGIN" vs "login".
+     * device locale doesn't break "LOGIN" vs "login". With [allCaps] —
+     * [actual] is rendered text — a whole-string match also accepts the
+     * query's all-caps rendering ([allCapsRendering]); a content description is
+     * what the app wrote, so it is compared as written.
      */
     fun nameMatches(
         actual: CharSequence?,
         query: String,
         exact: Boolean,
+        allCaps: Boolean = false,
     ): Boolean {
         if (actual == null) return false
-        if (exact) return equalsNormalized(actual, query)
+        if (exact) return equalsNormalized(actual, query) || (allCaps && equalsNormalized(actual, allCapsRendering(query)))
         return normalize(actual.toString()).lowercase().contains(normalize(query).lowercase())
     }
 
@@ -66,6 +80,9 @@ object TextMatch {
      * input with no label by its placeholder (PILOT-834). An empty field
      * reports its hint as its text, so that text is the hint, not a name of
      * its own: a described field is named by its description alone.
+     *
+     * The text and descendant text are rendered text, so compared whole they
+     * also match the name's all-caps rendering ([nameMatches] `allCaps`).
      */
     fun accessibleNameMatches(
         contentDescription: CharSequence?,
@@ -77,9 +94,9 @@ object TextMatch {
         hint: CharSequence? = null,
     ): Boolean =
         nameMatches(contentDescription, name, exact) ||
-            (!textIsHint(text, hint) && nameMatches(text, name, exact || textIsValue)) ||
+            (!textIsHint(text, hint) && nameMatches(text, name, exact || textIsValue, allCaps = true)) ||
             descendantText().let { descendants ->
-                nameMatches(descendants, name, exact) ||
+                nameMatches(descendants, name, exact, allCaps = true) ||
                     (isBlank(descendants) && nameMatches(hintName(contentDescription, hint), name, exact))
             }
 
@@ -130,8 +147,18 @@ object TextMatch {
             test(descendants)
     }
 
-    /** Full-match pattern: the text equals [query] after normalizing both. */
-    fun exactPattern(query: String): Pattern = Pattern.compile("$WS_CLASS*${wordsPattern(query)}$WS_CLASS*")
+    /**
+     * Full-match pattern: the text equals [query] after normalizing both,
+     * or equals its all-caps rendering ([allCapsRendering]), which is what an
+     * all-caps view reports: `"Yes, delete"` finds a dialog button shown as
+     * `YES, DELETE`. Mixed-case text still matches case-sensitively.
+     */
+    fun exactPattern(query: String): Pattern {
+        val words = wordsPattern(query)
+        val capsWords = wordsPattern(allCapsRendering(query))
+        val alternatives = if (capsWords == words) words else "(?:$words|$capsWords)"
+        return Pattern.compile("$WS_CLASS*$alternatives$WS_CLASS*")
+    }
 
     /**
      * Full-match pattern: the normalized text contains the normalized

@@ -22,6 +22,16 @@
       "matches": true
     },
     {
+      "why": "exact stays case-sensitive (iOS has no all-caps transform)",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "label": "SIGN IN",
+      "query": {
+        "exact": "Sign In"
+      },
+      "matches": false
+    },
+    {
       "why": "an alert by its title label",
       "platform": "ios",
       "type": "XCUIElementTypeAlert",
@@ -1033,9 +1043,79 @@
       "why": "exact is case-sensitive",
       "platform": "android",
       "type": "android.widget.TextView",
+      "text": "Get Started",
+      "query": {
+        "exact": "get started"
+      },
+      "matches": false
+    },
+    {
+      "why": "exact matches the all-caps rendering",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "text": "YES, DELETE",
+      "query": {
+        "exact": "Yes, delete"
+      },
+      "matches": true
+    },
+    {
+      "why": "whatever case the query is in",
+      "platform": "android",
+      "type": "android.widget.TextView",
       "text": "GET STARTED",
       "query": {
         "exact": "get started"
+      },
+      "matches": true
+    },
+    {
+      "why": "whitespace-normalized",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "text": "YES, DELETE",
+      "query": {
+        "exact": "Yes,  delete"
+      },
+      "matches": true
+    },
+    {
+      "why": "upper-cased without the device locale",
+      "platform": "android",
+      "type": "android.widget.TextView",
+      "text": "STRASSE",
+      "query": {
+        "exact": "Straße"
+      },
+      "matches": true
+    },
+    {
+      "why": "but not a mixed-case text",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "text": "Yes, Delete",
+      "query": {
+        "exact": "Yes, delete"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor a capitalized query of lower-case text",
+      "platform": "android",
+      "type": "android.widget.TextView",
+      "text": "yes, delete",
+      "query": {
+        "exact": "YES, DELETE"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor part of an all-caps text",
+      "platform": "android",
+      "type": "android.widget.Button",
+      "text": "YES, DELETE",
+      "query": {
+        "exact": "Yes"
       },
       "matches": false
     },
