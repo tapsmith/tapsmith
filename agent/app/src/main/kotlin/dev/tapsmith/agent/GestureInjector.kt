@@ -557,8 +557,9 @@ class GestureInjector(
      *   never saw the pointer stop, and a lift flung the list 136 rows).
      * - Then the pointer is lifted, with no speed left to fling. A lift, not
      *   a cancel: a React Native scroll view ends its drag (onScrollEndDrag,
-     *   momentum events, a paging list's snap) only on a lift. Nothing under
-     *   the finger is clicked: it has moved far past slop.
+     *   momentum events, a paging list's snap) only on a lift. Inside a scroll
+     *   view nothing under the finger is clicked: the scroll view takes the
+     *   drag over past slop and cancels the touch for the view under it.
      *
      * A refused event stops the drag, and the pointer is cancelled rather
      * than lifted after a drag that did not finish (as is one whose lift is
