@@ -285,8 +285,16 @@ class GestureInjector(
          */
         const val DRAG_FRAME_MOVES = 2
 
-        /** A [scrollStepDrag]'s moves span this much event time (Speedrun's 50 ms drag). */
+        /** A [scrollStepDrag]'s moves span this much event time (Speedrun's 50 ms drag)… */
         const val STEP_DRAG_MOVE_MS = 50L
+
+        /**
+         * …and its last move comes this much event time after the one before:
+         * more than the 20 ms gap up to which the app's input queue predicts
+         * where a moving pointer will be at the next frame (touch resampling,
+         * see [scrollStepDrag]).
+         */
+        const val STEP_DRAG_LAST_MOVE_GAP_MS = 25L
 
         /**
          * Event time between a [scrollStepDrag]'s last moving sample and its
@@ -535,18 +543,22 @@ class GestureInjector(
      * - The other moves go [STEP_DRAG_MOVE_GAP_MS] apart without waiting for
      *   the app (the last one waits, so the app has the whole drag).
      * - Event times are backdated: the moves span [STEP_DRAG_MOVE_MS] of event
-     *   time, then two still samples are stamped past VelocityTracker's stop
-     *   gap and its horizon, and no event is stamped later than it is sent.
-     *   Each still sample moves the pointer one pixel further along the drag:
-     *   a sample at the pointer's last position does not reach the scroll
-     *   view's velocity tracker, so still samples at the end point told it
-     *   nothing, and the lift flung the list (one drag moved it 136 rows).
+     *   time, the last one [STEP_DRAG_LAST_MOVE_GAP_MS] after the one before,
+     *   then two still samples are stamped past VelocityTracker's stop gap
+     *   and its horizon, and no event is stamped later than it is sent.
+     * - The app's input queue resamples touches: for each frame it predicts
+     *   where a pointer moving with samples 2-20 ms apart will be, and a
+     *   later sample at the same position as the one before is moved to that
+     *   prediction. So the last move is more than 20 ms after the one before
+     *   (or the app saw the drag end ~100 px past where the finger stopped,
+     *   and took that back at the next touch), and each still sample moves
+     *   the pointer one pixel further along the drag (still samples at the
+     *   end point were moved to an earlier prediction, the velocity tracker
+     *   never saw the pointer stop, and a lift flung the list 136 rows).
      * - Then the pointer is lifted, with no speed left to fling. A lift, not
      *   a cancel: a React Native scroll view ends its drag (onScrollEndDrag,
-     *   momentum events, a paging list's snap) only on a lift, and after a
-     *   cancelled drag at the end of its content the next tap on it could
-     *   be lost. Nothing under the finger is clicked: it has moved far past
-     *   slop.
+     *   momentum events, a paging list's snap) only on a lift. Nothing under
+     *   the finger is clicked: it has moved far past slop.
      *
      * A refused event stops the drag, and the pointer is cancelled rather
      * than lifted after a drag that did not finish (as is one whose lift is
@@ -565,7 +577,8 @@ class GestureInjector(
         val yStep = (y2 - y1).toDouble() / n
         // Every event time is at or before the real time it is sent: the
         // last still sample is stamped this far after the press.
-        val span = STEP_DRAG_MOVE_MS + STEP_DRAG_STOP_GAP_MS + STEP_DRAG_HORIZON_MS
+        val movesEnd = STEP_DRAG_MOVE_MS + STEP_DRAG_LAST_MOVE_GAP_MS
+        val span = movesEnd + STEP_DRAG_STOP_GAP_MS + STEP_DRAG_HORIZON_MS
         val downTime = clock.now() - span
         var x = x1
         var y = y1
@@ -591,7 +604,7 @@ class GestureInjector(
             checkpoint()
             x = if (i == n) x2 else x1 + (xStep * i).toInt()
             y = if (i == n) y2 else y1 + (yStep * i).toInt()
-            val t = downTime + STEP_DRAG_MOVE_MS * i / n
+            val t = if (i == n) downTime + movesEnd else downTime + STEP_DRAG_MOVE_MS * i / n
             if (i <= DRAG_FRAME_MOVES) {
                 ok = at(t, TouchAction.MOVE, sync = true)
                 clock.waitForNextFrame()
@@ -603,7 +616,7 @@ class GestureInjector(
         // One pixel on along the drag per still sample (its main axis).
         val nudgeX = if (abs(x2 - x1) > abs(y2 - y1)) (x2 - x1).sign else 0
         val nudgeY = if (nudgeX == 0) (y2 - y1).sign else 0
-        val stillAt = downTime + STEP_DRAG_MOVE_MS + STEP_DRAG_STOP_GAP_MS
+        val stillAt = downTime + movesEnd + STEP_DRAG_STOP_GAP_MS
         if (ok) {
             x += nudgeX
             y += nudgeY

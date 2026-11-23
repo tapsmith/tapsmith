@@ -634,10 +634,9 @@ class GestureInjectorTest {
 
     @Test
     fun `a step drag's still samples each move the pointer one pixel on along the drag`() {
-        // A sample at the pointer's last position does not reach the scroll
-        // view's velocity tracker, so it cannot tell it the pointer stopped:
-        // still samples at the end point left the drag's speed in it, and the
-        // lift flung the list.
+        // The app's input queue moves a sample at the pointer's last position
+        // to its last prediction: still samples at the end point never told
+        // the velocity tracker the pointer stopped, and the lift flung the list.
         val up = FakeSink(clock)
         injector(up).scrollStepDrag(0, 1000, 0, 200, steps = 20)
         val upMoves = up.touches.filter { it.second.action == TouchAction.MOVE }.map { it.second.pointers.single() }
@@ -683,7 +682,7 @@ class GestureInjectorTest {
         val times = eventTimes(sink)
         assertTrue("times $times", times.zipWithNext().all { (a, b) -> b >= a })
         sink.touches.zip(times).forEach { (sent, t) -> assertTrue("$t sent at ${sent.first}", t <= sent.first) }
-        // The moves span STEP_DRAG_MOVE_MS of event time from the press.
+        // The moves before the last span STEP_DRAG_MOVE_MS of event time from the press.
         val down = times.first()
         val lastMoving =
             sink.touches.indexOfFirst {
@@ -691,7 +690,26 @@ class GestureInjectorTest {
                     .single()
                     .y == 200
             }
-        assertTrue(times[lastMoving] - down <= GestureInjector.STEP_DRAG_MOVE_MS)
+        assertTrue(times[lastMoving - 1] - down <= GestureInjector.STEP_DRAG_MOVE_MS)
+    }
+
+    @Test
+    fun `a step drag's last move comes too long after the one before for the app to predict past it`() {
+        // An app's input queue resamples a pointer whose samples are 2-20 ms
+        // apart, predicting where it is at the next frame: for the last move
+        // it saw the drag end ~100 px past where the finger stopped.
+        for (steps in listOf(1, 8, 20)) {
+            val sink = FakeSink(clock)
+            injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = steps)
+            val times = eventTimes(sink)
+            val lastMoving =
+                sink.touches.indexOfFirst {
+                    it.second.pointers
+                        .single()
+                        .y == 200
+                }
+            assertTrue("steps $steps: times $times", times[lastMoving] - times[lastMoving - 1] > 20)
+        }
     }
 
     @Test
