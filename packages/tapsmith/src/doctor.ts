@@ -266,11 +266,6 @@ export interface AndroidDevicesSummary {
   fix?: string;
 }
 
-/**
- * Judge `adb devices`: a device adb lists but cannot use (unauthorized,
- * offline, no permissions) is named with its state and the fix, never
- * counted as "no devices" — the inventory lists it, so doctor must too.
- */
 /** The AVDs Tapsmith would boot for this config, and whether it can: their absence on disk, and the emulator binary. */
 export interface AvdSelfLaunch {
   avds: readonly string[];
@@ -278,6 +273,11 @@ export interface AvdSelfLaunch {
   emulatorFound: boolean;
 }
 
+/**
+ * Judge `adb devices`: a device adb lists but cannot use (unauthorized,
+ * offline, no permissions) is named with its state and the fix, never
+ * counted as "no devices" — the inventory lists it, so doctor must too.
+ */
 export function summarizeAndroidDevices(devices: AdbDevice[], launch?: AvdSelfLaunch): AndroidDevicesSummary {
   const ready = devices.filter((d) => d.state === 'device');
   const unusable = devices.filter((d) => d.state !== 'device');
