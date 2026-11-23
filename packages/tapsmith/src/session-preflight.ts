@@ -592,10 +592,26 @@ export async function ensureSessionReady(
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   options: EnsureSessionReadyOptions = {},
 ): Promise<void> {
+  // A relaunch here (the app was found in the background, or recovered) can
+  // put a development build on its dev launcher: connect it once the session
+  // is ready, as every other launch the session layer makes does.
+  let relaunched = false;
   const onRelaunch = (): void => {
+    relaunched = true;
     ctx.relaunches.count++;
     options.onRelaunch?.();
   };
+  await ensureSessionReadyInner(ctx, phase, maxAttempts, options, onRelaunch);
+  if (relaunched) await connectDevClient(ctx);
+}
+
+async function ensureSessionReadyInner(
+  ctx: SessionPreflightContext,
+  phase: string,
+  maxAttempts: number,
+  options: EnsureSessionReadyOptions,
+  onRelaunch: () => void,
+): Promise<void> {
   return withActionProgress('sessionReady', ctx.config.package, async (progress) => {
     let lastError: unknown;
     // Whether the recovery before THIS rung completed. Drives the probe's
@@ -1615,6 +1631,14 @@ const DEV_BUNDLE_LOAD_TIMEOUT_MS = 180_000;
 
 const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
 
+/**
+ * What the dev-client checks need of a session: the MCP server's own tools
+ * build one of these for a launch they make outside any test session.
+ */
+export type DevClientContext = Pick<SessionPreflightContext, 'config' | 'client' | 'deviceSerial' | 'capabilities'> & {
+  device: Pick<SessionDevice, 'openDeepLink'>
+};
+
 /** The build Tapsmith installed for this session, resolved against `rootDir`. */
 function configuredBuildPath(config: SessionPreflightContext['config']): string | undefined {
   const build = config.platform === 'ios' ? config.app : config.apk;
@@ -1628,7 +1652,7 @@ function configuredBuildPath(config: SessionPreflightContext['config']): string 
  * build to read, a project that depends on `expo-dev-client`, or one this
  * session already saw on a dev-client screen.
  */
-function mayBeDevClient(ctx: SessionPreflightContext): { look: boolean; scheme?: string } {
+function mayBeDevClient(ctx: DevClientContext): { look: boolean; scheme?: string } {
   const build = inspectDevBuild(configuredBuildPath(ctx.config));
   if (build) return { look: build.devClient, ...(build.scheme ? { scheme: build.scheme } : {}) };
   if (ctx.capabilities?.devClientSeen) return { look: true };
@@ -1636,8 +1660,32 @@ function mayBeDevClient(ctx: SessionPreflightContext): { look: boolean; scheme?:
   return { look: appDependsOn(ctx.config.rootDir, 'expo-dev-client') };
 }
 
+/**
+ * Connect a dev client after a launch made outside any test session (the MCP
+ * server's own tools), the way a session's launches do. The project is the
+ * one in `rootDir` (the MCP server's working folder); with no installed build
+ * to read, the check runs only for a project that depends on
+ * `expo-dev-client`.
+ */
+export function connectDevClientForTool(target: {
+  client: SessionPreflightContext['client']
+  device: Pick<SessionDevice, 'openDeepLink'>
+  packageName: string
+  platform: 'android' | 'ios'
+  serial?: string
+  rootDir: string
+}): Promise<void> {
+  return connectDevClient({
+    config: { package: target.packageName, platform: target.platform, rootDir: target.rootDir, device: target.serial } as SessionPreflightContext['config'],
+    client: target.client,
+    device: target.device,
+    deviceSerial: target.serial,
+    capabilities: {},
+  });
+}
+
 /** One hierarchy read for the dev-client checks; undefined when it fails. */
-async function readHierarchyXml(ctx: SessionPreflightContext): Promise<string | undefined> {
+async function readHierarchyXml(ctx: DevClientContext): Promise<string | undefined> {
   try {
     const h = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
     return h.hierarchyXml || undefined;
@@ -1654,7 +1702,7 @@ function devServerError(pkg: string, screen: DevClientScreen, why: string): Erro
       ? 'is an Expo development build and opened its dev menu'
       : screen === 'load-error'
         ? 'is an Expo development build and could not load its JavaScript ("There was a problem loading the project.")'
-        : 'is a React Native Debug build and could not load its JavaScript from Metro (React Native\'s "Unable to load script" screen)';
+        : 'is a React Native Debug build and could not load its JavaScript from Metro (React Native\'s red "Unable to load script" / "No bundle URL present" screen)';
   return new Error(
     `${pkg} ${where}: ${why}. A Debug build loads the app from the Metro dev server: start it in the app's folder `
     + '(`npx expo start`, or `npx react-native start`) and keep it running while the tests run, or test a Release build, '
@@ -1672,7 +1720,7 @@ function devServerError(pkg: string, screen: DevClientScreen, why: string): Erro
  * with an error saying so. Anything else returns after one hierarchy read,
  * and a build that is not a development build costs nothing.
  */
-export async function connectDevClient(ctx: SessionPreflightContext, deps: { fetch?: DevServerFetch } = {}): Promise<void> {
+export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: DevServerFetch } = {}): Promise<void> {
   const pkg = ctx.config.package;
   if (!pkg) return;
   const candidate = mayBeDevClient(ctx);
@@ -1720,7 +1768,7 @@ async function checkReactNativeDevServer(ctx: SessionPreflightContext): Promise<
  * so a screen with nothing on it yet is read again, bounded: an app still
  * blank after that is left to the tests' own waiting.
  */
-async function settledDevClientScreen(ctx: SessionPreflightContext, pkg: string, platform: 'android' | 'ios'): Promise<DevClientScreen | undefined> {
+async function settledDevClientScreen(ctx: DevClientContext, pkg: string, platform: 'android' | 'ios'): Promise<DevClientScreen | undefined> {
   const start = Date.now();
   for (;;) {
     const xml = await readHierarchyXml(ctx);
@@ -1735,7 +1783,7 @@ async function settledDevClientScreen(ctx: SessionPreflightContext, pkg: string,
 }
 
 /** Wait, bounded, for the app's own UI with no development screen over it. */
-async function waitForDevBundle(ctx: SessionPreflightContext, pkg: string, platform: 'android' | 'ios', serverUrl: string): Promise<void> {
+async function waitForDevBundle(ctx: DevClientContext, pkg: string, platform: 'android' | 'ios', serverUrl: string): Promise<void> {
   const start = Date.now();
   let last: DevClientScreen | undefined;
   while (Date.now() - start < DEV_BUNDLE_LOAD_TIMEOUT_MS) {
@@ -2365,9 +2413,10 @@ async function waitForHierarchy(
 }
 
 /**
- * Run one of the session layer's own launches: it checks readiness (and
- * connects a dev client) itself, so the device's after-launch hook, meant for
- * a test's own launches, stays out of it.
+ * Run one of the session layer's own launches: what follows it connects a dev
+ * client itself (`waitForAppReady`, or `ensureSessionReady` after a relaunch
+ * of its own), so the device's after-launch hook, meant for a test's own
+ * launches, stays out of it.
  */
 async function sessionLaunch<T>(ctx: Pick<SessionPreflightContext, 'device'>, launch: () => Promise<T>): Promise<T> {
   ctx.device._sessionLaunches = (ctx.device._sessionLaunches ?? 0) + 1;

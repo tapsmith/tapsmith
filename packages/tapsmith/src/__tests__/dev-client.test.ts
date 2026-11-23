@@ -42,6 +42,9 @@ describe('devClientScreen', () => {
     expect(devClientScreen(android)).toBe('no-dev-server');
     const ios = '<XCUIElementTypeApplication><XCUIElementTypeStaticText label="Could not connect to development server.&#10;&#10;Ensure the following:"/></XCUIElementTypeApplication>';
     expect(devClientScreen(ios)).toBe('no-dev-server');
+    // iOS with no packager at all: RCTBundleURLProvider has no URL to try.
+    const noUrl = '<XCUIElementTypeApplication><XCUIElementTypeStaticText label="No bundle URL present.&#10;&#10;Make sure you&apos;re running a packager server or have included a .jsbundle file in your application bundle."/></XCUIElementTypeApplication>';
+    expect(devClientScreen(noUrl)).toBe('no-dev-server');
   });
 
   it('reads the loaded app (with its hooks marker and the status bar) as no development screen', () => {

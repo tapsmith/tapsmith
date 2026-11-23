@@ -15,7 +15,6 @@
  * device side is in session-preflight.
  */
 
-import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import { unzipSync } from 'fflate';
 import { decodeXmlEntities } from './xml-entities.js';
@@ -63,7 +62,7 @@ export function devClientScreen(hierarchyXml: string): DevClientScreen | undefin
   if (has('Go home') && has('Reload') && (has('Toggle performance monitor') || has('Toggle element inspector'))) {
     return 'dev-menu';
   }
-  if (hasPrefix('Unable to load script.') || hasPrefix('Could not connect to development server') || hasPrefix('No script URL provided')) {
+  if (['Unable to load script.', 'No bundle URL present', 'Could not connect to development server', 'No script URL provided'].some(hasPrefix)) {
     return 'no-dev-server';
   }
   return undefined;
@@ -221,8 +220,9 @@ export type DevServerSearch =
 /**
  * Find the Metro serving this app: a server on one of {@link devServerPorts}
  * whose Expo config names `appId`, else one whose config names no app id for
- * the platform. A server for another app is never used (two projects' Metros
- * side by side is common); with several for this app, the lowest port wins.
+ * the platform. A server whose config names another app is never used (two
+ * projects' Metros side by side is common); with several for this app, the
+ * lowest port wins.
  */
 export async function findDevServer(
   appId: string,
@@ -256,7 +256,8 @@ export interface DevServerHostOptions {
 }
 
 /** Shell out, bounded; resolves even on failure (with the error). */
-function run(cmd: string, args: string[], timeoutMs: number): Promise<Error | undefined> {
+async function run(cmd: string, args: string[], timeoutMs: number): Promise<Error | undefined> {
+  const { execFile } = await import('node:child_process');
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: timeoutMs }, (err) => resolve(err ?? undefined));
   });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { connectDevClient, executeAppReset, launchConfiguredApp, type SessionPreflightContext } from '../session-preflight.js';
+import { connectDevClient, connectDevClientForTool, ensureSessionReady, executeAppReset, launchConfiguredApp, type SessionPreflightContext } from '../session-preflight.js';
 import type { DevServerFetch } from '../dev-client.js';
 
 const fixture = (name: string): string => fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf-8');
@@ -208,6 +208,29 @@ describe('dev clients through the launch and reset paths', () => {
     expect(client.getUiHierarchy.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
+  it('the per-test readiness check connects a dev client it had to relaunch', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const r = await metro(url, {}, 0);
+      if (!r) throw new Error('ECONNREFUSED');
+      return { status: r.status, text: async () => r.body };
+    }));
+    // The previous test left another app in front: the check relaunches ours,
+    // and the relaunch lands on the dev launcher.
+    const home = '<hierarchy><node package="com.google.android.apps.nexuslauncher" text="Phone" /></hierarchy>';
+    const { ctx, device } = makeContext([home, LAUNCHER, LAUNCHER, LAUNCHER, APP]);
+    device.currentPackage.mockResolvedValueOnce('com.google.android.apps.nexuslauncher');
+    await ensureSessionReady(ctx, 'before test');
+    expect(device.launchApp).toHaveBeenCalledTimes(1);
+    expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('the per-test readiness check reads nothing extra when it relaunched nothing', async () => {
+    const { ctx, device } = makeContext([APP]);
+    await ensureSessionReady(ctx, 'before test');
+    expect(device.launchApp).not.toHaveBeenCalled();
+    expect(device.openDeepLink).not.toHaveBeenCalled();
+  });
+
   it('marks its own launches so the device\'s after-launch hook (for a test\'s calls) stays out', async () => {
     const { ctx, device } = makeContext([APP]);
     const during: Array<number | undefined> = [];
@@ -226,5 +249,29 @@ describe('dev clients through the launch and reset paths', () => {
     const { ctx, device } = makeContext([APP, LAUNCHER, LAUNCHER, APP]);
     await executeAppReset(ctx, { mode: 'clear', scope: 'file' }, { phase: 'file reset', hooksProbeMs: 0 });
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('connectDevClientForTool (the MCP server\'s own launches)', () => {
+  it('connects a dev client in the project the server runs in', async () => {
+    const { ctx, device, client } = makeContext([LAUNCHER, APP]);
+    const fetch = vi.fn(async (url: string) => {
+      const r = await metro(url, {}, 0);
+      if (!r) throw new Error('ECONNREFUSED');
+      return { status: r.status, text: async () => r.body };
+    });
+    vi.stubGlobal('fetch', fetch);
+    await connectDevClientForTool({
+      client: ctx.client, device, packageName: PKG, platform: 'android', serial: 'emulator-5554', rootDir: DEV_CLIENT_PROJECT,
+    });
+    expect(client.getUiHierarchy).toHaveBeenCalled();
+    expect(new URL(device.openDeepLink.mock.calls[0]![0]).searchParams.get('url')).toBe('http://10.0.2.2:8081');
+  });
+
+  it('leaves other projects alone', async () => {
+    const { ctx, device, client } = makeContext([LAUNCHER]);
+    await connectDevClientForTool({ client: ctx.client, device, packageName: PKG, platform: 'android', rootDir: PLAIN_RN_PROJECT });
+    expect(client.getUiHierarchy).not.toHaveBeenCalled();
+    expect(device.openDeepLink).not.toHaveBeenCalled();
   });
 });

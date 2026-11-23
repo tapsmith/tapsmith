@@ -52,6 +52,20 @@ const simulators = new WeakMap<Device, string>();
 /** The serial a tool Device was asked for, if any (one pooled client can serve several). */
 const serials = new WeakMap<Device, string>();
 
+/**
+ * What a tool Device runs after `launchApp()` / `restartApp()` in `run_code`:
+ * an Expo development build on its dev launcher is connected to Metro, as in
+ * a test run.
+ */
+function afterAppLaunch(client: TapsmithGrpcClient, device: Device, serial: string | undefined): (pkg: string) => Promise<void> {
+  return async (packageName) => {
+    const { connectDevClientForTool } = await import('../session-preflight.js');
+    await connectDevClientForTool({
+      client, device, packageName, platform: device.platform === 'ios' ? 'ios' : 'android', serial, rootDir: process.cwd(),
+    });
+  };
+}
+
 /** The SDK Device for `client`'s device (`serial` when the tool resolved one). */
 export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | undefined): Promise<Device> {
   const key = serial ?? '';
@@ -70,6 +84,7 @@ export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | 
   const platform: Platform = known === 'ios' ? 'ios' : 'android';
   const device = new Device(client, { platform, timeout: MCP_ACTION_TIMEOUT_MS });
   if (serial) serials.set(device, serial);
+  device._afterAppLaunch = afterAppLaunch(client, device, serial);
   // On iOS the serial is the simulator's UDID, listed or not.
   const simulator = info?.serial ?? serial;
   if (platform === 'ios' && simulator) simulators.set(device, simulator);
@@ -125,6 +140,7 @@ export function sdkDeviceWithTimeout(client: TapsmithGrpcClient, device: Device,
   const timed = new Device(client, { platform: device.platform, simulator, timeout: timeoutMs });
   const serial = serials.get(device);
   if (serial) serials.set(timed, serial);
+  timed._afterAppLaunch = afterAppLaunch(client, timed, serial);
   if (simulator) simulators.set(timed, simulator);
   return timed;
 }
