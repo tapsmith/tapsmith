@@ -39,11 +39,14 @@ describe("a positional tap on a header button", () => {
   })
 
   test("first() and nth() type into the field each names", async ({ device }) => {
+    // The footer is under the keyboard while it is up, and Android leaves
+    // views the keyboard covers out of the accessibility tree, so hide it
+    // before each read and before reaching the field below the tabs.
     await screen.textFields.first().clearAndType("abc")
-    await expect(screen.fields).toHaveText(/^Search “abc”, note/)
-    // The field below the tabs is under the keyboard.
     await device.hideKeyboard()
+    await expect(screen.fields).toHaveText(/^Search “abc”, note/)
     await screen.textFields.nth(1).clearAndType("xyz")
+    await device.hideKeyboard()
     await expect(screen.fields).toHaveText("Search “abc”, note “xyz”")
   })
 })
