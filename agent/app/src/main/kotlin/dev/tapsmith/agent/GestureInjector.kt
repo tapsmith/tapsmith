@@ -1,5 +1,8 @@
 package dev.tapsmith.agent
 
+import kotlin.math.abs
+import kotlin.math.sign
+
 /*
  * Every touch and key the agent makes goes through [GestureInjector] (PILOT-789).
  *
@@ -521,9 +524,9 @@ class GestureInjector(
     }
 
     /**
-     * scrollIntoView()'s step drag (PILOT-998; the CANCEL ending and the short
-     * drag are ideas from Speedrun's Android agent, Apache-2.0, our own code):
-     * a drag that leaves no momentum and takes ~100 ms of real time where
+     * scrollIntoView()'s step drag (the short drag and backdated samples are
+     * ideas from Speedrun's Android agent, Apache-2.0, our own code): a drag
+     * that leaves no momentum and takes ~100 ms of real time where
      * [stepDrag] takes ~600 ms.
      *
      * - The press and the first [DRAG_FRAME_MOVES] moves are synchronous and
@@ -532,18 +535,22 @@ class GestureInjector(
      * - The other moves go [STEP_DRAG_MOVE_GAP_MS] apart without waiting for
      *   the app (the last one waits, so the app has the whole drag).
      * - Event times are backdated: the moves span [STEP_DRAG_MOVE_MS] of event
-     *   time, then two still samples at the end point are stamped past
-     *   VelocityTracker's stop gap and its horizon, and no event is stamped
-     *   later than it is sent.
-     * - It ends with a CANCEL, not an UP: a lift after backdated samples
-     *   still flung (one drag moved a list 150 rows), while a cancelled drag
-     *   stops dead, and nothing under the finger is clicked. The cost: a
-     *   paging or snapping list stays where the finger left it, and React
-     *   Native gets no `onScrollEndDrag`. So it is kept to vertical scroll
-     *   steps; sideways swipes still lift, so a pager turns.
+     *   time, then two still samples are stamped past VelocityTracker's stop
+     *   gap and its horizon, and no event is stamped later than it is sent.
+     *   Each still sample moves the pointer one pixel further along the drag:
+     *   a sample at the pointer's last position does not reach the scroll
+     *   view's velocity tracker, so still samples at the end point told it
+     *   nothing, and the lift flung the list (one drag moved it 136 rows).
+     * - Then the pointer is lifted, with no speed left to fling. A lift, not
+     *   a cancel: a React Native scroll view ends its drag (onScrollEndDrag,
+     *   momentum events, a paging list's snap) only on a lift, and after a
+     *   cancelled drag at the end of its content the next tap on it could
+     *   be lost. Nothing under the finger is clicked: it has moved far past
+     *   slop.
      *
-     * A refused event stops the moves; the pointer is still cancelled. A
-     * cancelled command cancels the pointer and throws
+     * A refused event stops the drag, and the pointer is cancelled rather
+     * than lifted after a drag that did not finish (as is one whose lift is
+     * refused). A cancelled command cancels the pointer and throws
      * [CommandCancelledException].
      */
     fun scrollStepDrag(
@@ -593,12 +600,29 @@ class GestureInjector(
                 if (i < n) clock.sleep(STEP_DRAG_MOVE_GAP_MS)
             }
         }
+        // One pixel on along the drag per still sample (its main axis).
+        val nudgeX = if (abs(x2 - x1) > abs(y2 - y1)) (x2 - x1).sign else 0
+        val nudgeY = if (nudgeX == 0) (y2 - y1).sign else 0
         val stillAt = downTime + STEP_DRAG_MOVE_MS + STEP_DRAG_STOP_GAP_MS
-        if (ok) ok = at(stillAt, TouchAction.MOVE, sync = false)
-        if (ok) ok = at(stillAt + STEP_DRAG_HORIZON_MS, TouchAction.MOVE, sync = true)
+        if (ok) {
+            x += nudgeX
+            y += nudgeY
+            ok = at(stillAt, TouchAction.MOVE, sync = false)
+        }
+        if (ok) {
+            x += nudgeX
+            y += nudgeY
+            ok = at(stillAt + STEP_DRAG_HORIZON_MS, TouchAction.MOVE, sync = true)
+        }
         checkpoint()
-        val cancelOk = at(maxOf(clock.now(), downTime + span + 1), TouchAction.CANCEL, sync = true)
-        return ok && cancelOk
+        val end = maxOf(clock.now(), downTime + span + 1)
+        if (!ok) {
+            at(end, TouchAction.CANCEL, sync = true)
+            return false
+        }
+        if (at(end, TouchAction.UP, sync = true)) return true
+        at(end, TouchAction.CANCEL, sync = true)
+        return false
     }
 
     /**
