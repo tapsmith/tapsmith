@@ -976,5 +976,94 @@ check("a button in the bar over the row is named before the bar",
           .analyze(rowAt(724), isHittable: false),
       .covered(by: "button \"Pay\""))
 
+// ─── The system status bar ───
+
+// Edge-to-edge content under the status bar of an iPhone 17 Pro (iOS 26.5):
+// SpringBoard draws the bar over the top 54 pt and takes every touch there,
+// though the app's snapshot does not hold it and XCUITest calls what is under
+// it hittable.
+let statusBarStrip = R(0, 0, 402, 54)
+let underBar = R(16, 4, 160, 37)
+let partlyUnderBar = R(226, 25, 160, 93)
+// No header: the screen's content starts at the top of the screen.
+let edgeToEdge = analyzer([
+    (0, .application, "Tapsmith Test App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .button, "Under", "", underBar),
+    (3, .button, "Partly", "", partlyUnderBar),
+    (3, .staticText, "under=0 partly=0", "", R(16, 182, 370, 20)),
+])
+check("a button wholly under the status bar: covered by it, though XCUITest calls it hittable",
+      edgeToEdge.analyze(button("Under", underBar), isHittable: true, statusBar: statusBarStrip),
+      .covered(by: "the status bar"))
+check("…and when it is not hittable",
+      edgeToEdge.analyze(button("Under", underBar), isHittable: false, statusBar: statusBarStrip),
+      .covered(by: "the status bar"))
+check("a button partly under the status bar is touched on the part below it",
+      edgeToEdge.analyze(button("Partly", partlyUnderBar), isHittable: true, statusBar: statusBarStrip),
+      .clear(point: CGPoint(x: 306, y: 86), visible: R(226, 54, 160, 64)))
+checkPoint("no status bar known (none shown, or SpringBoard unreadable): touched where it is",
+           edgeToEdge.analyze(button("Under", underBar), isHittable: true, statusBar: nil),
+           CGPoint(x: 96, y: 22.5))
+checkPoint("the nav bar's back button below the status bar is not clipped by it",
+           analyzer(screenRows()).analyze(button("Back", R(8, 70, 40, 40)), isHittable: true, statusBar: statusBarStrip),
+           CGPoint(x: 28, y: 90))
+// The analyzer clips by whatever region it is given — the iPhone Duo shows
+// its status bar as a column at the right edge.
+check("a button under a status bar column at the right edge: covered",
+      analyzer(screenRows(extra: [(4, .button, "Side", "", R(360, 120, 40, 40))]))
+          .analyze(button("Side", R(360, 120, 40, 40)), isHittable: true, statusBar: R(350, 0, 52, 874)),
+      .covered(by: "the status bar"))
+
+func checkBool(_ name: String, _ got: Bool, _ want: Bool) {
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
+}
+// Where the status bar can be: its place is learned from the first read that
+// finds it shown, per screen size, and kept; until then, the top band.
+// Whether it is shown is read afresh on every pass the gate lets through.
+do {
+    var gate = OcclusionAnalyzer.StatusBarGate()
+    checkBool("nothing learned: a target in the top band may be under the bar",
+              gate.mayCover(underBar, screen: screen), true)
+    checkBool("nothing learned: a target reaching up into the top band may be",
+              gate.mayCover(R(16, 60, 370, 200), screen: screen), true)
+    checkBool("nothing learned: a nav bar's back button in the top band may be",
+              gate.mayCover(R(8, 66, 40, 40), screen: screen), true)
+    checkBool("a target well below the top band is not (most taps pay nothing)",
+              gate.mayCover(covered, screen: screen), false)
+    checkBool("a target off screen above is not",
+              gate.mayCover(R(16, -200, 370, 50), screen: screen), false)
+    gate.learn(nil, screen: screen)
+    checkBool("a read that found no bar (hidden) teaches nothing: the top band still counts",
+              gate.mayCover(R(8, 66, 40, 40), screen: screen), true)
+    gate.learn(statusBarStrip, screen: screen)
+    checkBool("learned: a header button below the bar is not under it (no read)",
+              gate.mayCover(R(8, 66, 40, 40), screen: screen), false)
+    checkBool("learned: a header starting right at the bar's bottom is not",
+              gate.mayCover(R(0, 54, 402, 54), screen: screen), false)
+    checkBool("learned: a button under the bar is",
+              gate.mayCover(underBar, screen: screen), true)
+    checkBool("learned: a button reaching up into the bar is",
+              gate.mayCover(partlyUnderBar, screen: screen), true)
+    checkBool("learned: a button inside a legacy nav bar laid at y=20 is (the bar reaches 54)",
+              gate.mayCover(R(8, 22, 40, 40), screen: screen), true)
+    let landscape = R(0, 0, 874, 402)
+    checkBool("another screen size learns separately: the top band counts there",
+              gate.mayCover(R(16, 60, 100, 30), screen: landscape), true)
+    // The iPhone Duo's bar is a column at the right edge: once learned, a
+    // target under it anywhere down the screen is checked.
+    let duo = R(0, 0, 466, 951)
+    gate.learn(R(378, 0, 88, 176.33), screen: duo)
+    checkBool("Duo: a target under the column below the top band is",
+              gate.mayCover(R(400, 120, 40, 40), screen: duo), true)
+    checkBool("Duo: a target in the top band away from the column is not",
+              gate.mayCover(R(16, 10, 100, 40), screen: duo), false)
+    // A taller bar seen later (a call or recording banner) widens what is kept.
+    gate.learn(R(0, 0, 402, 80), screen: screen)
+    checkBool("learned regions grow, never shrink",
+              gate.mayCover(R(8, 60, 40, 15), screen: screen), true)
+}
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -169,6 +169,26 @@ export function parseResetRequest(url: string): ResetRequest | undefined {
   };
 }
 
+/** The query parameters a reset link adds to the route it opens. */
+const RESET_LINK_PARAMS = new Set([RESET_QUERY_FLAG, KEEP_DATA_QUERY_FLAG, 'nonce']);
+
+/**
+ * The route a reset link opens, with the route's own query (an
+ * `appResetRoute` of `'/settings?tab=2'`) but without the reset's parameters:
+ * where the app should be once the reset is done.
+ */
+export function resetHref(url: string): string {
+  const q = url.indexOf('?');
+  const route = routeOf(q < 0 ? url.split('#')[0] : url.slice(0, q));
+  if (q < 0) return route;
+  const kept = url.slice(q + 1).split('#')[0].split('&').filter((pair) => {
+    if (!pair) return false;
+    const eq = pair.indexOf('=');
+    return !RESET_LINK_PARAMS.has(safeDecode(eq < 0 ? pair : pair.slice(0, eq)));
+  });
+  return kept.length > 0 ? `${route}?${kept.join('&')}` : route;
+}
+
 /**
  * Key a redelivered reset request dedupes on. Tapsmith always sends a fresh
  * nonce per reset; a hand-crafted link without one dedupes on the URL itself,

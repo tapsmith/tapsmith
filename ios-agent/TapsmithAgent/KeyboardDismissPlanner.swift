@@ -196,7 +196,8 @@ struct KeyboardDismissPlanner {
 
     /// Where SpringBoard draws the status bar, in the app's screen space, from
     /// a SpringBoard snapshot read into `springboard` with the app's screen:
-    /// the on-screen union of what is in its `.statusBar` elements, leaving
+    /// the on-screen union of what is in its `.statusBar` elements that show
+    /// an item on screen (a hidden bar is listed with none), leaving
     /// out any element covering half the screen or more (the iPhone Duo's
     /// status bar element is the size of the screen; its items are a column
     /// at the right edge). nil when there is none, or when SpringBoard is laid
@@ -210,15 +211,24 @@ struct KeyboardDismissPlanner {
             abs(frame.width - screen.width) <= 1 && abs(frame.height - screen.height) <= 1
         }
         if let root = nodes.first, root.elementType == .application, !sameSize(root.frame) { return nil }
+        func onScreen(_ i: Int) -> CGRect? {
+            let f = nodes[i].frame.intersection(screen)
+            return !f.isNull && f.width > 0 && f.height > 0 ? f : nil
+        }
         var region: CGRect?
         for bar in nodes.indices where nodes[bar].elementType == .statusBar {
             if let w = nodes[bar].window, !sameSize(nodes[w].frame) { continue }
+            // Shown only with an item (a leaf: the clock, the battery…) on
+            // screen in it. SpringBoard keeps listing a status bar the app
+            // hides, with no items, and touches in its band then reach the
+            // app; it also lists an always-empty second one.
+            let items = (bar + 1)..<nodes[bar].subtreeEnd
+            guard items.contains(where: { nodes[$0].subtreeEnd == $0 + 1 && onScreen($0) != nil }) else { continue }
             for i in bar..<nodes[bar].subtreeEnd {
-                let onScreen = nodes[i].frame.intersection(screen)
-                guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0,
-                      onScreen.width * onScreen.height < screen.width * screen.height * Self.containerAreaFraction
+                guard let f = onScreen(i),
+                      f.width * f.height < screen.width * screen.height * Self.containerAreaFraction
                 else { continue }
-                region = region.map { $0.union(onScreen) } ?? onScreen
+                region = region.map { $0.union(f) } ?? f
             }
         }
         return region
