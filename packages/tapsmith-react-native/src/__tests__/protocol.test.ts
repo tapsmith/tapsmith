@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatMarker, parseMarker, parseResetRequest, resetDedupeKey, routeOf } from '../protocol.js';
+import { formatMarker, parseMarker, parseResetRequest, resetDedupeKey, resetHref, routeOf } from '../protocol.js';
 
 describe('marker', () => {
   it('round-trips, including an error message', () => {
@@ -121,5 +121,22 @@ describe('nav counter', () => {
     const text = formatMarker({ epoch: 2, boot: 'abcd1234', urlPrefix: 'app:///' });
     expect(text).not.toContain('nav=');
     expect(parseMarker(text)?.nav).toBeUndefined();
+  });
+});
+
+describe('resetHref', () => {
+  it('is the route a reset link opens, without the reset\'s own parameters', () => {
+    expect(resetHref('myapp:///?__tapsmith_reset=1&nonce=abc')).toBe('/');
+    expect(resetHref('exp://127.0.0.1:8081/--/tasks/new?__tapsmith_reset=1&nonce=abc')).toBe('/tasks/new');
+    expect(resetHref('myapp://profile?__tapsmith_reset=1&__tapsmith_keep=1&nonce=abc')).toBe('/profile');
+  });
+
+  it('keeps the route\'s own query, as written', () => {
+    expect(resetHref('myapp:///settings?tab=2&q=a%20b&__tapsmith_reset=1&nonce=abc')).toBe('/settings?tab=2&q=a%20b');
+    expect(resetHref('myapp:///settings?__tapsmith_reset=1&tab=2&nonce=abc#frag')).toBe('/settings?tab=2');
+  });
+
+  it('handles a link with no query', () => {
+    expect(resetHref('myapp:///list')).toBe('/list');
   });
 });

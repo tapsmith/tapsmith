@@ -28,7 +28,7 @@ export default function RootLayout() {
 }
 ```
 
-Wrap whatever navigator your root layout renders: `<Stack />`, `<Tabs />`, or the `<NativeTabs>` of the default `create-expo-app` template (its `<AppTabs />`). Providers your screens need (a theme, auth, a query client) can stay outside it. The navigation container must stay outside it too, because it holds the route the remounted navigator returns to: expo-router's root layout already renders inside its container, and a bare React Navigation app puts the hooks *inside* `<NavigationContainer>`, around its root navigator. Wrapped around the container, the hooks would remount it with no route, and the app would start each test on its first screen. Wrapping is what makes each reset a fresh start: the hooks remount everything inside them after every reset, so no screen keeps React state from the previous test. Without it, a tab navigator keeps every tab you visited mounted, with its state, and a test that expects an empty list finds the previous test's items (see [What a warm reset does not clear](#what-a-warm-reset-does-not-clear)). When the hooks are disabled, they render the navigator as it is and never remount it. Wrapping needs `@tapsmith/react-native` from the same release as `tapsmith`: earlier versions ignore their children and render nothing in their place, so update both together.
+Wrap whatever navigator your root layout renders: `<Stack />`, `<Tabs />`, or the `<NativeTabs>` of the default `create-expo-app` template (its `<AppTabs />`). Providers your screens need (a theme, auth, a query client) can stay outside it. The navigation container must stay outside it too, because it holds the route the remounted navigator returns to: expo-router's root layout already renders inside its container, and a bare React Navigation app puts the hooks *inside* `<NavigationContainer>`, around its root navigator. Wrapped around the container, the hooks would remount it with no route, and the app would start each test on its first screen. Wrapping is what makes each reset a fresh start: the hooks remount everything inside them after every reset, so no screen keeps React state from the previous test. They also reset the navigation state, so every tab's own stack is back on its first screen (see [Navigation](#navigation)). Without it, a tab navigator keeps every tab you visited mounted, with its state, and a test that expects an empty list finds the previous test's items (see [What a warm reset does not clear](#what-a-warm-reset-does-not-clear)). When the hooks are disabled, they render the navigator as it is and never remount it. Wrapping needs `@tapsmith/react-native` from the same release as `tapsmith`: earlier versions ignore their children and render nothing in their place, so update both together.
 
 Keep the `enabled` line exactly as written, in your app's own code: it is what lets a Release build made for tests turn the hooks on (see [Release builds for e2e](#release-builds-for-e2e)).
 
@@ -50,12 +50,12 @@ Together, wrapping the navigator and passing `clear` give each test what a fresh
 
 | Prop | Purpose |
 |---|---|
-| `children` | Your root navigator (inside the navigation container, never the container itself). Remounted after every reset, so no screen keeps React state from the previous test; the app stays on the route the reset opened. Rendered as-is when the hooks are disabled. |
+| `children` | Your root navigator (inside the navigation container, never the container itself). Remounted after every reset, so no screen keeps React state from the previous test, on fresh navigation state: the route the reset opened, with every other screen gone. Rendered as-is when the hooks are disabled. |
 | `clear` | Stores to wipe on every reset — anything with `clear()` or `clearAll()`: AsyncStorage, MMKV, … |
-| `onReset` | Your own reset: sign out, drop in-memory caches, reset navigation. Receives `{ target, nonce }`; if it navigates, navigate to `target` — that is the route the reset (and an `appResetRoute`) asked for, and Tapsmith cannot see where the app ends up. `target` is the route's path without its query: a query in `appResetRoute` (`'/settings?tab=2'`) reaches your app only with the reset link itself, so a handler that navigates again drops it. |
+| `onReset` | Your own reset: sign out, drop in-memory caches. It runs after the hooks have [reset navigation](#navigation), so it rarely needs to navigate. Receives `{ target, nonce }`; if it navigates, navigate to `target` — that is the route the reset (and an `appResetRoute`) asked for, and Tapsmith cannot see where the app ends up. `target` is the route's path without its query: a query in `appResetRoute` (`'/settings?tab=2'`) reaches your app only with the reset link itself, so a handler that navigates again drops it. |
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
 | `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders only its children and registers nothing. |
-| `onReload` | Resets the app while *keeping* its stored data: drop in-memory state (caches, navigation) and read it back from storage, as a fresh launch would, refreshing the signed-in session in place rather than signing out. Tapsmith runs it, instead of `clear`, `onReset` and `registerTapsmithReset` handlers, between tests that restore the same saved app state; see [Keeping restored app state between tests](#keeping-restored-app-state-between-tests). Needs `track`. |
+| `onReload` | Resets the app while *keeping* its stored data: drop in-memory state (caches) and read it back from storage, as a fresh launch would, refreshing the signed-in session in place rather than signing out. Tapsmith runs it, instead of `clear`, `onReset` and `registerTapsmithReset` handlers, between tests that restore the same saved app state; see [Keeping restored app state between tests](#keeping-restored-app-state-between-tests). Needs `track`. |
 | `track` | The key-value stores your app keeps data in, e.g. `[AsyncStorage]` or an MMKV instance. The hooks count every write to them, so Tapsmith can tell whether a test changed restored data. A SQLite database or a file system cannot be tracked this way (a call to `execute` may or may not write): passing one turns the count off. Report those writes with `markTapsmithWrite()` instead. |
 
 `registerTapsmithReset(fn)` registers a handler from non-React code.
@@ -73,7 +73,7 @@ In a bare React Native app, which does not inline `EXPO_PUBLIC_*` variables, pas
 
 ## What a warm reset does not clear
 
-A warm reset keeps the app's process running: it clears the stores in `clear`, runs `onReset`, and opens a link to the start route. With the navigator wrapped in `<TapsmithTestHooks>`, the hooks then remount the whole navigator, so the next test starts on fresh screens, as after a launch.
+A warm reset keeps the app's process running: it clears the stores in `clear`, resets navigation, runs `onReset`, and opens a link to the start route. With the navigator wrapped in `<TapsmithTestHooks>`, the hooks then remount the whole navigator, so the next test starts on fresh screens, as after a launch.
 
 With the hooks mounted beside the navigator instead (`<Stack /><TapsmithTestHooks … />`, as earlier versions of this guide showed), nothing remounts. Every screen that stays mounted keeps its React state, and some of it gets written back to storage after the clear:
 
@@ -99,6 +99,17 @@ export default function HomeScreen() {
 ```
 
 `useTapsmithResetEpoch()` returns the number of resets acknowledged in this process — it changes after every reset and is `0` at launch, so it costs nothing in production builds where the hooks are disabled.
+
+### Navigation
+
+Remounting the navigator does not reset where it is: a navigator reads its state back from the navigation container, and that state holds every tab's own stack. So the hooks reset the navigation state on every reset, before `onReset` or `onReload` runs, to what a launch on the reset's route would give: that route, with nothing pushed on any other tab. A test that pushed a form inside the Tasks tab no longer leaves it there for the next test, whichever tab the reset lands on.
+
+They do this for the two navigation setups they know, with no code on your side:
+
+- **expo-router**: the navigation state under the root layout is replaced, keeping the root layout itself mounted, and the app then navigates to the reset's route, with its query.
+- **React Navigation** with a [`linking`](https://reactnavigation.org/docs/configuring-links) config on the `NavigationContainer`: the whole state is replaced with the one your linking config builds for the reset's route, as on a launch from that link.
+
+Without one of these (React Navigation with no `linking` config, a route your config does not match, another navigation library), navigation is left as it is: reset it in `onReset`.
 
 Nothing outside the hooks remounts, wrapped or not: a provider above them (an auth context, a Redux store, a query cache) keeps its state, so reset it in `onReset`.
 
@@ -133,30 +144,9 @@ Render it inside your auth provider, around the navigator (`<AuthProvider><Hooks
 
 `onReload` should leave the app as a fresh launch with the same stored data would: for a signed-in session, re-read the session from storage rather than clear it. It is the only handler a keep reset runs — `clear`, `onReset` and handlers added with `registerTapsmithReset` do not run — so it must also drop whatever in-memory state those reset (a Redux store, a query cache), and cancel writes the app has scheduled but not made yet (a debounced save): a fresh launch would never make them.
 
-Two things a sign-out in `onReset` did for you that `onReload` has to do itself:
+One thing a sign-out in `onReset` did for you that `onReload` has to do itself: **stay signed in throughout.** Refresh the session in place rather than clearing it and reading it back. An auth guard that sees a signed-out or loading state halfway through redirects to the login screen while the reset link is navigating, and that bounce can crash the navigator.
 
-- **Stay signed in throughout.** Refresh the session in place rather than clearing it and reading it back. An auth guard that sees a signed-out or loading state halfway through redirects to the login screen while the reset link is navigating, and that bounce can crash the navigator.
-- **Reset navigation.** The reset link opens the start route only, so a screen a test pushed inside another tab is still there when the next test opens that tab. With expo-router, reset the navigation state *under* its root route, keeping that route's key: replacing the root route itself remounts the layout that renders `<TapsmithTestHooks>`.
-
-```tsx
-import { useNavigationContainerRef } from "expo-router"
-
-function useReload(reloadFromStorage: () => Promise<void>) {
-  const navigation = useNavigationContainerRef()
-  return async () => {
-    await reloadFromStorage()
-    const root = navigation.getRootState()
-    const rootRoute = root?.routes[root.index ?? 0]
-    if (!root || !rootRoute) return
-    navigation.resetRoot({
-      ...root,
-      index: 0,
-      // Same route (and key), fresh nested state: each tab back on its first screen.
-      routes: [{ ...rootRoute, state: { index: 0, routes: [{ name: "(tabs)" }] } }],
-    })
-  }
-}
-```
+The hooks reset navigation before `onReload` runs, as on every reset (see [Navigation](#navigation)), so `onReload` does not need to.
 
 What happens, per device:
 

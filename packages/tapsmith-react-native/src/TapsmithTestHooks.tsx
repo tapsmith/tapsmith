@@ -1,18 +1,21 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Keyboard, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
-import { formatMarker, BOOT_TOKEN } from './protocol.js';
+import { formatMarker, resetHref, BOOT_TOKEN } from './protocol.js';
 import { currentResetEpoch, subscribeResetEpoch } from './epoch.js';
 import { claimInitialUrl, handleIncomingUrl, linkState, subscribeLinkState } from './link-state.js';
 import { CARRIER_TEXT_COLOR } from './carrier-color.js';
 import { hooksEnabledByDefault } from './enabled.js';
 import { blurFocusedInput, type KeyboardDeps } from './keyboard.js';
+import { useNavigationReset } from './navigation.js';
 import { registeredHandlers, runResetPipeline, type Clearable, type ResetHandler } from './reset.js';
 import { persistedWriteCount, subscribePersistedWrites, trackStoreWrites } from './writes.js';
 
 export interface TapsmithTestHooksProps {
   /**
    * Runs on every reset request, after `clear`. Put your app's own reset here
-   * (sign out, drop in-memory caches, reset navigation state).
+   * (sign out, drop in-memory caches). Navigation is reset before it runs
+   * (expo-router, or React Navigation with a `linking` config): the app is on
+   * the reset's route, with nothing pushed on any other tab.
    */
   onReset?: ResetHandler;
   /**
@@ -29,7 +32,7 @@ export interface TapsmithTestHooksProps {
   urlPrefix?: string;
   /**
    * Resets the app while keeping its persisted data: drop in-memory state
-   * (caches, navigation) and read it back from storage, as a fresh launch
+   * (caches) and read it back from storage, as a fresh launch
    * would, refreshing the signed-in session in place rather than signing out
    * (an auth guard that sees a signed-out moment redirects mid-reset). Tapsmith calls it instead of `clear`, `onReset` and
    * `registerTapsmithReset` handlers (none of them run, so reset what they
@@ -67,6 +70,8 @@ export interface TapsmithTestHooksProps {
    * navigator keeps every visited tab's screen mounted, and a reset that
    * lands on the screen already showing keeps that one — so the app starts
    * each test as a fresh launch would, on the route the reset asked for.
+   * The hooks also reset the navigation state the remounted navigator reads,
+   * so a screen pushed on another tab's stack is gone too.
    * The navigation container must sit above the hooks, since it holds the
    * route that the remounted navigator picks back up: expo-router's root
    * layout already renders inside its container; a bare React Navigation app
@@ -108,8 +113,10 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
   // read the marker before the effect runs, and a marker without a count
   // there would read as "this app reports no writes".
   const [trackable, setTrackable] = useState<boolean | undefined>(undefined);
-  const latest = useRef({ onReset, onReload, clear });
-  latest.current = { onReset, onReload, clear };
+  // Called on every render, enabled or not: it calls hooks of its own.
+  const resetNavigation = useNavigationReset();
+  const latest = useRef({ onReset, onReload, clear, resetNavigation });
+  latest.current = { onReset, onReload, clear, resetNavigation };
   // `track={[AsyncStorage]}` is a new array on every render: re-wrap only
   // when the stores themselves change.
   const trackedStores = useRef<readonly object[] | undefined>(undefined);
@@ -149,9 +156,17 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
       // already showing keeps it mounted, and with it whatever input had
       // focus and the keyboard over it, which the next test would start
       // under. Blur it alongside the clear (see runResetPipeline for the order).
-      run: (request) => {
-        const handlers: ResetHandler[] = [...(latest.current.onReset ? [latest.current.onReset] : []), ...registeredHandlers()];
-        return runResetPipeline(request, latest.current.clear, handlers, () => blurFocusedInput(keyboardDeps), latest.current.onReload);
+      //
+      // Navigation is reset too: the remounted navigator would otherwise
+      // read every tab's nested stack back from the navigation container.
+      run: (request, url) => {
+        const { onReset: reset, onReload: reload, clear: stores, resetNavigation: navigationReset } = latest.current;
+        const handlers: ResetHandler[] = [...(reset ? [reset] : []), ...registeredHandlers()];
+        return runResetPipeline(request, stores, handlers, {
+          settle: () => blurFocusedInput(keyboardDeps),
+          reload,
+          resetNavigation: navigationReset ? () => { navigationReset(resetHref(url)); } : undefined,
+        });
       },
     });
 
@@ -206,8 +221,9 @@ export function TapsmithTestHooks({ onReset, onReload, track, clear = [], urlPre
   // same commit that acknowledges the reset, so Tapsmith never sees the ack
   // before the fresh screens, and they read the already-cleared stores. A
   // remounted React Navigation navigator picks its state back up from the
-  // navigation container above it (see `children`), so the app stays on the
-  // route the reset link opened; only the screens' own state starts over.
+  // navigation container above it (see `children`), which the reset has
+  // already put on the route the reset link opened, with nothing else
+  // pushed (see navigation.ts).
   return (
     <>
       {wraps ? <Fragment key={epoch}>{children}</Fragment> : null}
