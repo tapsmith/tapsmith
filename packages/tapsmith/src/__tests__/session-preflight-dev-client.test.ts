@@ -187,8 +187,22 @@ describe('connectDevClient', () => {
   });
 
   it('names the load-error screen when the bundle cannot load', async () => {
-    const { ctx } = makeContext([LAUNCHER, LOAD_ERROR]);
-    await expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow(/could not load its JavaScript .*could not load from http:\/\/10\.0\.2\.2:8081/);
+    vi.useFakeTimers();
+    try {
+      const { ctx, device } = makeContext([LAUNCHER, LOAD_ERROR]);
+      const failed = expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow(/could not load its JavaScript .*could not load from http:\/\/10\.0\.2\.2:8081/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failed;
+      expect(device.openDeepLink).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens the link once more when the device failed to load from a Metro that answers', async () => {
+    const { ctx, device } = makeContext([LAUNCHER, LOAD_ERROR, LOAD_ERROR, APP]);
+    await connectDevClient(ctx, { fetch: metro });
+    expect(device.openDeepLink).toHaveBeenCalledTimes(2);
   });
 
   it('names React Native\'s red screen for a missing Metro', async () => {

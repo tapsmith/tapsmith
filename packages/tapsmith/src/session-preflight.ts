@@ -1801,7 +1801,7 @@ export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: De
     // the reloaded app: start the app afresh with it, the menu switched off.
     if (platform === 'ios' && screen === 'dev-menu') await ctx.device.openDeepLink(link, { forceColdLaunch: true });
     else await ctx.device.openDeepLink(link);
-    await waitForDevBundle(ctx, pkg, platform, serverUrl);
+    await waitForDevBundle(ctx, pkg, platform, serverUrl, () => ctx.device.openDeepLink(link));
   });
 }
 
@@ -1845,17 +1845,38 @@ async function settledDevClientScreen(ctx: DevClientContext, pkg: string, platfo
   }
 }
 
-/** Wait, bounded, for the app's own UI with no development screen over it. */
-async function waitForDevBundle(ctx: DevClientContext, pkg: string, platform: 'android' | 'ios', serverUrl: string): Promise<void> {
+/** How long a load error may still be the last try's screen after the link is
+ *  opened again: the dev launcher swaps it out only once it starts loading. */
+const DEV_LOAD_ERROR_STALE_MS = 5_000;
+
+/**
+ * Wait, bounded, for the app's own UI with no development screen over it. A
+ * load error gets the link once more (`reopen`): the host has just had an
+ * answer from this Metro, so a connection the device could not make (an
+ * emulator's network dropping one, seen on a busy machine) is worth a retry.
+ */
+async function waitForDevBundle(
+  ctx: DevClientContext,
+  pkg: string,
+  platform: 'android' | 'ios',
+  serverUrl: string,
+  reopen: () => Promise<unknown>,
+): Promise<void> {
   const start = Date.now();
   let last: DevClientScreen | undefined;
   let blankSince: number | undefined;
+  let reopenedAt: number | undefined;
   while (Date.now() - start < DEV_BUNDLE_LOAD_TIMEOUT_MS) {
     const xml = await readHierarchyXml(ctx);
     if (xml) {
       last = devClientScreen(xml);
       if (last === 'load-error' || last === 'no-dev-server') {
-        throw devServerError(pkg, last, `the app could not load from ${serverUrl}`);
+        if (reopenedAt === undefined) {
+          await reopen();
+          reopenedAt = Date.now();
+        } else if (Date.now() - reopenedAt >= DEV_LOAD_ERROR_STALE_MS) {
+          throw devServerError(pkg, last, `the app could not load from ${serverUrl}`);
+        }
       }
       // The loading banner is drawn in the app's own window over its splash:
       // not done until it is gone and the app's UI is there.
