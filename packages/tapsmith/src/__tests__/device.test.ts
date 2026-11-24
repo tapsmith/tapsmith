@@ -716,7 +716,10 @@ describe('Device.openDeepLink()', () => {
     hook.mockResolvedValueOnce(true);
     await device.openDeepLink('myapp://x', { forceColdLaunch: true });
     expect(openDeepLink.mock.calls.slice(-2).map((c: unknown[]) => c[1])).toEqual([{ forceColdLaunch: true }, { forceColdLaunch: false }]);
+    // A test's own dev-client link is not the app's to drop.
     hook.mockClear();
+    await device.openDeepLink('exp+app://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081');
+    expect(hook).not.toHaveBeenCalled();
     device._sessionLaunches = 1;
     await device.openDeepLink('exp+app://expo-development-client/');
     expect(openDeepLink).toHaveBeenLastCalledWith('exp+app://expo-development-client/', undefined);

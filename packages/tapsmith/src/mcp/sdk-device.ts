@@ -57,16 +57,24 @@ const serials = new WeakMap<Device, string>();
  * an Expo development build on its dev launcher is connected to Metro, as in
  * a test run.
  */
-function afterAppLaunch(client: TapsmithGrpcClient, device: Device, serial: string | undefined): (pkg: string) => Promise<void> {
+function afterAppLaunch(client: TapsmithGrpcClient, device: Device, serial: string | undefined): (pkg: string) => Promise<boolean> {
   return async (packageName) => {
     const { connectDevClientForTool } = await import('../session-preflight.js');
     const { devClientProjectFor } = await import('./connection.js');
     const platform = device.platform === 'ios' ? 'ios' : 'android';
-    await connectDevClientForTool({
+    return connectDevClientForTool({
       client, device, packageName, platform, serial,
       ...(devClientProjectFor(packageName, platform) ?? { rootDir: process.cwd() }),
     });
   };
+}
+
+/** Connect a development build after `device`'s launches, and after the iOS links that may relaunch it. */
+function connectsDevClients(client: TapsmithGrpcClient, device: Device, serial: string | undefined): void {
+  const hook = afterAppLaunch(client, device, serial);
+  device._afterAppLaunch = hook;
+  // On iOS the current package is always the app the agent drives.
+  if (device.platform === 'ios') device._afterOpenLink = async () => hook(await device.currentPackage());
 }
 
 /** The SDK Device for `client`'s device (`serial` when the tool resolved one). */
@@ -87,7 +95,7 @@ export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | 
   const platform: Platform = known === 'ios' ? 'ios' : 'android';
   const device = new Device(client, { platform, timeout: MCP_ACTION_TIMEOUT_MS });
   if (serial) serials.set(device, serial);
-  device._afterAppLaunch = afterAppLaunch(client, device, serial);
+  connectsDevClients(client, device, serial);
   // On iOS the serial is the simulator's UDID, listed or not.
   const simulator = info?.serial ?? serial;
   if (platform === 'ios' && simulator) simulators.set(device, simulator);
@@ -143,7 +151,7 @@ export function sdkDeviceWithTimeout(client: TapsmithGrpcClient, device: Device,
   const timed = new Device(client, { platform: device.platform, simulator, timeout: timeoutMs });
   const serial = serials.get(device);
   if (serial) serials.set(timed, serial);
-  timed._afterAppLaunch = afterAppLaunch(client, timed, serial);
+  connectsDevClients(client, timed, serial);
   if (simulator) simulators.set(timed, simulator);
   return timed;
 }

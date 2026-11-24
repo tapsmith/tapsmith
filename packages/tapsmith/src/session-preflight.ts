@@ -1666,7 +1666,8 @@ async function waitForAppReady(
   else await waitForAndroidAppReady(ctx);
   // After a launch (`launched`, the default), not an in-app warm reset: a
   // development build may be on its dev launcher or dev menu, not the app.
-  if (options.launched !== false || relaunched) await connectDevClient(ctx);
+  // The wait above is for the first content, whichever screen draws it.
+  if (options.launched !== false || relaunched) await connectDevClient(ctx, { settleMs: LINK_SETTLE_MS });
 }
 
 // ─── Expo development builds ───
@@ -1687,6 +1688,16 @@ const DEV_LAUNCHER_STALE_MS = 30_000;
 
 /** When to look again for a dev menu opened over a freshly loaded app. */
 const DEV_MENU_CONFIRM_MS = 1_000;
+
+/** How long {@link connectDevClient} looks for anything drawn at all when what
+ *  came before has already waited for content. */
+export const LINK_SETTLE_MS = 2_000;
+
+/** {@link connectDevClient}'s options: `settleMs` is how long a blank screen is looked at again. */
+interface DevClientDeps {
+  fetch?: DevServerFetch
+  settleMs?: number
+}
 
 const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
 
@@ -1790,9 +1801,9 @@ function devServerError(pkg: string, screen: DevClientScreen, why: string): Erro
  * any Debug build still loading its bundle is waited for. A build that cannot
  * reach Metro stops the session with an error saying so. An app already drawn
  * costs one hierarchy read, and a build that carries its JavaScript nothing.
- * True when it had to leave a development screen.
+ * True when it had the app load again.
  */
-export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: DevServerFetch } = {}): Promise<boolean> {
+export async function connectDevClient(ctx: DevClientContext, deps: DevClientDeps = {}): Promise<boolean> {
   const pkg = ctx.config.package;
   if (!pkg) return false;
   const build = devBuildKind(ctx);
@@ -1817,6 +1828,8 @@ async function lookAtApp(ctx: DevClientContext, pkg: string): Promise<{ screen?:
   if (!xml) return undefined;
   const screen = devClientScreen(xml);
   if (screen) return { screen, rendered: false };
+  // Android's permission prompt hides the app's own nodes: the app is up.
+  if (/\bpackage="com\.(google\.)?android\.permissioncontroller"/.test(xml)) return { rendered: true };
   return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg) };
 }
 
@@ -1825,25 +1838,25 @@ async function leaveDevScreens(
   ctx: DevClientContext,
   pkg: string,
   build: { kind: 'dev-client' | 'metro'; scheme?: string },
-  deps: { fetch?: DevServerFetch },
+  deps: DevClientDeps,
 ): Promise<boolean> {
-  // A launch returns before the dev launcher has drawn (a test's own
-  // `launchApp()` comes here straight from the launch), so a screen with
-  // nothing on it yet is read again, bounded: an app still blank after that
-  // is left to the tests' own waiting.
   const launchedAt = Date.now();
-  let seen: Awaited<ReturnType<typeof lookAtApp>>;
-  for (;;) {
-    seen = await lookAtApp(ctx, pkg);
-    if (seen?.screen) break;
-    if (seen?.rendered || Date.now() - launchedAt >= APP_RENDER_READY_TIMEOUT_MS) return false;
-    await delay(HIERARCHY_POLL_INTERVAL_MS);
-  }
-
+  let seen = await lookAtApp(ctx, pkg);
+  if (seen?.rendered) return false;
+  let links = 0;
   await withActionProgress('loadDevBundle', pkg, async (progress) => {
+    // A launch returns before the dev launcher has drawn (a test's own
+    // `launchApp()` comes here straight from the launch), so a screen with
+    // nothing on it yet is read again, bounded: an app still blank after that
+    // is left to the tests' own waiting.
+    while (!seen?.screen) {
+      if (seen?.rendered || Date.now() - launchedAt >= (deps.settleMs ?? APP_RENDER_READY_TIMEOUT_MS)) return;
+      await delay(HIERARCHY_POLL_INTERVAL_MS);
+      seen = await lookAtApp(ctx, pkg);
+    }
+
     const start = Date.now();
     let target: { link: string; serverUrl: string } | undefined;
-    let links = 0;
     let linkedAt = 0;
     let blankSince: number | undefined;
     let confirming = false;
@@ -1859,9 +1872,11 @@ async function leaveDevScreens(
       }
       if (screen || seen?.rendered) blankSince = undefined;
       if (screen && screen !== 'loading') {
-        if (build.kind === 'metro') {
-          if (screen !== 'no-dev-server') return;
-          throw devServerError(pkg, screen, 'Metro is not reachable');
+        if (build.kind === 'metro' && screen === 'no-dev-server') {
+          const reverse = ctx.config.platform !== 'ios' && !/^emulator-/.test(ctx.deviceSerial ?? '')
+            ? ' (a physical Android device also needs `adb reverse tcp:8081 tcp:8081`)'
+            : '';
+          throw devServerError(pkg, screen, `Metro is not reachable from the device${reverse}`);
         }
         if (screen !== 'no-dev-server') (ctx.capabilities ??= {}).devClientSeen = true;
         const failed = screen === 'load-error' || screen === 'no-dev-server';
@@ -1894,7 +1909,7 @@ async function leaveDevScreens(
       seen = await lookAtApp(ctx, pkg);
     }
   });
-  return true;
+  return links > 0;
 }
 
 /** The Metro to point a dev client at, and the link that does. */

@@ -94,7 +94,7 @@ afterEach(() => {
 describe('connectDevClient', () => {
   it('points a dev client on its launcher at Metro and waits for the app', async () => {
     const { ctx, device } = makeContext([LAUNCHER, LAUNCHER, APP]);
-    await connectDevClient(ctx, { fetch: metro });
+    expect(await connectDevClient(ctx, { fetch: metro })).toBe(true);
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
     const url = new URL(device.openDeepLink.mock.calls[0]![0]);
     expect(url.protocol).toBe('exp+devclient:');
@@ -113,7 +113,7 @@ describe('connectDevClient', () => {
   it('takes a first screen with nothing readable on it for the app, after a while', async () => {
     vi.useFakeTimers();
     try {
-      const dialog = '<hierarchy><node package="com.google.android.permissioncontroller" text="Allow" /></hierarchy>';
+      const dialog = `<hierarchy><node package="${PKG}" class="android.widget.ImageView" text="" content-desc="" /></hierarchy>`;
       const { ctx, device } = makeContext([LAUNCHER, dialog]);
       const done = connectDevClient(ctx, { fetch: metro });
       await vi.advanceTimersByTimeAsync(35_000);
@@ -122,6 +122,12 @@ describe('connectDevClient', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('takes Android\'s permission prompt for the app being up', async () => {
+    const { ctx, client } = makeContext(['<hierarchy><node package="com.google.android.permissioncontroller" text="Allow" /></hierarchy>']);
+    expect(await connectDevClient(ctx, { fetch: metro })).toBe(false);
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(1);
   });
 
   it('does not take Expo\'s splash screen on iOS for the app', async () => {
@@ -269,7 +275,8 @@ describe('connectDevClient', () => {
   it('waits out the loading banner of a plain Debug build, found from the build\'s folder', async () => {
     const { ctx, client, device } = makeContext([BANNER, BANNER, APP], { rootDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-e2e-')) });
     ctx.config.apk = buildApk([], PLAIN_RN_PROJECT);
-    await connectDevClient(ctx, { fetch: noMetro });
+    // Nothing was loaded again, so a link that led here was not dropped.
+    expect(await connectDevClient(ctx, { fetch: noMetro })).toBe(false);
     expect(client.getUiHierarchy).toHaveBeenCalledTimes(3);
     expect(device.openDeepLink).not.toHaveBeenCalled();
   });

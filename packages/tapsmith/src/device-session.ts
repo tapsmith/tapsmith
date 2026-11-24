@@ -28,6 +28,7 @@ import {
 } from './worker-protocol.js';
 import {
   connectDevClient,
+  LINK_SETTLE_MS,
   ensureSessionReady,
   launchConfiguredApp,
   startAndroidLaunchEarly,
@@ -881,7 +882,7 @@ export async function openDeviceSession(
   // A test's own launches of the app land where the session's do: on the app,
   // not on an Expo development build's dev launcher or dev menu.
   device._afterAppLaunch = (pkg) => (pkg === config.package ? connectDevClient(session.context) : Promise.resolve(false));
-  if (config.platform === 'ios') device._afterOpenLink = () => connectDevClient(session.context);
+  if (config.platform === 'ios') device._afterOpenLink = () => connectDevClient(session.context, { settleMs: LINK_SETTLE_MS });
 
   // Whether this open holds the session's claim on the device. A failed open
   // gives back this process's hold, so a long-lived session (UI, watch, an MCP

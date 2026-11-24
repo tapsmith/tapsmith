@@ -207,7 +207,9 @@ app or project. The link also turns off the dev menu that opens at launch and, o
 and later, hides the floating tools button while the tests run. A menu that opens all the same
 is closed by opening the link again. An Android emulator reaches Metro at `10.0.2.2`. For a physical
 Android device, Tapsmith runs `adb reverse` for the port. A physical iPhone connects to
-your Mac's network address, so it must be on the same network.
+your Mac's network address, so it must be on the same network. A Debug build without
+`expo-dev-client` finds Metro by itself, so on a physical Android device run
+`adb reverse tcp:8081 tcp:8081` first.
 
 If Metro is not running, the run stops with an error that names the screen the app is
 stuck on (the dev launcher, or React Native's "Unable to load script" red screen) and

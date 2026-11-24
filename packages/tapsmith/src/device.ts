@@ -247,6 +247,11 @@ function warnStartAgentOnce(message: string): void {
   console.warn(`[tapsmith] ${message}`);
 }
 
+/** Whether a link is a dev client's own "open this server" link, not the app's. */
+function isDevClientLink(uri: string): boolean {
+  return /:\/\/expo-development-client\//.test(uri) || /[?&]__expo_url=/.test(uri);
+}
+
 /**
  * The device under test: the `device` fixture every test receives.
  * Locators come from its `getBy*()` methods and auto-wait when acted on;
@@ -353,7 +358,7 @@ export class Device {
   _afterAppLaunch?: (packageName: string) => Promise<unknown>;
   /**
    * @internal — The same, after a deep link that may have relaunched the app
-   * (iOS). True when the app was on a development screen, which drops the link.
+   * (iOS). True when it had to load the app again, which drops the link.
    */
   _afterOpenLink?: () => Promise<boolean>;
   /**
@@ -1041,7 +1046,7 @@ export class Device {
     await deliver(effectiveOptions);
     // An iOS link may have relaunched the app to deliver itself. A development
     // build cannot take an app's own link cold: once it is in the app, again.
-    if (!this._sessionLaunches && await this._afterOpenLink?.()) {
+    if (!this._sessionLaunches && !isDevClientLink(uri) && await this._afterOpenLink?.()) {
       await deliver(options ? { ...options, forceColdLaunch: false } : undefined);
     }
   }
