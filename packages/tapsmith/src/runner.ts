@@ -4257,7 +4257,7 @@ function failAll(ctx: SuiteContext, prefix: string, error: Error, opts: RunOptio
   for (const t of ctx.tests) {
     const fullName = prefix ? `${prefix} > ${t.name}` : t.name;
     if (!passesTestFilter(fullName, opts)) continue;
-    result.tests.push({ name: t.name, fullName, status: 'failed', durationMs: 0, error, project, screenshotPath, tracePath });
+    result.tests.push({ name: t.name, fullName, status: 'failed', durationMs: 0, error, project, filePath: opts.testFilePath, screenshotPath, tracePath });
   }
   for (const s of ctx.suites) {
     const childCtx = materializeSuiteEntry(s);

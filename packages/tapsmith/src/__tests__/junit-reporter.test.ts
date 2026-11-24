@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { JSDOM } from 'jsdom';
 import { JUnitReporter } from '../reporters/junit.js';
 import { BlobReporter, mergeBlobs } from '../reporters/blob.js';
+import { dependencySkipResult, standInSuite } from '../dispatcher.js';
 import type { FullResult } from '../reporter.js';
 import type { TapsmithConfig } from '../config.js';
 import type { SuiteResult, TestResult } from '../runner.js';
@@ -67,9 +68,13 @@ function result(suites: SuiteResult[]): FullResult {
   };
 }
 
-async function writeJUnit(full: FullResult, options: Record<string, unknown> = {}): Promise<Document> {
+async function writeJUnit(
+  full: FullResult,
+  options: Record<string, unknown> = {},
+  overrides: Partial<TapsmithConfig> = {},
+): Promise<Document> {
   const reporter = new JUnitReporter({ outputFile: 'out/results.xml', ...options });
-  reporter.onRunStart(config(), 1);
+  reporter.onRunStart(config(overrides), 1);
   await reporter.onRunEnd(full);
   const xml = fs.readFileSync(path.join(rootDir, 'out/results.xml'), 'utf-8');
   const doc = new JSDOM(xml, { contentType: 'text/xml' }).window.document;
@@ -148,6 +153,26 @@ describe('JUnitReporter suite and case names', () => {
     expect(casesOf(doc).map((c) => c.getAttribute('name'))).toEqual(['[android] Login > signs in', '[ios] Login > signs in']);
   });
 
+  it('with several projects configured, prefixes the names of a run of only one of them too', async () => {
+    const projects = [{ name: 'android' }, { name: 'ios' }];
+    const doc = await writeJUnit(result([fileSuite([test('signs in', { project: 'ios' })])]), {}, { projects });
+    expect(casesOf(doc)[0].getAttribute('name')).toBe('[ios] signs in');
+  });
+
+  it('lists a file a failed dependency skipped under its own path, and counts it', async () => {
+    const blocked = dependencySkipResult('app', path.join(rootDir, 'tests', 'app.test.ts'));
+    const doc = await writeJUnit(result([
+      fileSuite([test('signs in', { project: 'setup', status: 'failed', error: new Error('no login') })]),
+      standInSuite(blocked),
+    ]));
+    expect(suitesOf(doc).map((s) => [s.getAttribute('name'), s.getAttribute('skipped')])).toEqual([
+      ['tests/login.test.ts', '0'],
+      ['tests/app.test.ts', '1'],
+    ]);
+    expect(doc.documentElement.getAttribute('tests')).toBe('2');
+    expect(doc.documentElement.getAttribute('skipped')).toBe('1');
+  });
+
   it('includeProjectInTestName overrides the default either way', async () => {
     const two = result([
       fileSuite([test('t', { project: 'android' })]),
@@ -198,6 +223,15 @@ describe('JUnitReporter failures', () => {
     expect(body).not.toContain('dist/runner.js');
     expect(body).not.toContain('node:internal');
     expect(body).not.toContain('\x1b');
+  });
+
+  it('keeps every user frame, down to the test file under nested helpers', async () => {
+    const error = new Error('boom');
+    error.stack = ['Error: boom', ...['helpers', 'field', 'form', 'checkout', 'login.test'].map(
+      (f, i) => `    at fn${i} (${path.join(rootDir, `${f}.ts`)}:${i + 1}:1)`,
+    )].join('\n');
+    const doc = await writeJUnit(result([fileSuite([test('x', { status: 'failed', error })])]));
+    expect(doc.getElementsByTagName('failure')[0].textContent).toContain('login.test.ts:5:1');
   });
 
   it('writes a failure whose error has no stack', async () => {

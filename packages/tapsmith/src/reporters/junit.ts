@@ -44,9 +44,11 @@ export class JUnitReporter implements TapsmithReporter {
 
     // With several projects the same test runs once per project; its name
     // carries the project so CI dashboards keyed on classname + name keep the
-    // copies apart. An explicit option wins either way.
+    // copies apart. The configured projects decide, so a `--project` run or a
+    // shard names a test as the full run does; the results decide for a merge
+    // whose config lists none. An explicit option wins either way.
     const projects = new Set(result.tests.map((t) => t.project).filter((p) => p !== undefined));
-    const prefixProject = this._includeProjectInTestName ?? projects.size > 1;
+    const prefixProject = this._includeProjectInTestName ?? ((this._config?.projects?.length ?? 0) > 1 || projects.size > 1);
 
     const suites: string[] = [];
     let total = 0;
@@ -110,7 +112,7 @@ function testCase(test: TestResult, file: string, prefixProject: boolean, output
   } else if (test.status === 'failed') {
     const error = test.error ?? new Error('Test failed');
     const message = plain(error.message).split('\n').find((l) => l.trim() !== '') ?? '';
-    lines.push(`      <failure message="${attr(message.trim())}" type="FAILURE">${cdata(plain(formatError(error, '')))}</failure>`);
+    lines.push(`      <failure message="${attr(message.trim())}" type="FAILURE">${cdata(plain(formatError(error, '', Infinity)))}</failure>`);
   }
 
   // Playwright's attachment format, which the Jenkins JUnit attachments
@@ -134,9 +136,9 @@ function testCase(test: TestResult, file: string, prefixProject: boolean, output
 
 /**
  * The file a root suite stands for, relative to rootDir with forward
- * slashes, as Playwright names its file suites. Every live result carries
- * its file; a blob from a version that did not record it falls back to the
- * suite's own name.
+ * slashes, as Playwright names its file suites. A suite whose
+ * results record no file (a blob from an older version, watch mode's
+ * stand-in results) falls back to its own name.
  */
 function suiteFileName(tests: TestResult[], suiteName: string, rootDir: string): string {
   const filePath = tests.find((t) => t.filePath)?.filePath;

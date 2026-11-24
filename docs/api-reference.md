@@ -2539,7 +2539,7 @@ prints to stdout when no file is configured, Tapsmith's always writes the file.
 | Option | Type | Default |
 | --- | --- | --- |
 | `outputFile` | `string` | `"tapsmith-results/results.xml"` |
-| `includeProjectInTestName` | `boolean` | `true` when the report has more than one project, otherwise `false` |
+| `includeProjectInTestName` | `boolean` | `true` when the config (or the report) has more than one project, otherwise `false` |
 
 The path is printed on stderr when the file is written (`JUnit report written to …`). As in Playwright's JUnit
 reporter, the report has one `<testsuite>` per test file and project:
