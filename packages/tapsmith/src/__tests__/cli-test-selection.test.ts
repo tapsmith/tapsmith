@@ -484,5 +484,105 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     expect(plain(output)).toContain('To set Tapsmith up here, run: pnpm exec tapsmith init');
     expect(status).toBe(1);
   });
+
+  describe('--list', () => {
+    it('lists the selected tests with their locations, and touches no device', () => {
+      const { status, output, reachedDevice } = run('--list');
+      expect(output).toContain('Listing tests:\n');
+      expect(output).toMatch(/^ {2}tests\/pw\/login\.test\.ts:3:\d+ › login > signs in$/m);
+      expect(output).toContain('Total: 2 tests in 2 files');
+      expect(status).toBe(0);
+      expect(reachedDevice).toBe(false);
+    });
+
+    it('applies --grep, and names the project', () => {
+      fs.writeFileSync(path.join(root, 'tapsmith.config.mjs'),
+        'export default { platform: "android", package: "com.example", projects: [{ name: "pw", testMatch: ["**/*.test.ts"] }] };\n');
+      const { status, output } = run('--list', '--grep', 'creates');
+      expect(output).toMatch(/^ {2}\[pw\] › tests\/pw\/signup\.test\.ts:3:\d+ › signup > creates an account$/m);
+      expect(output).toContain('Total: 1 test in 1 file');
+      expect(status).toBe(0);
+    });
+
+    it('lists every test of a file with a .only, as Playwright does', () => {
+      fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'),
+        'import { test } from "tapsmith";\ntest.only("a", async () => {});\ntest("b", async () => {});\n');
+      expect(run('--list').output).toContain('Total: 3 tests in 2 files');
+    });
+
+    it('fails when a file does not load, and lists the others', () => {
+      fs.writeFileSync(path.join(root, 'tests', 'pw', 'signup.test.ts'), 'import "./missing.js";\n');
+      const { status, output } = run('--list');
+      expect(output).toContain('login > signs in');
+      expect(output).toContain('missing.js');
+      expect(status).toBe(1);
+    });
+
+    it('exits 0 for a shard with no test', () => {
+      const { status, output } = run('--list', '--shard=3/3');
+      expect(output).toContain('Total: 0 tests in 0 files');
+      expect(status).toBe(0);
+    });
+
+    it.each([[['--ui'], '--ui cannot be combined with --list'], [['--reporter', 'json'], '--list cannot be combined with --reporter json']])(
+      'refuses %j', (args, message) => {
+        const { status, output } = run('--list', ...args);
+        expect(output).toContain(message);
+        expect(status).toBe(1);
+      });
+  });
+
+  describe('--last-failed', () => {
+    const lastRun = (): string => path.join(root, 'tapsmith-results', '.last-run.json');
+    const record = (failedTests: unknown[]): void => {
+      fs.mkdirSync(path.dirname(lastRun()), { recursive: true });
+      fs.writeFileSync(lastRun(), JSON.stringify({ status: 'failed', failedTests }));
+    };
+
+    it('selects only the tests the last run failed', () => {
+      fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'), testFile('login', ['signs in', 'signs out']));
+      record([{ file: 'tests/pw/login.test.ts', title: 'login > signs out' }]);
+      const { output } = run('--list', '--last-failed');
+      expect(output).toContain('login > signs out');
+      expect(output).toContain('Total: 1 test in 1 file');
+    });
+
+    it('fails before any device work when the last run failed nothing', () => {
+      record([]);
+      const { status, output, reachedDevice } = run('--last-failed');
+      expect(output).toContain('No tests found: no test failed in the last run.');
+      expect(status).toBe(1);
+      expect(reachedDevice).toBe(false);
+    });
+
+    it('fails when the other filters leave no failed test', () => {
+      record([{ file: 'tests/pw/login.test.ts', title: 'login > signs in' }]);
+      const { status, output } = run('--last-failed', '--grep', 'creates');
+      expect(output).toContain('No tests found: none of the tests that failed in the last run');
+      expect(status).toBe(1);
+    });
+
+    it('runs everything when there is no record of a last run', () => {
+      const { output } = run('--last-failed', '--list');
+      expect(output).toContain('there is no record of a last run');
+      expect(output).toContain('Total: 2 tests in 2 files');
+    });
+
+    it('re-runs, on each shard, the failures that fall to it', () => {
+      record([{ file: 'tests/pw/login.test.ts', title: 'login > signs in' }]);
+      expect(run('--last-failed', '--list', '--shard=1/2').output).toContain('Total: 1 test in 1 file');
+      const other = run('--last-failed', '--list', '--shard=2/2');
+      expect(other.output).toContain('Total: 0 tests in 0 files');
+      expect(other.status).toBe(0);
+    });
+
+    it('keeps the record when the files did not load', () => {
+      record([{ file: 'tests/pw/login.test.ts', title: 'login > signs in' }]);
+      const before = fs.readFileSync(lastRun(), 'utf-8');
+      fs.writeFileSync(path.join(root, 'tests', 'pw', 'signup.test.ts'), 'import "./missing.js";\n');
+      expect(run().output).toContain('failed to load');
+      expect(fs.readFileSync(lastRun(), 'utf-8')).toBe(before);
+    });
+  });
 });
 

@@ -28,7 +28,7 @@ describe('preflightTestFiles', { timeout: 60_000 }, () => {
     const broken = write('broken.test.mjs', 'throw new Error("boom");\n');
     const syntax = write('syntax.test.mjs', 'export const a = 1;\nconst x = ;\n');
     const found = await preflightTestFiles([empty, broken, syntax]);
-    expect(found.get(empty)).toEqual({ names: [] });
+    expect(found.get(empty)).toEqual({ names: [], locations: [] });
     const thrown = found.get(broken);
     expect(thrown && 'error' in thrown && thrown.error).toMatchObject({ name: 'Error', message: 'boom' });
     expect(thrown && 'error' in thrown && thrown.error.stack).toContain(`${broken}:1:7`);
@@ -48,8 +48,10 @@ describe('preflightTestFiles', { timeout: 60_000 }, () => {
     expect(found.get(focused)).toEqual({
       names: ['focus', 'other', 'grp > g1', 'grp > inner > i1'],
       focusedNames: ['focus', 'grp > inner > i1'],
+      locations: [2, 3, 4, 4].map((line) => expect.objectContaining({ file: focused, line })),
     });
-    expect(found.get(plain)).toEqual({ names: ['b1'] });
+    expect(found.get(plain)).toMatchObject({ names: ['b1'] });
+    expect(found.get(plain)).not.toHaveProperty('focusedNames');
   });
 
   it('rebuilds a load error as an Error with its name and stack', () => {

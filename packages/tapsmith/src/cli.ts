@@ -39,6 +39,9 @@ import { installActionProgressPrinter } from './action-progress-renderer.js';
 import { discoverTestFiles, noConfigFoundMessage, noTestFilesFoundMessage, relativeTestPath, resolveTestFileArgs } from './test-file-discovery.js';
 import { resolveTsxBin, tsxIpcPathProblem } from './child-scripts.js';
 import { filterRanNothing } from './test-filter.js';
+import { FailureTracker, stoppedEarlyMessage } from './failure-tracker.js';
+import { readLastRun, selectLastFailed, writeLastRun } from './last-run.js';
+import { formatTestListing, type ListedTest } from './test-listing.js';
 import {
   resolveTraceConfig,
   isNetworkTracingEnabled,
@@ -2012,6 +2015,12 @@ async function preflightLoadFailures(
   return results;
 }
 
+/** Print `--list`'s listing and end the command. */
+function listAndExit(tests: ListedTest[], rootDir: string, code = 0): never {
+  console.log(formatTestListing(tests, rootDir));
+  process.exit(code);
+}
+
 /**
  * End a shard that has no file to run, with exit code 0. It still leaves its
  * (empty) blob, or merge-reports would report the shard as missing whenever
@@ -2025,8 +2034,12 @@ async function exitEmptyShard(config: TapsmithConfig): Promise<never> {
     process.exit(1);
   }
   beginOutputRun(config, { clear: true });
+  writeLastRun(config, { status: 'passed', tests: [] });
   process.exit(0);
 }
+
+/** Reporters `--list`'s plain listing stands in for, as Playwright's list mode does. */
+const LISTING_REPORTERS = new Set(['list', 'line', 'dot']);
 
 async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // Load config
@@ -2069,7 +2082,31 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   if (args.reporter) {
     config.reporter = args.reporter;
   }
-
+  if (args.retries !== undefined) {
+    config.retries = args.retries;
+    // Every project's too, as in Playwright: only a test file's own
+    // `retries` (describe.configure(), test.use()) is more specific.
+    const { retries } = args;
+    config.projects = config.projects?.map((p) =>
+      (p.use?.retries !== undefined ? { ...p, use: { ...p.use, retries } } : p));
+  }
+  if (args.maxFailures !== undefined) {
+    config.maxFailures = args.maxFailures;
+  }
+  if (args.ui || args.watch) {
+    const mode = args.ui ? '--ui' : '--watch';
+    const refused = args.list ? '--list'
+      : args.lastFailed ? '--last-failed'
+        : args.maxFailures !== undefined ? '--max-failures (or -x)' : undefined;
+    if (refused) {
+      console.error(red(`${mode} cannot be combined with ${refused}`));
+      process.exit(1);
+    }
+  }
+  if (args.list && args.reporter?.some((name) => !LISTING_REPORTERS.has(name))) {
+    console.error(red(`--list cannot be combined with --reporter ${args.reporter.join(',')}: it prints a plain listing, and runs no reporter`));
+    process.exit(1);
+  }
 
   // Validate watch mode constraints
   if (args.watch) {
@@ -2274,6 +2311,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     const { current, total } = config.shard;
     testFiles = shardProjects(projects, config.shard);
     if (testFiles.length === 0) {
+      if (args.list) listAndExit([], config.rootDir);
       console.log(dim(`Shard ${current}/${total}: no test files in this shard.`));
       await exitEmptyShard(config);
     }
@@ -2351,7 +2389,8 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     const result = preflight?.get(file);
     return !!result && 'names' in result && result.focusedNames !== undefined;
   };
-  const focusedRun = runIsFocused(unshardedFiles, focusedFile);
+  // Not for a listing, which lists every test, as Playwright's does.
+  const focusedRun = !args.list && runIsFocused(unshardedFiles, focusedFile);
   // Setup projects: a `.only` there neither focuses the run nor drops their files.
   const setupProjects = new Set(projects.flatMap((p) => p.dependencies));
   // The files a focused run runs, from the whole suite.
@@ -2377,7 +2416,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         const result = found.get(file);
         if (!result || !('names' in result)) return undefined;
         // A file with a `.only` runs only its focused tests, in any run.
-        return result.focusedNames ?? result.names;
+        return args.list ? result.names : result.focusedNames ?? result.names;
       },
     );
     if (miss) {
@@ -2434,6 +2473,74 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     }
   }
 
+  // The tests of a file a run under `project` selects; undefined when the
+  // preflight could not read them.
+  const selectableNames = async (file: string, project: import('./project.js').ResolvedProject): Promise<string[] | undefined> => {
+    const result = preflight?.get(file);
+    if (!result || !('names' in result)) return undefined;
+    const { grepFiltersFor, passesSelectionFilters } = await import('./test-filter.js');
+    const filters = { ...grepFiltersFor(config, project), fullNames: project.fullNamesByFile?.get(file) };
+    const names = args.list ? result.names : result.focusedNames ?? result.names;
+    return names.filter((name) => passesSelectionFilters(name, filters));
+  };
+
+  // After the shard split, as in Playwright: each shard re-runs the failures
+  // that fall to it.
+  if (args.lastFailed && loadFailures.length === 0) {
+    const failed = readLastRun(config);
+    if (!failed) {
+      console.error(yellow('Note: there is no record of a last run in outputDir, so --last-failed runs every test.'));
+    } else {
+      const names = new Map<import('./project.js').ResolvedProject, Map<string, string[] | undefined>>();
+      for (const project of projects) {
+        const byFile = new Map<string, string[] | undefined>();
+        for (const file of project.testFiles) byFile.set(file, await selectableNames(file, project));
+        names.set(project, byFile);
+      }
+      testFiles = selectLastFailed(projects, failed, config, (file, project) => names.get(project)?.get(file));
+      if (testFiles.length === 0) {
+        const why = failed.length === 0
+          ? 'no test failed in the last run'
+          : 'none of the tests that failed in the last run is in this selection';
+        if (config.shard) {
+          if (args.list) listAndExit([], config.rootDir);
+          console.log(dim(`Shard ${config.shard.current}/${config.shard.total}: ${why}.`));
+          await exitEmptyShard(config);
+        }
+        console.error(red(`No tests found: ${why}.`));
+        process.exit(1);
+      }
+      if (shardMessage && config.shard) {
+        shardMessage = `Shard ${config.shard.current}/${config.shard.total}: running ${testFiles.length} file(s)`;
+      }
+    }
+  }
+
+  if (args.list) {
+    const listed: ListedTest[] = [];
+    let unread = false;
+    for (const project of projectWaves.flat()) {
+      for (const file of project.testFiles) {
+        const result = preflight?.get(file);
+        if (!result) unread = true;
+        if (!result || !('names' in result)) continue;
+        const selected = new Set(await selectableNames(file, project));
+        result.names.forEach((fullName, i) => {
+          if (selected.has(fullName)) listed.push({ project: projectLabel(project), file, fullName, location: result.locations[i] });
+        });
+      }
+    }
+    for (const { error } of loadFailures) {
+      console.error(red(error?.message ?? ''));
+    }
+    if (unread) console.error(red('Some test files could not be read in time to list their tests.'));
+    if (listed.length === 0 && loadFailures.length === 0 && !unread && !config.shard) {
+      console.error(red('No tests found.'));
+      process.exit(1);
+    }
+    listAndExit(listed, config.rootDir, loadFailures.length > 0 || unread ? 1 : 0);
+  }
+
   // Retry-only video/trace modes start no recorder on attempt 0, so with
   // `retries: 0` they can never produce an artifact. Warn at run start —
   // one line per misconfigured project and artifact — rather than letting
@@ -2472,7 +2579,8 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       reporters.push(new BlobReporter());
     }
   }
-  const reporter = new ReporterDispatcher(reporters);
+  const failureTracker = config.maxFailures && !args.ui && !args.watch ? new FailureTracker(config.maxFailures) : undefined;
+  const reporter = new ReporterDispatcher(failureTracker ? [...reporters, failureTracker] : reporters);
 
   // A file that failed to load: report it, as the run would have, to every
   // reporter, and run nothing (PILOT-784).
@@ -2666,6 +2774,8 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
           workers: totalWorkers,
           forceInstall: args.forceInstall,
           networkApisInRun,
+          failureTracker,
+          fullNamesByFile: projects[0].fullNamesByFile,
           workerCap: budgetCap,
           projects: hasProjects ? projects : undefined,
           projectWaves: hasProjects ? projectWaves : undefined,
@@ -2680,8 +2790,10 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
 
       await reporter.onRunEnd(fullResult);
       preserveEmulatorsForReuse(emulatorsLaunchedThisProcess());
+      if (failureTracker?.reached) console.error(red(stoppedEarlyMessage(failureTracker.maxFailures)));
       const zeroMatch = filterRanNothing(!!selectionFilterActive, fullResult.tests);
       if (zeroMatch) console.error(red(zeroMatchFilterMessage));
+      else writeLastRun(config, fullResult);
       process.exit((fullResult.status === 'failed' || zeroMatch) ? 1 : 0);
     }
   }
@@ -3074,6 +3186,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
 
     for (const wave of projectWaves) {
       for (const project of wave) {
+        if (failureTracker?.reached) break;
         // A target that could not start: its files fail with the reason —
         // before the dependency check, so a dependent on the same target
         // fails too, as in the parallel path, rather than being skipped.
@@ -3156,6 +3269,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         const projectConfig = currentSequentialState?.effectiveConfig ?? config;
 
         for (const file of project.testFiles) {
+          if (failureTracker?.reached) break;
           // The between-file app reset is the runner's job (declared policy,
           // recorded in the trace as fixture setup). The first file after a
           // device launch inherits what that launch actually did as its
@@ -3180,6 +3294,8 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
             projectName: projectLabel(project),
             projectGrep: projectGrepRe.length > 0 ? projectGrepRe : undefined,
             projectGrepInvert: projectGrepInvertRe.length > 0 ? projectGrepInvertRe : undefined,
+            fullNames: project.fullNamesByFile?.get(file),
+            stopRequested: failureTracker && (() => failureTracker.reached),
           });
 
           const fileResults = collectResults(suiteResult);
@@ -3209,8 +3325,10 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       suites: allSuites,
     };
     await reporter.onRunEnd(fullResult);
+    if (failureTracker?.reached) console.error(red(stoppedEarlyMessage(failureTracker.maxFailures)));
     const zeroMatch = filterRanNothing(!!selectionFilterActive, allResults);
     if (zeroMatch) console.error(red(zeroMatchFilterMessage));
+    else writeLastRun(config, fullResult);
     sequentialExitCode = (hasFailed || zeroMatch) ? 1 : 0;
   } catch (err) {
     // Let main().catch own the exit for escaping errors. Its handler needs
@@ -3265,6 +3383,8 @@ async function runTestFileWithRecovery(
     projectName?: string
     projectGrep?: RegExp[]
     projectGrepInvert?: RegExp[]
+    fullNames?: readonly string[]
+    stopRequested?: () => boolean
   },
 ): Promise<SuiteResult> {
   const grep = normalizeGrep(opts.config.grep);
@@ -3322,6 +3442,8 @@ async function runTestFileWithRecovery(
       grepInvert: grepInvert.length > 0 ? grepInvert : undefined,
       projectGrep: opts.projectGrep,
       projectGrepInvert: opts.projectGrepInvert,
+      fullNames: opts.fullNames,
+      stopRequested: opts.stopRequested,
     }),
     recover: () => recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`),
     onTestEnd: (result) => opts.reporter.onTestEnd(result),

@@ -2753,6 +2753,9 @@ flag followed by another flag is an error, not a value: `tapsmith test --device 
 `option '-d, --device <serial>' argument missing`, instead of targeting a device called `--workers`. For a
 value that really starts with `-`, use the `=` form: `--grep=-slow`.
 
+A Playwright flag `tapsmith test` does not have (`--timeout`, `--output`, `--repeat-each`, …) is an unknown option,
+and the error says what to do instead.
+
 An empty value (`--device "$SERIAL"` with an empty variable) means the flag was not given for `--device`,
 `--trace`, `--video`, `--grep`, `--grep-invert` and `--reporter`: the run falls back to automatic device
 selection or the config's setting. An empty `-c` / `--config` is an error rather than a silent fallback to `tapsmith.config.*`, which
@@ -2968,6 +2971,59 @@ npx tapsmith test -g checkout --grep-invert wip  # Checkout tests, excluding wor
 ```
 
 Also configurable in `tapsmith.config.ts` as `grepInvert: RegExp | RegExp[]`, with per-project entries unioned with the root entry.
+
+### `tapsmith test --retries <n>`
+
+Retry each failed test up to `n` times; `0` turns retries off. As with Playwright's `--retries`, it overrides `retries` in the config and in every project's `use`, and a test file's own `retries` (`test.describe.configure()`, `test.use()`) overrides the flag.
+
+```bash
+npx tapsmith test --retries 2
+```
+
+### `tapsmith test --max-failures <n>` / `tapsmith test -x`
+
+Stop the run once `n` tests have failed (a test that will be retried has not failed yet). `-x` is `--max-failures=1`, and `--max-failures=0` means no limit. Overrides `maxFailures` in the config.
+
+```bash
+npx tapsmith test -x                 # Stop at the first failure
+npx tapsmith test --max-failures=10
+```
+
+The tests not started yet do not run: they are missing from the reports, and a `Testing stopped early after n maximum allowed failures.` line says so. `afterEach` and `afterAll` hooks still run. Two differences from Playwright: with several workers, a test that is already running on another one finishes first (Playwright interrupts it), so the run can end with more than `n` failures; and a failed `beforeAll` hook counts once for each test of its scope, since Tapsmith reports each of them as failed.
+
+UI mode, watch mode and MCP runs ignore `maxFailures`; `--max-failures` and `-x` with `--ui` or `--watch` are refused.
+
+### `tapsmith test --last-failed`
+
+Run only the tests that failed in the last `tapsmith test` run of this project.
+
+```bash
+npx tapsmith test                # 3 of 200 tests fail
+npx tapsmith test --last-failed  # runs those 3
+```
+
+As in Playwright, every run records what it failed in `<outputDir>/.last-run.json`, replacing the record of the run before it, so a `--grep` run or a `--last-failed` run narrows what the next one re-runs. [Clearing earlier output](configuration.md#output-of-earlier-runs) keeps the record. A run that is interrupted, or that a file which fails to load stops, leaves the record as it was.
+
+- The other filters (files, `--grep`, `--project`) apply as well, and a [setup project](#projects) a failed test needs runs whole. If only a setup project's own tests failed, those run.
+- With `--shard`, each shard re-runs the failures among its own files.
+- A failure that stood for a whole file (its device could not start, say) re-runs the whole file.
+- With no record, every test runs, with a note. If nothing failed in the last run, or the other filters leave none of the failures, the run fails with `No tests found` (a shard exits 0).
+
+`--last-failed` cannot be combined with `--ui` or `--watch`.
+
+### `tapsmith test --list`
+
+Print the tests a run would run, without running them. No daemon or device is needed, and nothing in `outputDir` changes. The files, `--grep`, `--project`, `--shard` and `--last-failed` filters apply.
+
+```bash
+npx tapsmith test --list
+# Listing tests:
+#   [android] › tests/login.tapsmith.ts:5:3 › login > signs in
+#   [android] › tests/login.tapsmith.ts:9:3 › login > rejects a wrong password
+# Total: 2 tests in 1 file
+```
+
+Each line ends with the test's full name, as `--grep` matches it. As in Playwright, skipped tests are listed, and a `.only` does not narrow the list. A file that fails to load is reported, and the command exits 1. Unlike Playwright's, the listing is always plain text: no reporter runs, and `--list` with a `--reporter` other than `list`, `line` or `dot` is refused. It cannot be combined with `--ui` or `--watch` either.
 
 ### `tapsmith test --project <name>`
 

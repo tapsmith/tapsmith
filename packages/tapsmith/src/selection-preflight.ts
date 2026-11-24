@@ -9,6 +9,7 @@ import { fork } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveChildLoader } from './child-scripts.js';
+import type { SourceLocation } from './trace/types.js';
 
 export interface PreflightRequest {
   type: 'discover-names';
@@ -27,7 +28,12 @@ export interface PreflightLoadError {
  * `.only`, the names of the focused tests, which alone run — or why it could
  * not be loaded.
  */
-export type FilePreflight = { names: string[]; focusedNames?: string[] } | { error: PreflightLoadError };
+export type FilePreflight = {
+  names: string[]
+  focusedNames?: string[]
+  /** Where each of `names` was declared, by index. */
+  locations: Array<SourceLocation | undefined>
+} | { error: PreflightLoadError };
 
 export type PreflightResponse =
   /** Sent first: the process that imports the files (under tsx, a grandchild). */

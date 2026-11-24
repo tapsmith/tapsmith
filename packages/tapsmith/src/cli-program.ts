@@ -54,6 +54,11 @@ export interface TestCommandArgs {
   /** `--reporter`, comma-separated and repeatable: the names in order. */
   reporter?: string[];
   project?: string[];
+  retries?: number;
+  /** `--max-failures`, or 1 for `-x`. */
+  maxFailures?: number;
+  lastFailed: boolean;
+  list: boolean;
 }
 
 /** Raw `tapsmith init` flags. `init-noninteractive.ts` validates the values, keeping its error codes. */
@@ -267,6 +272,8 @@ Examples:
   tapsmith test --workers 4 --trace retain-on-failure
   tapsmith test --shard 2/4 --reporter junit
   tapsmith test --grep "checkout" --project android
+  tapsmith test --last-failed --retries 1
+  tapsmith test --list
   tapsmith test --watch
   tapsmith test --ui --ui-port 8080
 
@@ -407,6 +414,11 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--grep-invert <pattern>', 'Skip tests whose full name matches this regex', regex('--grep-invert'))
     .option('--reporter <names>', `Reporters to use, comma-separated, in place of the config's: ${BUILT_IN_REPORTERS.join(', ')}, or a custom reporter's path or package`, collectReporters)
     .option('--project <name>', 'Only run this project from the config (repeatable; dependencies run too)', collectProject)
+    .option('--retries <n>', 'Retry each failed test up to n times, 0 for none (overrides the config and its projects)', nonNegativeInt('--retries'))
+    .option('--max-failures <n>', 'Stop the run after n failed tests, 0 for no limit', nonNegativeInt('--max-failures'))
+    .option('-x', 'Stop the run after the first failed test (--max-failures=1)', false)
+    .option('--last-failed', 'Only run the tests that failed in the last run', false)
+    .option('--list', 'List the tests that would run, without running them or needing a device', false)
     .option('--force-install', 'Reinstall the app even if it is already installed', false)
     .addOption(new Option(TSX_REEXEC_FLAG).hideHelp().default(false))
     .addHelpText('after', TEST_EXAMPLES)
@@ -432,6 +444,10 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
         grepInvert: (opts.grepInvert as RegExp | '' | undefined) || undefined,
         reporter: (opts.reporter as string[] | '' | undefined) || undefined,
         project: opts.project as string[] | undefined,
+        retries: opts.retries as number | undefined,
+        maxFailures: opts.x ? 1 : opts.maxFailures as number | undefined,
+        lastFailed: opts.lastFailed as boolean,
+        list: opts.list as boolean,
       };
       await act('test', handlers.test)(args);
     });
@@ -646,6 +662,26 @@ export function claimBanner(env: NodeJS.ProcessEnv = process.env): boolean {
   return true;
 }
 
+// ─── Playwright flags Tapsmith does not have ───
+
+/** `tapsmith test` flags a Playwright user reaches for, and what to do instead. */
+const PLAYWRIGHT_TEST_FLAG_HINTS: Record<string, string> = {
+  '--debug': 'Use --ui to run tests one at a time and step through what each did.',
+  '--forbid-only': 'Tapsmith cannot refuse a .only yet; a run that holds one prints a warning.',
+  '--fully-parallel': 'Tapsmith runs files in parallel (--workers) and the tests of a file in order.',
+  '--global-timeout': "Tapsmith has no limit for the whole run yet; set one on the CI job.",
+  '--headed': 'Set `emulatorLaunchOptions: { headless: false }` in the config for an emulator window.',
+  '--no-deps': 'Tapsmith always runs the projects a project depends on.',
+  '--only-changed': 'Name the changed test files instead: tapsmith test <files>.',
+  '--output': 'Set `outputDir` in the config.',
+  '--pass-with-no-tests': 'Tapsmith always fails a run that selects no test.',
+  '--quiet': 'Use a quieter reporter: --reporter dot.',
+  '--repeat-each': 'Tapsmith cannot repeat each test yet; run the command in a shell loop.',
+  '--timeout': 'Set `timeout` in the config, or test.use({ timeout }) in a file or describe. It is also the timeout of every action and assertion.',
+  '--update-snapshots': 'Tapsmith has no snapshot assertions yet.',
+  '-u': 'Tapsmith has no snapshot assertions yet.',
+};
+
 // ─── Pre-parse ───
 
 const ROOT_FLAGS = new Set(['-h', '--help', '-v', '--version']);
@@ -761,6 +797,13 @@ export function prepareCommandArgs(cmd: Command, args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const token = args[i]!;
+    const flagName = token.split('=', 1)[0]!;
+    if (cmd.name() === 'test' && Object.hasOwn(PLAYWRIGHT_TEST_FLAG_HINTS, flagName)) {
+      cmd.error(
+        `error: unknown option '${flagName}'\n${PLAYWRIGHT_TEST_FLAG_HINTS[flagName]}`,
+        { code: 'commander.unknownOption', exitCode: 1 },
+      );
+    }
     // `-grep x` would read as `-g rep` plus a file named x.
     const singleDashLong = /^-([a-zA-Z][a-zA-Z-]+)(=.*)?$/s.exec(token);
     if (singleDashLong && longNames.has(`--${singleDashLong[1]}`)) {

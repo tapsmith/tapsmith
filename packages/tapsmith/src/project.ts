@@ -37,6 +37,11 @@ export interface ResolvedProject {
    * gets exactly this many devices and bypasses the proportional split.
    */
   workers?: number
+  /**
+   * The tests each file runs, by exact full name: a `--last-failed` run. A
+   * file it does not name runs whole.
+   */
+  fullNamesByFile?: Map<string, string[]>
   /** Per-project grep filter, intersected with the root `grep`. */
   grep?: RegExp | RegExp[]
   /** Per-project grep-invert filter, unioned with the root `grepInvert`. */
