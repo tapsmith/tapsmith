@@ -300,7 +300,7 @@ function pidAlive(pid: number): boolean {
 }
 
 /** Whether `ref` is still the process it was when recorded. */
-function processIsLive(ref: ProcessRef): boolean {
+export function processIsLive(ref: ProcessRef): boolean {
   if (!pidAlive(ref.pid)) return false;
   if (ref.startToken === undefined) return true;
   const now = processStartToken(ref.pid);
@@ -324,7 +324,7 @@ function claimIsLive(claim: DeviceClaim): boolean {
 
 let ownRef: ProcessRef | undefined;
 /** This process, as a claim holder. Its start token never changes, so it is read once. */
-function thisProcess(): ProcessRef {
+export function thisProcess(): ProcessRef {
   if (!ownRef) {
     const token = processStartToken(process.pid);
     ownRef = token ? { pid: process.pid, startToken: token } : { pid: process.pid };

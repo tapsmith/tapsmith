@@ -653,7 +653,7 @@ export default defineConfig({
 
 Set the `screenshot` option to `"always"` in CI to capture screenshots for every test. This makes debugging failures much easier when you cannot see the emulator screen.
 
-Screenshots are saved to `<outputDir>/screenshots/` (by default `tapsmith-results/screenshots/`). Upload this directory as a CI artifact so you can download and inspect screenshots after a run.
+Screenshots are saved to `<outputDir>/screenshots/` (by default `tapsmith-results/screenshots/`). Upload this directory as a CI artifact so you can download and inspect screenshots after a run. Each run [removes the screenshots, traces and videos of earlier runs](configuration.md#output-of-earlier-runs), so a job that makes several runs needs an `outputDir` for each.
 
 Each screenshot file is named with the test name and a timestamp:
 

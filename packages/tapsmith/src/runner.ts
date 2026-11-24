@@ -27,6 +27,7 @@ import { FixtureRegistry, resolveFixtures, fixtureParameterNames, functionHasPar
 import { resolveTraceConfig, type TraceConfig } from './trace/types.js';
 import { shouldRecord, shouldRetain, uiModeTraceMode } from './trace/trace-mode.js';
 import { resolveVideoConfig } from './video/types.js';
+import { recordOutputFile } from './output-ledger.js';
 import { appendEventsToTrace, packageTrace, readTraceActionCount } from './trace/trace-packager.js';
 import { TraceCollector, extractSourceLocation, screenshotFileName, setActiveTraceCollector, withActiveTraceCollector } from './trace/trace-collector.js';
 import type { AnyTraceEvent, SourceLocation } from './trace/types.js';
@@ -1618,6 +1619,7 @@ async function captureFailureScreenshots(
     screenshotDir,
     opts.devices.length > 1 && i > 0 ? `${testName}-${rd.name}` : testName,
   )));
+  for (const p of paths) if (p) recordOutputFile(opts.config, p);
   return paths[0];
 }
 
@@ -2790,6 +2792,7 @@ async function runSuiteContext(
             appReset: policy.mode,
             appResetScope: policy.scope,
           });
+          recordOutputFile(opts.config, beforeAllTrace);
         } catch {
           // Trace packaging is best-effort
         }
@@ -3811,6 +3814,7 @@ async function runSuiteContext(
                 appResetScope: policy.scope,
                 retry: attempt > 0 ? attempt : undefined,
               });
+              recordOutputFile(opts.config, tracePath);
             } catch {
               // Trace packaging is best-effort
             }
@@ -3885,6 +3889,7 @@ async function runSuiteContext(
                 `${safeName}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.mp4`,
               );
               await fsPromises.copyFile(res.videoPath, filePath);
+              recordOutputFile(opts.config, filePath);
               await fsPromises.unlink(res.videoPath);
               videoPath = filePath;
             } catch (err) {
@@ -4158,6 +4163,7 @@ async function runSuiteContext(
         if (targetTracePath && actionIndexOffset > 0) {
           try {
             appendEventsToTrace(targetTracePath, afterAllCollector, Date.now(), opts.config.rootDir, actionIndexOffset);
+            recordOutputFile(opts.config, targetTracePath);
           } catch {
             // Trace amendment is best-effort, like packaging.
           }

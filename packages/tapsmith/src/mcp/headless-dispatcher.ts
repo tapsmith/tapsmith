@@ -24,6 +24,7 @@ import { knownCaptureFailures, rememberCaptureFailures } from '../capture-warnin
 import { foldBackCapabilities } from '../app-reset.js';
 import { telemetry } from '../telemetry.js';
 import { ensurePlatformTarget, platformTargetIsLive, type PlatformTarget } from './connection.js';
+import { beginOutputRun } from '../output-ledger.js';
 import { deviceGroupNames, deviceGroupSize, pinnedDeviceSerials, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from '../config.js';
 import { deviceGroupSignature, deviceSignature } from '../project.js';
 import type {
@@ -117,6 +118,8 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private _lastRunEnd: TestRunResult | null = null;
   private readonly _runEndWaiters: Array<(r: TestRunResult) => void> = [];
   private _activeChild: ChildProcess | null = null;
+  /** The `outputDir` this session's output run was begun for, once a test file ran. */
+  private _outputRunDir: string | null = null;
   /**
    * Sticky reset capabilities per device serial. Runs go through fresh
    * watch-run children, so without this store every `tapsmith_run_tests`
@@ -1460,6 +1463,18 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     return this._scanNetworkApis(this._testFiles);
   }
 
+  /**
+   * The server's session is one run, begun with its first test file (a server
+   * that runs nothing clears nothing). An edited `outputDir` begins another.
+   */
+  private _beginOutputRun(): void {
+    if (!this._config) return;
+    const dir = path.resolve(this._config.rootDir, this._config.outputDir);
+    if (dir === this._outputRunDir) return;
+    this._outputRunDir = dir;
+    beginOutputRun(this._config, { clear: true });
+  }
+
   private async _runFileInChild(
     filePath: string,
     projectUseOptions?: RunFileUseOptions,
@@ -1483,6 +1498,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     const deviceName = resolveDeviceGroup(runProject?.effectiveConfig ?? this._config ?? {})[0].name;
 
     const networkApisInRun = await this._networkApisInRun();
+    this._beginOutputRun();
     const scripts = this._scripts!;
     return new Promise((resolve, reject) => {
       const child = fork(scripts.watchRunScript, [], {

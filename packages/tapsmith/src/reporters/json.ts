@@ -7,6 +7,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { recordOutputFile } from '../output-ledger.js';
 import type { TapsmithReporter, FullResult } from '../reporter.js';
 import type { TapsmithConfig } from '../config.js';
 import type { SuiteResult } from '../runner.js';
@@ -89,6 +90,7 @@ export class JsonReporter implements TapsmithReporter {
     const outputPath = path.resolve(this._config?.rootDir ?? process.cwd(), this._outputFile);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
+    recordOutputFile(this._config, outputPath);
     // Internal: `tapsmith verify` reads and deletes the file itself.
     if (process.env.TAPSMITH_JSON_REPORT_QUIET !== '1') process.stderr.write(`JSON report written to ${outputPath}\n`);
   }

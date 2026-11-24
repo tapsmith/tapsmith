@@ -439,7 +439,8 @@ jobs:
             > "tapsmith-results/logcat-${{ matrix.shard }}-attempt1.txt" 2>&1 || true
           adb logcat -c || true
 
-          run_shard
+          # Its own folder: a run clears the traces of the runs before it.
+          E2E_OUTPUT_DIR=tapsmith-results/attempt2 run_shard
 
       # Only shards that ran auth.setup produce the archive (hashFiles is
       # empty otherwise), and only a green run may seed the cache. The
@@ -466,6 +467,8 @@ jobs:
       - name: Verify trace archive contents
         if: matrix.shard == 1
         working-directory: e2e
+        env:
+          E2E_OUTPUT_DIR: tapsmith-results/verify-trace
         run: |
           SERIAL=$(adb devices | grep -w device | head -1 | awk '{print $1}')
           node verify-trace-archive.mjs \
@@ -481,6 +484,7 @@ jobs:
         working-directory: e2e
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-android-1-mcp-lines.log
+          E2E_OUTPUT_DIR: tapsmith-results/mcp-lines
         run: |
           SERIAL=$(adb devices | grep -w device | head -1 | awk '{print $1}')
           node verify-mcp-test-lines.mjs -c tapsmith.config.android-ci.mjs --device "$SERIAL"
@@ -498,6 +502,7 @@ jobs:
         working-directory: e2e
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-android-1-untraced.log
+          E2E_OUTPUT_DIR: tapsmith-results/untraced
         run: |
           SERIAL=$(adb devices | grep -w device | head -1 | awk '{print $1}')
           adb -s "$SERIAL" unroot

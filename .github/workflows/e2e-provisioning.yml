@@ -532,6 +532,7 @@ jobs:
         working-directory: e2e
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-android-provisioning-rerun.log
+          E2E_OUTPUT_DIR: tapsmith-results/rerun
         run: npx tapsmith test -c tapsmith.config.android-provisioning-ci.mjs
 
       - name: Check the rerun reused both emulators

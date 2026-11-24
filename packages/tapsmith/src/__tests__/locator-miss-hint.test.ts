@@ -8,6 +8,7 @@ import { expect as tapsmithExpect } from "../expect.js";
 import { Device } from "../device.js";
 import { LOCATOR_PICKER_HINT, nearMissHint, nearMissProbes } from "../locator-miss-hint.js";
 import { _contentDesc, _hint, _label, _role, _text, _textContains, _testId, formatSelector, withParent } from "../selectors.js";
+import type { ElementHandle } from "../element-handle.js";
 import type { ElementInfo, EvaluateSelectorsResponse, GetSystemAlertResponse, TapsmithGrpcClient } from "../grpc-client.js";
 import type { Selector } from "../selectors.js";
 
@@ -132,17 +133,97 @@ describe("nearMissProbes()", () => {
 });
 
 describe("a not-found error lists the near misses the agent finds", () => {
-  it("in an action, before the off-screen hint and with the picker last", async () => {
+  it("in an action, in place of the off-screen hint and with the picker last", async () => {
+    // The words are on screen under another locator, so scrolling is not the fix.
     const { client } = missingClient((s) => (s.kind.type === "textContains" ? [element("t", "Sign in")] : []));
     const d = new Device(client, { platform: "android", timeout: 50 });
     const message = await err(d.getByRole("button", { name: "Sign in" }).tap());
     vitestExpect(message).toBe(
       'Element getByRole("button", { name: "Sign in" }) was not found after waiting 50ms. ' +
         'Nothing matches it, but on screen now this locator matches: getByText("Sign in") (1 element). ' +
-        'It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with ' +
-        'await locator.scrollIntoView() (scrollIntoView({ direction: "up" }) for one above the screen), then tap() it. ' +
         LOCATOR_PICKER_HINT,
     );
+  });
+
+  describe("the off-screen hint of an action", () => {
+    const offScreen = "It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with " +
+      'await locator.scrollIntoView() (scrollIntoView({ direction: "up" }) for one above the screen), then tap() it. ';
+    const tapError = (client: TapsmithGrpcClient, locate: (d: Device) => ElementHandle) =>
+      err(locate(new Device(client, { platform: "android", timeout: 50 })).tap());
+
+    it("is kept when nothing near matches", async () => {
+      const { client } = missingClient(() => []);
+      vitestExpect(await tapError(client, (d) => d.getByText("Delete", { exact: true }))).toBe(
+        'Element getByText("Delete", { exact: true }) was not found after waiting 50ms. ' + offScreen + LOCATOR_PICKER_HINT,
+      );
+    });
+
+    it("is kept when a hit only contains the words: the one asked for may be below the fold", async () => {
+      const { client } = missingClient((s) => (s.kind.type === "textContains" ? [element("h", "Delete all")] : []));
+      vitestExpect(await tapError(client, (d) => d.getByText("Delete", { exact: true }))).toBe(
+        'Element getByText("Delete", { exact: true }) was not found after waiting 50ms. ' +
+          'Nothing matches it, but on screen now this locator matches: getByText("Delete") (1 element). ' +
+          offScreen + LOCATOR_PICKER_HINT,
+      );
+    });
+
+    it("is dropped when a hit shows the words in another case, as Android draws a dialog button", async () => {
+      const { client } = missingClient((s) => (s.kind.type === "textContains" ? [element("b", "YES,  DELETE")] : []));
+      vitestExpect(await tapError(client, (d) => d.getByText("Yes, delete", { exact: true }))).toBe(
+        'Element getByText("Yes, delete", { exact: true }) was not found after waiting 50ms. ' +
+          'Nothing matches it, but on screen now this locator matches: getByText("Yes, delete") (1 element). ' +
+          LOCATOR_PICKER_HINT,
+      );
+    });
+
+    it("is dropped when a hit's description is the words, without trailing punctuation too", async () => {
+      const hit = { ...element("d", ""), contentDescription: "Forgot password" };
+      const { client } = missingClient((s) => (s.kind.type === "contentDesc" ? [hit] : []));
+      vitestExpect(await tapError(client, (d) => d.getByText("Forgot password?"))).not.toContain("off-screen");
+    });
+
+    it("is dropped when a hit's placeholder is the words", async () => {
+      const hit = { ...element("f", ""), hint: "Email" };
+      const { client } = missingClient((s) => (s.kind.type === "hint" ? [hit] : []));
+      vitestExpect(await tapError(client, (d) => d.getByText("Email"))).not.toContain("off-screen");
+    });
+
+    it("is dropped when a hit is a Flutter tab labelled with the words", async () => {
+      const hit = { ...element("t", ""), contentDescription: "Contact\nTab 2 of 3" };
+      const { client } = missingClient((s) => (s.kind.type === "role" && s.kind.value.role === "tab" ? [hit] : []));
+      vitestExpect(await tapError(client, (d) => d.getByText("Contact"))).not.toContain("off-screen");
+    });
+
+    it("is kept when the words are only a text field's typed value: the result may be below the fold", async () => {
+      // Android answers getByPlaceholder() with a field whose text is the words, so two probes return it.
+      const field = { ...element("f", "Apollo 11"), className: "android.widget.EditText", role: "textfield", hint: "Search" };
+      const { client } = missingClient((s) =>
+        s.kind.type === "hint" || (s.kind.type === "role" && s.kind.value.role === "textfield") ? [field] : []);
+      vitestExpect(await tapError(client, (d) => d.getByText("Apollo 11", { exact: true }))).toContain(offScreen);
+      vitestExpect(await tapError(client, (d) => d.getByRole("button", { name: "Apollo 11" }))).toContain(offScreen);
+      const iosField = { ...field, className: "XCUIElementTypeTextField" };
+      const ios = missingClient((s) => (s.kind.type === "role" && s.kind.value.role === "textfield" ? [iosField] : []));
+      vitestExpect(await tapError(ios.client, (d) => d.getByText("Apollo 11", { exact: true }))).toContain(offScreen);
+    });
+
+    it("is kept when the words are only on an off-screen element, which scrolling would bring up", async () => {
+      // Both agents can list an element scrolled out of view, as not visible.
+      const offScreenHit = { ...element("t", "Delete"), visible: false };
+      const hits = (found: ElementInfo[]) =>
+        missingClient((s) => (s.kind.type === "textContains" ? found : [])).client;
+      const locate = (d: Device) => d.getByRole("button", { name: "Delete" });
+      vitestExpect(await tapError(hits([offScreenHit]), locate)).toContain(offScreen);
+      vitestExpect(await tapError(hits([offScreenHit, element("v", "DELETE")]), locate)).not.toContain("off-screen");
+    });
+
+    it("is kept when only the role matches, under other names", async () => {
+      const { client } = missingClient((s) =>
+        s.kind.type === "role" && s.kind.value.role === "button" ? [element("a", "Log in")] : []);
+      vitestExpect(await tapError(client, (d) => d.getByRole("button", { name: "Sign in" }))).toBe(
+        'Element getByRole("button", { name: "Sign in" }) was not found after waiting 50ms. ' +
+          'getByRole("button") matches 1 element on screen now, none named "Sign in". ' + offScreen + LOCATOR_PICKER_HINT,
+      );
+    });
   });
 
   it("lists up to three, with their counts, in recommendation order", async () => {
