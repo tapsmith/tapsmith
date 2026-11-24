@@ -1815,7 +1815,7 @@ export async function connectDevClient(ctx: DevClientContext, deps: DevClientDep
 async function checkReactNativeDevServer(ctx: SessionPreflightContext): Promise<void> {
   const pkg = ctx.config.package;
   if (!pkg || devBuildKind(ctx).kind !== 'unknown') return;
-  await leaveDevScreens(ctx, pkg, { kind: 'metro' }, {});
+  await leaveDevScreens(ctx, pkg, { kind: 'metro' }, { settleMs: LINK_SETTLE_MS });
 }
 
 /** What one look at the app found: the development screen it shows, or whether its own UI is drawn. */
@@ -1824,25 +1824,29 @@ interface DevLook {
   rendered: boolean
 }
 
-/** Reads of the screen that may fail in a row before the failure is the story, not the app. */
-const DEV_READ_FAILURES = 10;
+/** How long reads of the screen may keep failing before the failure is the story, not the app. */
+const DEV_READ_FAILURE_MS = 30_000;
 
 /**
  * A look at the app, undefined when the read failed: a snapshot can time out
  * on a busy machine. A stopped run ends it at once, and a device that keeps
- * failing to answer after {@link DEV_READ_FAILURES} reads.
+ * failing to answer for {@link DEV_READ_FAILURE_MS}.
  */
 function devLooker(ctx: DevClientContext, pkg: string): () => Promise<DevLook | undefined> {
-  let failures = 0;
+  let failingSince: number | undefined;
   return async () => {
     let xml: string;
     try {
-      xml = (await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS)).hierarchyXml;
+      const read = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
+      // The daemon answers a failed dump with an empty hierarchy and its error.
+      if (!read.hierarchyXml) throw new Error(read.errorMessage || 'the UI hierarchy is empty');
+      xml = read.hierarchyXml;
     } catch (err) {
-      if (err instanceof TestAbortedError || err instanceof TestEndedError || ++failures >= DEV_READ_FAILURES) throw err;
+      if (err instanceof TestAbortedError || err instanceof TestEndedError) throw err;
+      if (Date.now() - (failingSince ??= Date.now()) >= DEV_READ_FAILURE_MS) throw err;
       return undefined;
     }
-    failures = 0;
+    failingSince = undefined;
     const screen = devClientScreen(xml);
     if (screen) return { screen, rendered: false };
     // Android's permission prompt hides the app's own nodes: the app is up.
@@ -1862,6 +1866,7 @@ async function leaveDevScreens(
   let seen = await look();
   if (seen?.rendered) return false;
   let links = 0;
+  let menuLinks = 0;
   await withActionProgress('loadDevBundle', pkg, async (progress) => {
     // A launch returns before the dev launcher has drawn (a test's own
     // `launchApp()` comes here straight from the launch), so a screen with
@@ -1906,8 +1911,9 @@ async function leaveDevScreens(
         // this machine, and an emulator on a busy one can drop a connection.
         const stale = screen === 'launcher' ? DEV_LAUNCHER_STALE_MS : DEV_SCREEN_STALE_MS;
         if (links === 0 || Date.now() - linkedAt >= stale) {
-          if (failed && links >= 2) throw devServerError(pkg, screen, `the app could not load from ${target!.serverUrl}`);
-          if (links < 2) {
+          if (failed && links - menuLinks >= 2) throw devServerError(pkg, screen, `the app could not load from ${target!.serverUrl}`);
+          // Closing the menu is not a retry of the load, so each has its own two.
+          if ((screen === 'dev-menu' ? menuLinks : links - menuLinks) < 2) {
             target ??= await devClientTarget(ctx, pkg, screen, build.scheme, deps);
             progress.setDetail(target.serverUrl);
             const { link } = target;
@@ -1916,6 +1922,7 @@ async function leaveDevScreens(
             const cold = ctx.config.platform === 'ios' && screen === 'dev-menu';
             await sessionLaunch(ctx, () => (cold ? ctx.device.openDeepLink(link, { forceColdLaunch: true }) : ctx.device.openDeepLink(link)));
             links++;
+            if (screen === 'dev-menu') menuLinks++;
             linkedAt = Date.now();
           }
         }

@@ -66,7 +66,7 @@ function makeContext(screens: string[], overrides: { rootDir?: string; platform?
   };
   const client = {
     ping: vi.fn(async () => ({ version: '0.1.0', agentConnected: true })),
-    getUiHierarchy: vi.fn(async () => ({ requestId: '1', hierarchyXml: screens[Math.min(i++, screens.length - 1)]!, errorMessage: '' })),
+    getUiHierarchy: vi.fn(async () => ({ requestId: '1', hierarchyXml: screens[Math.min(i++, screens.length - 1)]!, errorMessage: '' as string })),
     waitForAppReady: vi.fn(async () => ({ requestId: '1', ready: true, supported: true })),
     takeSystemDialogEvents: vi.fn(async () => ({ requestId: '1', events: [] })),
   };
@@ -286,8 +286,29 @@ describe('connectDevClient', () => {
       const { ctx, client } = makeContext([BANNER]);
       client.getUiHierarchy.mockRejectedValue(new Error('agent disconnected'));
       const failed = expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow('agent disconnected');
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(32_000);
       await failed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not take the daemon\'s empty answer for a failed dump as a blank app', async () => {
+    const { ctx, device, client } = makeContext([LAUNCHER, APP]);
+    client.getUiHierarchy.mockResolvedValueOnce({ requestId: '1', hierarchyXml: '', errorMessage: 'Unable to lookup in current state' });
+    expect(await connectDevClient(ctx, { fetch: metro, settleMs: 0 })).toBe(true);
+    expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('still closes the menu after a load that needed its retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const many = (screen: string): string[] => Array.from({ length: 12 }, () => screen);
+      const { ctx, device } = makeContext([LAUNCHER, ...many(LOAD_ERROR), APP, ...many(DEV_MENU), APP]);
+      const done = connectDevClient(ctx, { fetch: metro });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await done;
+      expect(device.openDeepLink).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

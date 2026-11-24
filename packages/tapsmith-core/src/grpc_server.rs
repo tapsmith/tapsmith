@@ -3144,8 +3144,6 @@ impl TapsmithServiceImpl {
     }
 }
 
-/// A getBy* RegExp (PILOT-520) as the agents read it: the SDK-translated
-/// pattern, its `i` flag, and the literal for messages.
 /// Whether `uri` asks an Expo development build to load its bundle from a
 /// server, rather than being the app's own link.
 fn is_dev_client_link(uri: &str) -> bool {
@@ -3154,6 +3152,8 @@ fn is_dev_client_link(uri: &str) -> bool {
         || uri.contains("&__expo_url=")
 }
 
+/// A getBy* RegExp (PILOT-520) as the agents read it: the SDK-translated
+/// pattern, its `i` flag, and the literal for messages.
 fn text_regex_to_json(re: &proto::TextRegex) -> Value {
     json!({
         "pattern": re.pattern,
