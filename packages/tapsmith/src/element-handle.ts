@@ -41,7 +41,7 @@ import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES, isIosTextInput } from './ios
 import {
   LOCATOR_PICKER_HINT,
   NEAR_MISS_BUDGET_MS,
-  nearMissHint,
+  nearMissCheck,
   type NearMissEvaluator,
   SYSTEM_ALERT_BUDGET_MS,
   systemAlertHint,
@@ -1822,8 +1822,10 @@ export class ElementHandle {
    * @internal — Everything a not-found message says after its first
    * sentence, as ". …" to append to it: the locators that do
    * match the same words on screen now (asked of the device agent, for an
-   * unmodified native locator), then `hints` (by default the platform hint,
-   * {@link _missHint}), then where to find a locator that matches.
+   * unmodified native locator), then `offScreen` unless one of them shows
+   * the locator's own words (the element is probably on screen, so scrolling
+   * is not the fix), then `hints` (by default the platform hint, {@link _missHint}),
+   * then where to find a locator that matches.
    *
    * '' after a `positionalDetail`, or for an `nth(i)` past the first or last
    * (which every reader reports as a positional miss, matched or not): the
@@ -1831,7 +1833,9 @@ export class ElementHandle {
    * near misses for no longer than the caller waited (`waitedMs`), and not at
    * all after a no-wait (`timeout: 0`) read, which stays a single read.
    */
-  async _locatorMissHelp(options: { waitedMs: number; positionalDetail?: string; hints?: string }): Promise<string> {
+  async _locatorMissHelp(
+    options: { waitedMs: number; positionalDetail?: string; offScreen?: string; hints?: string },
+  ): Promise<string> {
     const positionalDetail = options.positionalDetail ?? '';
     const nth = this._options.nthIndex;
     if (positionalDetail || (nth !== undefined && nth !== 0 && nth !== -1)) return '';
@@ -1846,11 +1850,12 @@ export class ElementHandle {
       ? await systemAlertHint(this._client, signal, Math.min(SYSTEM_ALERT_BUDGET_MS, budgetMs))
       : '';
     const near = this._hasModifiers() || budgetMs <= 0
-      ? ''
-      : await nearMissHint(this._client, this._selector, signal, budgetMs);
+      ? { hint: '', wordsOnScreen: false }
+      : await nearMissCheck(this._client, this._selector, signal, budgetMs);
     // With an alert named, the locator hints (off-screen, unnamed role)
     // would send the reader to the wrong cause.
-    return `. ${[alert, near, alert ? '' : hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
+    const offScreen = alert || near.wordsOnScreen ? '' : options.offScreen ?? '';
+    return `. ${[alert, near.hint, offScreen, alert ? '' : hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
   }
 
   /** {@link _missHint} as a bare sentence (with its leading space), to follow one that ends in a full stop. */
@@ -2311,9 +2316,7 @@ export class ElementHandle {
                 ? `. ${offScreenHint(action)}`
                 : await this._locatorMissHelp({
                   waitedMs: timeoutMs,
-                  hints: this._selector.kind.type === 'role' && this._missHint(detail)
-                    ? this._missHintSentence(detail)
-                    : `${offScreenHint(action)}${this._missHintSentence(detail)}`,
+                  offScreen: this._selector.kind.type === 'role' && this._missHint(detail) ? undefined : offScreenHint(action),
                 })),
         );
       }
