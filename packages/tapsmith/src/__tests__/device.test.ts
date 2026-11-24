@@ -706,16 +706,21 @@ describe('Device.openDeepLink()', () => {
   it('runs the session\'s after-link hook, and leaves the session layer\'s own links warm and unhooked', async () => {
     const openDeepLink = vi.fn(async () => successResponse());
     const device = new Device(makeMockClient({ openDeepLink }));
-    const hook = vi.fn(async () => undefined);
+    const hook = vi.fn(async () => false);
     device._afterOpenLink = hook;
     device._setForceColdDeepLinks(true);
     await device.openDeepLink('myapp://x');
     expect(openDeepLink).toHaveBeenLastCalledWith('myapp://x', { forceColdLaunch: true });
     expect(hook).toHaveBeenCalledTimes(1);
+    // The app came back on a development screen, which drops the link.
+    hook.mockResolvedValueOnce(true);
+    await device.openDeepLink('myapp://x', { forceColdLaunch: true });
+    expect(openDeepLink.mock.calls.slice(-2).map((c: unknown[]) => c[1])).toEqual([{ forceColdLaunch: true }, { forceColdLaunch: false }]);
+    hook.mockClear();
     device._sessionLaunches = 1;
     await device.openDeepLink('exp+app://expo-development-client/');
     expect(openDeepLink).toHaveBeenLastCalledWith('exp+app://expo-development-client/', undefined);
-    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook).not.toHaveBeenCalled();
   });
 
   it('passes forceColdLaunch through to the client', async () => {

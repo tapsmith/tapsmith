@@ -1743,7 +1743,7 @@ export function connectDevClientForTool(target: {
   /** The config's build for this app, relative to `rootDir`, when it names one. */
   apk?: string
   app?: string
-}): Promise<void> {
+}): Promise<boolean> {
   return connectDevClient({
     config: {
       package: target.packageName, platform: target.platform, rootDir: target.rootDir, device: target.serial,
@@ -1790,13 +1790,14 @@ function devServerError(pkg: string, screen: DevClientScreen, why: string): Erro
  * any Debug build still loading its bundle is waited for. A build that cannot
  * reach Metro stops the session with an error saying so. An app already drawn
  * costs one hierarchy read, and a build that carries its JavaScript nothing.
+ * True when it had to leave a development screen.
  */
-export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: DevServerFetch } = {}): Promise<void> {
+export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: DevServerFetch } = {}): Promise<boolean> {
   const pkg = ctx.config.package;
-  if (!pkg) return;
+  if (!pkg) return false;
   const build = devBuildKind(ctx);
-  if (build.kind !== 'dev-client' && build.kind !== 'metro') return;
-  await leaveDevScreens(ctx, pkg, { kind: build.kind, ...(build.scheme ? { scheme: build.scheme } : {}) }, deps);
+  if (build.kind !== 'dev-client' && build.kind !== 'metro') return false;
+  return leaveDevScreens(ctx, pkg, { kind: build.kind, ...(build.scheme ? { scheme: build.scheme } : {}) }, deps);
 }
 
 /**
@@ -1825,7 +1826,7 @@ async function leaveDevScreens(
   pkg: string,
   build: { kind: 'dev-client' | 'metro'; scheme?: string },
   deps: { fetch?: DevServerFetch },
-): Promise<void> {
+): Promise<boolean> {
   // A launch returns before the dev launcher has drawn (a test's own
   // `launchApp()` comes here straight from the launch), so a screen with
   // nothing on it yet is read again, bounded: an app still blank after that
@@ -1835,7 +1836,7 @@ async function leaveDevScreens(
   for (;;) {
     seen = await lookAtApp(ctx, pkg);
     if (seen?.screen) break;
-    if (seen?.rendered || Date.now() - launchedAt >= APP_RENDER_READY_TIMEOUT_MS) return;
+    if (seen?.rendered || Date.now() - launchedAt >= APP_RENDER_READY_TIMEOUT_MS) return false;
     await delay(HIERARCHY_POLL_INTERVAL_MS);
   }
 
@@ -1893,6 +1894,7 @@ async function leaveDevScreens(
       seen = await lookAtApp(ctx, pkg);
     }
   });
+  return true;
 }
 
 /** The Metro to point a dev client at, and the link that does. */

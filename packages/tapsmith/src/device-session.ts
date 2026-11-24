@@ -880,7 +880,7 @@ export async function openDeviceSession(
 
   // A test's own launches of the app land where the session's do: on the app,
   // not on an Expo development build's dev launcher or dev menu.
-  device._afterAppLaunch = (pkg) => (pkg === config.package ? connectDevClient(session.context) : Promise.resolve());
+  device._afterAppLaunch = (pkg) => (pkg === config.package ? connectDevClient(session.context) : Promise.resolve(false));
   if (config.platform === 'ios') device._afterOpenLink = () => connectDevClient(session.context);
 
   // Whether this open holds the session's claim on the device. A failed open

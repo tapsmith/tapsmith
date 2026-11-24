@@ -350,9 +350,12 @@ export class Device {
    * session's app, bring an Expo development build from its dev launcher (or
    * dev menu) to the app, as the session's own launches do.
    */
-  _afterAppLaunch?: (packageName: string) => Promise<void>;
-  /** @internal — The same, after a deep link that may have relaunched the app (iOS). */
-  _afterOpenLink?: () => Promise<void>;
+  _afterAppLaunch?: (packageName: string) => Promise<unknown>;
+  /**
+   * @internal — The same, after a deep link that may have relaunched the app
+   * (iOS). True when the app was on a development screen, which drops the link.
+   */
+  _afterOpenLink?: () => Promise<boolean>;
   /**
    * @internal — Launches the session layer has in flight. Its launches run
    * their own readiness checks (which connect a dev client), so the hook
@@ -1031,12 +1034,16 @@ export class Device {
     // daemon rides out re-deliveries, a trust prompt, or the black-display
     // reboot escalation — the user should see a heartbeat, and the runner's
     // test timeout excludes tracked slow-action time.
-    await withActionProgress('openDeepLink', uri,
+    const deliver = (opts?: OpenDeepLinkOptions): Promise<void> => withActionProgress('openDeepLink', uri,
       () => this._tracedAction('openDeepLink', 'navigation', undefined,
-        () => this._client.openDeepLink(uri, effectiveOptions),
+        () => this._client.openDeepLink(uri, opts),
         'Open deep link failed'));
-    // An iOS link may have relaunched the app to deliver itself.
-    if (!this._sessionLaunches) await this._afterOpenLink?.();
+    await deliver(effectiveOptions);
+    // An iOS link may have relaunched the app to deliver itself. A development
+    // build cannot take an app's own link cold: once it is in the app, again.
+    if (!this._sessionLaunches && await this._afterOpenLink?.()) {
+      await deliver(options ? { ...options, forceColdLaunch: false } : undefined);
+    }
   }
 
   /**
