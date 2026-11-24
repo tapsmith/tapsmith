@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
     launchConfiguredApp: vi.fn(async () => ({ policy: { mode: 'clear', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'startup launch' })),
     probeResetCapabilities: vi.fn(async (ctx: { capabilities?: Record<string, unknown> }) => { (ctx.capabilities ??= {}).hooksDetected = true; return ctx.capabilities; }),
     checkMissingResetHooks: vi.fn(async () => {}),
+    connectDevClient: vi.fn(async (_ctx: unknown) => false),
+    LINK_SETTLE_MS: 0,
     startAndroidLaunchEarly: vi.fn(async (): Promise<{ launched: Promise<boolean> } | undefined> => ({ launched: Promise.resolve(true) })),
   },
   agentFailures: 0,
@@ -261,6 +263,18 @@ describe('openDeviceSession', () => {
     expect(progress).toContain('agent connected');
     // A lone device records untagged events, as it always has.
     expect(device._traceDeviceId).toBeUndefined();
+  });
+
+  it('connects a development build after a test\'s own launches of the app, and only of the app', async () => {
+    const session = await openDeviceSession({ name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' }, makeConfig(), { claimSession: SESSION, startNetworkProxy: false, label: 'Device' });
+    mocks.preflight.connectDevClient.mockClear();
+    await session.device._afterAppLaunch!('com.android.settings');
+    expect(mocks.preflight.connectDevClient).not.toHaveBeenCalled();
+    await session.device._afterAppLaunch!(session.config.package!);
+    expect(mocks.preflight.connectDevClient).toHaveBeenCalledExactlyOnceWith(session.context);
+    // A link can start the app, or open another one.
+    await session.device._afterOpenLink!();
+    expect(mocks.preflight.connectDevClient).toHaveBeenLastCalledWith(session.context, expect.objectContaining({ ifInFront: true }));
   });
 
   it('installs onto a device that lacks the app and vouches for the fresh install', async () => {

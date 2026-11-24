@@ -48,6 +48,7 @@ import type {
 import { RunQueue, mapKeyToAction, watchUsage } from './watch-queue.js';
 import { preserveEmulatorsForReuse, emulatorsLaunchedThisProcess, type LaunchedEmulator } from './emulator.js';
 import { deviceTargetLabel } from './dispatcher.js';
+import { devBundleAllowanceMs } from './session-preflight.js';
 import type { ProvisionedTarget, UnavailableTargets } from './unavailable-targets.js';
 import { createNetworkApiScanner } from './network-api-scan.js';
 
@@ -551,7 +552,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     const { id, process: child, deviceSerial, daemonPort } = worker;
     return new Promise<void>((resolve, reject) => {
 
-      const timeout = setTimeout(() => reject(new Error(`worker ${id} init timed out`)), 90_000);
+      const timeout = setTimeout(() => reject(new Error(`worker ${id} init timed out`)), 90_000 + devBundleAllowanceMs(workerConfig));
 
       const onMessage = (msg: UIWorkerChildMessage) => {
         if (msg.type === 'ready' && msg.workerId === id) {

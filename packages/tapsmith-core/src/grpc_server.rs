@@ -1529,7 +1529,9 @@ impl TapsmithServiceImpl {
         // session that has seen the marker always re-reads — the nav value
         // must be fresh, and hooks compiled into an app cannot vanish.
         let mut ack_nav_gt: Option<u64> = None;
-        if ack_epoch_gt.is_none() {
+        // A development build's link to its server loads the app anew: there is
+        // no hook to acknowledge it.
+        if ack_epoch_gt.is_none() && !is_dev_client_link(uri) {
             let hooks_seen = self.last_hooks_marker.read().await.is_some();
             let known_absent = *self.nav_probe_found_no_marker.read().await;
             if hooks_seen || !known_absent {
@@ -1547,6 +1549,12 @@ impl TapsmithServiceImpl {
                     None => {}
                 }
             }
+        }
+        // A development build's launcher (or dev menu) stands in for the app
+        // until this link loads it: what an earlier link's probe missed there
+        // says nothing about the app's hooks.
+        if is_dev_client_link(uri) {
+            *self.nav_probe_found_no_marker.write().await = false;
         }
         backend
             .deliver_deep_link(
@@ -3136,6 +3144,14 @@ impl TapsmithServiceImpl {
             app_launched_fresh: false,
         }))
     }
+}
+
+/// Whether `uri` asks an Expo development build to load its bundle from a
+/// server, rather than being the app's own link.
+fn is_dev_client_link(uri: &str) -> bool {
+    uri.contains("://expo-development-client/")
+        || uri.contains("?__expo_url=")
+        || uri.contains("&__expo_url=")
 }
 
 /// A getBy* RegExp (PILOT-520) as the agents read it: the SDK-translated
@@ -7735,8 +7751,19 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
     async fn warm_deep_link(&self, link: &str, cold: bool) -> Result<(), String> {
         let delivery = if cold {
             DeepLinkDelivery::Cold
-        } else {
+        } else if self
+            .svc
+            .backend()
+            .await
+            .map_err(|e| e.message().to_string())?
+            .supports_cold_deep_link()
+            .await
+        {
             DeepLinkDelivery::WarmThenCold
+        } else {
+            // An iOS development build would open on its dev launcher, which
+            // reads as delivered: report the miss, for the next rung.
+            DeepLinkDelivery::WarmOnly
         };
         let resp = self
             .svc
@@ -7966,6 +7993,17 @@ mod tests {
     use super::*;
     use crate::proto::tapsmith_service_server::TapsmithService;
     use serde_json::json;
+
+    #[test]
+    fn dev_client_links_are_told_from_the_apps_own() {
+        assert!(is_dev_client_link(
+            "exp+app://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081"
+        ));
+        assert!(is_dev_client_link(
+            "exp+app://?__expo_url=http%3A%2F%2Flocalhost%3A8081"
+        ));
+        assert!(!is_dev_client_link("myapp://settings?url=x"));
+    }
 
     #[test]
     fn agent_timing_fields_list_reported_phases_in_order() {

@@ -59,6 +59,7 @@ import { freeStaleAgentPort } from './port-utils.js';
 import { describeUnusableAndroidDevice, isUsableAndroidState, moreDevicesAdvice, noOnlineDeviceMessage, workerStartAdvice } from './device-advice.js';
 import { androidToolchainBlocker, iosToolchainBlocker, toolchainBlocker } from './toolchain.js';
 import type { AdbDevice } from './adb-devices.js';
+import { devBundleAllowanceMs } from './session-preflight.js';
 import { notifyLegacySudoersIfPresent } from './legacy-cleanup.js';
 import {
   forkStdioForLaunchProgress,
@@ -1711,9 +1712,9 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
           baseAgentPort,
           firstDaemon,
           resolvedScript,
-          initializationTimeoutMs: isFresh
+          initializationTimeoutMs: (isFresh
             ? LAUNCHED_EMULATOR_INIT_TIMEOUT_MS
-            : EXISTING_DEVICE_INIT_TIMEOUT_MS,
+            : EXISTING_DEVICE_INIT_TIMEOUT_MS) + devBundleAllowanceMs(serializedConfig),
           freshEmulator: isFresh,
           forceInstall: opts.forceInstall,
           networkApisInRun: opts.networkApisInRun,

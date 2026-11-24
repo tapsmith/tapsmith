@@ -100,6 +100,7 @@ import {
 import { filesToRediscover } from './ui-rediscovery.js';
 import { mirrorTouchPoint, parseDeviceTurn, type MirrorFrame } from './mirror-touch-point.js';
 import { WorkerStartupGate } from './worker-startup.js';
+import { devBundleAllowanceMs } from '../session-preflight.js';
 
 /** No worker came up at startup, and none can be respawned: there is no device chip to respawn from. */
 const NO_WORKER_STARTED_MESSAGE = 'No test worker could be started — the terminal says why. Fix that, then restart UI mode.';
@@ -2451,9 +2452,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // (PILOT-415, PILOT-416).
     try {
       await new Promise<void>((resolve, reject) => {
+        const limitMs = 90_000 + devBundleAllowanceMs(workerConfig);
         const timeout = setTimeout(() => {
-          reject(new Error(`worker ${id} timed out during initialization (90s)`));
-        }, 90_000);
+          reject(new Error(`worker ${id} timed out during initialization (${limitMs / 1000}s)`));
+        }, limitMs);
 
         const onExit = (code: number | null) => {
           clearTimeout(timeout);

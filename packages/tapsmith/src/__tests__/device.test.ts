@@ -640,6 +640,58 @@ describe('Device.launchApp()', () => {
   });
 });
 
+describe('Device: a test\'s own launches bring a dev client to the app', () => {
+  it('runs the session\'s after-launch hook after launchApp() and restartApp()', async () => {
+    const device = new Device(makeMockClient(), { package: 'com.example.app' } as never);
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    await device.launchApp('com.example.app', { clearData: true });
+    await device.restartApp();
+    expect(hook.mock.calls).toEqual([['com.example.app'], ['com.example.app']]);
+  });
+
+  it('skips it when the caller asked not to wait for the app', async () => {
+    const device = new Device(makeMockClient());
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    await device.launchApp('com.example.app', { waitForIdle: false });
+    await device.restartApp('com.example.app', { waitForIdle: false });
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('leaves the session layer\'s own launches to its readiness checks', async () => {
+    const device = new Device(makeMockClient());
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    device._sessionLaunches = 1;
+    await device.launchApp('com.example.app');
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('runs it after a resetApp() that relaunched the app, not after an in-app one', async () => {
+    const reply = (coldLaunch: boolean) => ({
+      requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0),
+      modeRequested: 'APP_RESET_MODE_CLEAR', modeUsed: coldLaunch ? 'APP_RESET_MODE_CLEAR' : 'APP_RESET_MODE_WARM', fellBack: false, coldLaunch,
+      reason: '', durationMs: 100, hooksDetected: !coldLaunch, epochBefore: 0, epochAfter: 1, steps: [], targetReached: false,
+    });
+    const resetApp = vi.fn(async () => reply(true));
+    const device = new Device(makeMockClient({ resetApp } as Partial<TapsmithGrpcClient>), { package: 'com.example.app' } as never);
+    const hook = vi.fn(async () => undefined);
+    device._afterAppLaunch = hook;
+    await device.resetApp({ mode: 'clear' });
+    expect(hook).toHaveBeenCalledWith('com.example.app');
+    resetApp.mockImplementation(async () => reply(false));
+    await device.resetApp();
+    expect(hook).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the launch with the hook\'s error (Metro not running)', async () => {
+    const device = new Device(makeMockClient());
+    device._afterAppLaunch = async () => { throw new Error('no Metro server answered'); };
+    await expect(device.launchApp('com.example.app')).rejects.toThrow('no Metro server answered');
+  });
+});
+
 // ─── openDeepLink() ───
 
 describe('Device.openDeepLink()', () => {
@@ -649,6 +701,29 @@ describe('Device.openDeepLink()', () => {
     const device = new Device(client);
     await device.openDeepLink('myapp://settings');
     expect(openDeepLink).toHaveBeenCalledWith('myapp://settings', undefined);
+  });
+
+  it('runs the session\'s after-link hook, and leaves the session layer\'s own links warm and unhooked', async () => {
+    const openDeepLink = vi.fn(async () => successResponse());
+    const device = new Device(makeMockClient({ openDeepLink }));
+    const hook = vi.fn(async () => false);
+    device._afterOpenLink = hook;
+    device._setForceColdDeepLinks(true);
+    await device.openDeepLink('myapp://x');
+    expect(openDeepLink).toHaveBeenLastCalledWith('myapp://x', { forceColdLaunch: true });
+    expect(hook).toHaveBeenCalledTimes(1);
+    // The app came back on a development screen, which drops the link.
+    hook.mockResolvedValueOnce(true);
+    await device.openDeepLink('myapp://x', { forceColdLaunch: true });
+    expect(openDeepLink.mock.calls.slice(-2).map((c: unknown[]) => c[1])).toEqual([{ forceColdLaunch: true }, { forceColdLaunch: false }]);
+    // A test's own dev-client link is not the app's to drop.
+    hook.mockClear();
+    await device.openDeepLink('exp+app://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081');
+    expect(hook).not.toHaveBeenCalled();
+    device._sessionLaunches = 1;
+    await device.openDeepLink('exp+app://expo-development-client/');
+    expect(openDeepLink).toHaveBeenLastCalledWith('exp+app://expo-development-client/', undefined);
+    expect(hook).not.toHaveBeenCalled();
   });
 
   it('passes forceColdLaunch through to the client', async () => {

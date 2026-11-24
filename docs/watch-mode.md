@@ -1,6 +1,6 @@
 # Watch Mode
 
-Tapsmith's watch mode provides fast terminal-based iteration by keeping the daemon, device, and agent alive across re-runs. This eliminates the setup overhead that dominates cold test runs, bringing re-run times down to roughly 1-2 seconds.
+Tapsmith's watch mode provides fast terminal-based iteration by keeping the daemon, device, and agent alive across re-runs. That removes the setup that dominates a cold run (starting the daemon, booting or selecting the device, starting the agent): a re-run goes straight to the app reset and the tests. Those still take their own time. A [warm reset](warm-reset.md) with in-app hooks takes about a second. Clearing and relaunching an app without hooks takes several seconds, and longer for a React Native [Debug build](getting-started.md#debug-and-dev-client-builds-with-metro), which reloads its JavaScript from Metro at each launch.
 
 ## Starting watch mode
 

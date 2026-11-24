@@ -115,14 +115,15 @@ A React Native project keeps its native projects in `android/` and `ios/`, and n
 
 ### React Native and Expo
 
-A React Native **Debug** build does not contain your JavaScript: it loads it from the
-Metro dev server at launch. Without Metro running (`npx expo start` or
-`npx react-native start`) it opens on a red error screen instead of your app. Even with
-Metro running, an Expo build that includes `expo-dev-client` opens the dev launcher
-rather than the app on a cold launch, and a physical Android device reaches Metro only
-after `adb reverse tcp:8081 tcp:8081`. A **Release** build bundles the JavaScript into
-the app and runs on its own, which makes it the simplest choice for tests, locally and
-in CI:
+Tapsmith tests either kind of React Native build:
+
+- A **Debug** build (including an Expo development build with `expo-dev-client`) does not
+  contain your JavaScript: it loads it from the Metro dev server, so Metro must be running
+  while the tests run. It is the build you already develop with, which makes it the quick
+  way to write and iterate on tests locally. See
+  [Debug and dev-client builds with Metro](#debug-and-dev-client-builds-with-metro).
+- A **Release** build bundles the JavaScript into the app and runs on its own. Use one in
+  CI, where no Metro runs, and wherever you want runs that do not depend on a dev server:
 
 ```bash
 # Android (the React Native template signs release builds with the debug keystore)
@@ -142,6 +143,136 @@ When a debug APK is also lying around, the wizard lists it first and `tapsmith i
 - With EAS, use a build profile that produces simulator and installable builds, for example `"e2e": { "ios": { "simulator": true }, "android": { "buildType": "apk" } }` in `eas.json`, then `eas build --profile e2e --platform ios --local` (or download the build). An iOS simulator build arrives as a `.tar.gz`; extract it and point `app` at the `.app` inside.
 
 If the app mounts [`@tapsmith/react-native`](warm-reset.md), its reset hooks are on in Debug builds but switched off in Release builds unless you turn them on for your test build. In an Expo project, mount it with `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` and set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` at build time. The check has to be in your app's code, because Expo inlines `EXPO_PUBLIC_*` variables only there, never inside `node_modules`. A bare React Native app does not inline that variable, so pass the hooks' `enabled` prop from a build-time flag of your own instead.
+
+#### Debug and dev-client builds with Metro
+
+Start Metro in the app's folder and keep it running, then run Tapsmith from another
+terminal:
+
+```bash
+npx expo start          # or: npx react-native start
+npx tapsmith test       # or: npx tapsmith test --watch / --ui
+```
+
+Build and install the Debug build as you usually do (`npx expo run:android`,
+`npx expo run:ios`, or Android Studio and Xcode). Point the config at it, as for any build. `npx expo run:ios`
+and Xcode build into Xcode's DerivedData folder, so give that path as `app`, or build with
+`xcodebuild … -derivedDataPath build` as above, with `-configuration Debug`:
+
+```ts
+// tapsmith.config.ts
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  projects: [
+    {
+      name: "android",
+      use: {
+        platform: "android",
+        apk: "android/app/build/outputs/apk/debug/app-debug.apk",
+        package: "com.example.myapp",
+      },
+    },
+    {
+      name: "ios",
+      use: {
+        platform: "ios",
+        app: "ios/build/Build/Products/Debug-iphonesimulator/MyApp.app",
+        package: "com.example.myapp",
+      },
+    },
+  ],
+});
+```
+
+Tests need nothing special. They start on your app, not on Expo's dev launcher:
+
+```ts
+// tests/home.test.ts
+import { test, expect } from "tapsmith";
+
+test("opens on the home screen", async ({ device }) => {
+  await expect(device.getByText("Welcome to Expo")).toBeVisible();
+});
+```
+
+An Expo development build opens on the dev launcher after every launch that follows a
+reset, because clearing the app also clears its list of recent servers. After each
+launch Tapsmith makes (at the start of a run, for a reset, and for a test's own
+`device.launchApp()` or `device.restartApp()`), it checks the screen. When the app is on
+the dev launcher or has the dev menu open, Tapsmith connects it to Metro the way
+`npx expo start` does: it opens the dev-client link
+(`exp+<slug>://expo-development-client/?url=…`) for the Metro server running this app,
+then waits for the app to draw. It looks for that server on ports 8081–8090 (or on
+`RCT_METRO_PORT` when you set it), and skips any Metro whose Expo config names a different
+app or project. The link also turns off the dev menu that opens at launch and, on Expo SDK 58
+and later, hides the floating tools button until the app is next restarted. A menu that opens all the same
+is closed by opening the link again. An Android emulator reaches Metro at `10.0.2.2`. For a physical
+Android device, Tapsmith runs `adb reverse` for the port. A physical iPhone connects to
+your Mac's network address, so it must be on the same network. A Debug build without
+`expo-dev-client` finds Metro by itself, so on a physical Android device run
+`adb reverse tcp:8081 tcp:8081` first.
+
+If Metro is not running, the run stops with an error that names the screen the app is
+stuck on (the dev launcher, or React Native's "Unable to load script" red screen) and
+how to start Metro.
+
+What to expect while you iterate:
+
+- **Every relaunch loads the bundle from Metro.** That takes a few seconds once Metro has
+  built it, and the first build after starting Metro can take a minute. An app without
+  in-app hooks is cleared and relaunched for every test file, so it pays this once per file.
+  Mount [`<TapsmithTestHooks>`](warm-reset.md) and resets happen inside the running app
+  instead, about a second each, with no relaunch and no bundle reload. A few things still
+  relaunch: every `appResetColdEvery`-th reset, a retry, a saved `appState` restore, and
+  `device.restartApp()`.
+- **Fast Refresh applies your edits while tests run.** Saving a file re-renders the app,
+  so a test running at that moment can see its screen change under it. Save between runs.
+  Watch mode re-runs when a test file changes, not when app code does.
+- **Warnings show on screen.** In a Debug build, React Native shows `console.warn` and
+  `console.error` as LogBox notices at the bottom of the screen, where they can cover
+  what a test taps. Fix the warnings, or hide them in test runs with
+  `LogBox.ignoreAllLogs()`.
+
+##### Skipping the dev launcher in the build
+
+You need none of this for Tapsmith to reach your app. Newer Expo SDKs can also build the
+dev launcher out of the way, which saves the launcher's appearance and the deep link on
+each relaunch:
+
+| Expo SDK | What you can do |
+|---|---|
+| 55 and earlier | Nothing to set. Tapsmith's dev-client link is the way in |
+| 56 and later | Set the `defaultLaunchURL`, `showMenuAtLaunch` and `skipOnboarding` options of the `expo-dev-client` plugin, and rebuild the app. `toolsButton: false` also hides the floating button (SDK 55 and later) |
+
+```json
+{
+  "expo": {
+    "plugins": [
+      [
+        "expo-dev-client",
+        {
+          "showMenuAtLaunch": false,
+          "skipOnboarding": true,
+          "toolsButton": false,
+          "android": { "defaultLaunchURL": "http://10.0.2.2:8081" },
+          "ios": { "defaultLaunchURL": "http://localhost:8081" }
+        }
+      ]
+    ]
+  }
+}
+```
+
+`defaultLaunchURL` is fixed in the build: these addresses suit an emulator and a simulator with
+Metro on port 8081, and not a physical device. A cleared app then loads straight from Metro.
+Whenever the launcher, the dev menu or a load error still appears (Metro on another port, say),
+Tapsmith handles it as above. Set `showMenuAtLaunch` to `false` along with it: otherwise the
+dev menu opens over a cleared app, because the saved setting that keeps it closed is cleared too.
+The default `launchMode` (`"most-recent"`) reopens the last server on a relaunch, but a clear
+removes that record, so on its own it does not avoid the launcher.
+
+In CI, test a Release build: the steps are in [CI setup](ci-setup.md).
 
 ### Flutter
 

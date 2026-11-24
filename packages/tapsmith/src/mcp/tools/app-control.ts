@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { deviceClientFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
+import { deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
+import { sdkDeviceFor } from '../sdk-device.js';
+import { devClientProjectFor } from '../connection.js';
+import { connectDevClientForTool } from '../../session-preflight.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { actionResult } from './device-actions.js';
 import { actionLineResult, launchAppLine } from '../test-lines.js';
@@ -16,13 +19,24 @@ export function registerAppControlTools(server: McpServer, dispatcher?: TestDisp
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),
     },
     async ({ package: pkg, clear_data, device, project }) => {
-      const client = await deviceClientFor({ device, project }, dispatcher);
+      const { client, device: serial } = await deviceTargetFor({ device, project }, dispatcher);
       const { success, errorMessage } = await client.launchApp(pkg, {
         clearData: clear_data ?? false,
       });
-      return success
-        ? actionLineResult(`Test line: ${launchAppLine(pkg, clear_data ?? false)}`)
-        : actionResult(success, errorMessage);
+      if (!success) return actionResult(success, errorMessage);
+      // An Expo development build lands on its dev launcher: connect it to
+      // Metro, as the launch in a test run does, so the tool shows the app.
+      try {
+        const sdkDevice = await sdkDeviceFor(client, serial);
+        const platform = sdkDevice.platform === 'ios' ? 'ios' : 'android';
+        await connectDevClientForTool({
+          client, device: sdkDevice, packageName: pkg, platform, serial,
+          ...(devClientProjectFor(pkg, platform) ?? { rootDir: process.cwd() }),
+        });
+      } catch (err) {
+        return actionResult(false, err instanceof Error ? err.message : String(err));
+      }
+      return actionLineResult(`Test line: ${launchAppLine(pkg, clear_data ?? false)}`);
     },
   );
 }

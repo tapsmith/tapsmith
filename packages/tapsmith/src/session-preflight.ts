@@ -5,10 +5,13 @@ import type { Device } from './device.js';
 import { appResetAction, parseHooksMarker, routeDeepLink, satisfies, warmResetTarget, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
 import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
+import { isAbortError } from './abort.js';
+import { isTestEndedError } from './attempt-fence.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
-import { appDependsOnTapsmithHooks } from './init-detect.js';
+import { appDependsOn, appDependsOnTapsmithHooks } from './init-detect.js';
+import { devClientLaunchUrl, devClientScheme, devClientScreen, devServerUrlForDevice, findDevServer, inspectDevBuild, type DevClientScreen, type DevServerFetch } from './dev-client.js';
 
-type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
+type SessionDevice = Pick<Device, '_sessionLaunches' | 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
 type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy' | 'takeSystemDialogEvents' | 'waitForAppReady'>
 
 export interface SessionPreflightContext {
@@ -313,6 +316,8 @@ function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
     // iOS 27's empty toolbar host carries "Toolbar" before the app has drawn
     // anything (non-app-nodes.ts isEmptyBarHostNode).
     if (tag.includes('tapsmith-empty-bar-host="true"')) continue;
+    // Expo's splash screen, still up while the bundle loads.
+    if (tag.includes('identifier="SplashScreenLogo"')) continue;
     if (/\blabel="[^"]+"/.test(tag) || /\bidentifier="[^"]+"/.test(tag)) return true;
   }
   return false;
@@ -337,9 +342,13 @@ function projectWithoutHooks(config: SessionPreflightContext['config']): boolean
  * but the build lives inside it.
  */
 function appUsesTapsmithHooks(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>): boolean {
+  return projectFolders(config).some((dir) => appDependsOnTapsmithHooks(dir));
+}
+
+/** Where to look up from for the app's package.json: the config's folder and the build's. */
+function projectFolders(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>): string[] {
   const builds = [config.apk, config.app].filter((p): p is string => !!p);
-  const starts = [config.rootDir, ...builds.map((p) => path.dirname(path.resolve(config.rootDir, p)))];
-  return starts.some((dir) => appDependsOnTapsmithHooks(dir));
+  return [config.rootDir, ...builds.map((p) => path.dirname(path.resolve(config.rootDir, p)))];
 }
 
 /**
@@ -629,10 +638,26 @@ export async function ensureSessionReady(
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   options: EnsureSessionReadyOptions = {},
 ): Promise<void> {
+  // A relaunch here (the app was found in the background, or recovered) can
+  // put a development build on its dev launcher: connect it once the session
+  // is ready, as every other launch the session layer makes does.
+  let relaunched = false;
   const onRelaunch = (): void => {
+    relaunched = true;
     ctx.relaunches.count++;
     options.onRelaunch?.();
   };
+  await ensureSessionReadyInner(ctx, phase, maxAttempts, options, onRelaunch);
+  if (relaunched) await connectDevClient(ctx);
+}
+
+async function ensureSessionReadyInner(
+  ctx: SessionPreflightContext,
+  phase: string,
+  maxAttempts: number,
+  options: EnsureSessionReadyOptions,
+  onRelaunch: () => void,
+): Promise<void> {
   return withActionProgress('sessionReady', ctx.config.package, async (progress) => {
     let lastError: unknown;
     // Whether the recovery before THIS rung completed. Drives the probe's
@@ -743,10 +768,11 @@ export async function launchConfiguredApp(
     // explicitly launch the app (iOS auto-launches via the XCUITest agent
     // during startAgent), then go straight to ensuring the session is ready.
     if (ctx.config.platform !== 'ios' && !options.appLaunched) {
-      await ctx.device.launchApp(ctx.config.package, launchOptions(ctx.config));
+      await sessionLaunch(ctx, () => ctx.device.launchApp(ctx.config.package!, launchOptions(ctx.config)));
     }
     await ensureSessionReady(ctx, phase, readinessAttempts);
     await waitForAppReady(ctx);
+    await checkReactNativeDevServer(ctx);
     await probeResetCapabilities(ctx, probe);
     await checkMissingResetHooks(ctx, probe.pollMs);
     return prepared();
@@ -755,6 +781,7 @@ export async function launchConfiguredApp(
   if (!options.appLaunched) await hardClearAndLaunch(ctx);
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
+  await checkReactNativeDevServer(ctx);
   await probeResetCapabilities(ctx, probe);
   await checkMissingResetHooks(ctx, probe.pollMs);
   return prepared();
@@ -795,7 +822,7 @@ export async function startAndroidLaunchEarly(
       return undefined;
     }
   }
-  const launched = ctx.device.launchApp(pkg, launchOptions(ctx.config)).then(() => true, () => false);
+  const launched = sessionLaunch(ctx, () => ctx.device.launchApp(pkg, launchOptions(ctx.config))).then(() => true, () => false);
   return { launched };
 }
 
@@ -1021,7 +1048,7 @@ export async function executeAppReset(
       inApp = false;
       if (ctx.capabilities) delete ctx.capabilities.appStateBaseline;
       await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
-      await step('restartApp', () => ctx.device.restartApp(pkg));
+      await step('restartApp', () => sessionLaunch(ctx, () => ctx.device.restartApp(pkg)));
       if (plan.recordBaseline) recordBaselineFor = action.archive;
       else if (plan.recordIfHooksAppear) recordIfHooksAppearFor = action.archive;
     }
@@ -1114,7 +1141,7 @@ export async function executeAppReset(
     && ctx.capabilities?.daemonWaitsForRender === true;
   const rendered = (processRecreated && !daemonRendered) || relaunched;
   if (rendered || ctx.config.platform === 'ios') {
-    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered, onRelaunch: relaunchedAfterReset }));
+    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered, onRelaunch: relaunchedAfterReset, launched: processRecreated || relaunched }));
   }
   if (
     action.kind !== 'warm'
@@ -1389,7 +1416,7 @@ async function hardClearAndLaunch(ctx: SessionPreflightContext, step: StepRunner
     // called with ios_app_path — tapsmith's CLI + worker runners always do.
     await step('clearAppData', () => ctx.device.clearAppData(pkg));
     try {
-      await step('restartApp', () => ctx.device.restartApp(pkg));
+      await step('restartApp', () => sessionLaunch(ctx, () => ctx.device.restartApp(pkg)));
     } catch (err) {
       // restartApp can fail on iOS if the agent session is stale after
       // clearAppData. The app will be relaunched by ensureSessionReady's
@@ -1435,7 +1462,7 @@ async function hardClearAndLaunch(ctx: SessionPreflightContext, step: StepRunner
     // Will be recovered by ensureSessionReady below
   }
 
-  await step('launchApp', () => ctx.device.launchApp(pkg, launchOptions(ctx.config)));
+  await step('launchApp', () => sessionLaunch(ctx, () => ctx.device.launchApp(pkg, launchOptions(ctx.config))));
 }
 
 function formatSeconds(ms: number): string {
@@ -1576,7 +1603,7 @@ async function verifySession(
       if (state !== 'foreground') {
         try {
           onRelaunch?.();
-          await ctx.device.launchApp(ctx.config.package);
+          await sessionLaunch(ctx, () => ctx.device.launchApp(ctx.config.package!));
         } catch (err) {
           // The probe answered; the relaunch is what broke. Drop the probe
           // annotation so triage is not pointed at the deadline constant.
@@ -1614,7 +1641,7 @@ async function verifySession(
         // whole-file retry. A genuinely broken session fails the relaunch or
         // the readiness wait below, and THAT propagates into real recovery.
         onRelaunch?.();
-        await ctx.device.launchApp(ctx.config.package);
+        await sessionLaunch(ctx, () => ctx.device.launchApp(ctx.config.package!));
         const relaunched = await waitForHierarchy(ctx.client);
         await waitForAndroidAppHierarchy(ctx, relaunched.hierarchyXml, ctx.config.package, dialogs);
         return;
@@ -1634,10 +1661,346 @@ async function verifySession(
  */
 async function waitForAppReady(
   ctx: SessionPreflightContext,
-  options: { rendered?: boolean; onRelaunch?: () => void } = {},
+  options: { rendered?: boolean; onRelaunch?: () => void; launched?: boolean } = {},
 ): Promise<void> {
-  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, options);
-  return waitForAndroidAppReady(ctx);
+  let relaunched = false;
+  if (ctx.config.platform === 'ios') relaunched = await waitForIosAppReady(ctx, options);
+  else await waitForAndroidAppReady(ctx);
+  // After a launch (`launched`, the default), not an in-app warm reset: a
+  // development build may be on its dev launcher or dev menu, not the app.
+  // The wait above is for the first content, whichever screen draws it.
+  if (options.launched !== false || relaunched) await connectDevClient(ctx, { settleMs: LINK_SETTLE_MS });
+}
+
+// ─── Expo development builds ───
+
+/** How long a dev client gets to load its bundle from Metro once Tapsmith
+ *  has pointed it there: a first bundle on a cold Metro cache can take a
+ *  minute on a busy Mac, and an error screen ends the wait early. */
+const DEV_BUNDLE_LOAD_TIMEOUT_MS = 180_000;
+
+/** How long a screen that is neither a development screen nor readable app
+ *  content is waited on after the link, before it is taken for the app. */
+const DEV_BLANK_SCREEN_MS = 30_000;
+
+/** How long after the link a development screen may still be the one the link
+ *  was opened on; the launcher keeps its place until Metro's manifest is in. */
+const DEV_SCREEN_STALE_MS = 5_000;
+const DEV_LAUNCHER_STALE_MS = 30_000;
+
+/** When to look again for a dev menu opened over a freshly loaded app. */
+const DEV_MENU_CONFIRM_MS = 1_000;
+
+/** How long {@link connectDevClient} looks for anything drawn at all when what
+ *  came before has already waited for content. */
+export const LINK_SETTLE_MS = 2_000;
+
+/** {@link connectDevClient}'s options: `settleMs` is how long a blank screen is looked at again. */
+interface DevClientDeps {
+  fetch?: DevServerFetch
+  settleMs?: number
+  /** Only when the app is the one in front. */
+  ifInFront?: boolean
+}
+
+const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
+
+/**
+ * What the dev-client checks need of a session: the MCP server's own tools
+ * build one of these for a launch they make outside any test session.
+ */
+export type DevClientContext = Pick<SessionPreflightContext, 'config' | 'client' | 'deviceSerial' | 'capabilities'> & {
+  device: Pick<SessionDevice, 'openDeepLink' | 'currentPackage' | '_sessionLaunches'>
+};
+
+/** The build Tapsmith installed for this session, resolved against `rootDir`. */
+function configuredBuildPath(config: SessionPreflightContext['config']): string | undefined {
+  const build = config.platform === 'ios' ? config.app : config.apk;
+  if (!build) return undefined;
+  return config.rootDir ? path.resolve(config.rootDir, build) : path.resolve(build);
+}
+
+/**
+ * What a launch of the app needs a look at the screen for: an Expo development
+ * build (`dev-client`), or a React Native Debug build that loads from Metro
+ * itself (`metro`). The installed build says which; without a build to read,
+ * a project that depends on `expo-dev-client`, or one this session already
+ * saw on a dev-client screen, is taken for a dev client. `unknown` is a React
+ * Native project whose build cannot be read.
+ */
+function devBuildKind(ctx: Pick<DevClientContext, 'config' | 'capabilities'>): { kind: 'dev-client' | 'metro' | 'unknown' | 'none'; scheme?: string } {
+  // Expo Go is its own app, with a home screen of its own: the test opens the project.
+  if (/^host\.exp\.exponent$/i.test(ctx.config.package ?? '')) return { kind: 'none' };
+  const build = inspectDevBuild(configuredBuildPath(ctx.config));
+  if (build?.devClient) return { kind: 'dev-client', ...(build.scheme ? { scheme: build.scheme } : {}) };
+  if (build?.embedsJs) return { kind: 'none' };
+  if (!build && ctx.capabilities?.devClientSeen) return { kind: 'dev-client' };
+  const { rootDir, apk, app } = ctx.config;
+  if (!rootDir) return { kind: 'none' };
+  const folders = projectFolders({ rootDir, apk, app });
+  const dependsOn = (name: string): boolean => folders.some((dir) => appDependsOn(dir, name));
+  if (!build && dependsOn('expo-dev-client')) return { kind: 'dev-client' };
+  if (!dependsOn('react-native') && !dependsOn('expo')) return { kind: 'none' };
+  return { kind: build ? 'metro' : 'unknown' };
+}
+
+/**
+ * What a worker's start may take on top of the usual: a build that loads from
+ * Metro may wait for its first bundle (or the named error) before it is ready.
+ */
+export function devBundleAllowanceMs(config: Pick<TapsmithConfig, 'package' | 'platform' | 'apk' | 'app' | 'rootDir'>): number {
+  const { kind } = devBuildKind({ config: config as SessionPreflightContext['config'], capabilities: undefined });
+  return kind === 'none' ? 0 : DEV_BUNDLE_LOAD_TIMEOUT_MS;
+}
+
+/**
+ * Connect a dev client after a launch made outside any test session (the MCP
+ * server's own tools), the way a session's launches do. `rootDir` and the
+ * build come from the server's config; with no build to read, the check runs
+ * only for a project that depends on `expo-dev-client`.
+ */
+export function connectDevClientForTool(target: {
+  client: SessionPreflightContext['client']
+  device: DevClientContext['device']
+  packageName: string
+  platform: 'android' | 'ios'
+  serial?: string
+  rootDir: string
+  /** The config's build for this app, relative to `rootDir`, when it names one. */
+  apk?: string
+  app?: string
+}, deps: DevClientDeps = {}): Promise<boolean> {
+  return connectDevClient({
+    config: {
+      package: target.packageName, platform: target.platform, rootDir: target.rootDir, device: target.serial,
+      ...(target.apk ? { apk: target.apk } : {}), ...(target.app ? { app: target.app } : {}),
+    } as SessionPreflightContext['config'],
+    client: target.client,
+    device: target.device,
+    deviceSerial: target.serial,
+    capabilities: {},
+  }, deps);
+}
+
+/** The error a session stops with when Metro cannot be used. */
+function devServerError(pkg: string, screen: DevClientScreen, why: string, metro: 'missing' | 'answers' = 'missing'): Error {
+  const where = screen === 'launcher'
+    ? 'is an Expo development build and opened on Expo\'s dev launcher'
+    : screen === 'dev-menu'
+      ? 'is an Expo development build and opened its dev menu'
+      : screen === 'load-error'
+        ? 'could not load its JavaScript'
+        : 'is a React Native Debug build and could not load its JavaScript from Metro (React Native\'s red "Unable to load script" / "No bundle URL present" screen)';
+  return new Error(
+    metro === 'answers'
+      ? `${pkg} ${where}: ${why}, although Metro answers this machine. Check the Metro terminal for a bundling error. See ${GETTING_STARTED_DEV_CLIENT}`
+      : `${pkg} ${where}: ${why}. A Debug build loads the app from the Metro dev server: start it in the app's folder `
+    + '(`npx expo start`, or `npx react-native start`) and keep it running while the tests run, or test a Release build, '
+    + `which carries its JavaScript. See ${GETTING_STARTED_DEV_CLIENT}`,
+  );
+}
+
+/**
+ * After a launch: bring a build that loads its JavaScript from Metro to the
+ * app's own UI, so tests start on the app and not on a development screen. An
+ * Expo development build on its dev launcher (as after every clear), or with
+ * its dev menu open, is pointed at this app's Metro with the dev-client link;
+ * any Debug build still loading its bundle is waited for. A build that cannot
+ * reach Metro stops the session with an error saying so. An app already drawn
+ * costs one hierarchy read, and a build that carries its JavaScript nothing.
+ * True when it had the app load again.
+ */
+export async function connectDevClient(ctx: DevClientContext, deps: DevClientDeps = {}): Promise<boolean> {
+  const pkg = ctx.config.package;
+  if (!pkg) return false;
+  const build = devBuildKind(ctx);
+  if (build.kind !== 'dev-client' && build.kind !== 'metro') return false;
+  // An Android link may have gone to another app.
+  if (deps.ifInFront && ctx.config.platform !== 'ios' && await ctx.device.currentPackage() !== pkg) return false;
+  return leaveDevScreens(ctx, pkg, { kind: build.kind, ...(build.scheme ? { scheme: build.scheme } : {}) }, deps);
+}
+
+/**
+ * At the session's first launch of a React Native app whose build could not be
+ * read (nothing to install, say): the same look, for the loading banner and
+ * the red screen, that {@link connectDevClient} gives a known Debug build.
+ */
+async function checkReactNativeDevServer(ctx: SessionPreflightContext): Promise<void> {
+  const pkg = ctx.config.package;
+  if (!pkg || devBuildKind(ctx).kind !== 'unknown') return;
+  await leaveDevScreens(ctx, pkg, { kind: 'metro' }, { settleMs: LINK_SETTLE_MS });
+}
+
+/** What one look at the app found: the development screen it shows, or whether its own UI is drawn. */
+interface DevLook {
+  screen?: DevClientScreen
+  rendered: boolean
+}
+
+/** How long reads of the screen may keep failing before the failure is the story, not the app. */
+const DEV_READ_FAILURE_MS = 30_000;
+
+/**
+ * A look at the app, undefined when the read failed: a snapshot can time out
+ * on a busy machine. A stopped run ends it at once, and a device that keeps
+ * failing to answer for {@link DEV_READ_FAILURE_MS}.
+ */
+function devLooker(ctx: DevClientContext, pkg: string): () => Promise<DevLook | undefined> {
+  let failingSince: number | undefined;
+  return async () => {
+    let xml: string;
+    try {
+      const read = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
+      // The daemon answers a failed dump with an empty hierarchy and its error.
+      if (!read.hierarchyXml) throw new Error(read.errorMessage || 'the UI hierarchy is empty');
+      xml = read.hierarchyXml;
+    } catch (err) {
+      if (isAbortError(err) || isTestEndedError(err)) throw err;
+      if (Date.now() - (failingSince ??= Date.now()) >= DEV_READ_FAILURE_MS) throw err;
+      return undefined;
+    }
+    failingSince = undefined;
+    const screen = devClientScreen(xml);
+    if (screen) return { screen, rendered: false };
+    // Android's permission prompt hides the app's own nodes: the app is up.
+    if (/\bpackage="com\.(google\.)?android\.permissioncontroller"/.test(xml)) return { rendered: true };
+    // Expo's floating tools button and Android's launch icon are up before the
+    // app is: alone, they are not its content.
+    const content = xml.replace(/\b(text|content-desc|label|identifier)="(Tools|gearshape\.fill|Application icon)"/g, '$1=""');
+    return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(content) : androidHierarchyHasRenderedContent(content, pkg) };
+  };
+}
+
+/** {@link connectDevClient}'s loop: look, act on a development screen, until the app is there. */
+async function leaveDevScreens(
+  ctx: DevClientContext,
+  pkg: string,
+  build: { kind: 'dev-client' | 'metro'; scheme?: string },
+  deps: DevClientDeps,
+): Promise<boolean> {
+  const look = devLooker(ctx, pkg);
+  let seen = await look();
+  if (seen?.rendered) return false;
+  let links = 0;
+  let menuLinks = 0;
+  await withActionProgress('loadDevBundle', pkg, async (progress) => {
+    // A launch returns before the dev launcher has drawn (a test's own
+    // `launchApp()` comes here straight from the launch), so a screen with
+    // nothing on it yet is read again, bounded: an app still blank after that
+    // is left to the tests' own waiting.
+    // A read that failed saw nothing, so it does not count towards the bound.
+    let settleBy: number | undefined;
+    while (!seen?.screen) {
+      if (seen?.rendered) return;
+      if (seen && Date.now() >= (settleBy ??= Date.now() + (deps.settleMs ?? APP_RENDER_READY_TIMEOUT_MS))) return;
+      await delay(HIERARCHY_POLL_INTERVAL_MS);
+      seen = await look();
+    }
+
+    const start = Date.now();
+    let target: { link: string; serverUrl: string } | undefined;
+    let linkedAt = 0;
+    let blankSince: number | undefined;
+    let confirming = false;
+    for (;;) {
+      const screen = seen?.screen;
+      if (seen?.rendered) {
+        // A build that ignores the link's dev-menu switches (SDK 56 and 57)
+        // opens the menu as its content appears: look once more.
+        if (confirming || links === 0) return;
+        confirming = true;
+      } else {
+        confirming = false;
+      }
+      if (screen || seen?.rendered) blankSince = undefined;
+      if (screen && screen !== 'loading') {
+        if (build.kind === 'metro' && screen === 'load-error') {
+          throw devServerError(pkg, screen, 'its bundle does not compile', 'answers');
+        }
+        if (build.kind === 'metro' && screen === 'no-dev-server') {
+          const reverse = ctx.config.platform !== 'ios' && !/^emulator-/.test(ctx.deviceSerial ?? '')
+            ? ' (a physical Android device also needs `adb reverse tcp:8081 tcp:8081`)'
+            : '';
+          throw devServerError(pkg, screen, `Metro is not reachable from the device${reverse}`);
+        }
+        if (screen !== 'no-dev-server') (ctx.capabilities ??= {}).devClientSeen = true;
+        const failed = screen === 'load-error' || screen === 'no-dev-server';
+        // The screen a link was opened on stays up until the load starts, and
+        // a load that failed is worth one more try: Metro has just answered
+        // this machine, and an emulator on a busy one can drop a connection.
+        const stale = screen === 'launcher' ? DEV_LAUNCHER_STALE_MS : DEV_SCREEN_STALE_MS;
+        if (links === 0 || Date.now() - linkedAt >= stale) {
+          if (failed && links - menuLinks >= 2) throw devServerError(pkg, screen, `the app could not load from ${target!.serverUrl}`, 'answers');
+          // Closing the menu is not a retry of the load, so each has its own two.
+          if ((screen === 'dev-menu' ? menuLinks : links - menuLinks) < 2) {
+            target ??= await devClientTarget(ctx, pkg, screen, build.scheme, deps);
+            progress.setDetail(target.serverUrl);
+            const { link } = target;
+            // On iOS the open menu is a window of its own that the link leaves
+            // up over the reloaded app: start the app afresh with the link.
+            const cold = ctx.config.platform === 'ios' && screen === 'dev-menu';
+            await sessionLaunch(ctx, () => (cold ? ctx.device.openDeepLink(link, { forceColdLaunch: true }) : ctx.device.openDeepLink(link)));
+            links++;
+            if (screen === 'dev-menu') menuLinks++;
+            linkedAt = Date.now();
+          }
+        }
+      } else if (seen && !screen && !seen.rendered) {
+        // No development screen, but nothing readable of the app's either: a
+        // first screen without text, or a permission dialog over it. Left to
+        // the tests' own waiting, as any other launch is.
+        if (Date.now() - (blankSince ??= Date.now()) >= DEV_BLANK_SCREEN_MS) {
+          // Unless it is not there: Expo's error screen can crash on a bundle
+          // that does not compile.
+          if (links > 0 && ctx.config.platform !== 'ios' && await ctx.device.currentPackage() !== pkg) {
+            throw new Error(`${pkg} is an Expo development build and closed while loading from Metro (${target!.serverUrl}). Check the Metro terminal for a bundling error. See ${GETTING_STARTED_DEV_CLIENT}`);
+          }
+          return;
+        }
+      }
+      if (Date.now() - start >= DEV_BUNDLE_LOAD_TIMEOUT_MS) throw devBundleTimeout(pkg, build.kind, screen, target?.serverUrl);
+      await delay(confirming ? DEV_MENU_CONFIRM_MS : HIERARCHY_POLL_INTERVAL_MS);
+      seen = await look();
+    }
+  });
+  return links > 0;
+}
+
+/** The Metro to point a dev client at, and the link that does. */
+async function devClientTarget(
+  ctx: DevClientContext,
+  pkg: string,
+  screen: DevClientScreen,
+  buildScheme: string | undefined,
+  deps: { fetch?: DevServerFetch },
+): Promise<{ link: string; serverUrl: string }> {
+  const platform = ctx.config.platform === 'ios' ? 'ios' : 'android';
+  const search = await findDevServer(pkg, platform, {
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    ...(buildScheme ? { scheme: buildScheme } : {}),
+  });
+  if (!search.server) throw devServerError(pkg, screen, search.reason);
+  const scheme = buildScheme ?? (search.server.slug ? devClientScheme(search.server.slug) : undefined);
+  if (!scheme) {
+    throw devServerError(pkg, screen, `the Metro server on port ${search.server.port} serves no Expo config to read the app's dev-client scheme (exp+<slug>) from`);
+  }
+  const serial = ctx.deviceSerial ?? ctx.config.device ?? '';
+  const serverUrl = await devServerUrlForDevice({ platform, serial, port: search.server.port });
+  return { link: devClientLaunchUrl(scheme, serverUrl), serverUrl };
+}
+
+/** The error for a bundle that has not loaded in {@link DEV_BUNDLE_LOAD_TIMEOUT_MS}. */
+function devBundleTimeout(pkg: string, kind: 'dev-client' | 'metro', screen: DevClientScreen | undefined, serverUrl: string | undefined): Error {
+  const shows: Record<DevClientScreen, string> = {
+    'launcher': 'its dev launcher', 'dev-menu': 'its dev menu', 'load-error': 'a load error',
+    'no-dev-server': 'a load error', 'loading': 'the bundle loading',
+  };
+  return new Error(
+    `${pkg} is ${kind === 'metro' ? 'a React Native Debug build' : 'an Expo development build'}`
+    + `${serverUrl ? `: Tapsmith pointed it at Metro (${serverUrl}), but` : ', and'} after `
+    + `${Math.round(DEV_BUNDLE_LOAD_TIMEOUT_MS / 1000)} s it still showed ${screen ? shows[screen] : 'no app content'}. `
+    + `Check the Metro terminal for a bundling error. See ${GETTING_STARTED_DEV_CLIENT}`,
+  );
 }
 
 /**
@@ -1731,12 +2094,12 @@ async function waitForRenderedContent(
  * is a bare shell (application, window, empty containers) until its bundle
  * renders. A warm deep link sent into it finds no content and falls back to a
  * cold relaunch, and the hooks-marker read misses, pinning a hooked session
- * to clear resets (PILOT-1058).
+ * to clear resets (PILOT-1058). True when it relaunched the app itself.
  */
 async function waitForIosAppReady(
   ctx: SessionPreflightContext,
   options: { rendered?: boolean; onRelaunch?: () => void } = {},
-): Promise<void> {
+): Promise<boolean> {
   // A relaunch inside the hierarchy phase puts the app back on a bare shell,
   // so it needs the rendered-content phase even where the caller skipped it.
   let relaunched = false;
@@ -1747,6 +2110,7 @@ async function waitForIosAppReady(
   if ((options.rendered !== false || relaunched) && ctx.config.package) {
     await waitForRenderedContent(ctx, ctx.config.package, iosHierarchyHasRenderedContent);
   }
+  return relaunched;
 }
 
 /** The first phase of {@link waitForIosAppReady}: a non-empty hierarchy. */
@@ -1790,7 +2154,7 @@ async function waitForIosAppHierarchy(ctx: SessionPreflightContext, onRelaunch?:
             `${Math.round((Date.now() - start) / 1000)}s waiting for readiness; relaunching once\n`,
           );
           onRelaunch?.();
-          await ctx.device.launchApp(ctx.config.package);
+          await sessionLaunch(ctx, () => ctx.device.launchApp(ctx.config.package!));
         }
       } catch {
         // Keep polling — the relaunch probe itself may hit a still-busy agent.
@@ -2147,7 +2511,7 @@ async function recoverSession(ctx: SessionPreflightContext): Promise<void> {
     // App may not be running
   }
 
-  await ctx.device.launchApp(ctx.config.package, launchOptions(ctx.config));
+  await sessionLaunch(ctx, () => ctx.device.launchApp(ctx.config.package!, launchOptions(ctx.config)));
 }
 
 async function dismissBlockingSystemUi(ctx: SessionPreflightContext): Promise<void> {
@@ -2228,6 +2592,21 @@ async function waitForHierarchy(
     await new Promise(resolve => setTimeout(resolve, HIERARCHY_POLL_INTERVAL_MS));
   }
   throw new Error('UI hierarchy is empty (timed out waiting for UIAutomator2)');
+}
+
+/**
+ * Run one of the session layer's own launches: what follows it connects a dev
+ * client itself (`waitForAppReady`, or `ensureSessionReady` after a relaunch
+ * of its own), so the device's after-launch hook, meant for a test's own
+ * launches, stays out of it.
+ */
+async function sessionLaunch<T>(ctx: { device: Pick<SessionDevice, '_sessionLaunches'> }, launch: () => Promise<T>): Promise<T> {
+  ctx.device._sessionLaunches = (ctx.device._sessionLaunches ?? 0) + 1;
+  try {
+    return await launch();
+  } finally {
+    ctx.device._sessionLaunches = (ctx.device._sessionLaunches ?? 1) - 1;
+  }
 }
 
 function formatError(err: unknown): string {

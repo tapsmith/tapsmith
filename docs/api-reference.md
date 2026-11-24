@@ -393,6 +393,8 @@ await device.launchApp("com.example.myapp", { waitForIdle: false }); // return i
 - `clearData?` — clear all app data before launching (default: `false`). On an iOS simulator this clears the data container and `UserDefaults` but, unlike [`clearAppData`](#deviceclearappdatapackagename-string-promisevoid), keeps the keychain and privacy permissions
 - `waitForIdle?` — wait for the UI to settle after launch (default: `true`)
 
+For [an Expo development build](getting-started.md#debug-and-dev-client-builds-with-metro), the launch also connects the app to Metro when it opens on the dev launcher or the dev menu, and throws if it cannot. `waitForIdle: false` skips this.
+
 ### `device.openDeepLink(uri: string, options?: OpenDeepLinkOptions): Promise<void>`
 
 Navigate to a screen via deep link URI.
@@ -413,6 +415,10 @@ Deep links are delivered to the running app without relaunching it (warm
 delivery) whenever possible. On iOS simulators, if warm delivery does not
 reach its destination within a bounded window, Tapsmith automatically falls
 back to a cold relaunch with the URL.
+
+[An Expo development build](getting-started.md#debug-and-dev-client-builds-with-metro) that the
+link starts opens on its dev launcher. Tapsmith then connects it to Metro and
+delivers the link again, and throws if it cannot reach Metro.
 
 On Android the link goes to the app under test (the config's `package`), not to
 whichever app Android would pick. So an `https` link opens your app even when
@@ -511,6 +517,8 @@ await device.resetApp({ target: "/settings" })                 // warm reset lan
 | `targetReached` | `boolean` | The app ended on `target`: an in-app reset was acknowledged on that route. `false` after a `restart`/`clear` rung (the app is at its launch route), and when the target screen hid the hooks marker, so the reset was confirmed on `/` instead |
 | `steps` | `{ name, durationMs, ok, detail? }[]` | Per-rung timings |
 
+When the reset relaunches [an Expo development build](getting-started.md#debug-and-dev-client-builds-with-metro), the app is connected to Metro before the call returns.
+
 The call is recorded in the trace as a `resetApp` action whose detail line names the rung and reason. Throws when the ladder is exhausted (or `fallback: false` and the requested rung failed).
 
 ### `device.restartApp(packageName: string, options?: { waitForIdle?: boolean }): Promise<void>`
@@ -532,6 +540,8 @@ test("remembers the signed-in user across a restart", async ({ device }) => {
 
 **Options:**
 - `waitForIdle?` — wait for the UI to settle after relaunch (default: `true`)
+
+As with [`launchApp`](#devicelaunchapppackagename-string-options-launchappoptions-promisevoid), an Expo development build is connected to Metro after the relaunch, unless `waitForIdle` is `false`.
 
 ### `device.clearAppData(packageName: string): Promise<void>`
 
@@ -2992,7 +3002,7 @@ npx tapsmith test --project android tests/login.tapsmith.ts
 
 ### `tapsmith test --watch` / `tapsmith test -w`
 
-Watch test files for changes and re-run them automatically. The daemon, device, and agent are kept alive across re-runs, so only the app reset + test execution cost is paid (~1-2s per re-run).
+Watch test files for changes and re-run them automatically. The daemon, device, and agent are kept alive across re-runs, so a re-run pays only the app reset and the tests themselves, not a cold run's setup ([Watch mode](watch-mode.md) says what each reset costs).
 
 ```bash
 npx tapsmith test --watch

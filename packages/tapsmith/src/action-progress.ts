@@ -24,7 +24,8 @@ export type SlowActionName =
   | 'startAgent'
   | 'openDeepLink'
   | 'resetApp'
-  | 'sessionReady';
+  | 'sessionReady'
+  | 'loadDevBundle';
 
 export interface ActionProgressEvent {
   kind: 'start' | 'end'
@@ -85,6 +86,7 @@ export const ACTION_PROGRESS_LABELS: Record<SlowActionName, ActionProgressLabels
   openDeepLink: { active: 'Opening deep link', done: 'Opened deep link', failed: 'Open deep link failed' },
   resetApp: { active: 'Resetting app', done: 'Reset app', failed: 'App reset failed' },
   sessionReady: { active: 'Waiting for app to be ready', done: 'App ready', failed: 'App readiness check failed' },
+  loadDevBundle: { active: 'Loading the app from Metro', done: 'Loaded the app from Metro', failed: 'Loading the app from Metro failed' },
 };
 
 // ─── Channel ───

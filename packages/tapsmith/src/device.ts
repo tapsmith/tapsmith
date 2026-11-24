@@ -247,6 +247,11 @@ function warnStartAgentOnce(message: string): void {
   console.warn(`[tapsmith] ${message}`);
 }
 
+/** Whether a link is a dev client's own "open this server" link, not the app's. */
+function isDevClientLink(uri: string): boolean {
+  return /:\/\/expo-development-client\//.test(uri) || /[?&]__expo_url=/.test(uri);
+}
+
 /**
  * The device under test: the `device` fixture every test receives.
  * Locators come from its `getBy*()` methods and auto-wait when acted on;
@@ -345,6 +350,23 @@ export class Device {
   _networkHttpsPassthrough = false;
   /** Set by the runner on retry attempts — see _setForceColdDeepLinks. */
   private _forceColdDeepLinks = false;
+  /**
+   * @internal — Set by the device session: after this device launches the
+   * session's app, bring an Expo development build from its dev launcher (or
+   * dev menu) to the app, as the session's own launches do.
+   */
+  _afterAppLaunch?: (packageName: string) => Promise<unknown>;
+  /**
+   * @internal — The same, after a deep link, which may have started the app
+   * (a stopped one, or an iOS cold delivery). True when it had to load the app again, which drops the link.
+   */
+  _afterOpenLink?: () => Promise<boolean>;
+  /**
+   * @internal — Launches the session layer has in flight. Its launches run
+   * their own readiness checks (which connect a dev client), so the hook
+   * above is for a test's own calls only.
+   */
+  _sessionLaunches?: number;
 
   /** @internal — Active WebView handle, if in WebView context. */
   _activeWebView: WebViewHandle | null = null;
@@ -897,10 +919,11 @@ export class Device {
     const options = typeof packageOrOptions === 'string' ? maybeOptions : packageOrOptions;
     const pkg = this.requirePackageName(packageName);
     await this._disposeWebViewManager();
-    return withActionProgress('restartApp', pkg,
+    await withActionProgress('restartApp', pkg,
       () => this._tracedAction('restartApp', 'device', undefined,
         () => this._client.restartApp(pkg, options?.waitForIdle ?? true),
         'Restart app failed').then(() => this._appProcessRecreated()));
+    if (options?.waitForIdle !== false && !this._sessionLaunches) await this._afterAppLaunch?.(pkg);
   }
 
   /**
@@ -908,10 +931,11 @@ export class Device {
    * settle after launch unless `waitForIdle: false`; `clearData` starts it fresh.
    */
   async launchApp(packageName: string, options?: LaunchAppOptions): Promise<void> {
-    return withActionProgress('launchApp', packageName,
+    await withActionProgress('launchApp', packageName,
       () => this._tracedAction('launchApp', 'navigation', undefined,
         () => this._client.launchApp(packageName, options),
         'Launch app failed').then(() => { if (options?.clearData) this._appProcessRecreated(); }));
+    if (options?.waitForIdle !== false && !this._sessionLaunches) await this._afterAppLaunch?.(packageName);
   }
 
   /**
@@ -921,7 +945,11 @@ export class Device {
    * reports which rung actually ran.
    */
   async resetApp(options: AppResetOptions = {}): Promise<AppResetResult> {
-    return this._resetApp(this.requirePackageName(), options);
+    const pkg = this.requirePackageName();
+    const result = await this._resetApp(pkg, options);
+    // A reset that relaunched the app lands where a launch does.
+    if (result.coldLaunch && !this._sessionLaunches) await this._afterAppLaunch?.(pkg);
+    return result;
   }
 
   /** @internal — runner/preflight entry point with policy inputs. */
@@ -1001,17 +1029,28 @@ export class Device {
     // On retry attempts the runner forces every deep link cold (see
     // _setForceColdDeepLinks); an explicit forceColdLaunch option can only
     // add to that, never override it back to warm.
-    const effectiveOptions = this._forceColdDeepLinks
+    // The dev-client link is the session layer's own, and opens a build that
+    // was just relaunched: it stays warm, so a route the app was cold-opened
+    // with is not dropped with the process.
+    const effectiveOptions = this._forceColdDeepLinks && !this._sessionLaunches
       ? { ...options, forceColdLaunch: true }
       : options;
     // Progress-tracked: delivery can legitimately run for minutes when the
     // daemon rides out re-deliveries, a trust prompt, or the black-display
     // reboot escalation — the user should see a heartbeat, and the runner's
     // test timeout excludes tracked slow-action time.
-    return withActionProgress('openDeepLink', uri,
+    const deliver = (opts?: OpenDeepLinkOptions): Promise<void> => withActionProgress('openDeepLink', uri,
       () => this._tracedAction('openDeepLink', 'navigation', undefined,
-        () => this._client.openDeepLink(uri, effectiveOptions),
+        () => this._client.openDeepLink(uri, opts),
         'Open deep link failed'));
+    await deliver(effectiveOptions);
+    // A link may have started the app to deliver itself. A development build
+    // cannot take an app's own link cold: once it is in the app, again. (That
+    // one can go cold too, when it changes nothing on screen.)
+    if (!this._sessionLaunches && !isDevClientLink(uri) && await this._afterOpenLink?.()) {
+      await deliver(options ? { ...options, forceColdLaunch: false } : undefined);
+      await this._afterOpenLink?.();
+    }
   }
 
   /**

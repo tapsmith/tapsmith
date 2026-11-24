@@ -1,6 +1,6 @@
 # UI Mode
 
-Tapsmith's UI mode is a browser-based interactive test runner with built-in MCP integration. Like [watch mode](watch-mode.md), it keeps the daemon, device, and agent alive across re-runs, bringing re-run times down to roughly 1-2 seconds.
+Tapsmith's UI mode is a browser-based interactive test runner with built-in MCP integration. Like [watch mode](watch-mode.md), it keeps the daemon, device, and agent alive across re-runs, so a re-run goes straight to the app reset and the tests instead of paying a cold run's setup. The tests and the app reset before each file or test still take their own time: about a second for a [warm reset](warm-reset.md), several seconds to clear and relaunch an app without in-app hooks, and longer for a React Native [Debug build](getting-started.md#debug-and-dev-client-builds-with-metro), which reloads its JavaScript from Metro at each launch.
 
 ## Starting UI mode
 

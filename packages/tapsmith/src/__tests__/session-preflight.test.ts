@@ -21,6 +21,7 @@ const LAUNCHER_ANR_FIXTURE = fs.readFileSync(
 
 function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]> = {}) {
   const device = {
+    _sessionLaunches: undefined as number | undefined,
     startAgent: vi.fn(async () => undefined),
     terminateApp: vi.fn(async () => undefined),
     launchApp: vi.fn(async () => undefined),

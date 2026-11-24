@@ -681,9 +681,18 @@ function projectDependencies(cwd: string): Record<string, unknown> | undefined {
  * package, `react-native` or `expo` — that one is the app's.
  */
 export function appDependsOnTapsmithHooks(dir: string): boolean {
+  return appDependsOn(dir, '@tapsmith/react-native');
+}
+
+/**
+ * Whether the React Native app that owns `dir` depends on `name`, found the
+ * same way as {@link appDependsOnTapsmithHooks}: the first package.json up
+ * from `dir` that names `name`, `react-native` or `expo` is the app's.
+ */
+export function appDependsOn(dir: string, name: string): boolean {
   for (let current = path.resolve(dir); ; current = path.dirname(current)) {
     const deps = projectDependencies(current);
-    if (deps && '@tapsmith/react-native' in deps) return true;
+    if (deps && name in deps) return true;
     if (deps && ('react-native' in deps || 'expo' in deps)) return false;
     if (path.dirname(current) === current) return false;
   }
