@@ -95,7 +95,7 @@ export async function runMergeReports(
 
   let result;
   try {
-    result = mergeBlobs(resolvedDir);
+    result = mergeBlobs(resolvedDir, config.rootDir);
   } catch (err) {
     if (!(err instanceof BlobMergeError)) throw err;
     console.error(red(`merge-reports: ${err.message}`));
