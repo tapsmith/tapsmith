@@ -74,6 +74,8 @@ export function devClientScreen(hierarchyXml: string): DevClientScreen | undefin
     && (has('Development Build') || has('Fetch development servers') || has('Enter URL manually')
       || has('New development server') || has('Start a local development server with:'))
   ) return 'launcher';
+  // The menu's first-launch introduction, which has none of the menu's own items.
+  if (hasPrefix('This is the developer menu.')) return 'dev-menu';
   if (has('Go home') && has('Reload') && (has('Toggle performance monitor') || has('Toggle element inspector'))) {
     return 'dev-menu';
   }
@@ -186,6 +188,8 @@ export interface DevServer {
   appId?: string
   /** The Expo project's slug: the dev client's scheme is `exp+<slug>`. */
   slug?: string
+  /** Its Expo config could not be read (no answer in time, or a server error): whose app it serves is unknown. */
+  unread?: true
 }
 
 /** One HTTP GET, bounded. Undefined on any failure. */
@@ -200,18 +204,22 @@ const defaultFetch: DevServerFetch = async (url, headers, timeoutMs) => {
   }
 };
 
-const PROBE_TIMEOUT_MS = 1_500;
+/** A port with nothing on it refuses at once; a busy Metro answers late. */
+const STATUS_TIMEOUT_MS = 5_000;
+/** The first manifest evaluates the app config, its plugins and expo-updates. */
+const MANIFEST_TIMEOUT_MS = 15_000;
 
 /** Read one port: undefined when no Metro answers there. */
 async function probeDevServer(port: number, platform: 'android' | 'ios', get: DevServerFetch): Promise<DevServer | undefined> {
-  const status = await get(`http://127.0.0.1:${port}/status`, {}, PROBE_TIMEOUT_MS);
+  const status = await get(`http://127.0.0.1:${port}/status`, {}, STATUS_TIMEOUT_MS);
   if (!status || !status.body.includes('packager-status:running')) return undefined;
   const server: DevServer = { port };
   const manifest = await get(`http://127.0.0.1:${port}/`, {
     'expo-platform': platform,
     accept: 'application/expo+json,application/json',
-  }, PROBE_TIMEOUT_MS * 2);
-  if (manifest && manifest.status === 200) {
+  }, MANIFEST_TIMEOUT_MS);
+  if (!manifest || manifest.status >= 500) return { ...server, unread: true };
+  if ( manifest.status === 200) {
     try {
       const json = JSON.parse(manifest.body) as { extra?: { expoClient?: Record<string, unknown> } };
       const expo = json.extra?.expoClient;
@@ -235,15 +243,17 @@ export type DevServerSearch =
 
 /**
  * Find the Metro serving this app: a server on one of {@link devServerPorts}
- * whose Expo config names `appId`, else one whose config names no app id for
- * the platform. A server whose config names another app is never used (two
- * projects' Metros side by side is common); with several for this app, the
- * lowest port wins.
+ * whose Expo config names `appId`, else one whose project has the build's own
+ * dev-client scheme (a debug or variant build's app id differs from the one
+ * the config resolves to), else one whose config names no app id for the
+ * platform. A server whose config names another app, or could not be read, is
+ * never used (two projects' Metros side by side is common); with several for
+ * this app, the lowest port wins.
  */
 export async function findDevServer(
   appId: string,
   platform: 'android' | 'ios',
-  options: { ports?: number[]; fetch?: DevServerFetch } = {},
+  options: { ports?: number[]; fetch?: DevServerFetch; scheme?: string } = {},
 ): Promise<DevServerSearch> {
   const ports = options.ports ?? devServerPorts();
   const get = options.fetch ?? defaultFetch;
@@ -251,9 +261,16 @@ export async function findDevServer(
     .filter((s): s is DevServer => s !== undefined);
   const exact = servers.find((s) => s.appId === appId);
   if (exact) return { server: exact };
-  const unnamed = servers.find((s) => s.appId === undefined);
+  const scheme = options.scheme?.toLowerCase();
+  const sameScheme = scheme ? servers.find((s) => s.slug !== undefined && devClientScheme(s.slug) === scheme) : undefined;
+  if (sameScheme) return { server: sameScheme };
+  const unnamed = servers.find((s) => s.appId === undefined && !s.unread);
   if (unnamed) return { server: unnamed };
   const where = ports.length === 1 ? `port ${ports[0]}` : `ports ${ports[0]}–${ports.at(-1)}`;
+  const unread = servers.find((s) => s.unread);
+  if (unread) {
+    return { reason: `the Metro server on port ${unread.port} did not answer with its Expo config (is it still starting, or is its app config failing?)` };
+  }
   if (servers.length > 0) {
     const others = servers.map((s) => `${s.appId} on ${s.port}`).join(', ');
     return { reason: `the Metro servers running on this machine are for other apps (${others}), none for ${appId}` };
@@ -311,7 +328,8 @@ export async function devServerUrlForDevice(
  * `expo-development-client` host every expo-dev-client version understands,
  * plus switches for the dev menu. `disableOnboarding` and `disableAutoLaunch`
  * are saved in the build's preferences, so the menu stays closed on later
- * launches too (a restart reloads the last server without this link, and the
+ * launches too (`disableOnboarding` is also on the server URL itself, where
+ * iOS builds before SDK 55 look for it; a restart reloads the last server without this link, and the
  * menu it would open lands after the app has drawn, past any check). The
  * floating tools button is hidden for this process only (`__expo_disable_fab`,
  * read by newer versions and ignored by older ones), leaving the button the
@@ -319,7 +337,7 @@ export async function devServerUrlForDevice(
  */
 export function devClientLaunchUrl(scheme: string, serverUrl: string): string {
   const params = new URLSearchParams({
-    url: serverUrl,
+    url: `${serverUrl}?disableOnboarding=1`,
     disableOnboarding: '1',
     disableAutoLaunch: '1',
     __expo_disable_onboarding: '1',

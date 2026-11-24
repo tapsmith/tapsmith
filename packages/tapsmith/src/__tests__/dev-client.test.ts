@@ -167,6 +167,21 @@ describe('findDevServer', () => {
     expect(one).toEqual({ reason: 'no Metro server answered on port 9000' });
   });
 
+  it('matches a debug or variant build by its dev-client scheme', async () => {
+    const fetch = host({ 8081: { manifest: expoManifest('My App', 'com.example', 'com.example') } });
+    const found = await findDevServer('com.example.dev', 'android', { fetch, ports: [8081], scheme: 'exp+myapp' });
+    expect(found.server?.port).toBe(8081);
+    expect((await findDevServer('com.example.dev', 'android', { fetch, ports: [8081], scheme: 'exp+other' })).server).toBeUndefined();
+  });
+
+  it('does not take a Metro whose Expo config could not be read for a bare one', async () => {
+    for (const manifest of [undefined, { status: 500, body: '{}' }]) {
+      const fetch: DevServerFetch = async (url) => (url.endsWith('/status') ? { status: 200, body: 'packager-status:running' } : manifest);
+      const found = await findDevServer('com.example', 'android', { fetch, ports: [8081] });
+      expect(found).toEqual({ reason: expect.stringContaining('port 8081 did not answer with its Expo config') });
+    }
+  });
+
   it('does not take a server that is not Metro', async () => {
     const fetch: DevServerFetch = async () => ({ status: 200, body: '<html>webpack</html>' });
     expect((await findDevServer('com.example', 'ios', { fetch, ports: [8081] })).server).toBeUndefined();
@@ -211,7 +226,7 @@ describe('devClientLaunchUrl', () => {
     const url = new URL(devClientLaunchUrl('exp+devclient', 'http://10.0.2.2:8081'));
     expect(url.protocol).toBe('exp+devclient:');
     expect(url.host).toBe('expo-development-client');
-    expect(url.searchParams.get('url')).toBe('http://10.0.2.2:8081');
+    expect(url.searchParams.get('url')).toBe('http://10.0.2.2:8081?disableOnboarding=1');
     expect(url.searchParams.get('disableOnboarding')).toBe('1');
     expect(url.searchParams.get('__expo_disable_auto_launch')).toBe('1');
     expect(url.searchParams.get('__expo_disable_fab')).toBe('1');

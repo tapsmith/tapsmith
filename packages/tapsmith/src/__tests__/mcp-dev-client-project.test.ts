@@ -19,6 +19,19 @@ describe('devClientProjectIn (where an MCP launch looks for a dev client)', () =
     expect(devClientProjectIn(config, 'com.example', 'android')).toEqual({ rootDir: '/repo', apk: 'a.apk' });
   });
 
+  it('prefers the project for the platform over a top level that shares the package', () => {
+    const config = {
+      rootDir: '/repo/e2e',
+      package: 'com.example',
+      projects: [
+        { name: 'android', use: { platform: 'android' as const, apk: 'a.apk' } },
+        { name: 'ios', use: { platform: 'ios' as const, app: 'A.app' } },
+      ],
+    };
+    expect(devClientProjectIn(config, 'com.example', 'ios')).toEqual({ rootDir: '/repo/e2e', app: 'A.app' });
+    expect(devClientProjectIn(config, 'com.example', 'android')).toEqual({ rootDir: '/repo/e2e', apk: 'a.apk' });
+  });
+
   it('keeps the config folder for an app the config does not name', () => {
     expect(devClientProjectIn({ rootDir: '/repo', package: 'com.example' }, 'com.other', 'android')).toEqual({ rootDir: '/repo' });
   });

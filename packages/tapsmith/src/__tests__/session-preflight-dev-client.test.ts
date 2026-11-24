@@ -88,7 +88,7 @@ describe('connectDevClient', () => {
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
     const url = new URL(device.openDeepLink.mock.calls[0]![0]);
     expect(url.protocol).toBe('exp+devclient:');
-    expect(url.searchParams.get('url')).toBe('http://10.0.2.2:8081');
+    expect(url.searchParams.get('url')).toBe('http://10.0.2.2:8081?disableOnboarding=1');
     expect(url.searchParams.get('__expo_disable_auto_launch')).toBe('1');
     expect(ctx.capabilities?.devClientSeen).toBe(true);
   });
@@ -98,6 +98,31 @@ describe('connectDevClient', () => {
     const { ctx, device } = makeContext([blank, blank, LAUNCHER, APP]);
     await connectDevClient(ctx, { fetch: metro });
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a first screen with nothing readable on it for the app, after a while', async () => {
+    vi.useFakeTimers();
+    try {
+      const dialog = '<hierarchy><node package="com.google.android.permissioncontroller" text="Allow" /></hierarchy>';
+      const { ctx, device } = makeContext([LAUNCHER, dialog]);
+      const done = connectDevClient(ctx, { fetch: metro });
+      await vi.advanceTimersByTimeAsync(35_000);
+      await done;
+      expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not take Expo\'s splash screen on iOS for the app', async () => {
+    const ios = (inner: string): string => `<hierarchy><XCUIElementTypeApplication label="devclient">${inner}</XCUIElementTypeApplication></hierarchy>`;
+    const splash = ios('<XCUIElementTypeImage label="" identifier="SplashScreenLogo" />');
+    const { ctx, client } = makeContext(
+      [ios('<XCUIElementTypeOther label="This is the developer menu. It gives you access to useful tools in your development builds." />'), splash, splash, ios('<XCUIElementTypeStaticText label="Welcome" />')],
+      { platform: 'ios', device: '4178D98F-5543-4DD8-B444-C409CE0EFB78' },
+    );
+    await connectDevClient(ctx, { fetch: metro });
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(4);
   });
 
   it('waits out the loading banner before calling the app ready', async () => {
@@ -126,7 +151,7 @@ describe('connectDevClient', () => {
     const app = '<XCUIElementTypeApplication label="devclient"><XCUIElementTypeStaticText label="Welcome to Expo"/></XCUIElementTypeApplication>';
     const { ctx, device } = makeContext([launcher, app], { platform: 'ios', device: '4178D98F-5543-4DD8-B444-C409CE0EFB78' });
     await connectDevClient(ctx, { fetch: metro });
-    expect(new URL(device.openDeepLink.mock.calls[0]![0]).searchParams.get('url')).toBe('http://localhost:8081');
+    expect(new URL(device.openDeepLink.mock.calls[0]![0]).searchParams.get('url')).toBe('http://localhost:8081?disableOnboarding=1');
   });
 
   it('leaves an app that is already showing alone', async () => {
@@ -280,7 +305,7 @@ describe('connectDevClientForTool (the MCP server\'s own launches)', () => {
       client: ctx.client, device, packageName: PKG, platform: 'android', serial: 'emulator-5554', rootDir: DEV_CLIENT_PROJECT,
     });
     expect(client.getUiHierarchy).toHaveBeenCalled();
-    expect(new URL(device.openDeepLink.mock.calls[0]![0]).searchParams.get('url')).toBe('http://10.0.2.2:8081');
+    expect(new URL(device.openDeepLink.mock.calls[0]![0]).searchParams.get('url')).toBe('http://10.0.2.2:8081?disableOnboarding=1');
   });
 
   it('leaves other projects alone', async () => {

@@ -166,7 +166,9 @@ export function devClientProjectIn(
   platform: string,
 ): { rootDir: string; apk?: string; app?: string } {
   const uses = [config, ...(config.projects ?? []).map((p) => ({ ...config, ...p.use }))];
-  const use = uses.find((u) => u.package === packageName && (u.platform ?? platform) === platform) ?? uses.find((u) => u.package === packageName);
+  const named = uses.filter((u) => u.package === packageName);
+  // The entry for this platform, over a top level that names the app alone.
+  const use = named.find((u) => u.platform === platform) ?? named.find((u) => u.platform === undefined) ?? named[0];
   if (!use) return { rootDir: config.rootDir };
   return { rootDir: config.rootDir, ...(use.apk ? { apk: use.apk } : {}), ...(use.app ? { app: use.app } : {}) };
 }

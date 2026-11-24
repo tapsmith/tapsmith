@@ -314,6 +314,8 @@ function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
     // iOS 27's empty toolbar host carries "Toolbar" before the app has drawn
     // anything (non-app-nodes.ts isEmptyBarHostNode).
     if (tag.includes('tapsmith-empty-bar-host="true"')) continue;
+    // Expo's splash screen, still up while the bundle loads.
+    if (tag.includes('identifier="SplashScreenLogo"')) continue;
     if (/\blabel="[^"]+"/.test(tag) || /\bidentifier="[^"]+"/.test(tag)) return true;
   }
   return false;
@@ -1670,6 +1672,10 @@ async function waitForAppReady(
  *  minute on a busy Mac, and an error screen ends the wait early. */
 const DEV_BUNDLE_LOAD_TIMEOUT_MS = 180_000;
 
+/** How long a screen that is neither a development screen nor readable app
+ *  content is waited on after the link, before it is taken for the app. */
+const DEV_BLANK_SCREEN_MS = 30_000;
+
 const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
 
 /**
@@ -1778,7 +1784,10 @@ export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: De
   (ctx.capabilities ??= {}).devClientSeen = true;
 
   await withActionProgress('loadDevBundle', pkg, async (progress) => {
-    const search = await findDevServer(pkg, platform, deps.fetch ? { fetch: deps.fetch } : {});
+    const search = await findDevServer(pkg, platform, {
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      ...(candidate.scheme ? { scheme: candidate.scheme } : {}),
+    });
     if (!search.server) throw devServerError(pkg, screen, search.reason);
     const scheme = candidate.scheme ?? (search.server.slug ? devClientScheme(search.server.slug) : undefined);
     if (!scheme) {
@@ -1836,6 +1845,7 @@ async function settledDevClientScreen(ctx: DevClientContext, pkg: string, platfo
 async function waitForDevBundle(ctx: DevClientContext, pkg: string, platform: 'android' | 'ios', serverUrl: string): Promise<void> {
   const start = Date.now();
   let last: DevClientScreen | undefined;
+  let blankSince: number | undefined;
   while (Date.now() - start < DEV_BUNDLE_LOAD_TIMEOUT_MS) {
     const xml = await readHierarchyXml(ctx);
     if (xml) {
@@ -1847,6 +1857,11 @@ async function waitForDevBundle(ctx: DevClientContext, pkg: string, platform: 'a
       // not done until it is gone and the app's UI is there.
       const rendered = platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg);
       if (!last && rendered) return;
+      // No development screen, but nothing readable of the app's either: a
+      // first screen without text, or a permission dialog over it. Left to
+      // the tests' own waiting, as any other launch is.
+      if (last) blankSince = undefined;
+      else if (Date.now() - (blankSince ??= Date.now()) >= DEV_BLANK_SCREEN_MS) return;
     }
     await delay(HIERARCHY_POLL_INTERVAL_MS);
   }

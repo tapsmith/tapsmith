@@ -391,6 +391,8 @@ await device.launchApp("com.example.myapp", { waitForIdle: false }); // return i
 - `clearData?` — clear all app data before launching (default: `false`). On an iOS simulator this clears the data container and `UserDefaults` but, unlike [`clearAppData`](#deviceclearappdatapackagename-string-promisevoid), keeps the keychain and privacy permissions
 - `waitForIdle?` — wait for the UI to settle after launch (default: `true`)
 
+For [an Expo development build](getting-started.md#debug-and-dev-client-builds-with-metro), the launch also connects the app to Metro when it opens on the dev launcher or the dev menu, and throws if it cannot. `waitForIdle: false` skips this.
+
 ### `device.openDeepLink(uri: string, options?: OpenDeepLinkOptions): Promise<void>`
 
 Navigate to a screen via deep link URI.
@@ -509,6 +511,8 @@ await device.resetApp({ target: "/settings" })                 // warm reset lan
 | `targetReached` | `boolean` | The app ended on `target`: an in-app reset was acknowledged on that route. `false` after a `restart`/`clear` rung (the app is at its launch route), and when the target screen hid the hooks marker, so the reset was confirmed on `/` instead |
 | `steps` | `{ name, durationMs, ok, detail? }[]` | Per-rung timings |
 
+When the reset relaunches [an Expo development build](getting-started.md#debug-and-dev-client-builds-with-metro), the app is connected to Metro before the call returns.
+
 The call is recorded in the trace as a `resetApp` action whose detail line names the rung and reason. Throws when the ladder is exhausted (or `fallback: false` and the requested rung failed).
 
 ### `device.restartApp(packageName: string, options?: { waitForIdle?: boolean }): Promise<void>`
@@ -530,6 +534,8 @@ test("remembers the signed-in user across a restart", async ({ device }) => {
 
 **Options:**
 - `waitForIdle?` — wait for the UI to settle after relaunch (default: `true`)
+
+As with [`launchApp`](#devicelaunchapppackagename-string-options-launchappoptions-promisevoid), an Expo development build is connected to Metro after the relaunch, unless `waitForIdle` is `false`.
 
 ### `device.clearAppData(packageName: string): Promise<void>`
 
