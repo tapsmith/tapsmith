@@ -3562,14 +3562,6 @@ async function runSuiteContext(
         d._routeManager?.removeTestListeners?.();
       });
 
-      // System ANR / crash dialogs the agent answered during the attempt
-      // (PILOT-977): a trace row each, while the trace is still recording,
-      // and a warning on this test for the app under test's own.
-      if (!opts.abortSignal?.aborted) {
-        await Promise.all(resettableDevices(opts).map((rd) => collectAnsweredSystemDialogs(rd.sessionContext)));
-        drainPreflightNotices(opts, traceCollector);
-      }
-
       // An unhandled rejection raised during the
       // attempt fails it — only it — as in Playwright (PILOT-543).
       const unhandledErrors = closeErrorScope(attemptErrors);
@@ -3611,6 +3603,16 @@ async function runSuiteContext(
           opts.screenshotDir,
           fullName,
         );
+      }
+
+      // System dialogs the agent answered during the attempt (PILOT-977): a
+      // trace row each, while the trace is still recording, and a warning on
+      // this test for the app under test's own. On iOS the agent first
+      // answers an alert the test left up, so it does not cover the next
+      // test: after every screenshot of the attempt, which must show it.
+      if (!opts.abortSignal?.aborted) {
+        await Promise.all(resettableDevices(opts).map((rd) => collectAnsweredSystemDialogs(rd.sessionContext, 'test-end')));
+        drainPreflightNotices(opts, traceCollector);
       }
 
       // Finalize trace recording

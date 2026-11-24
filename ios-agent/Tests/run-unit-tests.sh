@@ -421,6 +421,7 @@ xcrun swiftc -sdk "$SDK" \
 xcrun swiftc -sdk "$SDK" \
   Tests/SystemAlertTests/main.swift \
   TapsmithAgent/SystemAlert.swift \
+  TapsmithAgent/SystemDialogPolicy.swift \
   -o "$OUT/system-alert-tests"
 
 # When an in-app browser's content is looked for (PILOT-1384).

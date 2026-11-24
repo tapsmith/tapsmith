@@ -310,11 +310,17 @@ impl DeviceBackend for IosBackend<'_> {
             .to_string())
     }
 
-    async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
-        // The leftover "Open in" prompts the agent cancelled before a launch.
+    async fn take_system_dialog_events(
+        &self,
+        answer_leftover_alerts: bool,
+    ) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+        // The leftover "Open in" prompts the agent cancelled before a launch,
+        // and, at a test boundary, the leftover alerts it answers now.
         let result = self
             .svc
-            .send_agent_command(&AgentCommand::TakeSystemDialogEvents {})
+            .send_agent_command(&AgentCommand::TakeSystemDialogEvents {
+                answer_leftover_alerts,
+            })
             .await?;
         if !result.success {
             return Err(Status::internal(format!(

@@ -79,6 +79,11 @@ enum RowBinding {
         var throughAnchor = false
         /// Checked on every use to be at the frame it was found at.
         var checkFrame = false
+        /// Outside any row: checked on its first use to be the element found,
+        /// and bound again if need be (`firstUse`); after that, a touch
+        /// planned on it checks its identity, and its frame too unless it is
+        /// the only element with that identity (`checksFrameAfterFirstUse`).
+        var checkFrameOnce = false
         /// Checked once per command that its anchor still names one row.
         var checkAnchor = false
     }
@@ -92,8 +97,20 @@ enum RowBinding {
     /// somewhere, which can load a cell with the same anchor later: the
     /// query for the anchor's row looks at every cell of the app, so even a
     /// UITableView's anchor is then checked.
+    ///
+    /// Outside any row, a binding by place among others is frame-checked
+    /// too, once: XCTest's live query need not list nodes in the snapshot's
+    /// order. On a React Navigation screen it listed the bottom tab bar's
+    /// buttons before the header's drawer toggle, which comes first in the
+    /// tree, so `getByRole("button").first()` was bound to the first tab, and
+    /// its tap touched that tab and reported success. On its first use, such
+    /// a binding is checked and, if need be, bound again (`firstUse`); then
+    /// it is followed wherever it moves (a field the keyboard pushes up is
+    /// still read live), and only a touch planned on it checks that the live
+    /// element still has the identity found.
     static func plan(bound: Bool, inRow: Bool, uniqueInQuery: Bool, tags: Tags, treeHasLazyList: Bool) -> Plan {
-        guard bound, inRow else { return Plan() }
+        guard bound else { return Plan() }
+        guard inRow else { return Plan(checkFrameOnce: !uniqueInQuery) }
         if uniqueInQuery && tags.listExposesEveryRow { return Plan() }
         guard tags.anchor != nil else { return Plan(checkFrame: true) }
         return Plan(
@@ -102,14 +119,100 @@ enum RowBinding {
         )
     }
 
+    /// What becomes of a binding by place among others outside any row on
+    /// its first use.
+    enum FirstUse: Equatable {
+        /// It is the element found (or that element, moved since): keep it.
+        case keep
+        /// It is another element; the element found is the lookalike at this
+        /// index: bind that instead.
+        case rebind(Int)
+        /// It is another element, and the one found cannot be told among its
+        /// lookalikes: keep no live element.
+        case drop
+    }
+
+    /// The first use of a binding by place among others outside any row,
+    /// whose live element is read at `live` (nil: it could not be read). One
+    /// still at the frame it was found at is kept. One elsewhere is either
+    /// another element, listed at that place because the live query does not
+    /// follow the tree's order, or the element found, moved since (a panel
+    /// still sliding in, a field the keyboard pushed up). The element found
+    /// is looked for at its frame among its lookalikes (`lookalikes`: the
+    /// live frames of the elements with its type, label, identifier and
+    /// placeholder, read only then, and whether every one was read), and
+    /// bound if it is the one there. Failing that, the live element is kept
+    /// only when it is the one element with the identity found
+    /// (`liveIsFoundIdentity`, and the only lookalike is at its frame), so it
+    /// can only be the element found, moved; otherwise the element found
+    /// cannot be told among its lookalikes, and the binding is dropped.
+    static func firstUse(
+        found: CGRect, live: CGRect?, liveIsFoundIdentity: Bool,
+        lookalikes: () -> (frames: [CGRect?], complete: Bool)
+    ) -> FirstUse {
+        guard live != nil else { return .drop }
+        if isFoundElement(found: found, live: live) { return .keep }
+        let read = lookalikes()
+        let atFound = read.frames.enumerated().filter { isFoundElement(found: found, live: $0.element) }
+        if atFound.count == 1 { return .rebind(atFound[0].offset) }
+        // The only lookalike, and the live element is it.
+        if atFound.isEmpty, read.complete, read.frames.count == 1, liveIsFoundIdentity,
+           isFoundElement(found: read.frames[0] ?? .null, live: live) {
+            return .keep
+        }
+        return .drop
+    }
+
+    /// The lookalikes of an element found, from a query that returned
+    /// `count` elements, of which at most `max` are read: `read(i)` reads
+    /// the i-th one's frame and whether it has the identity found (nil: it
+    /// could not be read). Their frames, their indices in the query, and
+    /// whether every lookalike was read: not when the query returned more
+    /// than `max`, or one could not be read (it could be the element found).
+    static func readLookalikes(
+        count: Int, max: Int, read: (Int) -> (frame: CGRect, isLookalike: Bool)?
+    ) -> (frames: [CGRect?], indices: [Int], complete: Bool) {
+        var frames: [CGRect?] = []
+        var indices: [Int] = []
+        var complete = count <= max
+        for index in 0..<Swift.max(0, Swift.min(count, max)) {
+            guard let element = read(index) else {
+                complete = false
+                continue
+            }
+            guard element.isLookalike else { continue }
+            frames.append(element.frame)
+            indices.append(index)
+        }
+        return (frames, indices, complete)
+    }
+
+    /// Whether a touch planned on a binding after its first use (`use`)
+    /// must still find its live element at the frame it was found at, as a
+    /// row's must: unless it is the only element with the identity found
+    /// (`lookalikes`: how many have it, nil when not known). Its live query is
+    /// evaluated again on every read, and an element mounted since with the
+    /// same identity can take its place there; only its frame tells the two
+    /// apart. One that is the only such element is followed wherever it
+    /// moves.
+    static func checksFrameAfterFirstUse(_ use: FirstUse, lookalikes: Int?) -> Bool {
+        use != .drop && lookalikes != 1
+    }
+
     /// Whether the live element, read at `live` (nil: it could not be read),
     /// is the match found at `found`. Compared in whole points, as the SDK
     /// keys a target. A found frame with no area matches nothing.
+    /// A frame with no geometry (an element XCTest reports `.null` or
+    /// infinite) matches nothing: converting it to points would crash.
     static func isFoundElement(found: CGRect, live: CGRect?) -> Bool {
         guard let live, found.width > 0, found.height > 0 else { return false }
-        func points(_ r: CGRect) -> [Int] {
-            [Int(r.minX), Int(r.minY), Int(r.maxX), Int(r.maxY)]
+        func points(_ r: CGRect) -> [Int]? {
+            let edges = [r.minX, r.minY, r.maxX, r.maxY]
+            // 100k pt is far beyond any screen, and well inside Int.
+            guard edges.allSatisfy({ $0.isFinite && abs($0) < 100_000 }) else { return nil }
+            return edges.map { Int($0) }
         }
-        return points(found) == points(live)
+        guard let foundPoints = points(found), let livePoints = points(live) else { return false }
+        return foundPoints == livePoints
     }
 }

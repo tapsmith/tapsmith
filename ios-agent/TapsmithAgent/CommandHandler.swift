@@ -165,30 +165,63 @@ class CommandHandler {
         for _ in 0..<SystemAlert.maxLeftoverPromptsPerCheck {
             guard let alert = readSpringBoardAlert(), alert.isOpenInPrompt else { break }
             NSLog("[SystemDialog] Cancelling a leftover %@ before using the app", alert.description)
-            var gone = false
-            _ = ObjCExceptionCatcher.catchException {
-                let element = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
-                element.buttons["Cancel"].tap()
-                let deadline = Date(timeIntervalSinceNow: 2.0)
-                while Date() < deadline {
-                    if !element.exists { gone = true; return }
-                    Thread.sleep(forTimeInterval: 0.1)
-                }
-            }
-            systemAlertEvents.record(
-                title: alert.title,
-                button: "Cancel",
-                timestampMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
-            )
+            pressLeftoverAlertButton(alert, button: "Cancel", kind: SystemAlertEvents.openInPromptKind)
             cancelled = true
-            // Another unanswered openurl's prompt comes up a moment after
-            // this one closes: give it that moment, then read again. After
-            // every Cancel, whether or not the poll saw the alert go (it can
-            // miss the moment between two prompts). Paid only after a cancel.
-            if !gone { NSLog("[SystemDialog] the alert was still up 2 s after Cancel") }
-            Thread.sleep(forTimeInterval: Self.queuedPromptSettle)
         }
         return cancelled
+    }
+
+    /// Answer every SpringBoard alert that is up now, the daemon having said
+    /// it is a leftover: a test has ended, or an app reset is about to begin,
+    /// so nothing the next test does can have raised it. A permission prompt
+    /// a test raised and never answered otherwise stays up across resets,
+    /// runs and even the app's uninstall, covering every later test. Each is
+    /// answered per `SystemAlert.leftoverAnswer` (an allow-style button,
+    /// never a denial); one with no such button is left up, to be named in
+    /// errors. Recorded for the daemon to report. Never called on the
+    /// agent's own: an alert up in the middle of a test is the test's.
+    private func answerLeftoverSystemAlerts() {
+        for _ in 0..<SystemAlert.maxLeftoverPromptsPerCheck {
+            guard let alert = readSpringBoardAlert() else { return }
+            guard let button = alert.leftoverAnswer else {
+                NSLog("[SystemDialog] Leaving a leftover %@ up: no button is safe to press", alert.description)
+                return
+            }
+            NSLog("[SystemDialog] Pressing %@ on a leftover %@", button, alert.description)
+            pressLeftoverAlertButton(
+                alert,
+                button: button,
+                kind: alert.isOpenInPrompt ? SystemAlertEvents.openInPromptKind : SystemAlertEvents.leftoverAlertKind
+            )
+        }
+    }
+
+    /// Press `button` on SpringBoard's frontmost alert (`alert`, as just read),
+    /// wait up to 2 s for it to close, and record it for the daemon.
+    private func pressLeftoverAlertButton(_ alert: SystemAlert, button: String, kind: String) {
+        var gone = false
+        _ = ObjCExceptionCatcher.catchException {
+            let element = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+            element.buttons[button].tap()
+            let deadline = Date(timeIntervalSinceNow: 2.0)
+            while Date() < deadline {
+                if !element.exists { gone = true; return }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        systemAlertEvents.record(
+            title: alert.title,
+            button: button,
+            kind: kind,
+            timestampMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        )
+        // Another alert (a queued openurl's prompt, a second permission
+        // request) comes up a moment after this one closes: give it that
+        // moment before the caller reads again. After every press, whether
+        // or not the poll saw the alert go (it can miss the moment between
+        // two alerts). Paid only after a press.
+        if !gone { NSLog("[SystemDialog] the alert was still up 2 s after %@", button) }
+        Thread.sleep(forTimeInterval: Self.queuedPromptSettle)
     }
 
     /// True when the app's accessibility tree has rendered interactive content.
@@ -3434,8 +3467,13 @@ class CommandHandler {
             return ["present": true, "title": alert.title, "buttons": alert.buttons]
 
         case "takeSystemDialogEvents":
-            // The prompts cancelLeftoverOpenInPrompt answered since the last
-            // call, in the Android agent's event shape.
+            // The alerts the agent answered since the last call, in the
+            // Android agent's event shape. With `answerLeftoverAlerts` (the
+            // daemon sends it only at a test boundary), first answer any
+            // alert still up: it is a leftover.
+            if params["answerLeftoverAlerts"] as? Bool == true {
+                answerLeftoverSystemAlerts()
+            }
             return ["events": systemAlertEvents.take()]
 
         case "acceptOpenInAppDialog":

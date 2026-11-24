@@ -60,7 +60,19 @@ let nestedRow = Tags(anchor: "t\u{1}Featured", index: 4, nested: true,
                      anchorListExposesEveryRow: true, listExposesEveryRow: false)
 let noAnchorTable = Tags(listExposesEveryRow: true)
 let noAnchorList = Tags(listExposesEveryRow: false)
-check("outside a row: as before", RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false), Plan())
+// Outside any row, XCTest's live query still need not return nodes in the
+// snapshot's order (it listed a React Navigation tab bar's buttons before the
+// header's toggle, which comes first in the tree): a binding by place among
+// others is checked, once, on its first use: that order does not change as
+// the element moves, so a field that moves once typing focuses it keeps its
+// live element. One its query alone returns stands.
+check("outside a row, by place among others: frame-checked once",
+      RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false),
+      Plan(checkFrameOnce: true))
+check("outside a row, unique in its query: as before",
+      RowBinding.plan(bound: true, inRow: false, uniqueInQuery: true, tags: Tags(), treeHasLazyList: false), Plan())
+check("outside a row, no live element on purpose stays none",
+      RowBinding.plan(bound: false, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false), Plan())
 check("no live element on purpose stays none",
       RowBinding.plan(bound: false, inRow: true, uniqueInQuery: false, tags: tableRow, treeHasLazyList: false), Plan())
 check("a table row's repeated button goes through its row",
@@ -85,6 +97,96 @@ check("no anchor, unique in a table: as before",
 check("no anchor, unique in a collection view: frame-checked",
       RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorList, treeHasLazyList: false), Plan(checkFrame: true))
 
+// ─── firstUse (a binding by place among others, outside any row) ───
+
+typealias FirstUse = RowBinding.FirstUse
+let toggle = CGRect(x: 5, y: 61.33, width: 50, height: 40)
+let firstTab = CGRect(x: 0, y: 873.33, width: 146.67, height: 48.67)
+let elsewhere = CGRect(x: 300, y: 61.33, width: 50, height: 40)
+var lookalikesRead = 0
+func lookalikes(_ frames: [CGRect?], complete: Bool = true) -> () -> (frames: [CGRect?], complete: Bool) {
+    { lookalikesRead += 1; return (frames, complete) }
+}
+lookalikesRead = 0
+check("bound where it was found: kept", RowBinding.firstUse(
+    found: toggle, live: toggle, liveIsFoundIdentity: true, lookalikes: lookalikes([])
+), FirstUse.keep)
+check("bound where it was found: nothing else read", lookalikesRead, 0)
+// The live query listed the tab bar's buttons first: index 0 is a tab. The
+// toggle is the one element with its type, label and identifier at the frame
+// it was found at.
+check("bound to another element: re-bound to the one at the found frame", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: false, lookalikes: lookalikes([elsewhere, toggle])
+), FirstUse.rebind(1))
+// Two unnamed buttons, listed out of order: same identity, other frame.
+check("bound to a lookalike: re-bound", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([firstTab, toggle])
+), FirstUse.rebind(1))
+// The element moved since it was found (a panel still sliding in, a field the
+// keyboard pushed up): nothing is at the found frame, and the live element is
+// the only element with the identity found. Followed, as before.
+check("moved since found, no lookalike: kept", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([firstTab])
+), FirstUse.keep)
+// With lookalikes, one that moved cannot be told from another listed at its
+// place: not kept, so the touch goes to the found frame.
+// The one lookalike read is the element found, moved; the live element is
+// another one with its label and identifier (of another type, which the
+// lookalike query, scoped to the type found, does not return).
+check("moved since found, the one lookalike elsewhere than the live element: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([elsewhere])
+), FirstUse.drop)
+check("moved since found, with lookalikes: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([firstTab, elsewhere])
+), FirstUse.drop)
+// Lookalikes past the ones read could hold the element found.
+check("moved since found, lookalikes not all read: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([firstTab], complete: false)
+), FirstUse.drop)
+check("another element, nothing at the found frame: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: false, lookalikes: lookalikes([elsewhere])
+), FirstUse.drop)
+check("unreadable live element: dropped", RowBinding.firstUse(
+    found: toggle, live: nil, liveIsFoundIdentity: false, lookalikes: lookalikes([])
+), FirstUse.drop)
+// Two lookalikes at the found frame: the element found is one of them, so it
+// has not moved and the live element elsewhere is not it; nor can the two be
+// told apart.
+check("two at the found frame, another element: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: false, lookalikes: lookalikes([toggle, toggle])
+), FirstUse.drop)
+check("two at the found frame, a lookalike elsewhere: dropped", RowBinding.firstUse(
+    found: toggle, live: firstTab, liveIsFoundIdentity: true, lookalikes: lookalikes([toggle, toggle, firstTab])
+), FirstUse.drop)
+
+// ─── readLookalikes ───
+
+typealias Read = (frame: CGRect, isLookalike: Bool)
+func reads(_ rs: [Read?]) -> (Int) -> Read? { { rs[$0] } }
+let allRead = RowBinding.readLookalikes(count: 3, max: 32, read: reads([
+    (firstTab, true), (elsewhere, false), (toggle, true),
+]))
+check("all read: their frames", allRead.frames, [firstTab, toggle])
+check("all read: their indices in the query", allRead.indices, [0, 2])
+check("all read: complete", allRead.complete, true)
+// The element found could be the one that could not be read.
+let unreadable = RowBinding.readLookalikes(count: 2, max: 32, read: reads([(firstTab, true), nil]))
+check("one unreadable: not complete", unreadable.complete, false)
+check("one unreadable: the rest still read", unreadable.frames, [firstTab])
+var readsMade = 0
+let capped = RowBinding.readLookalikes(count: 40, max: 32) { _ in readsMade += 1; return (elsewhere, true) }
+check("over the cap: not complete", capped.complete, false)
+check("over the cap: no more than the cap read", readsMade, 32)
+
+// ─── checksFrameAfterFirstUse ───
+
+check("the only element with its identity: followed", RowBinding.checksFrameAfterFirstUse(.keep, lookalikes: 1), false)
+check("kept among lookalikes: frame-checked", RowBinding.checksFrameAfterFirstUse(.keep, lookalikes: 3), true)
+check("lookalikes not known: frame-checked", RowBinding.checksFrameAfterFirstUse(.keep, lookalikes: nil), true)
+check("re-bound to the only one: followed", RowBinding.checksFrameAfterFirstUse(.rebind(0), lookalikes: 1), false)
+check("re-bound among lookalikes: frame-checked", RowBinding.checksFrameAfterFirstUse(.rebind(1), lookalikes: 2), true)
+check("dropped: no live element to check", RowBinding.checksFrameAfterFirstUse(.drop, lookalikes: 2), false)
+
 // ─── isFoundElement ───
 
 // Row 68's "More Info" button where it was found, and Row 67's, one row
@@ -94,6 +196,16 @@ let row67 = CGRect(x: 349, y: 771.33, width: 22, height: 22)
 check("the button where it was found", RowBinding.isFoundElement(found: row68, live: row68), true)
 check("another row's button", RowBinding.isFoundElement(found: row68, live: row67), false)
 check("no live element", RowBinding.isFoundElement(found: row68, live: nil), false)
+// A lookalike or live read with no geometry is not where anything was found
+// (and must not crash the agent converting it to points).
+check("a null live frame", RowBinding.isFoundElement(found: row68, live: .null), false)
+check("an infinite live frame", RowBinding.isFoundElement(found: row68, live: .infinite), false)
+check("a live frame beyond any screen", RowBinding.isFoundElement(
+    found: row68, live: CGRect(x: 1e300, y: 0, width: 22, height: 22)
+), false)
+check("a non-finite found frame", RowBinding.isFoundElement(
+    found: CGRect(x: CGFloat.nan, y: 0, width: 22, height: 22), live: row68
+), false)
 // Frames are compared in whole points, as the SDK keys a target: a read
 // that differs below a point is the same element.
 check("sub-point difference", RowBinding.isFoundElement(

@@ -235,7 +235,8 @@ export interface IsKeyboardShownResponse {
 
 /**
  * A system dialog the agent answered on its own: an ANR / crash dialog on
- * Android, a leftover "Open in “App”?" prompt on iOS.
+ * Android; on iOS a leftover "Open in “App”?" prompt, or an alert still up
+ * at a test boundary.
  */
 export interface SystemDialogEvent {
   /** The dialog's title, e.g. `Pixel Launcher isn't responding`; empty when unknown. */
@@ -244,9 +245,9 @@ export interface SystemDialogEvent {
   owner: string;
   /** The app under test owns it: its own ANR, answered with Wait. */
   ownedByTarget: boolean;
-  /** `anr` (isn't responding) or `crash` (keeps stopping) on Android; `open-in-prompt` on iOS. */
+  /** `anr` (isn't responding) or `crash` (keeps stopping) on Android; `open-in-prompt` or `leftover-alert` on iOS. */
   kind: string;
-  /** The button pressed: `Close app` or `Wait` on Android; `Cancel` on iOS. */
+  /** The button pressed: `Close app` or `Wait` on Android; on iOS `Cancel` for an "Open in" prompt, else e.g. `Allow`. */
   button: string;
   /** When it was answered, device wall-clock ms since the epoch. */
   timestampMs: number;
@@ -1250,10 +1251,19 @@ export class TapsmithGrpcClient {
     });
   }
 
-  /** The system dialogs the agent answered since the last call, oldest first. */
-  async takeSystemDialogEvents(deadlineMs?: number): Promise<TakeSystemDialogEventsResponse> {
+  /**
+   * The system dialogs the agent answered since the last call, oldest first.
+   * `answerLeftoverAlerts` (only at a test boundary: a test has ended, or an
+   * app reset is about to begin) first has the iOS agent answer any alert
+   * still up.
+   */
+  async takeSystemDialogEvents(
+    deadlineMs?: number,
+    options: { answerLeftoverAlerts?: boolean } = {},
+  ): Promise<TakeSystemDialogEventsResponse> {
     return this.call<TakeSystemDialogEventsResponse>('takeSystemDialogEvents', {
       requestId: requestId(),
+      answerLeftoverAlerts: options.answerLeftoverAlerts ?? false,
     }, deadlineMs);
   }
 

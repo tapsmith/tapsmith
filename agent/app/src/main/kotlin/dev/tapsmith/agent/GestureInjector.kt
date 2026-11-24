@@ -1,5 +1,8 @@
 package dev.tapsmith.agent
 
+import kotlin.math.abs
+import kotlin.math.sign
+
 /*
  * Every touch and key the agent makes goes through [GestureInjector] (PILOT-789).
  *
@@ -282,8 +285,16 @@ class GestureInjector(
          */
         const val DRAG_FRAME_MOVES = 2
 
-        /** A [scrollStepDrag]'s moves span this much event time (Speedrun's 50 ms drag). */
+        /** A [scrollStepDrag]'s moves span this much event time (Speedrun's 50 ms drag)… */
         const val STEP_DRAG_MOVE_MS = 50L
+
+        /**
+         * …and its last move comes this much event time after the one before:
+         * more than the 20 ms gap up to which the app's input queue predicts
+         * where a moving pointer will be at the next frame (touch resampling,
+         * see [scrollStepDrag]).
+         */
+        const val STEP_DRAG_LAST_MOVE_GAP_MS = 25L
 
         /**
          * Event time between a [scrollStepDrag]'s last moving sample and its
@@ -521,9 +532,9 @@ class GestureInjector(
     }
 
     /**
-     * scrollIntoView()'s step drag (PILOT-998; the CANCEL ending and the short
-     * drag are ideas from Speedrun's Android agent, Apache-2.0, our own code):
-     * a drag that leaves no momentum and takes ~100 ms of real time where
+     * scrollIntoView()'s step drag (the short drag and backdated samples are
+     * ideas from Speedrun's Android agent, Apache-2.0, our own code): a drag
+     * that leaves no momentum and takes ~100 ms of real time where
      * [stepDrag] takes ~600 ms.
      *
      * - The press and the first [DRAG_FRAME_MOVES] moves are synchronous and
@@ -532,18 +543,35 @@ class GestureInjector(
      * - The other moves go [STEP_DRAG_MOVE_GAP_MS] apart without waiting for
      *   the app (the last one waits, so the app has the whole drag).
      * - Event times are backdated: the moves span [STEP_DRAG_MOVE_MS] of event
-     *   time, then two still samples at the end point are stamped past
-     *   VelocityTracker's stop gap and its horizon, and no event is stamped
-     *   later than it is sent.
-     * - It ends with a CANCEL, not an UP: a lift after backdated samples
-     *   still flung (one drag moved a list 150 rows), while a cancelled drag
-     *   stops dead, and nothing under the finger is clicked. The cost: a
-     *   paging or snapping list stays where the finger left it, and React
-     *   Native gets no `onScrollEndDrag`. So it is kept to vertical scroll
-     *   steps; sideways swipes still lift, so a pager turns.
+     *   time, the last one [STEP_DRAG_LAST_MOVE_GAP_MS] after the one before,
+     *   then two still samples are stamped past VelocityTracker's stop gap
+     *   and its horizon, and no event is stamped later than it is sent.
+     * - The app's input queue resamples touches: for each frame it predicts
+     *   where a pointer moving with samples 2-20 ms apart will be, and a
+     *   later sample at the same position as the one before is moved to that
+     *   prediction. So the last move is more than 20 ms after the one before
+     *   (or the app saw the drag end ~100 px past where the finger stopped,
+     *   and took that back at the next touch), and each still sample moves
+     *   the pointer one pixel further along the drag (still samples at the
+     *   end point were moved to an earlier prediction, the velocity tracker
+     *   never saw the pointer stop, and a lift flung the list 136 rows).
+     * - Then the pointer is lifted, with no speed left to fling. A lift, not
+     *   a cancel: a React Native scroll view ends its drag (onScrollEndDrag,
+     *   momentum events, a paging list's snap) only on a lift. Inside a scroll
+     *   view nothing under the finger is clicked: the scroll view takes the
+     *   drag over past slop and cancels the touch for the view under it.
+     * - Except a drag that pulls down (toward the top of the content): it
+     *   keeps the ending steps always had — no last-move gap, still samples
+     *   at the end point, a cancel. Past the top of a list it is a pull, and
+     *   a lift starts the list's pull-to-refresh (a refresh on almost every
+     *   step at the top of a React Native RefreshControl list on API 36);
+     *   and with the gap and moved-on still samples but a cancel, the tap
+     *   after a step up to a React Native button at the top was lost on API
+     *   33 (3 of 3; none with this ending).
      *
-     * A refused event stops the moves; the pointer is still cancelled. A
-     * cancelled command cancels the pointer and throws
+     * A refused event stops the drag, and the pointer is cancelled rather
+     * than lifted after a drag that did not finish (as is one whose lift is
+     * refused). A cancelled command cancels the pointer and throws
      * [CommandCancelledException].
      */
     fun scrollStepDrag(
@@ -556,9 +584,14 @@ class GestureInjector(
         val n = steps.coerceIn(STEP_DRAG_MIN_MOVES, STEP_DRAG_MAX_MOVES)
         val xStep = (x2 - x1).toDouble() / n
         val yStep = (y2 - y1).toDouble() / n
+        // A drag that pulls down (toward the top of the content) keeps the
+        // ending steps always had: no last-move gap, still samples at the
+        // end point, a cancel. See the KDoc.
+        val lifts = y2 <= y1
         // Every event time is at or before the real time it is sent: the
         // last still sample is stamped this far after the press.
-        val span = STEP_DRAG_MOVE_MS + STEP_DRAG_STOP_GAP_MS + STEP_DRAG_HORIZON_MS
+        val movesEnd = STEP_DRAG_MOVE_MS + if (lifts) STEP_DRAG_LAST_MOVE_GAP_MS else 0
+        val span = movesEnd + STEP_DRAG_STOP_GAP_MS + STEP_DRAG_HORIZON_MS
         val downTime = clock.now() - span
         var x = x1
         var y = y1
@@ -584,7 +617,7 @@ class GestureInjector(
             checkpoint()
             x = if (i == n) x2 else x1 + (xStep * i).toInt()
             y = if (i == n) y2 else y1 + (yStep * i).toInt()
-            val t = downTime + STEP_DRAG_MOVE_MS * i / n
+            val t = if (i == n) downTime + movesEnd else downTime + STEP_DRAG_MOVE_MS * i / n
             if (i <= DRAG_FRAME_MOVES) {
                 ok = at(t, TouchAction.MOVE, sync = true)
                 clock.waitForNextFrame()
@@ -593,12 +626,30 @@ class GestureInjector(
                 if (i < n) clock.sleep(STEP_DRAG_MOVE_GAP_MS)
             }
         }
-        val stillAt = downTime + STEP_DRAG_MOVE_MS + STEP_DRAG_STOP_GAP_MS
-        if (ok) ok = at(stillAt, TouchAction.MOVE, sync = false)
-        if (ok) ok = at(stillAt + STEP_DRAG_HORIZON_MS, TouchAction.MOVE, sync = true)
+        // One pixel on along the drag per still sample (its main axis).
+        val nudgeX = if (lifts && abs(x2 - x1) > abs(y2 - y1)) (x2 - x1).sign else 0
+        val nudgeY = if (lifts && nudgeX == 0) (y2 - y1).sign else 0
+        val stillAt = downTime + movesEnd + STEP_DRAG_STOP_GAP_MS
+        if (ok) {
+            x += nudgeX
+            y += nudgeY
+            ok = at(stillAt, TouchAction.MOVE, sync = false)
+        }
+        if (ok) {
+            x += nudgeX
+            y += nudgeY
+            ok = at(stillAt + STEP_DRAG_HORIZON_MS, TouchAction.MOVE, sync = true)
+        }
         checkpoint()
-        val cancelOk = at(maxOf(clock.now(), downTime + span + 1), TouchAction.CANCEL, sync = true)
-        return ok && cancelOk
+        val end = maxOf(clock.now(), downTime + span + 1)
+        if (!ok) {
+            at(end, TouchAction.CANCEL, sync = true)
+            return false
+        }
+        if (!lifts) return at(end, TouchAction.CANCEL, sync = true)
+        if (at(end, TouchAction.UP, sync = true)) return true
+        at(end, TouchAction.CANCEL, sync = true)
+        return false
     }
 
     /**

@@ -610,17 +610,19 @@ class GestureInjectorTest {
     private fun eventTimes(sink: FakeSink) = sink.touches.map { (sentAt, e) -> motionEventTime(e, sentAt) }
 
     @Test
-    fun `a step drag moves to its end and cancels instead of lifting`() {
+    fun `a step drag moves to its end, holds still and lifts`() {
         val sink = FakeSink(clock)
         assertTrue(injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20))
         val actions = sink.actions()
         assertEquals(TouchAction.DOWN, actions.first())
-        assertEquals(TouchAction.CANCEL, actions.last())
-        assertFalse(TouchAction.UP in actions)
+        // A lift, not a cancel: a React Native scroll view ends its drag
+        // only on a lift, and until it does the next tap can be lost.
+        assertEquals(TouchAction.UP, actions.last())
+        assertFalse(TouchAction.CANCEL in actions)
         val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }
         // At most STEP_DRAG_MAX_MOVES moving samples, then the two still ones.
         assertEquals(GestureInjector.STEP_DRAG_MAX_MOVES + 2, moves.size)
-        assertTrue(moves.takeLast(3).all { it.second.pointers.single() == PointerState(0, 0, 200) })
+        assertEquals(PointerState(0, 0, 200), moves[moves.size - 3].second.pointers.single())
         assertEquals(
             1,
             sink.touches
@@ -628,6 +630,53 @@ class GestureInjectorTest {
                 .toSet()
                 .size,
         )
+    }
+
+    @Test
+    fun `a step drag that pulls down ends as before, still at its end point and cancelled`() {
+        // A drag that pulls down (toward the top of the content) can end as
+        // a pull at the top of a list: a lift there starts its
+        // pull-to-refresh, and still samples moved on from the end point lost
+        // the next tap on API 33. So it keeps the ending it had: moves over
+        // STEP_DRAG_MOVE_MS, still samples at the end point, and a cancel.
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).scrollStepDrag(0, 200, 0, 1000, steps = 20))
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+        val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }
+        assertEquals(GestureInjector.STEP_DRAG_MAX_MOVES + 2, moves.size)
+        assertTrue(moves.takeLast(3).all { it.second.pointers.single() == PointerState(0, 0, 1000) })
+        val times = eventTimes(sink)
+        val lastMoving =
+            sink.touches.indexOfFirst {
+                it.second.pointers
+                    .single()
+                    .y == 1000
+            }
+        assertEquals(GestureInjector.STEP_DRAG_MOVE_MS, times[lastMoving] - times.first())
+    }
+
+    @Test
+    fun `a lifted step drag's still samples each move the pointer one pixel on along the drag`() {
+        // The app's input queue moves a sample at the pointer's last position
+        // to its last prediction: still samples at the end point never told
+        // the velocity tracker the pointer stopped, and the lift flung the list.
+        val up = FakeSink(clock)
+        injector(up).scrollStepDrag(0, 1000, 0, 200, steps = 20)
+        val upMoves = up.touches.filter { it.second.action == TouchAction.MOVE }.map { it.second.pointers.single() }
+        assertEquals(listOf(PointerState(0, 0, 199), PointerState(0, 0, 198)), upMoves.takeLast(2))
+        assertEquals(
+            PointerState(0, 0, 198),
+            up.touches
+                .last()
+                .second.pointers
+                .single(),
+        )
+
+        val sideways = FakeSink(clock)
+        injector(sideways).scrollStepDrag(900, 40, 100, 40, steps = 20)
+        val sideMoves = sideways.touches.filter { it.second.action == TouchAction.MOVE }.map { it.second.pointers.single() }
+        assertEquals(listOf(PointerState(0, 99, 40), PointerState(0, 98, 40)), sideMoves.takeLast(2))
     }
 
     @Test
@@ -652,19 +701,38 @@ class GestureInjectorTest {
         val times = eventTimes(sink)
         assertTrue("times $times", times.zipWithNext().all { (a, b) -> b >= a })
         sink.touches.zip(times).forEach { (sent, t) -> assertTrue("$t sent at ${sent.first}", t <= sent.first) }
-        // The moves span STEP_DRAG_MOVE_MS of event time from the press.
+        // The moves before the last span STEP_DRAG_MOVE_MS of event time from the press.
         val down = times.first()
-        val moving =
-            sink.touches.indexOfLast {
+        val lastMoving =
+            sink.touches.indexOfFirst {
                 it.second.pointers
                     .single()
-                    .y != 200
+                    .y == 200
             }
-        assertTrue(times[moving + 1] - down <= GestureInjector.STEP_DRAG_MOVE_MS)
+        assertTrue(times[lastMoving - 1] - down <= GestureInjector.STEP_DRAG_MOVE_MS)
     }
 
     @Test
-    fun `a step drag's still samples clear the velocity tracker before the cancel`() {
+    fun `a step drag's last move comes too long after the one before for the app to predict past it`() {
+        // An app's input queue resamples a pointer whose samples are 2-20 ms
+        // apart, predicting where it is at the next frame: for the last move
+        // it saw the drag end ~100 px past where the finger stopped.
+        for (steps in listOf(1, 8, 20)) {
+            val sink = FakeSink(clock)
+            injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = steps)
+            val times = eventTimes(sink)
+            val lastMoving =
+                sink.touches.indexOfFirst {
+                    it.second.pointers
+                        .single()
+                        .y == 200
+                }
+            assertTrue("steps $steps: times $times", times[lastMoving] - times[lastMoving - 1] > 20)
+        }
+    }
+
+    @Test
+    fun `a step drag's still samples clear the velocity tracker before the lift`() {
         val sink = FakeSink(clock)
         injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20)
         val times = eventTimes(sink)
@@ -674,6 +742,8 @@ class GestureInjectorTest {
         val lastStill = moves[moves.size - 1].index
         assertTrue(times[firstStill] - times[lastMoving] > 40)
         assertTrue(times[lastStill] - times[firstStill] > 100)
+        // The lift comes after the last still sample.
+        assertTrue(times.last() > times[lastStill])
     }
 
     @Test
@@ -696,6 +766,23 @@ class GestureInjectorTest {
     }
 
     @Test
+    fun `a step drag whose lift is refused cancels its pointer`() {
+        val sink = FakeSink(clock, refuse = { it.action == TouchAction.UP })
+        assertFalse(injector(sink).scrollStepDrag(0, 500, 0, 0, steps = 20))
+        assertEquals(listOf(TouchAction.UP, TouchAction.CANCEL), sink.actions().takeLast(2))
+    }
+
+    @Test
+    fun `a refused still sample cancels a step drag's pointer instead of lifting it`() {
+        var moves = 0
+        val sink =
+            FakeSink(clock, refuse = { it.action == TouchAction.MOVE && ++moves == GestureInjector.STEP_DRAG_MAX_MOVES + 1 })
+        assertFalse(injector(sink).scrollStepDrag(0, 500, 0, 0, steps = 20))
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+    }
+
+    @Test
     fun `a cancelled command cancels a step drag's pointer and throws`() {
         val token = CommandCancellation()
         val sink = FakeSink(clock)
@@ -714,7 +801,7 @@ class GestureInjectorTest {
             }
         try {
             CommandCancellation.runWith(token) {
-                GestureInjector(sink, cancelling) { 8L }.scrollStepDrag(0, 0, 0, 500, steps = 20)
+                GestureInjector(sink, cancelling) { 8L }.scrollStepDrag(0, 500, 0, 0, steps = 20)
             }
             throw AssertionError("expected CommandCancelledException")
         } catch (e: CommandCancelledException) {

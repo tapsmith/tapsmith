@@ -822,6 +822,12 @@ message IsKeyboardShownResponse {
 
 message TakeSystemDialogEventsRequest {
   string request_id = 1;
+  // The caller is at a test boundary (a test has ended, or an app reset is
+  // about to begin): first answer any system alert still up, as a leftover
+  // nothing the next test does can have raised. iOS only; it presses an
+  // allow-style button, never a denial, and reports each as a
+  // "leftover-alert" event.
+  bool answer_leftover_alerts = 2;
 }
 
 // One system dialog the agent answered.
@@ -834,9 +840,10 @@ message SystemDialogEvent {
   // The app under test owns it: its own ANR, answered with "Wait".
   bool owned_by_target = 3;
   // "anr" (isn't responding) or "crash" (keeps stopping) on Android;
-  // "open-in-prompt" on iOS.
+  // "open-in-prompt" or "leftover-alert" on iOS.
   string kind = 4;
-  // The button pressed: "Close app" or "Wait" on Android; "Cancel" on iOS.
+  // The button pressed: "Close app" or "Wait" on Android; on iOS "Cancel"
+  // for an "Open in" prompt, else the allow-style button (e.g. "Allow").
   string button = 5;
   // When it was answered, in device wall-clock ms since the epoch.
   int64 timestamp_ms = 6;
