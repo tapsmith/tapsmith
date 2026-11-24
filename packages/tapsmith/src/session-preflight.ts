@@ -1729,6 +1729,8 @@ function configuredBuildPath(config: SessionPreflightContext['config']): string 
  * Native project whose build cannot be read.
  */
 function devBuildKind(ctx: Pick<DevClientContext, 'config' | 'capabilities'>): { kind: 'dev-client' | 'metro' | 'unknown' | 'none'; scheme?: string } {
+  // Expo Go is its own app, with a home screen of its own: the test opens the project.
+  if (/^host\.exp\.exponent$/i.test(ctx.config.package ?? '')) return { kind: 'none' };
   const build = inspectDevBuild(configuredBuildPath(ctx.config));
   if (build?.devClient) return { kind: 'dev-client', ...(build.scheme ? { scheme: build.scheme } : {}) };
   if (build?.embedsJs) return { kind: 'none' };
@@ -1746,7 +1748,7 @@ function devBuildKind(ctx: Pick<DevClientContext, 'config' | 'capabilities'>): {
  * What a worker's start may take on top of the usual: a build that loads from
  * Metro may wait for its first bundle (or the named error) before it is ready.
  */
-export function devBundleAllowanceMs(config: Pick<TapsmithConfig, 'platform' | 'apk' | 'app' | 'rootDir'>): number {
+export function devBundleAllowanceMs(config: Pick<TapsmithConfig, 'package' | 'platform' | 'apk' | 'app' | 'rootDir'>): number {
   const { kind } = devBuildKind({ config: config as SessionPreflightContext['config'], capabilities: undefined });
   return kind === 'none' ? 0 : DEV_BUNDLE_LOAD_TIMEOUT_MS;
 }

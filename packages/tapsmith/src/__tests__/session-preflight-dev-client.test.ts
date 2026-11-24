@@ -347,6 +347,13 @@ describe('connectDevClient', () => {
     expect(client.getUiHierarchy).toHaveBeenCalledTimes(3);
   });
 
+  it('leaves Expo Go alone', async () => {
+    const { ctx, client } = makeContext([LAUNCHER]);
+    ctx.config.package = 'host.exp.Exponent';
+    expect(await connectDevClient(ctx, { fetch: metro })).toBe(false);
+    expect(client.getUiHierarchy).not.toHaveBeenCalled();
+  });
+
   it('reads nothing for a build that carries its JavaScript, even in an expo-dev-client project', async () => {
     const { ctx, client } = makeContext([LAUNCHER]);
     ctx.config.apk = buildApk(['assets/index.android.bundle']);

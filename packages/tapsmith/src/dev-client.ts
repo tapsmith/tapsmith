@@ -71,7 +71,7 @@ export function devClientScreen(hierarchyXml: string): DevClientScreen | undefin
   const hasPrefix = (p: string): boolean => [...texts].some((t) => t.startsWith(p));
   if (has('There was a problem loading the project.')) return 'load-error';
   // React Native's iOS red box for a bundle that does not compile.
-  if (hasPrefix('Extra Info') && ['SyntaxError', 'TransformError', 'Unable to resolve module', 'UnableToResolveError'].some(hasPrefix)) return 'load-error';
+  if (hasPrefix('Extra Info') && ['SyntaxError: /', 'TransformError', 'Unable to resolve module', 'UnableToResolveError'].some(hasPrefix)) return 'load-error';
   if (
     [...texts].some((t) => /^development servers$/i.test(t))
     && (has('Development Build') || has('Fetch development servers') || has('Enter URL manually')

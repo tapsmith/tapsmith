@@ -71,6 +71,7 @@ describe('devClientScreen', () => {
   it('reads the red box of a bundle that does not compile as a load error, not one from the running app', () => {
     const box = (message: string): string => `<hierarchy><XCUIElementTypeStaticText label="${message}"/><XCUIElementTypeButton label="Dismiss&#10;(ESC)"/><XCUIElementTypeButton label="Extra Info&#10;(⌘E)"/></hierarchy>`;
     expect(devClientScreen(box('SyntaxError: /app/_layout.tsx: Unexpected token (19:10)'))).toBe('load-error');
+    expect(devClientScreen(box('SyntaxError: JSON Parse error: Unexpected token'))).toBeUndefined();
     expect(devClientScreen(box('Unhandled JS Exception: boom'))).toBeUndefined();
   });
 
