@@ -15,6 +15,7 @@
  * @internal
  */
 
+import { ANDROID_EDIT_TEXT_CLASSES } from './accessible-name.js';
 import type { ElementInfo, EvaluateSelectorsResponse, GetSystemAlertResponse } from './grpc-client.js';
 import { collapseSameTargetDuplicates } from './element-handle.js';
 import { isIosTextInput } from './ios-text-content.js';
@@ -295,19 +296,24 @@ function locatorWords(selector: Selector): string | undefined {
   }
 }
 
+/** Whether an element's text is what was typed into it (any getter's probe can return the field: Android's hint query compares its text too). */
+function isTextInput(el: ElementInfo): boolean {
+  return ANDROID_EDIT_TEXT_CLASSES.has(el.className) || isIosTextInput(el.className, el.role);
+}
+
 /** The position Flutter appends to a tab's description ("Contact\nTab 2 of 3"). */
 const FLUTTER_TAB_POSITION = /\nTab \d+ of \d+$/;
 
-/** Whether a hit shows the locator's words ({@link NearMissCheck}). Fallback and field-value probes don't count. */
+/** Whether a hit shows the locator's words ({@link NearMissCheck}). Fallback probes and a text field's typed value don't count. */
 function showsWords(selector: Selector, probes: Probe[], response: EvaluateSelectorsResponse): boolean {
   const words = locatorWords(selector);
   if (words === undefined) return false;
   const fold = (s: string) => normalizeText(s).toLowerCase();
   const wanted = new Set([fold(words), fold(words.trim().replace(TRAILING_PUNCTUATION, ''))].filter(Boolean));
   const shows = (s: string | undefined) => wanted.has(fold(s ?? ''));
-  return probes.some((probe, i) => !probe.fallback && probe.fieldValue === undefined && !response.results[i].errorMessage &&
+  return probes.some((probe, i) => !probe.fallback && !response.results[i].errorMessage &&
     probeHits(probe, response.results[i].elements).some((el) =>
-      shows(el.text) || shows(el.contentDescription) || shows(el.contentDescription?.replace(FLUTTER_TAB_POSITION, '')) ||
+      (!isTextInput(el) && shows(el.text)) || shows(el.contentDescription) || shows(el.contentDescription?.replace(FLUTTER_TAB_POSITION, '')) ||
       shows(el.hint)));
 }
 

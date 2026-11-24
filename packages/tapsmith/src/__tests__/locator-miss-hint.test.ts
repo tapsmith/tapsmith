@@ -195,9 +195,15 @@ describe("a not-found error lists the near misses the agent finds", () => {
     });
 
     it("is kept when the words are only a text field's typed value: the result may be below the fold", async () => {
+      // Android answers getByPlaceholder() with a field whose text is the words, so two probes return it.
+      const field = { ...element("f", "Apollo 11"), className: "android.widget.EditText", role: "textfield", hint: "Search" };
       const { client } = missingClient((s) =>
-        s.kind.type === "role" && s.kind.value.role === "textfield" && s.kind.value.exact ? [element("f", "Apollo 11")] : []);
+        s.kind.type === "hint" || (s.kind.type === "role" && s.kind.value.role === "textfield") ? [field] : []);
       vitestExpect(await tapError(client, (d) => d.getByText("Apollo 11", { exact: true }))).toContain(offScreen);
+      vitestExpect(await tapError(client, (d) => d.getByRole("button", { name: "Apollo 11" }))).toContain(offScreen);
+      const iosField = { ...field, className: "XCUIElementTypeTextField" };
+      const ios = missingClient((s) => (s.kind.type === "role" && s.kind.value.role === "textfield" ? [iosField] : []));
+      vitestExpect(await tapError(ios.client, (d) => d.getByText("Apollo 11", { exact: true }))).toContain(offScreen);
     });
 
     it("is kept when only the role matches, under other names", async () => {
