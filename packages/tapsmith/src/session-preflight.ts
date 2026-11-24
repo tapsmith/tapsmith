@@ -340,9 +340,13 @@ function projectWithoutHooks(config: SessionPreflightContext['config']): boolean
  * but the build lives inside it.
  */
 function appUsesTapsmithHooks(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>): boolean {
+  return projectFolders(config).some((dir) => appDependsOnTapsmithHooks(dir));
+}
+
+/** Where to look up from for the app's package.json: the config's folder and the build's. */
+function projectFolders(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>): string[] {
   const builds = [config.apk, config.app].filter((p): p is string => !!p);
-  const starts = [config.rootDir, ...builds.map((p) => path.dirname(path.resolve(config.rootDir, p)))];
-  return starts.some((dir) => appDependsOnTapsmithHooks(dir));
+  return [config.rootDir, ...builds.map((p) => path.dirname(path.resolve(config.rootDir, p)))];
 }
 
 /**
@@ -1676,6 +1680,14 @@ const DEV_BUNDLE_LOAD_TIMEOUT_MS = 180_000;
  *  content is waited on after the link, before it is taken for the app. */
 const DEV_BLANK_SCREEN_MS = 30_000;
 
+/** How long after the link a development screen may still be the one the link
+ *  was opened on; the launcher keeps its place until Metro's manifest is in. */
+const DEV_SCREEN_STALE_MS = 5_000;
+const DEV_LAUNCHER_STALE_MS = 30_000;
+
+/** When to look again for a dev menu opened over a freshly loaded app. */
+const DEV_MENU_CONFIRM_MS = 1_000;
+
 const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
 
 /**
@@ -1683,7 +1695,7 @@ const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-
  * build one of these for a launch they make outside any test session.
  */
 export type DevClientContext = Pick<SessionPreflightContext, 'config' | 'client' | 'deviceSerial' | 'capabilities'> & {
-  device: Pick<SessionDevice, 'openDeepLink'>
+  device: Pick<SessionDevice, 'openDeepLink' | '_sessionLaunches'>
 };
 
 /** The build Tapsmith installed for this session, resolved against `rootDir`. */
@@ -1694,17 +1706,25 @@ function configuredBuildPath(config: SessionPreflightContext['config']): string 
 }
 
 /**
- * Whether the app may be an Expo development build, so that a launch is worth
- * a look at the screen: the installed build says so (or not), and without a
- * build to read, a project that depends on `expo-dev-client`, or one this
- * session already saw on a dev-client screen.
+ * What a launch of the app needs a look at the screen for: an Expo development
+ * build (`dev-client`), or a React Native Debug build that loads from Metro
+ * itself (`metro`). The installed build says which; without a build to read,
+ * a project that depends on `expo-dev-client`, or one this session already
+ * saw on a dev-client screen, is taken for a dev client. `unknown` is a React
+ * Native project whose build cannot be read.
  */
-function mayBeDevClient(ctx: DevClientContext): { look: boolean; scheme?: string } {
+function devBuildKind(ctx: DevClientContext): { kind: 'dev-client' | 'metro' | 'unknown' | 'none'; scheme?: string } {
   const build = inspectDevBuild(configuredBuildPath(ctx.config));
-  if (build) return { look: build.devClient, ...(build.scheme ? { scheme: build.scheme } : {}) };
-  if (ctx.capabilities?.devClientSeen) return { look: true };
-  if (!ctx.config.rootDir) return { look: false };
-  return { look: appDependsOn(ctx.config.rootDir, 'expo-dev-client') };
+  if (build?.devClient) return { kind: 'dev-client', ...(build.scheme ? { scheme: build.scheme } : {}) };
+  if (build?.embedsJs) return { kind: 'none' };
+  if (!build && ctx.capabilities?.devClientSeen) return { kind: 'dev-client' };
+  const { rootDir, apk, app } = ctx.config;
+  if (!rootDir) return { kind: 'none' };
+  const folders = projectFolders({ rootDir, apk, app });
+  const dependsOn = (name: string): boolean => folders.some((dir) => appDependsOn(dir, name));
+  if (!build && dependsOn('expo-dev-client')) return { kind: 'dev-client' };
+  if (!dependsOn('react-native') && !dependsOn('expo')) return { kind: 'none' };
+  return { kind: build ? 'metro' : 'unknown' };
 }
 
 /**
@@ -1715,7 +1735,7 @@ function mayBeDevClient(ctx: DevClientContext): { look: boolean; scheme?: string
  */
 export function connectDevClientForTool(target: {
   client: SessionPreflightContext['client']
-  device: Pick<SessionDevice, 'openDeepLink'>
+  device: DevClientContext['device']
   packageName: string
   platform: 'android' | 'ios'
   serial?: string
@@ -1763,136 +1783,151 @@ function devServerError(pkg: string, screen: DevClientScreen, why: string): Erro
 }
 
 /**
- * After a launch: if the app is an Expo development build standing on its dev
- * launcher (no bundle loaded, as after every clear) or with the dev menu open
- * over it (a relaunch that reloaded the last server), point it at this app's
- * Metro with the dev-client link and wait for the app itself, so tests start
- * on the app and not on a development screen. A React Native red screen for
- * a missing Metro, and a dev client that cannot reach Metro, stop the session
- * with an error saying so. Anything else returns after one hierarchy read,
- * and a build that is not a development build costs nothing.
+ * After a launch: bring a build that loads its JavaScript from Metro to the
+ * app's own UI, so tests start on the app and not on a development screen. An
+ * Expo development build on its dev launcher (as after every clear), or with
+ * its dev menu open, is pointed at this app's Metro with the dev-client link;
+ * any Debug build still loading its bundle is waited for. A build that cannot
+ * reach Metro stops the session with an error saying so. An app already drawn
+ * costs one hierarchy read, and a build that carries its JavaScript nothing.
  */
 export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: DevServerFetch } = {}): Promise<void> {
   const pkg = ctx.config.package;
   if (!pkg) return;
-  const candidate = mayBeDevClient(ctx);
-  if (!candidate.look) return;
-  const platform = ctx.config.platform === 'ios' ? 'ios' : 'android';
-  const screen = await settledDevClientScreen(ctx, pkg, platform);
-  if (!screen) return;
-  if (screen === 'no-dev-server') throw devServerError(pkg, screen, 'Metro is not reachable');
-  (ctx.capabilities ??= {}).devClientSeen = true;
-
-  await withActionProgress('loadDevBundle', pkg, async (progress) => {
-    const search = await findDevServer(pkg, platform, {
-      ...(deps.fetch ? { fetch: deps.fetch } : {}),
-      ...(candidate.scheme ? { scheme: candidate.scheme } : {}),
-    });
-    if (!search.server) throw devServerError(pkg, screen, search.reason);
-    const scheme = candidate.scheme ?? (search.server.slug ? devClientScheme(search.server.slug) : undefined);
-    if (!scheme) {
-      throw devServerError(pkg, screen, `the Metro server on port ${search.server.port} serves no Expo config to read the app's dev-client scheme (exp+<slug>) from`);
-    }
-    const serial = ctx.deviceSerial ?? ctx.config.device ?? '';
-    const serverUrl = await devServerUrlForDevice({ platform, serial, port: search.server.port });
-    progress.setDetail(serverUrl);
-    const link = devClientLaunchUrl(scheme, serverUrl);
-    // On iOS the open menu is a window of its own that the link leaves up over
-    // the reloaded app: start the app afresh with it, the menu switched off.
-    if (platform === 'ios' && screen === 'dev-menu') await ctx.device.openDeepLink(link, { forceColdLaunch: true });
-    else await ctx.device.openDeepLink(link);
-    await waitForDevBundle(ctx, pkg, platform, serverUrl, () => ctx.device.openDeepLink(link));
-  });
+  const build = devBuildKind(ctx);
+  if (build.kind !== 'dev-client' && build.kind !== 'metro') return;
+  await leaveDevScreens(ctx, pkg, { kind: build.kind, ...(build.scheme ? { scheme: build.scheme } : {}) }, deps);
 }
 
 /**
- * At the session's first launch of a React Native app that is not a dev
- * client: a Debug build that cannot reach Metro opens on React Native's red
- * "Unable to load script" screen, which has content and so passes for ready.
- * One hierarchy read says so before the first test fails on it. A Release
- * build never shows it; a dev client is checked after every launch instead.
+ * At the session's first launch of a React Native app whose build could not be
+ * read (nothing to install, say): the same look, for the loading banner and
+ * the red screen, that {@link connectDevClient} gives a known Debug build.
  */
 async function checkReactNativeDevServer(ctx: SessionPreflightContext): Promise<void> {
   const pkg = ctx.config.package;
-  if (!pkg || !ctx.config.rootDir || mayBeDevClient(ctx).look) return;
-  if (!appDependsOn(ctx.config.rootDir, 'react-native') && !appDependsOn(ctx.config.rootDir, 'expo')) return;
+  if (!pkg || devBuildKind(ctx).kind !== 'unknown') return;
+  await leaveDevScreens(ctx, pkg, { kind: 'metro' }, {});
+}
+
+/** One look at the app: the development screen it shows, or whether its own UI is drawn. */
+async function lookAtApp(ctx: DevClientContext, pkg: string): Promise<{ screen?: DevClientScreen; rendered: boolean } | undefined> {
   const xml = await readHierarchyXml(ctx);
-  if (xml && devClientScreen(xml) === 'no-dev-server') throw devServerError(pkg, 'no-dev-server', 'Metro is not reachable');
+  if (!xml) return undefined;
+  const screen = devClientScreen(xml);
+  if (screen) return { screen, rendered: false };
+  return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg) };
 }
 
-/**
- * The development screen the app shows once it has drawn something, or
- * undefined for the app's own UI. A launch returns before the dev launcher
- * has drawn (a test's own `launchApp()` comes here straight from the launch),
- * so a screen with nothing on it yet is read again, bounded: an app still
- * blank after that is left to the tests' own waiting.
- */
-async function settledDevClientScreen(ctx: DevClientContext, pkg: string, platform: 'android' | 'ios'): Promise<DevClientScreen | undefined> {
-  const start = Date.now();
-  let budget = APP_RENDER_READY_TIMEOUT_MS;
-  for (;;) {
-    const xml = await readHierarchyXml(ctx);
-    if (xml) {
-      const screen = devClientScreen(xml);
-      // A bundle still loading (a relaunch reloading the last server): wait
-      // for what it brings up, for as long as a bundle may take.
-      if (screen === 'loading') budget = DEV_BUNDLE_LOAD_TIMEOUT_MS;
-      else if (screen) return screen;
-      else if (platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg)) return undefined;
-    }
-    if (Date.now() - start >= budget) return undefined;
-    await delay(HIERARCHY_POLL_INTERVAL_MS);
-  }
-}
-
-/** How long a load error may still be the last try's screen after the link is
- *  opened again: the dev launcher swaps it out only once it starts loading. */
-const DEV_LOAD_ERROR_STALE_MS = 5_000;
-
-/**
- * Wait, bounded, for the app's own UI with no development screen over it. A
- * load error gets the link once more (`reopen`): the host has just had an
- * answer from this Metro, so a connection the device could not make (an
- * emulator's network dropping one, seen on a busy machine) is worth a retry.
- */
-async function waitForDevBundle(
+/** {@link connectDevClient}'s loop: look, act on a development screen, until the app is there. */
+async function leaveDevScreens(
   ctx: DevClientContext,
   pkg: string,
-  platform: 'android' | 'ios',
-  serverUrl: string,
-  reopen: () => Promise<unknown>,
+  build: { kind: 'dev-client' | 'metro'; scheme?: string },
+  deps: { fetch?: DevServerFetch },
 ): Promise<void> {
-  const start = Date.now();
-  let last: DevClientScreen | undefined;
-  let blankSince: number | undefined;
-  let reopenedAt: number | undefined;
-  while (Date.now() - start < DEV_BUNDLE_LOAD_TIMEOUT_MS) {
-    const xml = await readHierarchyXml(ctx);
-    if (xml) {
-      last = devClientScreen(xml);
-      if (last === 'load-error' || last === 'no-dev-server') {
-        if (reopenedAt === undefined) {
-          await reopen();
-          reopenedAt = Date.now();
-        } else if (Date.now() - reopenedAt >= DEV_LOAD_ERROR_STALE_MS) {
-          throw devServerError(pkg, last, `the app could not load from ${serverUrl}`);
-        }
-      }
-      // The loading banner is drawn in the app's own window over its splash:
-      // not done until it is gone and the app's UI is there.
-      const rendered = platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg);
-      if (!last && rendered) return;
-      // No development screen, but nothing readable of the app's either: a
-      // first screen without text, or a permission dialog over it. Left to
-      // the tests' own waiting, as any other launch is.
-      if (last) blankSince = undefined;
-      else if (Date.now() - (blankSince ??= Date.now()) >= DEV_BLANK_SCREEN_MS) return;
-    }
+  // A launch returns before the dev launcher has drawn (a test's own
+  // `launchApp()` comes here straight from the launch), so a screen with
+  // nothing on it yet is read again, bounded: an app still blank after that
+  // is left to the tests' own waiting.
+  const launchedAt = Date.now();
+  let seen: Awaited<ReturnType<typeof lookAtApp>>;
+  for (;;) {
+    seen = await lookAtApp(ctx, pkg);
+    if (seen?.screen) break;
+    if (seen?.rendered || Date.now() - launchedAt >= APP_RENDER_READY_TIMEOUT_MS) return;
     await delay(HIERARCHY_POLL_INTERVAL_MS);
   }
-  throw new Error(
-    `${pkg} is an Expo development build: Tapsmith pointed it at Metro (${serverUrl}), but after `
-    + `${Math.round(DEV_BUNDLE_LOAD_TIMEOUT_MS / 1000)} s it still showed ${last === 'loading' ? 'the bundle loading' : last ? `its ${last === 'launcher' ? 'dev launcher' : 'dev menu'}` : 'no app content'}. `
+
+  await withActionProgress('loadDevBundle', pkg, async (progress) => {
+    const start = Date.now();
+    let target: { link: string; serverUrl: string } | undefined;
+    let links = 0;
+    let linkedAt = 0;
+    let blankSince: number | undefined;
+    let confirming = false;
+    for (;;) {
+      const screen = seen?.screen;
+      if (seen?.rendered) {
+        // A build that ignores the link's dev-menu switches (SDK 56 and 57)
+        // opens the menu as its content appears: look once more.
+        if (confirming || links === 0) return;
+        confirming = true;
+      } else {
+        confirming = false;
+      }
+      if (screen || seen?.rendered) blankSince = undefined;
+      if (screen && screen !== 'loading') {
+        if (build.kind === 'metro') {
+          if (screen !== 'no-dev-server') return;
+          throw devServerError(pkg, screen, 'Metro is not reachable');
+        }
+        if (screen !== 'no-dev-server') (ctx.capabilities ??= {}).devClientSeen = true;
+        const failed = screen === 'load-error' || screen === 'no-dev-server';
+        // The screen a link was opened on stays up until the load starts, and
+        // a load that failed is worth one more try: Metro has just answered
+        // this machine, and an emulator on a busy one can drop a connection.
+        const stale = screen === 'launcher' ? DEV_LAUNCHER_STALE_MS : DEV_SCREEN_STALE_MS;
+        if (links === 0 || Date.now() - linkedAt >= stale) {
+          if (failed && links >= 2) throw devServerError(pkg, screen, `the app could not load from ${target!.serverUrl}`);
+          if (links < 2) {
+            target ??= await devClientTarget(ctx, pkg, screen, build.scheme, deps);
+            progress.setDetail(target.serverUrl);
+            const { link } = target;
+            // On iOS the open menu is a window of its own that the link leaves
+            // up over the reloaded app: start the app afresh with the link.
+            const cold = ctx.config.platform === 'ios' && screen === 'dev-menu';
+            await sessionLaunch(ctx, () => (cold ? ctx.device.openDeepLink(link, { forceColdLaunch: true }) : ctx.device.openDeepLink(link)));
+            links++;
+            linkedAt = Date.now();
+          }
+        }
+      } else if (seen && !screen && !seen.rendered) {
+        // No development screen, but nothing readable of the app's either: a
+        // first screen without text, or a permission dialog over it. Left to
+        // the tests' own waiting, as any other launch is.
+        if (Date.now() - (blankSince ??= Date.now()) >= DEV_BLANK_SCREEN_MS) return;
+      }
+      if (Date.now() - start >= DEV_BUNDLE_LOAD_TIMEOUT_MS) throw devBundleTimeout(pkg, build.kind, screen, target?.serverUrl);
+      await delay(confirming ? DEV_MENU_CONFIRM_MS : HIERARCHY_POLL_INTERVAL_MS);
+      seen = await lookAtApp(ctx, pkg);
+    }
+  });
+}
+
+/** The Metro to point a dev client at, and the link that does. */
+async function devClientTarget(
+  ctx: DevClientContext,
+  pkg: string,
+  screen: DevClientScreen,
+  buildScheme: string | undefined,
+  deps: { fetch?: DevServerFetch },
+): Promise<{ link: string; serverUrl: string }> {
+  const platform = ctx.config.platform === 'ios' ? 'ios' : 'android';
+  const search = await findDevServer(pkg, platform, {
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    ...(buildScheme ? { scheme: buildScheme } : {}),
+  });
+  if (!search.server) throw devServerError(pkg, screen, search.reason);
+  const scheme = buildScheme ?? (search.server.slug ? devClientScheme(search.server.slug) : undefined);
+  if (!scheme) {
+    throw devServerError(pkg, screen, `the Metro server on port ${search.server.port} serves no Expo config to read the app's dev-client scheme (exp+<slug>) from`);
+  }
+  const serial = ctx.deviceSerial ?? ctx.config.device ?? '';
+  const serverUrl = await devServerUrlForDevice({ platform, serial, port: search.server.port });
+  return { link: devClientLaunchUrl(scheme, serverUrl), serverUrl };
+}
+
+/** The error for a bundle that has not loaded in {@link DEV_BUNDLE_LOAD_TIMEOUT_MS}. */
+function devBundleTimeout(pkg: string, kind: 'dev-client' | 'metro', screen: DevClientScreen | undefined, serverUrl: string | undefined): Error {
+  const shows: Record<DevClientScreen, string> = {
+    'launcher': 'its dev launcher', 'dev-menu': 'its dev menu', 'load-error': 'a load error',
+    'no-dev-server': 'a load error', 'loading': 'the bundle loading',
+  };
+  return new Error(
+    `${pkg} is ${kind === 'metro' ? 'a React Native Debug build' : 'an Expo development build'}`
+    + `${serverUrl ? `: Tapsmith pointed it at Metro (${serverUrl}), but` : ', and'} after `
+    + `${Math.round(DEV_BUNDLE_LOAD_TIMEOUT_MS / 1000)} s it still showed ${screen ? shows[screen] : 'no app content'}. `
     + `Check the Metro terminal for a bundling error. See ${GETTING_STARTED_DEV_CLIENT}`,
   );
 }
@@ -2494,7 +2529,7 @@ async function waitForHierarchy(
  * of its own), so the device's after-launch hook, meant for a test's own
  * launches, stays out of it.
  */
-async function sessionLaunch<T>(ctx: Pick<SessionPreflightContext, 'device'>, launch: () => Promise<T>): Promise<T> {
+async function sessionLaunch<T>(ctx: { device: Pick<SessionDevice, '_sessionLaunches'> }, launch: () => Promise<T>): Promise<T> {
   ctx.device._sessionLaunches = (ctx.device._sessionLaunches ?? 0) + 1;
   try {
     return await launch();

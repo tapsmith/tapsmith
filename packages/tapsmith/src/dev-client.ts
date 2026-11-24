@@ -94,6 +94,8 @@ export interface DevBuildInfo {
   devClient: boolean
   /** The `exp+<slug>` scheme expo-dev-client registered for it, when found. */
   scheme?: string
+  /** It carries a JavaScript bundle, so it runs without Metro (a Release build). */
+  embedsJs: boolean
 }
 
 const EXP_SCHEME = /^exp\+[a-z0-9][a-z0-9+.-]*$/i;
@@ -115,13 +117,19 @@ function manifestStrings(manifest: Uint8Array): string[] {
 /** Read an APK's manifest: dev-launcher's activity and the `exp+` scheme. */
 function inspectApk(apkPath: string): DevBuildInfo | undefined {
   try {
-    const entries = unzipSync(fs.readFileSync(apkPath), { filter: (f) => f.name === 'AndroidManifest.xml' });
+    let embedsJs = false;
+    const entries = unzipSync(fs.readFileSync(apkPath), {
+      filter: (f) => {
+        if (/^assets\/[^/]+\.bundle$/.test(f.name)) embedsJs = true;
+        return f.name === 'AndroidManifest.xml';
+      },
+    });
     const manifest = entries['AndroidManifest.xml'];
     if (!manifest) return undefined;
     const strings = manifestStrings(manifest);
     const devClient = strings.includes('expo.modules.devlauncher.launcher.DevLauncherActivity');
     const scheme = strings.find((s) => EXP_SCHEME.test(s));
-    return { devClient, ...(scheme ? { scheme } : {}) };
+    return { devClient, embedsJs, ...(scheme ? { scheme } : {}) };
   } catch {
     return undefined;
   }
@@ -131,9 +139,11 @@ function inspectApk(apkPath: string): DevBuildInfo | undefined {
 function inspectApp(appPath: string, readSchemes: (appPath: string) => string[]): DevBuildInfo | undefined {
   try {
     if (!fs.statSync(appPath).isDirectory()) return undefined;
-    const devClient = fs.readdirSync(appPath).some((f) => /^EXDevLauncher.*\.bundle$/.test(f));
+    const files = fs.readdirSync(appPath);
+    const devClient = files.some((f) => /^EXDevLauncher.*\.bundle$/.test(f));
+    const embedsJs = files.some((f) => f.endsWith('.jsbundle'));
     const scheme = readSchemes(appPath).find((s) => EXP_SCHEME.test(s));
-    return { devClient, ...(scheme ? { scheme } : {}) };
+    return { devClient, embedsJs, ...(scheme ? { scheme } : {}) };
   } catch {
     return undefined;
   }
@@ -246,8 +256,9 @@ export type DevServerSearch =
  * whose Expo config names `appId`, else one whose project has the build's own
  * dev-client scheme (a debug or variant build's app id differs from the one
  * the config resolves to), else one whose config names no app id for the
- * platform. A server whose config names another app, or could not be read, is
- * never used (two projects' Metros side by side is common); with several for
+ * platform. A server whose config names another app or project is
+ * never used, and one that could not be read is reported rather than guessed
+ * at (two projects' Metros side by side is common); with several for
  * this app, the lowest port wins.
  */
 export async function findDevServer(
@@ -264,15 +275,15 @@ export async function findDevServer(
   const scheme = options.scheme?.toLowerCase();
   const sameScheme = scheme ? servers.find((s) => s.slug !== undefined && devClientScheme(s.slug) === scheme) : undefined;
   if (sameScheme) return { server: sameScheme };
-  const unnamed = servers.find((s) => s.appId === undefined && !s.unread);
-  if (unnamed) return { server: unnamed };
-  const where = ports.length === 1 ? `port ${ports[0]}` : `ports ${ports[0]}–${ports.at(-1)}`;
   const unread = servers.find((s) => s.unread);
   if (unread) {
     return { reason: `the Metro server on port ${unread.port} did not answer with its Expo config (is it still starting, or is its app config failing?)` };
   }
+  const unnamed = servers.find((s) => s.appId === undefined && !(scheme && s.slug !== undefined));
+  if (unnamed) return { server: unnamed };
+  const where = ports.length === 1 ? `port ${ports[0]}` : `ports ${ports[0]}–${ports.at(-1)}`;
   if (servers.length > 0) {
-    const others = servers.map((s) => `${s.appId} on ${s.port}`).join(', ');
+    const others = servers.map((s) => `${s.appId ?? s.slug} on ${s.port}`).join(', ');
     return { reason: `the Metro servers running on this machine are for other apps (${others}), none for ${appId}` };
   }
   return { reason: `no Metro server answered on ${where}` };

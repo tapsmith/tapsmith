@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
+import { strToU8, zipSync } from 'fflate';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { connectDevClient, connectDevClientForTool, ensureSessionReady, executeAppReset, launchConfiguredApp, type SessionPreflightContext } from '../session-preflight.js';
@@ -12,6 +13,15 @@ const DEV_MENU = fixture('android-dev-menu-at-launch.xml');
 const LOAD_ERROR = fixture('android-dev-launcher-load-error.xml');
 const APP = '<hierarchy><node package="dev.tapsmith.devclient" text="Welcome to Expo" /><node package="dev.tapsmith.devclient" text="Explore" /></hierarchy>';
 const PKG = 'dev.tapsmith.devclient';
+const RED = `<hierarchy><node package="${PKG}" text="Unable to load script. Make sure you're either running Metro or that your bundle is packaged correctly for release." /></hierarchy>`;
+const BANNER = `<hierarchy><node package="${PKG}" text="Bundling 12%…" /></hierarchy>`;
+
+/** An APK (not a dev client) holding `files`, in `dir`. */
+function buildApk(files: string[], dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-apk-'))): string {
+  const file = path.join(dir, 'app.apk');
+  fs.writeFileSync(file, zipSync(Object.fromEntries(['AndroidManifest.xml', ...files].map((f) => [f, strToU8('xx')]))));
+  return file;
+}
 
 /** A project folder whose package.json depends on `deps`. */
 function project(deps: Record<string, string>): string {
@@ -122,7 +132,7 @@ describe('connectDevClient', () => {
       { platform: 'ios', device: '4178D98F-5543-4DD8-B444-C409CE0EFB78' },
     );
     await connectDevClient(ctx, { fetch: metro });
-    expect(client.getUiHierarchy).toHaveBeenCalledTimes(4);
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(5);
     // The open menu outlives a warm link on iOS, so the app is started afresh.
     expect(device.openDeepLink).toHaveBeenCalledWith(expect.any(String), { forceColdLaunch: true });
   });
@@ -132,7 +142,7 @@ describe('connectDevClient', () => {
     const { ctx, device, client } = makeContext([LAUNCHER, LAUNCHER, banner, banner, APP]);
     await connectDevClient(ctx, { fetch: metro });
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
-    expect(client.getUiHierarchy).toHaveBeenCalledTimes(5);
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(6);
   });
 
   it('waits through a relaunch that is still loading the last server, then handles what comes up', async () => {
@@ -200,15 +210,68 @@ describe('connectDevClient', () => {
   });
 
   it('opens the link once more when the device failed to load from a Metro that answers', async () => {
-    const { ctx, device } = makeContext([LAUNCHER, LOAD_ERROR, LOAD_ERROR, APP]);
-    await connectDevClient(ctx, { fetch: metro });
-    expect(device.openDeepLink).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers();
+    try {
+      const { ctx, device, client } = makeContext([LAUNCHER]);
+      const screens = [LAUNCHER, ...Array.from({ length: 12 }, () => LOAD_ERROR), APP];
+      let i = 0;
+      client.getUiHierarchy.mockImplementation(async () => ({ requestId: '1', hierarchyXml: screens[Math.min(i++, screens.length - 1)]!, errorMessage: '' }));
+      const done = connectDevClient(ctx, { fetch: metro });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await done;
+      expect(device.openDeepLink).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('names React Native\'s red screen for a missing Metro', async () => {
-    const red = `<hierarchy><node package="${PKG}" text="Unable to load script. Make sure you're either running Metro or that your bundle is packaged correctly for release." /></hierarchy>`;
-    const { ctx } = makeContext([red]);
-    await expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow(/Unable to load script.*Metro is not reachable/);
+  it('clears a dev menu that opens over the app after the link (SDK 56)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ctx, device } = makeContext([LAUNCHER, APP, ...Array.from({ length: 12 }, () => DEV_MENU), APP]);
+      const done = connectDevClient(ctx, { fetch: metro });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await done;
+      expect(device.openDeepLink).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('points a dev client on React Native\'s red screen at a Metro that runs, and names it when none does', async () => {
+    const { ctx, device } = makeContext([RED, APP]);
+    await connectDevClient(ctx, { fetch: metro });
+    expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+    await expect(connectDevClient(makeContext([RED]).ctx, { fetch: noMetro })).rejects.toThrow(/Unable to load script.*no Metro server answered/);
+  });
+
+  it('leaves a screen that is blank after the loading banner to the tests', async () => {
+    vi.useFakeTimers();
+    try {
+      const blank = `<hierarchy><node package="${PKG}" text="" content-desc="" /></hierarchy>`;
+      const { ctx, client } = makeContext([BANNER, blank]);
+      const done = connectDevClient(ctx, { fetch: metro });
+      await vi.advanceTimersByTimeAsync(35_000);
+      await done;
+      expect(client.getUiHierarchy.mock.calls.length).toBeLessThan(70);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads nothing for a build that carries its JavaScript, even in an expo-dev-client project', async () => {
+    const { ctx, client } = makeContext([LAUNCHER]);
+    ctx.config.apk = buildApk(['assets/index.android.bundle']);
+    await connectDevClient(ctx, { fetch: metro });
+    expect(client.getUiHierarchy).not.toHaveBeenCalled();
+  });
+
+  it('waits out the loading banner of a plain Debug build, found from the build\'s folder', async () => {
+    const { ctx, client, device } = makeContext([BANNER, BANNER, APP], { rootDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-e2e-')) });
+    ctx.config.apk = buildApk([], PLAIN_RN_PROJECT);
+    await connectDevClient(ctx, { fetch: noMetro });
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(3);
+    expect(device.openDeepLink).not.toHaveBeenCalled();
   });
 });
 
@@ -234,7 +297,9 @@ describe('dev clients through the launch and reset paths', () => {
     const { ctx, client, device } = makeContext([APP], { rootDir: PLAIN_RN_PROJECT });
     await launchConfiguredApp(ctx, 'startup', { hooksProbeMs: 0 });
     expect(device.openDeepLink).not.toHaveBeenCalled();
-    expect(client.getUiHierarchy.mock.calls.length).toBeGreaterThan(0);
+    const native = makeContext([APP], { rootDir: project({}) });
+    await launchConfiguredApp(native.ctx, 'startup', { hooksProbeMs: 0 });
+    expect(client.getUiHierarchy.mock.calls.length).toBe(native.client.getUiHierarchy.mock.calls.length + 1);
   });
 
   it('an iOS clear reset whose daemon already waited for the render still connects the dev client', async () => {

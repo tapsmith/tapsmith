@@ -72,7 +72,7 @@ describe('inspectDevBuild', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-devbuild-'));
 
   /** An APK whose binary manifest's string pool holds `strings` as aapt2 writes them (UTF-16: length, characters, zero). */
-  function apk(name: string, strings: string[]): string {
+  function apk(name: string, strings: string[], files: string[] = []): string {
     const header = Buffer.from([0x03, 0x00, 0x08, 0x00, 0x10, 0x20, 0x00, 0x00]);
     const utf16 = Buffer.concat([header, ...strings.map((s) => {
       const len = Buffer.alloc(2);
@@ -80,32 +80,33 @@ describe('inspectDevBuild', () => {
       return Buffer.concat([len, Buffer.from(s, 'utf16le'), Buffer.alloc(2)]);
     })]);
     const file = path.join(tmp, name);
-    fs.writeFileSync(file, zipSync({ 'AndroidManifest.xml': new Uint8Array(utf16), 'classes.dex': strToU8('dex') }));
+    fs.writeFileSync(file, zipSync({ 'AndroidManifest.xml': new Uint8Array(utf16), 'classes.dex': strToU8('dex'), ...Object.fromEntries(files.map((f) => [f, strToU8('x')])) }));
     return file;
   }
 
   it('reads a debug APK as a dev client, with its exp+ scheme', () => {
     const file = apk('debug.apk', ['dev.tapsmith.devclient', 'expo.modules.devlauncher.launcher.DevLauncherActivity', 'exp+devclient', 'devclient']);
-    expect(inspectDevBuild(file)).toEqual({ devClient: true, scheme: 'exp+devclient' });
+    expect(inspectDevBuild(file)).toEqual({ devClient: true, embedsJs: false, scheme: 'exp+devclient' });
   });
 
   it('reads a release APK as not a dev client', () => {
     // A string of 57 characters has a printable length unit ('9'): it must not run into the scheme.
-    const file = apk('release.apk', ['dev.tapsmith.devclient', 'exp+devclient', 'expo.modules.adapters.react.apploader.RNHeadlessAppLoader', '.MainActivity']);
-    expect(inspectDevBuild(file)).toEqual({ devClient: false, scheme: 'exp+devclient' });
+    const file = apk('release.apk', ['dev.tapsmith.devclient', 'exp+devclient', 'expo.modules.adapters.react.apploader.RNHeadlessAppLoader', '.MainActivity'], ['assets/index.android.bundle']);
+    expect(inspectDevBuild(file)).toEqual({ devClient: false, embedsJs: true, scheme: 'exp+devclient' });
   });
 
   it('reads a debug .app by its EXDevLauncher bundle and its registered exp+ scheme', () => {
     const app = path.join(tmp, 'Debug.app');
     fs.mkdirSync(path.join(app, 'EXDevLauncher.bundle'), { recursive: true });
     const readIosSchemes = vi.fn(() => ['devclient', 'dev.tapsmith.devclient', 'exp+devclient']);
-    expect(inspectDevBuild(app, { readIosSchemes })).toEqual({ devClient: true, scheme: 'exp+devclient' });
+    expect(inspectDevBuild(app, { readIosSchemes })).toEqual({ devClient: true, embedsJs: false, scheme: 'exp+devclient' });
   });
 
   it('reads a release .app as not a dev client', () => {
     const app = path.join(tmp, 'Release.app');
     fs.mkdirSync(path.join(app, 'Frameworks'), { recursive: true });
-    expect(inspectDevBuild(app, { readIosSchemes: () => [] })).toEqual({ devClient: false });
+    fs.writeFileSync(path.join(app, 'main.jsbundle'), 'js');
+    expect(inspectDevBuild(app, { readIosSchemes: () => [] })).toEqual({ devClient: false, embedsJs: true });
   });
 
   it('cannot tell without a readable build', () => {
@@ -172,6 +173,16 @@ describe('findDevServer', () => {
     const found = await findDevServer('com.example.dev', 'android', { fetch, ports: [8081], scheme: 'exp+myapp' });
     expect(found.server?.port).toBe(8081);
     expect((await findDevServer('com.example.dev', 'android', { fetch, ports: [8081], scheme: 'exp+other' })).server).toBeUndefined();
+  });
+
+  it('does not guess at another project\'s Metro that names no app id, or past one it could not read', async () => {
+    const slugOnly = { extra: { expoClient: { slug: 'playground' } } };
+    const found = await findDevServer('com.shop', 'android', { fetch: host({ 8081: { manifest: slugOnly } }), ports: [8081], scheme: 'exp+shop' });
+    expect(found).toEqual({ reason: expect.stringContaining('playground on 8081') });
+    const fetch: DevServerFetch = async (url) => (url.endsWith('/status')
+      ? { status: 200, body: 'packager-status:running' }
+      : url.includes(':8082') ? undefined : { status: 404, body: '' });
+    expect((await findDevServer('com.shop', 'android', { fetch, ports: [8081, 8082] })).server).toBeUndefined();
   });
 
   it('does not take a Metro whose Expo config could not be read for a bare one', async () => {

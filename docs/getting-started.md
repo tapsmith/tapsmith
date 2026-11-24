@@ -202,9 +202,10 @@ the dev launcher or has the dev menu open, Tapsmith connects it to Metro the way
 `npx expo start` does: it opens the dev-client link
 (`exp+<slug>://expo-development-client/?url=…`) for the Metro server running this app,
 then waits for the app to draw. It looks for that server on ports 8081–8090 (or on
-`RCT_METRO_PORT` when you set it), and skips any Metro whose Expo config names a different app. The link
-also turns off the dev menu that opens at launch, and hides the floating tools button
-while the tests run. An Android emulator reaches Metro at `10.0.2.2`. For a physical
+`RCT_METRO_PORT` when you set it), and skips any Metro whose Expo config names a different
+app or project. The link also turns off the dev menu that opens at launch and, on Expo SDK 58
+and later, hides the floating tools button while the tests run. A menu that opens all the same
+is closed by opening the link again. An Android emulator reaches Metro at `10.0.2.2`. For a physical
 Android device, Tapsmith runs `adb reverse` for the port. A physical iPhone connects to
 your Mac's network address, so it must be on the same network.
 
