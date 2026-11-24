@@ -47,6 +47,14 @@ interface SerializedTest {
   traceKey?: string
   videoKey?: string
   retry?: number
+  /** The project the test ran in, when projects are configured. */
+  project?: string
+  /**
+   * The test file, relative to the shard's `config.rootDir` with forward
+   * slashes: shards run in different checkouts, so the merge resolves it
+   * against its own rootDir. Absent from blobs written before it was added.
+   */
+  filePath?: string
 }
 
 interface SerializedSuite {
@@ -146,6 +154,7 @@ export class BlobReporter implements TapsmithReporter {
       }
     };
 
+    const rootDir = path.resolve(this._config?.rootDir ?? process.cwd());
     const serializeTest = (t: TestResult): SerializedTest => {
       let screenshotKey: string | undefined;
       if (t.screenshotPath && fs.existsSync(t.screenshotPath)) {
@@ -173,6 +182,8 @@ export class BlobReporter implements TapsmithReporter {
         traceKey,
         videoKey,
         retry: t.retry,
+        ...(t.project !== undefined ? { project: t.project } : {}),
+        ...(t.filePath ? { filePath: toPosixPath(path.relative(rootDir, t.filePath)) } : {}),
       };
     };
 
@@ -246,7 +257,7 @@ const mergeInfo = new WeakMap<FullResult, MergeInfo>();
  * as-is, any number of them, as Playwright does. A set missing a shard merges
  * what is there with status `failed`; {@link incompleteMergeMessage} says so.
  */
-export function mergeBlobs(blobDir: string): FullResult {
+export function mergeBlobs(blobDir: string, rootDir: string = process.cwd()): FullResult {
   let entries: string[];
   try {
     if (!fs.statSync(blobDir).isDirectory()) {
@@ -277,8 +288,8 @@ export function mergeBlobs(blobDir: string): FullResult {
     totalDuration = Math.max(totalDuration, blob.duration);
     try {
       checkAttachmentKeys(file, blob);
-      allTests.push(...blob.tests.map((t) => restoreTest(t, blobDir)));
-      allSuites.push(...blob.suites.map((s) => deserializeSuite(s, blobDir)));
+      allTests.push(...blob.tests.map((t) => restoreTest(t, blobDir, rootDir)));
+      allSuites.push(...blob.suites.map((s) => deserializeSuite(s, blobDir, rootDir)));
     } catch (err) {
       if (err instanceof BlobMergeError) throw err;
       throw new BlobMergeError(
@@ -504,7 +515,7 @@ function containsDir(dir: string, target: string): boolean {
   return rel === '' || (rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel));
 }
 
-function restoreTest(t: SerializedTest, blobDir: string): TestResult {
+function restoreTest(t: SerializedTest, blobDir: string, rootDir: string): TestResult {
   return {
     name: t.name,
     fullName: t.fullName,
@@ -522,18 +533,24 @@ function restoreTest(t: SerializedTest, blobDir: string): TestResult {
     tracePath: t.traceKey ? path.join(blobDir, t.traceKey) : undefined,
     videoPath: t.videoKey ? path.join(blobDir, t.videoKey) : undefined,
     retry: t.retry,
+    ...(typeof t.project === 'string' ? { project: t.project } : {}),
+    ...(typeof t.filePath === 'string' && t.filePath !== '' ? { filePath: path.resolve(rootDir, t.filePath) } : {}),
   };
 }
 
 function deserializeSuite(
   s: SerializedSuite,
   blobDir: string,
+  rootDir: string,
 ): SuiteResult {
   return {
     name: s.name,
     durationMs: s.durationMs,
-    tests: s.tests.map((t) => restoreTest(t, blobDir)),
-    suites: s.suites.map((child) => deserializeSuite(child, blobDir)),
+    tests: s.tests.map((t) => restoreTest(t, blobDir, rootDir)),
+    suites: s.suites.map((child) => deserializeSuite(child, blobDir, rootDir)),
   };
 }
 
+function toPosixPath(p: string): string {
+  return p.split(path.sep).join('/');
+}

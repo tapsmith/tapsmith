@@ -2539,8 +2539,21 @@ prints to stdout when no file is configured, Tapsmith's always writes the file.
 | Option | Type | Default |
 | --- | --- | --- |
 | `outputFile` | `string` | `"tapsmith-results/results.xml"` |
+| `includeProjectInTestName` | `boolean` | `true` when the config (or the report) has more than one project, otherwise `false` |
 
-The path is printed on stderr when the file is written (`JUnit report written to …`).
+The path is printed on stderr when the file is written (`JUnit report written to …`). As in Playwright's JUnit
+reporter, the report has one `<testsuite>` per test file and project:
+
+- The suite's `name`, and each test case's `classname`, is the file's path relative to `rootDir`. The suite's
+  `hostname` is the project.
+- The test case's `name` is the test's full name, including its `describe` blocks. With several projects it starts
+  with `[project] `, so the same test in two projects stays two tests. `includeProjectInTestName` sets this
+  explicitly (Playwright's defaults to `false`).
+- A `<failure>` has the first line of the error as its `message`, and the whole error, code snippet and stack frames
+  from your code as its body.
+- Screenshots, traces and videos are listed in `<system-out>` as `[[ATTACHMENT|path]]`, relative to the report.
+
+`merge-reports --reporter junit` names suites and tests the same way.
 
 **`html`**
 

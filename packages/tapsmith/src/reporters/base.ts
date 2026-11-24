@@ -168,7 +168,8 @@ export function errorStackFrames(error: Error, max: number): string[] {
   return userStackFrames(lines.slice(first)).slice(0, max);
 }
 
-export function formatError(error: Error, indent: string = '        '): string {
+/** `maxFrames`: how many stack frames to keep; a file report keeps them all. */
+export function formatError(error: Error, indent: string = '        ', maxFrames = 3): string {
   const lines: string[] = [];
   // Every line under the indent: a multi-line message's later lines (a
   // matcher's Expected/Received, a start error's detail) would otherwise
@@ -198,7 +199,7 @@ export function formatError(error: Error, indent: string = '        '): string {
       lines.push('');
     }
 
-    for (const line of errorStackFrames(error, 3)) {
+    for (const line of errorStackFrames(error, maxFrames)) {
       lines.push(`${indent}${dim(line.trim())}`);
     }
   }
