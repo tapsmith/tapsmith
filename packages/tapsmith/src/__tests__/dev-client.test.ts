@@ -68,6 +68,12 @@ describe('devClientScreen', () => {
     expect(devClientScreen('<hierarchy><node text="Development Build"/><node text="Home"/><node text="Settings"/></hierarchy>')).toBeUndefined();
   });
 
+  it('reads the red box of a bundle that does not compile as a load error, not one from the running app', () => {
+    const box = (message: string): string => `<hierarchy><XCUIElementTypeStaticText label="${message}"/><XCUIElementTypeButton label="Dismiss&#10;(ESC)"/><XCUIElementTypeButton label="Extra Info&#10;(⌘E)"/></hierarchy>`;
+    expect(devClientScreen(box('SyntaxError: /app/_layout.tsx: Unexpected token (19:10)'))).toBe('load-error');
+    expect(devClientScreen(box('Unhandled JS Exception: boom'))).toBeUndefined();
+  });
+
   it('leaves an app\'s own screen alone, even one that says "Reload" or "Development servers" in passing', () => {
     expect(devClientScreen('<hierarchy><node text="Welcome to Expo" package="x"/><node text="Reload" package="x"/></hierarchy>')).toBeUndefined();
     expect(devClientScreen('<hierarchy><node text="Development servers" package="x"/><node text="Settings" package="x"/></hierarchy>')).toBeUndefined();

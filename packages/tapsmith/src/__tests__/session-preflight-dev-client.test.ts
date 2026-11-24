@@ -207,7 +207,7 @@ describe('connectDevClient', () => {
     vi.useFakeTimers();
     try {
       const { ctx, device } = makeContext([LAUNCHER, LOAD_ERROR]);
-      const failed = expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow(/could not load its JavaScript .*could not load from http:\/\/10\.0\.2\.2:8081/);
+      const failed = expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow(/could not load its JavaScript.*could not load from http:\/\/10\.0\.2\.2:8081/);
       await vi.advanceTimersByTimeAsync(10_000);
       await failed;
       expect(device.openDeepLink).toHaveBeenCalledTimes(2);
@@ -338,6 +338,13 @@ describe('connectDevClient', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not take Expo\'s tools button or the launch icon alone for the app', async () => {
+    const only = (text: string): string => `<hierarchy><node package="${PKG}" content-desc="${text}" /></hierarchy>`;
+    const { ctx, client } = makeContext([only('Application icon'), only('Tools'), APP]);
+    await connectDevClient(ctx, { fetch: metro });
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(3);
   });
 
   it('reads nothing for a build that carries its JavaScript, even in an expo-dev-client project', async () => {

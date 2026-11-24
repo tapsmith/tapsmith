@@ -1787,7 +1787,7 @@ function devServerError(pkg: string, screen: DevClientScreen, why: string, metro
     : screen === 'dev-menu'
       ? 'is an Expo development build and opened its dev menu'
       : screen === 'load-error'
-        ? 'is an Expo development build and could not load its JavaScript ("There was a problem loading the project.")'
+        ? 'could not load its JavaScript'
         : 'is a React Native Debug build and could not load its JavaScript from Metro (React Native\'s red "Unable to load script" / "No bundle URL present" screen)';
   return new Error(
     metro === 'answers'
@@ -1862,7 +1862,10 @@ function devLooker(ctx: DevClientContext, pkg: string): () => Promise<DevLook | 
     if (screen) return { screen, rendered: false };
     // Android's permission prompt hides the app's own nodes: the app is up.
     if (/\bpackage="com\.(google\.)?android\.permissioncontroller"/.test(xml)) return { rendered: true };
-    return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg) };
+    // Expo's floating tools button and Android's launch icon are up before the
+    // app is: alone, they are not its content.
+    const content = xml.replace(/\b(text|content-desc|label)="(Tools|Application icon)"/g, '$1=""');
+    return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(content) : androidHierarchyHasRenderedContent(content, pkg) };
   };
 }
 
@@ -1909,6 +1912,9 @@ async function leaveDevScreens(
       }
       if (screen || seen?.rendered) blankSince = undefined;
       if (screen && screen !== 'loading') {
+        if (build.kind === 'metro' && screen === 'load-error') {
+          throw devServerError(pkg, screen, 'its bundle does not compile', 'answers');
+        }
         if (build.kind === 'metro' && screen === 'no-dev-server') {
           const reverse = ctx.config.platform !== 'ios' && !/^emulator-/.test(ctx.deviceSerial ?? '')
             ? ' (a physical Android device also needs `adb reverse tcp:8081 tcp:8081`)'

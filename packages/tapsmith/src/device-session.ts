@@ -882,7 +882,11 @@ export async function openDeviceSession(
   // A test's own launches of the app land where the session's do: on the app,
   // not on an Expo development build's dev launcher or dev menu.
   device._afterAppLaunch = (pkg) => (pkg === config.package ? connectDevClient(session.context) : Promise.resolve(false));
-  device._afterOpenLink = () => connectDevClient(session.context, { settleMs: LINK_SETTLE_MS, ifInFront: true });
+  device._afterOpenLink = () => connectDevClient(session.context, {
+    // Android reports a link delivered once the app is in front, drawn or not.
+    ...(config.platform === 'ios' ? { settleMs: LINK_SETTLE_MS } : {}),
+    ifInFront: true,
+  });
 
   // Whether this open holds the session's claim on the device. A failed open
   // gives back this process's hold, so a long-lived session (UI, watch, an MCP
