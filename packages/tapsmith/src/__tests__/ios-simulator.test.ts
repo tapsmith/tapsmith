@@ -829,6 +829,30 @@ describe('cleanupStaleSimulators', () => {
     expect(result.deleted).toEqual(['iPhone 16 (Tapsmith Worker 1)']);
   });
 
+  it('does not name a clone simctl failed to delete, and still deletes the rest', () => {
+    const attempted: string[] = [];
+    mockedExecFileSync.mockImplementation((cmd: string, args: string[]) => {
+      const a = args as string[];
+      if (cmd === 'xcrun' && a?.[1] === 'list') {
+        return makeSimctlOutput(['STUCK', 'GONE', 'RECORDED'].map((udid, i) => (
+          { udid, name: `iPhone 16 (Tapsmith Worker ${i + 1})`, state: 'Shutdown' }))) as unknown as Buffer;
+      }
+      if (cmd === 'xcrun' && a?.[1] === 'delete') {
+        attempted.push(a[2]);
+        if (a[2] !== 'GONE') throw new Error('Unable to delete');
+      }
+      return '' as unknown as Buffer;
+    });
+    // RECORDED is in the manifest (and unhealthy: not booted); the others are orphans.
+    mockedReadFileSync.mockReturnValue(JSON.stringify([
+      { udid: 'RECORDED', name: 'iPhone 16 (Tapsmith Worker 3)', sourceName: 'iPhone 16', createdAt: '2026-01-01' },
+    ]));
+
+    const result = cleanupStaleSimulators('iPhone 16');
+    expect(attempted.sort()).toEqual(['GONE', 'RECORDED', 'STUCK']);
+    expect(result.deleted).toEqual(['iPhone 16 (Tapsmith Worker 2)']);
+  });
+
   it('names the clones it deleted, and why they were Tapsmith\'s, rather than just counting them', () => {
     expect(staleSimulatorsDeletedMessage({ deleted: ['iPhone 16 (Tapsmith Worker 1)', 'iPhone 16 (Tapsmith Worker 2)'] })).toBe(
       'Deleted 2 stale simulators an earlier Tapsmith run cloned for parallel workers and left behind: '

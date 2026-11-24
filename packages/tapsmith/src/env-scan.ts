@@ -208,12 +208,13 @@ export function simulatorChoices(simulators: SimulatorInfo[]): SimulatorInfo[] {
  * simulator moves up to sit after the booted stock ones (or after the
  * default, when none is booted), so the simulator someone is already using
  * is a keypress away rather than at the end of a long list. The first choice,
- * which the wizard selects and `init --yes` takes, stays the stock one.
+ * which the wizard selects and `init --yes` takes, is unchanged: a stock one,
+ * or with none, the booted custom one, already first.
  */
 export function simulatorPickerChoices(simulators: SimulatorInfo[]): SimulatorInfo[] {
   const choices = simulatorChoices(simulators);
+  if (choices.length === 0 || isCustomSimulatorName(choices[0])) return choices;
   const bootedCustom = choices.filter((s) => s.state === 'Booted' && isCustomSimulatorName(s));
-  if (bootedCustom.length === 0 || bootedCustom.length === choices.length) return choices;
   const rest = choices.filter((s) => !bootedCustom.includes(s));
   const firstUnbooted = rest.findIndex((s) => s.state !== 'Booted');
   const at = Math.max(1, firstUnbooted === -1 ? rest.length : firstUnbooted);

@@ -638,8 +638,13 @@ describe('debugBuildNote()', () => {
 
   it('gives assembleRelease for a bare React Native Debug APK, flavoured or not', () => {
     expect(debugBuildNote('android/app/build/outputs/apk/debug/app-debug.apk', 'android', rnLayout, true))
-      .toContain('`cd android && ./gradlew assembleRelease`, which writes android/app/build/outputs/apk/release/app-release.apk');
-    expect(debugBuildNote('android/app/build/outputs/apk/staging/debug/app-staging-debug.apk', 'android', rnLayout, true)).toBeDefined();
+      .toContain('`cd android && ./gradlew assembleRelease`, which writes the APK under android/app/build/outputs/apk/, in a folder and with a name that depend on the build variant.');
+    // A flavour's Release APK is not app-release.apk, so no note names that file.
+    for (const project of [undefined, expo]) {
+      const flavoured = debugBuildNote('android/app/build/outputs/apk/staging/debug/app-staging-debug.apk', 'android', rnLayout, true, project);
+      expect(flavoured).toContain('depend on the build variant');
+      expect(flavoured).not.toContain('app-release.apk');
+    }
   });
 
   it('says nothing for a Release build, a native app, or a configuration it cannot judge', () => {

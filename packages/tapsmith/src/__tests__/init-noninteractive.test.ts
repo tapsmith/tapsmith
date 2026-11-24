@@ -1480,6 +1480,9 @@ describe('simulatorChoices() (PILOT-562)', () => {
     // Nothing to move: the order is simulatorChoices'.
     expect(simulatorPickerChoices(stock)).toEqual(simulatorChoices(stock));
     expect(simulatorPickerChoices([custom('Mine', 'Booted')]).map((s) => s.name)).toEqual(['Mine']);
+    // With no stock simulator to keep first, a booted one stays the default.
+    const farm = [custom('Farm 1'), custom('Mine', 'Booted'), custom('Farm 2')];
+    expect(simulatorPickerChoices(farm).map((s) => s.name)).toEqual(['Mine', 'Farm 1', 'Farm 2']);
   });
 
   it('init --yes picks the booted simulator over the newest iPhone', () => {

@@ -531,17 +531,19 @@ export function cloneSimulator(sourceUdid: string, newName: string): string {
 }
 
 /**
- * Delete a simulator by UDID.
+ * Delete a simulator by UDID, best-effort. Returns whether simctl deleted it.
  */
-export function deleteSimulator(udid: string): void {
+export function deleteSimulator(udid: string): boolean {
   try {
     shutdownSimulator(udid);
     execFileSync('xcrun', ['simctl', 'delete', udid], {
       timeout: 30_000,
       stdio: 'ignore',
     });
+    return true;
   } catch {
     // Best-effort cleanup
+    return false;
   }
 }
 
@@ -848,9 +850,9 @@ export function killAgentRunnersForSimulators(udids: string[]): void {
 export interface CleanupStaleSimulatorsResult {
   /** UDIDs of healthy clones ready for reuse. */
   reusable: string[]
-  /** UDIDs of deleted clones, and of recorded ones that were already gone. */
+  /** UDIDs of clones this sweep set out to delete, and of recorded ones that were already gone. */
   killed: string[]
-  /** Names of the clones this sweep deleted, for saying which. */
+  /** Names of the clones simctl confirmed deleted, for saying which. */
   deleted: string[]
   /**
    * The simulators the sweep listed, less the ones it deleted — current
@@ -910,9 +912,8 @@ export function cleanupStaleSimulators(
         killed.push(entry.udid);
       } else {
         // Exists but unhealthy — delete it
-        deleteSimulator(entry.udid);
+        if (deleteSimulator(entry.udid)) deleted.push(entry.name);
         killed.push(entry.udid);
-        deleted.push(entry.name);
       }
     }
 
@@ -952,9 +953,8 @@ export function cleanupStaleSimulators(
     // strength of a snapshot taken before it existed.
     if (isRecordedInManifest(sim.udid)) continue;
 
-    deleteSimulator(sim.udid);
+    if (deleteSimulator(sim.udid)) deleted.push(sim.name);
     killed.push(sim.udid);
-    deleted.push(sim.name);
   }
 
   // Phase 3: kill stale xcodebuild processes for deleted sims

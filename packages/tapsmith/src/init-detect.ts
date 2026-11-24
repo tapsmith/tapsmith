@@ -515,12 +515,14 @@ export function debugBuildNote(
   if (!reactNative || !isDebugBuildPath(build, platform)) return undefined;
   let release: string;
   if (platform === 'android') {
+    // Product flavours and ABI splits name the Release APK, so only its folder is certain.
+    const apkUnder = (dir: string): string => `which writes the APK under ${dir}app/build/outputs/apk/, in a folder and with a name that depend on the build variant`;
     if (expo) {
-      release = expoBuildStep('android', expo);
+      release = expoBuildStep('android', expo, apkUnder('android/'));
     } else {
       const root = layout.androidRoot === undefined || layout.androidRoot === '.' ? undefined : layout.androidRoot;
       const cd = root ? `cd ${shellArg(root)} && ` : '';
-      release = `Build one with \`${cd}./gradlew assembleRelease\`, which writes ${root ? `${root}/` : ''}app/build/outputs/apk/release/app-release.apk.`;
+      release = `Build one with \`${cd}./gradlew assembleRelease\`, ${apkUnder(root ? `${root}/` : '')}.`;
     }
   } else if (xcodeBuildTarget(layout)) {
     // The project's own workspace and scheme, as the other build hints name them.
@@ -726,15 +728,18 @@ function expoHooksNote(expo: ExpoProject): string {
     : `For sub-second resets between tests, wrap your root navigator in @tapsmith/react-native's <TapsmithTestHooks> with \`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}\` and build test builds with ${HOOKS_FLAG} (https://tapsmith.dev/guides/warm-reset/).`;
 }
 
-/** The build step for one platform, as a sentence. */
-function expoBuildStep(platform: 'android' | 'ios', expo: ExpoProject): string {
+/** The build step for one platform, as a sentence; `apkOutput` says where the Android one writes. */
+function expoBuildStep(
+  platform: 'android' | 'ios',
+  expo: ExpoProject,
+  apkOutput = 'which writes android/app/build/outputs/apk/release/app-release.apk',
+): string {
   const env = expo.usesTapsmithHooks ? `${HOOKS_FLAG} ` : '';
   if (platform === 'android') {
     // `expo run:android` resolves a device before it builds, so it fails with
     // no emulator or device; prebuild + gradle builds headless (as CI does).
     const generate = expo.hasAndroidDir ? '' : '`npx expo prebuild --platform android` (this Expo project has no android/ yet), then ';
-    return `Build a release APK with ${generate}\`cd android && ${env}./gradlew assembleRelease\`, `
-      + 'which writes android/app/build/outputs/apk/release/app-release.apk '
+    return `Build a release APK with ${generate}\`cd android && ${env}./gradlew assembleRelease\`, ${apkOutput} `
       + '(`npx expo run:android --variant release` builds and installs in one step, but needs a running emulator or device to install on).';
   }
   const generate = expo.hasIosDir ? '' : '`npx expo prebuild --platform ios` (this Expo project has no ios/ yet), then ';
