@@ -1823,8 +1823,8 @@ export class ElementHandle {
    * sentence, as ". …" to append to it: the locators that do
    * match the same words on screen now (asked of the device agent, for an
    * unmodified native locator), then `offScreen` unless one of them shows
-   * the locator's own words (the element is on screen, so scrolling is not
-   * the fix), then `hints` (by default the platform hint, {@link _missHint}),
+   * the locator's own words (the element is probably on screen, so scrolling
+   * is not the fix), then `hints` (by default the platform hint, {@link _missHint}),
    * then where to find a locator that matches.
    *
    * '' after a `positionalDetail`, or for an `nth(i)` past the first or last

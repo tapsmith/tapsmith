@@ -182,6 +182,18 @@ describe("a not-found error lists the near misses the agent finds", () => {
       vitestExpect(await tapError(client, (d) => d.getByText("Forgot password?"))).not.toContain("off-screen");
     });
 
+    it("is dropped when a hit's placeholder is the words", async () => {
+      const hit = { ...element("f", ""), hint: "Email" };
+      const { client } = missingClient((s) => (s.kind.type === "hint" ? [hit] : []));
+      vitestExpect(await tapError(client, (d) => d.getByText("Email"))).not.toContain("off-screen");
+    });
+
+    it("is dropped when a hit is a Flutter tab labelled with the words", async () => {
+      const hit = { ...element("t", ""), contentDescription: "Contact\nTab 2 of 3" };
+      const { client } = missingClient((s) => (s.kind.type === "role" && s.kind.value.role === "tab" ? [hit] : []));
+      vitestExpect(await tapError(client, (d) => d.getByText("Contact"))).not.toContain("off-screen");
+    });
+
     it("is kept when the words are only a text field's typed value: the result may be below the fold", async () => {
       const { client } = missingClient((s) =>
         s.kind.type === "role" && s.kind.value.role === "textfield" && s.kind.value.exact ? [element("f", "Apollo 11")] : []);

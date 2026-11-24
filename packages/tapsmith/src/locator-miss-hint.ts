@@ -254,9 +254,9 @@ export interface NearMissCheck {
   /** The near-miss sentence ({@link nearMissHint}), or ''. */
   hint: string;
   /**
-   * A hit's text or description is the locator's words (in any case,
-   * whitespace-normalized; without trailing punctuation too), so the element
-   * asked for is on screen under another locator, not off-screen. A hit that
+   * A hit's text, description or placeholder is the locator's words (in any
+   * case, whitespace-normalized; without trailing punctuation too), so the
+   * element asked for is probably on screen under another locator. A hit that
    * only contains the words is another element, and so is a text field whose
    * typed value is the words (a search field above the result it finds).
    */
@@ -295,14 +295,20 @@ function locatorWords(selector: Selector): string | undefined {
   }
 }
 
+/** The position Flutter appends to a tab's description ("Contact\nTab 2 of 3"). */
+const FLUTTER_TAB_POSITION = /\nTab \d+ of \d+$/;
+
 /** Whether a hit shows the locator's words ({@link NearMissCheck}). Fallback and field-value probes don't count. */
 function showsWords(selector: Selector, probes: Probe[], response: EvaluateSelectorsResponse): boolean {
   const words = locatorWords(selector);
   if (words === undefined) return false;
   const fold = (s: string) => normalizeText(s).toLowerCase();
   const wanted = new Set([fold(words), fold(words.trim().replace(TRAILING_PUNCTUATION, ''))].filter(Boolean));
+  const shows = (s: string | undefined) => wanted.has(fold(s ?? ''));
   return probes.some((probe, i) => !probe.fallback && probe.fieldValue === undefined && !response.results[i].errorMessage &&
-    probeHits(probe, response.results[i].elements).some((el) => wanted.has(fold(el.text ?? '')) || wanted.has(fold(el.contentDescription ?? ''))));
+    probeHits(probe, response.results[i].elements).some((el) =>
+      shows(el.text) || shows(el.contentDescription) || shows(el.contentDescription?.replace(FLUTTER_TAB_POSITION, '')) ||
+      shows(el.hint)));
 }
 
 /** The RPC the system-alert check needs (a TapsmithGrpcClient in production). */
