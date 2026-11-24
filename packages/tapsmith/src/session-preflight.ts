@@ -1728,7 +1728,7 @@ function configuredBuildPath(config: SessionPreflightContext['config']): string 
  * saw on a dev-client screen, is taken for a dev client. `unknown` is a React
  * Native project whose build cannot be read.
  */
-function devBuildKind(ctx: DevClientContext): { kind: 'dev-client' | 'metro' | 'unknown' | 'none'; scheme?: string } {
+function devBuildKind(ctx: Pick<DevClientContext, 'config' | 'capabilities'>): { kind: 'dev-client' | 'metro' | 'unknown' | 'none'; scheme?: string } {
   const build = inspectDevBuild(configuredBuildPath(ctx.config));
   if (build?.devClient) return { kind: 'dev-client', ...(build.scheme ? { scheme: build.scheme } : {}) };
   if (build?.embedsJs) return { kind: 'none' };
@@ -1740,6 +1740,15 @@ function devBuildKind(ctx: DevClientContext): { kind: 'dev-client' | 'metro' | '
   if (!build && dependsOn('expo-dev-client')) return { kind: 'dev-client' };
   if (!dependsOn('react-native') && !dependsOn('expo')) return { kind: 'none' };
   return { kind: build ? 'metro' : 'unknown' };
+}
+
+/**
+ * What a worker's start may take on top of the usual: a build that loads from
+ * Metro may wait for its first bundle (or the named error) before it is ready.
+ */
+export function devBundleAllowanceMs(config: Pick<TapsmithConfig, 'platform' | 'apk' | 'app' | 'rootDir'>): number {
+  const { kind } = devBuildKind({ config: config as SessionPreflightContext['config'], capabilities: undefined });
+  return kind === 'none' ? 0 : DEV_BUNDLE_LOAD_TIMEOUT_MS;
 }
 
 /**

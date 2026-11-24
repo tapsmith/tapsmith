@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import { strToU8, zipSync } from 'fflate';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { connectDevClient, connectDevClientForTool, ensureSessionReady, executeAppReset, launchConfiguredApp, type SessionPreflightContext } from '../session-preflight.js';
+import { connectDevClient, devBundleAllowanceMs, connectDevClientForTool, ensureSessionReady, executeAppReset, launchConfiguredApp, type SessionPreflightContext } from '../session-preflight.js';
 import { TestAbortedError } from '../abort.js';
 import type { DevServerFetch } from '../dev-client.js';
 
@@ -319,6 +319,12 @@ describe('connectDevClient', () => {
     device.currentPackage.mockResolvedValueOnce('com.android.chrome');
     expect(await connectDevClient(ctx, { fetch: metro, ifInFront: true })).toBe(false);
     expect(client.getUiHierarchy).not.toHaveBeenCalled();
+  });
+
+  it('gives a worker\'s start the bundle\'s time only for a build that loads from Metro', () => {
+    const at = (apk: string): number => devBundleAllowanceMs({ platform: 'android', rootDir: PLAIN_RN_PROJECT, apk });
+    expect(at(buildApk([], PLAIN_RN_PROJECT))).toBe(180_000);
+    expect(at(buildApk(['assets/index.android.bundle']))).toBe(0);
   });
 
   it('reads nothing for a build that carries its JavaScript, even in an expo-dev-client project', async () => {
