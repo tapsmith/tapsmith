@@ -79,6 +79,12 @@ interface TaggedFile {
   projectGrep?: import('./worker-protocol.js').SerializedRegExp[]
   projectGrepInvert?: import('./worker-protocol.js').SerializedRegExp[]
   fullNames?: readonly string[]
+  /**
+   * The last result reported of each of the file's tests, whichever attempt or
+   * worker ran it: once `maxFailures` stops the run nothing runs again, so a
+   * test the last attempt did not reach keeps the result it had.
+   */
+  streamed?: Map<string, TestResult>
 }
 
 /** A secondary device of a worker's group, with the daemon this dispatcher spawned for it. */
@@ -446,6 +452,21 @@ function applyWorkerIndexBaseToSuite(
     tests: suite.tests.map((t) => applyWorkerIndexBase(t, base)),
     suites: suite.suites.map((s) => applyWorkerIndexBaseToSuite(s, base)),
   };
+}
+
+/**
+ * Add to a file's results, in place, the ones an earlier attempt reported for
+ * tests its last attempt did not reach before `maxFailures` stopped the run.
+ */
+export function keepUnreachedResults(
+  suite: SuiteResult,
+  results: TestResult[],
+  streamed: ReadonlyMap<string, TestResult> | undefined,
+): void {
+  const reached = new Set(results.map((r) => r.fullName));
+  const unreached = [...(streamed?.values() ?? [])].filter((r) => !reached.has(r.fullName));
+  suite.tests.push(...unreached);
+  results.push(...unreached);
 }
 
 export function handleParallelTestEndMessage(
@@ -1927,7 +1948,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
           if (worker.retired) return;
 
           // Enough tests have failed: the files not started yet never run.
-          if (opts.failureTracker?.reached) fileQueue.length = 0;
+          if (opts.failureTracker?.reached) dropQueuedFiles();
           const next = fileQueue.shift();
           if (!next) {
             worker.busy = false;
@@ -1938,7 +1959,6 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
 
           worker.busy = true;
           worker.currentFile = next;
-          streamed.set(worker.id, new Map());
           reporter.onTestFileStart?.(next.filePath);
 
           const msg: MainToWorkerMessage = {
@@ -1958,9 +1978,20 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
         }
 
         const workerTestCounts = new Map<number, number>();
-        // The results each worker streamed of the file it is running, for a
-        // worker that dies once the run stops and nothing runs the file again.
-        const streamed = new Map<number, Map<string, TestResult>>();
+
+        /** Record a file nothing will run again with the results it reported. */
+        function endUnfinishedFile(file: TaggedFile): void {
+          const results = [...(file.streamed?.values() ?? [])];
+          if (results.length === 0) return;
+          allResults.push(...results);
+          allSuites.push({ name: '', tests: results, suites: [], durationMs: 0 });
+          reporter.onTestFileEnd?.(file.filePath, results);
+        }
+
+        /** Leave out the files still queued: a requeued one has run in part. */
+        function dropQueuedFiles(): void {
+          fileQueue.splice(0).forEach(endUnfinishedFile);
+        }
 
         function retireWorker(worker: WorkerHandle, reason: string): void {
           if (worker.retired) return;
@@ -1983,13 +2014,8 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
 
           if (opts.failureTracker?.reached) {
             // The run is stopping: nothing is run again, and no worker is needed.
-            fileQueue.length = 0;
-            const results = [...(streamed.get(worker.id)?.values() ?? [])];
-            if (inFlightFile) {
-              allResults.push(...results);
-              allSuites.push({ name: '', tests: results, suites: [], durationMs: 0 });
-              reporter.onTestFileEnd?.(inFlightFile.filePath, results);
-            }
+            dropQueuedFiles();
+            if (inFlightFile) endUnfinishedFile(inFlightFile);
             process.stderr.write(
               `${YELLOW}Worker ${displayWorkerId(worker.id)} (${worker.deviceSerial}) became unavailable: ${reason}. The run is stopping.${RESET}\n`,
             );
@@ -2066,7 +2092,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
                   reporter,
                   opts.workerIndexBase,
                 );
-                if (!result._willRetry) streamed.get(msg.workerId)?.set(result.fullName, result);
+                if (!result._willRetry && worker.currentFile) (worker.currentFile.streamed ??= new Map()).set(result.fullName, result);
                 // The worker waits for this before it starts another test.
                 if (opts.failureTracker && msg.result.status === 'failed' && !msg.result._willRetry) {
                   sendToWorkerProcess(worker.process, { type: 'failure-verdict', stop: opts.failureTracker.reached }, () => {});
@@ -2081,12 +2107,14 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
                 break;
               }
               case 'file-done': {
+                const file = worker.currentFile;
                 worker.currentFile = undefined;
                 const { results, suite } = handleParallelFileDoneMessage(
                   msg,
                   workerTestCounts,
                   opts.workerIndexBase,
                 );
+                if (opts.failureTracker?.reached) keepUnreachedResults(suite, results, file?.streamed);
                 allResults.push(...results);
                 allSuites.push(suite);
 

@@ -7,6 +7,7 @@ import {
   PORTS_PER_BUCKET,
   handleParallelTestStartMessage,
   handleParallelTestEndMessage,
+  keepUnreachedResults,
   handleParallelFileRetryMessage,
   handleParallelFileDoneMessage,
   pinnedWorkerDevices,
@@ -1074,5 +1075,24 @@ describe('targetStartWarning()', () => {
       'Device target ios iPhone 17 could not start; its 1 test file(s) are reported as failed. The other device targets still run. '
       + 'Running its tests again retries it.',
     );
+  });
+});
+
+describe('keepUnreachedResults', () => {
+  const result = (fullName: string, status: 'passed' | 'failed') => ({ name: fullName, fullName, status, durationMs: 1 });
+
+  it('keeps an earlier attempt\'s results for the tests the last one did not reach, and only those', () => {
+    const tests = [result('a', 'passed')];
+    const suite = { name: '', tests: [...tests], suites: [], durationMs: 1 };
+    const results = [...tests];
+    keepUnreachedResults(suite, results, new Map([['a', result('a', 'failed')], ['b', result('b', 'failed')]]));
+    expect(results.map((r) => [r.fullName, r.status])).toEqual([['a', 'passed'], ['b', 'failed']]);
+    expect(suite.tests).toEqual(results);
+  });
+
+  it('changes nothing for a file with no earlier attempt', () => {
+    const suite = { name: '', tests: [], suites: [], durationMs: 1 };
+    keepUnreachedResults(suite, [], undefined);
+    expect(suite.tests).toEqual([]);
   });
 });
