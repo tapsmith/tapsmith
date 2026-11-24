@@ -7749,8 +7749,19 @@ impl app_reset::ResetOps for ServiceResetOps<'_> {
     async fn warm_deep_link(&self, link: &str, cold: bool) -> Result<(), String> {
         let delivery = if cold {
             DeepLinkDelivery::Cold
-        } else {
+        } else if self
+            .svc
+            .backend()
+            .await
+            .map_err(|e| e.message().to_string())?
+            .supports_cold_deep_link()
+            .await
+        {
             DeepLinkDelivery::WarmThenCold
+        } else {
+            // An iOS development build would open on its dev launcher, which
+            // reads as delivered: report the miss, for the next rung.
+            DeepLinkDelivery::WarmOnly
         };
         let resp = self
             .svc

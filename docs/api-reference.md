@@ -414,6 +414,10 @@ delivery) whenever possible. On iOS simulators, if warm delivery does not
 reach its destination within a bounded window, Tapsmith automatically falls
 back to a cold relaunch with the URL.
 
+[An Expo development build](getting-started.md#debug-and-dev-client-builds-with-metro) that the
+link starts opens on its dev launcher. Tapsmith then connects it to Metro and
+delivers the link again, and throws if it cannot reach Metro.
+
 On Android the link goes to the app under test (the config's `package`), not to
 whichever app Android would pick. So an `https` link opens your app even when
 its app links are not verified. That is usually the case for a debug build: the

@@ -2566,7 +2566,8 @@ async function startAgentFromConfig(
           agentApk,
           agentTestApk,
           iosXctestrun,
-          undefined,
+          // As a test run's agent start: the daemon reads the build's kind from it.
+          config?.platform === 'ios' && config.app ? path.resolve(rootDir, config.app) : undefined,
           false,
           false,
           // Every launch of the app this session (launch_app, a run's
