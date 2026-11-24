@@ -4,7 +4,6 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { beginOutputRun, recordOutputFile } from '../output-ledger.js';
-import { thisProcess, type ProcessRef } from '../device-claims.js';
 import { writeEmptyShardBlob, runMergeReports } from '../merge-reports.js';
 import { JsonReporter } from '../reporters/json.js';
 import { JUnitReporter } from '../reporters/junit.js';
@@ -48,12 +47,12 @@ const ledgerDir = (): string => path.join(rootDir, 'out', '.tapsmith-output');
 const ledgers = (): string[] => (fs.existsSync(ledgerDir()) ? fs.readdirSync(ledgerDir()) : []);
 
 /** A run of another process; it writes `rel`, and ends however the process does. */
-function runElsewhere(fn: () => void, by: { host?: string; pid?: number; owner?: ProcessRef } = {}): void {
+function runElsewhere(fn: () => void, by: { host?: string; pid?: number } = {}): void {
   beginOutputRun(config, { clear: false });
   const dead = spawnSync(process.execPath, ['-e', '']).pid;
   const run = JSON.parse(process.env[RUN_ENV]!) as Record<string, unknown>;
   process.env[RUN_ENV] = JSON.stringify({
-    ...run, host: by.host ?? run.host, owner: by.owner ?? { pid: by.pid ?? dead },
+    ...run, host: by.host ?? run.host, owner: { pid: by.pid ?? dead },
   });
   fn();
 }
@@ -196,13 +195,11 @@ describe('output ledger', () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
-  it('leaves a run of this machine whose hostname has changed since', () => {
-    let file = '';
-    runElsewhere(() => { file = artifact('traces/a.zip'); }, { host: 'old-name.invalid', owner: thisProcess() });
-    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    fs.utimesSync(path.join(ledgerDir(), ledgers()[0]), old, old);
-    beginOutputRun(config, { clear: true });
-    expect(fs.existsSync(file)).toBe(true);
+  it.skipIf(process.platform === 'win32')('identifies the machine by its boot, not a hostname that can change or be shared', () => {
+    beginOutputRun(config, { clear: false });
+    const { host } = JSON.parse(process.env[RUN_ENV]!) as { host: string };
+    expect(host).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}/i);
+    expect(host).not.toContain(os.hostname());
   });
 
   it('never removes a file outside outputDir, or a directory, whatever a ledger says', () => {
@@ -211,7 +208,9 @@ describe('output ledger', () => {
     write('dir/keep.txt');
     fs.mkdirSync(ledgerDir(), { recursive: true });
     const dead = spawnSync(process.execPath, ['-e', '']).pid;
-    const entry = (file: string): string => JSON.stringify({ host: os.hostname(), owner: { pid: dead }, file, size: 4, mtimeMs: fs.statSync(outside).mtimeMs });
+    runElsewhere(() => {});
+    const { host } = JSON.parse(process.env[RUN_ENV]!) as { host: string };
+    const entry = (file: string): string => JSON.stringify({ host, owner: { pid: dead }, file, size: 4, mtimeMs: fs.statSync(outside).mtimeMs });
     fs.writeFileSync(path.join(ledgerDir(), 'x.jsonl'), [entry('../app.ts'), entry(outside), entry('dir'), 'not json', 'null'].join('\n'));
     beginOutputRun(config, { clear: true });
     expect(fs.existsSync(outside)).toBe(true);

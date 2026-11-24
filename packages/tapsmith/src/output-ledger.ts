@@ -18,6 +18,7 @@
  * a run; the files are then left behind.
  */
 
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -30,8 +31,8 @@ const RUN_ENV = 'TAPSMITH_OUTPUT_RUN';
 /** Internal: set by a command whose `tapsmith test` child is a check, not the user's run. */
 export const KEEP_OUTPUT_ENV = 'TAPSMITH_KEEP_OUTPUT';
 /**
- * How long a run of another machine or container, which left no end mark, is
- * taken to be still going: its process cannot be looked up from here.
+ * How long a run of another machine, container or boot, which left no end
+ * mark, is taken to be still going: its process cannot be looked up from here.
  */
 const FOREIGN_RUN_MS = 24 * 60 * 60 * 1000;
 
@@ -93,16 +94,35 @@ export function recordOutputFile(config: OutputConfig | undefined, file: string)
   }
 }
 
+let ownHost: string | undefined;
 /**
- * Where a pid means the same process: the machine and, on Linux, the pid
- * namespace, since containers can share a hostname.
+ * Where a pid means the same process: this boot of this machine and, on Linux,
+ * this pid namespace. Not the hostname, which machines and containers can
+ * share, and which macOS takes from the network; it is the fallback where
+ * there is nothing better (Windows).
  */
 function processHost(): string {
+  ownHost ??= readProcessHost();
+  return ownHost;
+}
+
+function readProcessHost(): string {
   try {
-    return `${os.hostname()} ${fs.readlinkSync('/proc/self/ns/pid')}`;
+    return `${fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim()} ${fs.readlinkSync('/proc/self/ns/pid')}`;
   } catch {
-    return os.hostname(); // no procfs (macOS, Windows): one namespace
+    // No procfs.
   }
+  if (process.platform === 'darwin') {
+    try {
+      const id = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], {
+        encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000,
+      }).trim();
+      if (id) return id;
+    } catch {
+      // Fall through to the hostname.
+    }
+  }
+  return os.hostname();
 }
 
 function currentRun(): OutputRun | undefined {
@@ -183,9 +203,7 @@ function readLedger(ledger: string): { files: Map<string, FileStamp>; over: bool
     if (files.size > 1) continue; // every entry has the same owner
     live = entry.host === processHost()
       ? processIsLive(entry.owner)
-      : Date.now() - fs.statSync(ledger).mtimeMs < FOREIGN_RUN_MS
-        // This machine under another name: macOS takes one from the network.
-        || (entry.owner.startToken !== undefined && processIsLive(entry.owner));
+      : Date.now() - fs.statSync(ledger).mtimeMs < FOREIGN_RUN_MS;
   }
   return { files, over: ended || !live };
 }
