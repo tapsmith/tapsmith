@@ -229,6 +229,44 @@ What to expect while you iterate:
   what a test taps. Fix the warnings, or hide them in test runs with
   `LogBox.ignoreAllLogs()`.
 
+##### Skipping the dev launcher in the build
+
+You need none of this for Tapsmith to reach your app. Newer Expo SDKs can also build the
+dev launcher out of the way, which saves the launcher's appearance and the deep link on
+each relaunch:
+
+| Expo SDK | What you can do |
+|---|---|
+| 55 and earlier | Nothing to set. Tapsmith's dev-client link is the way in |
+| 56 and later | Set the `defaultLaunchURL`, `showMenuAtLaunch` and `skipOnboarding` options of the `expo-dev-client` plugin, and rebuild the app. `toolsButton: false` also hides the floating button (SDK 55 and later) |
+
+```json
+{
+  "expo": {
+    "plugins": [
+      [
+        "expo-dev-client",
+        {
+          "showMenuAtLaunch": false,
+          "skipOnboarding": true,
+          "toolsButton": false,
+          "android": { "defaultLaunchURL": "http://10.0.2.2:8081" },
+          "ios": { "defaultLaunchURL": "http://localhost:8081" }
+        }
+      ]
+    ]
+  }
+}
+```
+
+`defaultLaunchURL` is fixed in the build: these addresses suit an emulator and a simulator with
+Metro on port 8081, and not a physical device. A cleared app then loads straight from Metro.
+Whenever the launcher, the dev menu or a load error still appears (Metro on another port, say),
+Tapsmith handles it as above. Set `showMenuAtLaunch` to `false` along with it: otherwise the
+dev menu opens over a cleared app, because the saved setting that keeps it closed is cleared too.
+The default `launchMode` (`"most-recent"`) reopens the last server on a relaunch, but a clear
+removes that record, so on its own it does not avoid the launcher.
+
 In CI, test a Release build: the steps are in [CI setup](ci-setup.md).
 
 ### Flutter
