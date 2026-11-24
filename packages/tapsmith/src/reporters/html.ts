@@ -36,13 +36,20 @@ export class HtmlReporter implements TapsmithReporter {
     removePreviousReport(outputDir, result);
     fs.mkdirSync(outputDir, { recursive: true });
 
+    // The folder may be the one the artifacts are in: those are not the
+    // report's, and not its successor's to remove.
+    const copied = new Set<string>();
+
     // Copy screenshots to report folder
     const screenshotMap = new Map<string, string>();
     for (const test of result.tests) {
       if (test.screenshotPath && fs.existsSync(test.screenshotPath)) {
         const basename = path.basename(test.screenshotPath);
         const dest = path.join(outputDir, basename);
-        fs.copyFileSync(test.screenshotPath, dest);
+        if (realPath(test.screenshotPath) !== realPath(dest)) {
+          fs.copyFileSync(test.screenshotPath, dest);
+          copied.add(basename);
+        }
         screenshotMap.set(test.screenshotPath, basename);
       }
     }
@@ -53,7 +60,10 @@ export class HtmlReporter implements TapsmithReporter {
       if (test.tracePath && fs.existsSync(test.tracePath)) {
         const basename = path.basename(test.tracePath);
         const dest = path.join(outputDir, basename);
-        fs.copyFileSync(test.tracePath, dest);
+        if (realPath(test.tracePath) !== realPath(dest)) {
+          fs.copyFileSync(test.tracePath, dest);
+          copied.add(basename);
+        }
         traceMap.set(test.tracePath, basename);
       }
     }
@@ -65,7 +75,10 @@ export class HtmlReporter implements TapsmithReporter {
         try {
           const basename = path.basename(test.videoPath);
           const dest = path.join(outputDir, basename);
-          await fs.promises.copyFile(test.videoPath, dest);
+          if (realPath(test.videoPath) !== realPath(dest)) {
+            await fs.promises.copyFile(test.videoPath, dest);
+            copied.add(basename);
+          }
           videoMap.set(test.videoPath, basename);
         } catch (err) {
           console.warn(`[HtmlReporter] Failed to copy video ${test.videoPath}:`, err);
@@ -76,7 +89,7 @@ export class HtmlReporter implements TapsmithReporter {
     const html = generateHtml(result, this._startTime, screenshotMap, traceMap, videoMap);
     const indexPath = path.join(outputDir, 'index.html');
     fs.writeFileSync(indexPath, html);
-    writeReportLedger(outputDir, new Set(['index.html', ...screenshotMap.values(), ...traceMap.values(), ...videoMap.values()]));
+    writeReportLedger(outputDir, ['index.html', ...copied]);
 
     const hasFailed = result.tests.some((t) => t.status === 'failed');
     // Never in CI, as in Playwright: nobody is there to look, and a runner
@@ -138,9 +151,9 @@ function removePreviousReport(outputDir: string, result: FullResult): void {
   }
 }
 
-function writeReportLedger(outputDir: string, names: Set<string>): void {
+function writeReportLedger(outputDir: string, names: string[]): void {
   try {
-    const files = [...names].map((name) => ({ name, size: fs.statSync(path.join(outputDir, name)).size }));
+    const files = names.map((name) => ({ name, size: fs.statSync(path.join(outputDir, name)).size }));
     fs.writeFileSync(path.join(outputDir, REPORT_LEDGER), JSON.stringify({ version: 1, files }) + '\n');
   } catch {
     // The next report then leaves this one's files behind.

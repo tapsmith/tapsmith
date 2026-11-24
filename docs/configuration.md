@@ -302,7 +302,7 @@ starts: their traces, failure screenshots and videos, and JSON or JUnit reports 
 [HTML reporter](api-reference.md#built-in-reporters) replaces its report when it writes a new one.
 
 Unlike Playwright, the folder itself is not emptied. Tapsmith records each file it writes there (in
-`<outputDir>/.tapsmith-output/`), and removes only those, and only while they are the size it wrote. These always stay:
+`<outputDir>/.tapsmith-output/`), and removes only those, and only while they are unchanged. These always stay:
 
 - files you put there, such as an [`appState` archive](writing-tests.md), logs, or screenshots a test saved itself;
 - output of a run that is still going, such as another `tapsmith test` or a UI-mode session in the same project;

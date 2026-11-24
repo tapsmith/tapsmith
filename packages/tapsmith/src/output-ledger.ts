@@ -7,8 +7,8 @@
  * removed because of where it is or what it is called: each run records the
  * files it writes in a ledger, `<outputDir>/.tapsmith-output/<run>.jsonl`, and
  * a run starts by removing the recorded files of the runs that are over. A
- * file no ledger names, or one that has changed size since it was recorded, is
- * left alone, and so is everything a run that is still going has written.
+ * file no ledger names, or one that has changed since it was recorded, is left
+ * alone, and so is everything a run that is still going has written.
  *
  * A run is one top-level process (a `tapsmith test`, a UI or watch session, an
  * MCP server). It stamps its identity into the environment, so the workers it
@@ -65,7 +65,7 @@ export function beginOutputRun(config: OutputConfig, opts: { clear: boolean }): 
   const outputDir = resolveOutputDir(config);
   if (!outputDir) return;
   if (opts.clear) clearPreviousOutput(outputDir);
-  const run: OutputRun = { id: randomUUID(), host: os.hostname(), owner: thisProcess(), outputDir };
+  const run: OutputRun = { id: randomUUID(), host: processHost(), owner: thisProcess(), outputDir };
   process.env[RUN_ENV] = JSON.stringify(run);
   process.once('exit', () => endRun(run));
 }
@@ -79,15 +79,27 @@ export function recordOutputFile(config: OutputConfig | undefined, file: string)
   const rel = path.relative(outputDir, path.resolve(file));
   if (rel === '' || rel.split(path.sep)[0] === '..' || path.isAbsolute(rel)) return;
   try {
-    const { size } = fs.statSync(file);
+    const { size, mtimeMs } = fs.statSync(file);
     const ledger = ledgerPath(run);
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
     // One append, so the workers of a run never split each other's lines. The
     // owner goes with every entry: whichever process writes first, the run can
     // be recognised as live from its first entry.
-    fs.appendFileSync(ledger, JSON.stringify({ host: run.host, owner: run.owner, file: rel.split(path.sep).join('/'), size }) + '\n');
+    fs.appendFileSync(ledger, JSON.stringify({ host: run.host, owner: run.owner, file: rel.split(path.sep).join('/'), size, mtimeMs }) + '\n');
   } catch {
     // Left behind rather than failing the test that produced it.
+  }
+}
+
+/**
+ * Where a pid means the same process: the machine and, on Linux, the pid
+ * namespace, since containers can share a hostname.
+ */
+function processHost(): string {
+  try {
+    return `${os.hostname()} ${fs.readlinkSync('/proc/self/ns/pid')}`;
+  } catch {
+    return os.hostname(); // no procfs (macOS, Windows): one namespace
   }
 }
 
@@ -134,7 +146,7 @@ function clearPreviousOutput(outputDir: string): void {
       const { files, over } = readLedger(ledger);
       if (!over) continue;
       let removedAll = true;
-      for (const [file, size] of files) removedAll = removeRecorded(outputDir, file, size) && removedAll;
+      for (const [file, stamp] of files) removedAll = removeRecorded(outputDir, file, stamp) && removedAll;
       // Kept while a file could not be removed, for the next run to retry.
       if (removedAll) fs.rmSync(ledger, { force: true });
     } catch {
@@ -143,8 +155,14 @@ function clearPreviousOutput(outputDir: string): void {
   }
 }
 
-function readLedger(ledger: string): { files: Map<string, number>; over: boolean } {
-  const files = new Map<string, number>();
+/** What a file looked like when it was recorded. */
+interface FileStamp {
+  size: number
+  mtimeMs: number
+}
+
+function readLedger(ledger: string): { files: Map<string, FileStamp>; over: boolean } {
+  const files = new Map<string, FileStamp>();
   let live = false;
   let ended = false;
   for (const line of fs.readFileSync(ledger, 'utf-8').split('\n')) {
@@ -156,11 +174,12 @@ function readLedger(ledger: string): { files: Map<string, number>; over: boolean
     }
     if (!isRecord(entry)) continue;
     if (entry.end === true) ended = true;
-    if (typeof entry.file !== 'string' || typeof entry.size !== 'number' || !isProcessRef(entry.owner)) continue;
+    if (typeof entry.file !== 'string' || typeof entry.size !== 'number' || typeof entry.mtimeMs !== 'number'
+      || !isProcessRef(entry.owner)) continue;
     // The last entry wins: a trace is recorded again when hooks amend it.
-    files.set(entry.file, entry.size);
+    files.set(entry.file, { size: entry.size, mtimeMs: entry.mtimeMs });
     if (files.size > 1) continue; // every entry has the same owner
-    live = entry.host === os.hostname()
+    live = entry.host === processHost()
       ? processIsLive(entry.owner)
       : Date.now() - fs.statSync(ledger).mtimeMs < FOREIGN_RUN_MS;
   }
@@ -168,13 +187,17 @@ function readLedger(ledger: string): { files: Map<string, number>; over: boolean
 }
 
 /** Remove a recorded file that is still the one recorded. False when it should be gone and is not. */
-function removeRecorded(outputDir: string, file: string, size: number): boolean {
+function removeRecorded(outputDir: string, file: string, stamp: FileStamp): boolean {
   const target = path.resolve(outputDir, file);
   const rel = path.relative(outputDir, target);
   if (rel === '' || rel.split(path.sep)[0] === '..' || path.isAbsolute(rel)) return true;
   try {
     const stat = fs.lstatSync(target);
-    if (stat.isFile() && stat.size === size) fs.rmSync(target);
+    // A directory on the way there may since have become a link out of
+    // outputDir; what is behind it is not this run's to remove.
+    const inside = path.relative(fs.realpathSync(outputDir), fs.realpathSync(path.dirname(target)));
+    if (inside.split(path.sep)[0] === '..' || path.isAbsolute(inside)) return true;
+    if (stat.isFile() && stat.size === stamp.size && stat.mtimeMs === stamp.mtimeMs) fs.rmSync(target);
     return true;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ENOTDIR';

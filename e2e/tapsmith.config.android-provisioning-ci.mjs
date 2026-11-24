@@ -21,6 +21,8 @@ export default defineConfig({
   // Two retries (Playwright's CI convention): emulator-load one-offs can
   // outlast a single retry on oversubscribed runners.
   retries: 2,
+  // The workflow's second run writes elsewhere, or it would clear the first one's traces.
+  outputDir: process.env.E2E_OUTPUT_DIR ?? "tapsmith-results",
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
   trace: { mode: "retain-on-failure-and-retries", daemonLogs: true },

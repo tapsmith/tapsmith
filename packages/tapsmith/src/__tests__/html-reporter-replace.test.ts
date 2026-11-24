@@ -54,12 +54,16 @@ describe('HtmlReporter replacing the previous report', () => {
     expect(visible()).toEqual(['a.zip', 'favicon.ico', 'index.html']);
   });
 
-  it('never removes the artifacts it is reporting', async () => {
-    await report({ tracePath: artifact('r/a.zip') });
-    // A merge of a blob directory that holds an earlier report.
-    const inFolder = path.join(folder, 'a.zip');
-    await report({ tracePath: inFolder }).catch(() => {});
-    expect(fs.existsSync(inFolder)).toBe(true);
+  it('never removes the artifacts it is reporting, or ones that were in the folder already', async () => {
+    const inFolder = ['a.png', 'a.zip', 'a.mp4'].map((f) => artifact(`report/${f}`));
+    const [screenshotPath, tracePath, videoPath] = inFolder;
+    await report({ screenshotPath, tracePath, videoPath });
+    await report();
+    expect(inFolder.every((f) => fs.existsSync(f))).toBe(true);
+
+    await report({ tracePath: artifact('r/b.zip') });
+    await report({ tracePath: path.join(folder, 'b.zip') });
+    expect(visible()).toContain('b.zip');
   });
 
   it('ignores ledger entries that are not plain file names, and a malformed ledger', async () => {

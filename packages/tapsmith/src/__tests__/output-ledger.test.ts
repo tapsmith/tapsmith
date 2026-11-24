@@ -117,6 +117,34 @@ describe('output ledger', () => {
     expect(fs.existsSync(file)).toBe(true);
   });
 
+  it('keeps a recorded file replaced by one of the same size', () => {
+    let file = '';
+    runElsewhere(() => { file = artifact('results.json', '{"a":1}'); });
+    fs.writeFileSync(file, '{"a":2}');
+    fs.utimesSync(file, new Date(), new Date(Date.now() + 5_000));
+    beginOutputRun(config, { clear: true });
+    expect(fs.readFileSync(file, 'utf-8')).toBe('{"a":2}');
+  });
+
+  it('does not follow a directory that has become a link out of outputDir', () => {
+    let file = '';
+    runElsewhere(() => { file = artifact('traces/a.zip'); });
+    const archive = path.join(rootDir, 'archive');
+    fs.renameSync(path.dirname(file), archive);
+    fs.symlinkSync(archive, path.dirname(file), 'dir');
+    beginOutputRun(config, { clear: true });
+    expect(fs.existsSync(path.join(archive, 'a.zip'))).toBe(true);
+  });
+
+  it('clears an outputDir that is itself a link', () => {
+    const real = path.join(rootDir, 'real');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, path.join(rootDir, 'out'), 'dir');
+    runElsewhere(() => { artifact('traces/a.zip'); });
+    beginOutputRun(config, { clear: true });
+    expect(fs.existsSync(path.join(real, 'traces/a.zip'))).toBe(false);
+  });
+
   it('removes a trace that was amended after it was first recorded', () => {
     let file = '';
     runElsewhere(() => {
@@ -161,7 +189,7 @@ describe('output ledger', () => {
     write('dir/keep.txt');
     fs.mkdirSync(ledgerDir(), { recursive: true });
     const dead = spawnSync(process.execPath, ['-e', '']).pid;
-    const entry = (file: string): string => JSON.stringify({ host: os.hostname(), owner: { pid: dead }, file, size: 4 });
+    const entry = (file: string): string => JSON.stringify({ host: os.hostname(), owner: { pid: dead }, file, size: 4, mtimeMs: fs.statSync(outside).mtimeMs });
     fs.writeFileSync(path.join(ledgerDir(), 'x.jsonl'), [entry('../app.ts'), entry(outside), entry('dir'), 'not json', 'null'].join('\n'));
     beginOutputRun(config, { clear: true });
     expect(fs.existsSync(outside)).toBe(true);
@@ -194,7 +222,7 @@ describe('output ledger', () => {
     expect(ledgers()).toEqual([]);
   });
 
-  it('lets a forked process record into the same run', () => {
+  it('keeps one ledger for a run', () => {
     runElsewhere(() => { artifact('traces/a.zip'); artifact('traces/b.zip'); });
     expect(ledgers()).toHaveLength(1);
   });
