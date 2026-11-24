@@ -490,6 +490,55 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
     + `which writes the .app under ${out} (\`xcodebuild -list\` shows the schemes if yours is not ${target.scheme}${metro}; see ${BUILD_DOCS})`;
 }
 
+/** A Debug build by its output path: Xcode's `Debug-iphone*` products folder, Gradle's `debug` variant. */
+function isDebugBuildPath(build: string, platform: 'android' | 'ios'): boolean {
+  return platform === 'ios'
+    ? /(?:^|[\\/])Debug-iphone(?:simulator|os)[\\/]/.test(build)
+    : /(?:^|[\\/])debug[\\/][^\\/]+\.apk$|-debug\.apk$/i.test(build);
+}
+
+/**
+ * A note for a React Native (or Expo) Debug build, which loads its
+ * JavaScript from Metro: Metro has to keep running while testing. That is a
+ * supported setup (it suits watch and UI mode), so the note is neutral, and
+ * gives the Release build for CI or the steadiest runs. Undefined for a
+ * Release build, a native app, or a build whose configuration the path does
+ * not say.
+ */
+export function debugBuildNote(
+  build: string,
+  platform: 'android' | 'ios',
+  layout: ProjectLayout,
+  reactNative: boolean,
+  expo?: ExpoProject,
+): string | undefined {
+  if (!reactNative || !isDebugBuildPath(build, platform)) return undefined;
+  let release: string;
+  if (platform === 'android') {
+    // Product flavours and ABI splits name the Release APK, so only its folder is certain.
+    const apkUnder = (dir: string): string => `which writes the APK under ${dir}app/build/outputs/apk/, in a folder and with a name that depend on the build variant`;
+    if (expo) {
+      release = expoBuildStep('android', expo, apkUnder('android/'));
+    } else {
+      const root = layout.androidRoot === undefined || layout.androidRoot === '.' ? undefined : layout.androidRoot;
+      const cd = root ? `cd ${shellArg(root)} && ` : '';
+      release = `Build one with \`${cd}./gradlew assembleRelease\`, ${apkUnder(root ? `${root}/` : '')}.`;
+    }
+  } else if (xcodeBuildTarget(layout)) {
+    // The project's own workspace and scheme, as the other build hints name them.
+    const hooks = expo?.usesTapsmithHooks ? `${HOOKS_FLAG} ` : '';
+    release = `${nativeBuildHint('ios', layout, true).replace(/^Build one for the simulator first/, 'Build one').replace('xcodebuild ', `${hooks}xcodebuild `)}.`;
+  } else if (expo) {
+    release = expoBuildStep('ios', expo);
+  } else {
+    release = 'Build one with `xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build` '
+      + 'in the folder with your Xcode project.';
+  }
+  return `${build} is a Debug build: it loads its JavaScript from Metro, so keep Metro running while you test. `
+    + 'That suits iterating with watch or UI mode. For CI, or the fastest and steadiest runs, use a Release build. '
+    + `${release} Then point the config at it.`;
+}
+
 /**
  * A Flutter app's build, with `flutter build`, which knows to run
  * the Dart build first: a bare Gradle or Xcode build of a fresh checkout
@@ -679,15 +728,18 @@ function expoHooksNote(expo: ExpoProject): string {
     : `For sub-second resets between tests, wrap your root navigator in @tapsmith/react-native's <TapsmithTestHooks> with \`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}\` and build test builds with ${HOOKS_FLAG} (https://tapsmith.dev/guides/warm-reset/).`;
 }
 
-/** The build step for one platform, as a sentence. */
-function expoBuildStep(platform: 'android' | 'ios', expo: ExpoProject): string {
+/** The build step for one platform, as a sentence; `apkOutput` says where the Android one writes. */
+function expoBuildStep(
+  platform: 'android' | 'ios',
+  expo: ExpoProject,
+  apkOutput = 'which writes android/app/build/outputs/apk/release/app-release.apk',
+): string {
   const env = expo.usesTapsmithHooks ? `${HOOKS_FLAG} ` : '';
   if (platform === 'android') {
     // `expo run:android` resolves a device before it builds, so it fails with
     // no emulator or device; prebuild + gradle builds headless (as CI does).
     const generate = expo.hasAndroidDir ? '' : '`npx expo prebuild --platform android` (this Expo project has no android/ yet), then ';
-    return `Build a release APK with ${generate}\`cd android && ${env}./gradlew assembleRelease\`, `
-      + 'which writes android/app/build/outputs/apk/release/app-release.apk '
+    return `Build a release APK with ${generate}\`cd android && ${env}./gradlew assembleRelease\`, ${apkOutput} `
       + '(`npx expo run:android --variant release` builds and installs in one step, but needs a running emulator or device to install on).';
   }
   const generate = expo.hasIosDir ? '' : '`npx expo prebuild --platform ios` (this Expo project has no ios/ yet), then ';

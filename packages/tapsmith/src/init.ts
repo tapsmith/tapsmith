@@ -4,13 +4,14 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Enquirer from 'enquirer';
 import figlet from 'figlet';
-import { isCustomSimulatorName, runningAvds, scanEnvironment, simulatorChoices, type ConnectedAndroidDevice, type EnvScan } from './env-scan.js';
+import { isCustomSimulatorName, runningAvds, scanEnvironment, simulatorChoices, simulatorPickerChoices, type ConnectedAndroidDevice, type EnvScan } from './env-scan.js';
 import type { SeStatus } from './setup-ios.js';
 import {
   detectAndroidPackage,
   detectExpoProject,
   detectGradleApplicationId,
   detectIosBundleId,
+  debugBuildNote,
   derivedDataBuildWarning,
   detectProjectLayout,
   expoBuildHint,
@@ -472,6 +473,9 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
       : `No APK found in the project's build outputs (${apkSearchedIn(layout)}). ${nativeBuildHint('android', layout, isReactNativeProject(cwd))}, or enter its path.`,
     typeMessage: 'Path to your Android APK:',
   });
+  // A note, not a warning: a Debug build with Metro is a supported setup.
+  const apkDebugNote = apkPath ? debugBuildNote(apkPath, 'android', layout, isReactNativeProject(cwd), expo) : undefined;
+  if (apkDebugNote) console.log(dim(`  ${apkDebugNote}`));
 
   let packageName = apkPath ? detectAndroidPackage(apkPath) : undefined;
   if (packageName) {
@@ -580,6 +584,8 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
       typeMessage: 'Path to your simulator build (.app):',
     });
     if (appPath && builds.hints.has(appPath)) console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(appPath, detectProjectLayout(cwd), 'iphonesimulator', isReactNativeProject(cwd))}`);
+    const appDebugNote = appPath ? debugBuildNote(appPath, 'ios', detectProjectLayout(cwd), isReactNativeProject(cwd), expo) : undefined;
+    if (appDebugNote) console.log(dim(`  ${appDebugNote}`));
     simBundleId = appPath ? detectBundleId(appPath) : undefined;
   }
 
@@ -587,8 +593,8 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
   let simulatorDeviceType: string | undefined;
   if (useSimulators) {
     // Every simulator, stock names first, then a booted one, the first
-    // selected (PILOT-562, PILOT-721).
-    const choices = simulatorChoices(env.simulators);
+    // selected (PILOT-562, PILOT-721); a booted custom-named one near the top.
+    const choices = simulatorPickerChoices(env.simulators);
     if (choices.length > 0) {
       simulator = await ask<string>({
         type: 'select',
