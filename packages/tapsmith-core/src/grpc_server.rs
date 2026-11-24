@@ -1529,7 +1529,9 @@ impl TapsmithServiceImpl {
         // session that has seen the marker always re-reads — the nav value
         // must be fresh, and hooks compiled into an app cannot vanish.
         let mut ack_nav_gt: Option<u64> = None;
-        if ack_epoch_gt.is_none() {
+        // A development build's link to its server loads the app anew: there is
+        // no hook to acknowledge it.
+        if ack_epoch_gt.is_none() && !is_dev_client_link(uri) {
             let hooks_seen = self.last_hooks_marker.read().await.is_some();
             let known_absent = *self.nav_probe_found_no_marker.read().await;
             if hooks_seen || !known_absent {
@@ -1549,8 +1551,8 @@ impl TapsmithServiceImpl {
             }
         }
         // A development build's launcher (or dev menu) stands in for the app
-        // until this link loads it: what the probe saw (or missed) there says
-        // nothing about the app's hooks.
+        // until this link loads it: what an earlier link's probe missed there
+        // says nothing about the app's hooks.
         if is_dev_client_link(uri) {
             *self.nav_probe_found_no_marker.write().await = false;
         }
