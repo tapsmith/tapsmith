@@ -8,7 +8,7 @@
  */
 
 import * as path from 'node:path';
-import { runTestFile, collectResults, markFileRetryFlakes, type RunDevice } from './runner.js';
+import { runTestFile, collectResults, markFileRetryFlakes, mergeStoppedRetry, type RunDevice } from './runner.js';
 import type { TapsmithConfig } from './config.js';
 import type {
   MainToWorkerMessage,
@@ -280,7 +280,7 @@ async function runFileWithRecovery(
         // Tests that failed on the discarded first attempt must surface as
         // flaky, not as clean passes (see markFileRetryFlakes).
         if (attempt === 2 && firstAttemptSuite) {
-          markFileRetryFlakes(firstAttemptSuite, suite);
+          (runStopped ? mergeStoppedRetry : markFileRetryFlakes)(firstAttemptSuite, suite);
         }
         return suite;
       }
@@ -290,6 +290,7 @@ async function runFileWithRecovery(
       infraError = infrastructureFailure;
       firstAttemptSuite = suite;
     } catch (err) {
+      if (attempt === 2 && runStopped && firstAttemptSuite && isRecoverableInfrastructureError(err)) return firstAttemptSuite;
       if (!isRecoverableInfrastructureError(err) || attempt === 2) {
         throw err;
       }
@@ -301,6 +302,8 @@ async function runFileWithRecovery(
       `Retrying ${path.basename(filePath)} after infrastructure error (attempt 2 of 2)\n`,
     );
     await recoverFileSession(filePath, infraError!);
+    // Stopped by another worker's failure meanwhile.
+    if (runStopped && firstAttemptSuite) return firstAttemptSuite;
   }
 
   throw new Error(`Worker ${workerId}: exhausted recovery attempts for ${path.basename(filePath)}`);

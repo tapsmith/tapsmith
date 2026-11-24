@@ -284,6 +284,31 @@ describe('worker-runner IPC reporting', () => {
         await over;
       }
       expect(asked).toEqual([false, false, true]);
+
+      // A stop that lands while the worker recovers keeps the attempt it has.
+      for (const listener of process.listeners('message')) {
+        if (!beforeListeners.includes(listener)) process.removeListener('message', listener);
+      }
+      vi.resetModules();
+      await import('../worker-runner.js');
+      const emitToFresh = process.listeners('message').find((l) => !beforeListeners.includes(l)) as (msg: MainToWorkerMessage) => void;
+      messages.length = 0;
+      const freshReady = waitForMessage((msg) => msg.type === 'ready');
+      emitToFresh({
+        type: 'init', workerId: 0, deviceSerial: 'device-1', deviceName: 'device-1', daemonPort: 19_000,
+        config: makeSerializedConfig({ package: 'com.example.app' }), forceInstall: false, networkApisInRun: false,
+        awaitFailureVerdicts: true,
+      });
+      await freshReady;
+      workerRunnerMocks.runTestFile.mockReset();
+      workerRunnerMocks.runTestFile.mockResolvedValue({
+        name: '', tests: [failed, { ...failed, fullName: 'drops', error: new Error('Agent connection dropped') }], suites: [], durationMs: 1,
+      });
+      void waitForMessage((msg) => msg.type === 'file-retry').then(() => emitToFresh({ type: 'failure-verdict', stop: true }));
+      const kept = waitForMessage((msg) => msg.type === 'file-done');
+      emitToFresh({ type: 'run-file', filePath: '/tmp/recovering.test.ts' });
+      expect((await kept as Extract<WorkerToMainMessage, { type: 'file-done' }>).results.map((r) => r.fullName)).toEqual(['fails', 'drops']);
+      expect(workerRunnerMocks.runTestFile).toHaveBeenCalledTimes(1);
     } finally {
       for (const listener of process.listeners('message')) {
         if (!beforeListeners.includes(listener)) {

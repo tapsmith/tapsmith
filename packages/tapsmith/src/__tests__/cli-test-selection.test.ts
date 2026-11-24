@@ -511,10 +511,10 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     });
 
     it('fails when a file does not load, and lists the others', () => {
-      fs.writeFileSync(path.join(root, 'tests', 'pw', 'signup.test.ts'), 'import "./missing.js";\n');
+      fs.writeFileSync(path.join(root, 'tests', 'pw', 'signup.test.ts'), 'throw new Error("boom");\n');
       const { status, output } = run('--list');
       expect(output).toContain('login > signs in');
-      expect(output).toContain('missing.js');
+      expect(output).toContain('tests/pw/signup.test.ts failed to load: boom');
       expect(status).toBe(1);
     });
 
@@ -574,6 +574,15 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
       const other = run('--last-failed', '--list', '--shard=2/2');
       expect(other.output).toContain('Total: 0 tests in 0 files');
       expect(other.status).toBe(0);
+    });
+
+    it('keeps the record on a shard with none of the failures', () => {
+      record([{ file: 'tests/pw/login.test.ts', title: 'login > signs in' }]);
+      const before = fs.readFileSync(lastRun(), 'utf-8');
+      const { status, output, reachedDevice } = run('--last-failed', '--shard=2/2');
+      expect(output).toContain('Shard 2/2: none of the tests that failed in the last run');
+      expect([status, reachedDevice]).toEqual([0, false]);
+      expect(fs.readFileSync(lastRun(), 'utf-8')).toBe(before);
     });
 
     it('keeps the record when the files did not load', () => {

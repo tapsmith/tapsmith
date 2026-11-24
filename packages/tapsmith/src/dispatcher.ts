@@ -1938,6 +1938,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
 
           worker.busy = true;
           worker.currentFile = next;
+          streamed.set(worker.id, new Map());
           reporter.onTestFileStart?.(next.filePath);
 
           const msg: MainToWorkerMessage = {
@@ -1957,6 +1958,9 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
         }
 
         const workerTestCounts = new Map<number, number>();
+        // The results each worker streamed of the file it is running, for a
+        // worker that dies once the run stops and nothing runs the file again.
+        const streamed = new Map<number, Map<string, TestResult>>();
 
         function retireWorker(worker: WorkerHandle, reason: string): void {
           if (worker.retired) return;
@@ -1980,6 +1984,15 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
           if (opts.failureTracker?.reached) {
             // The run is stopping: nothing is run again, and no worker is needed.
             fileQueue.length = 0;
+            const results = [...(streamed.get(worker.id)?.values() ?? [])];
+            if (inFlightFile) {
+              allResults.push(...results);
+              allSuites.push({ name: '', tests: results, suites: [], durationMs: 0 });
+              reporter.onTestFileEnd?.(inFlightFile.filePath, results);
+            }
+            process.stderr.write(
+              `${YELLOW}Worker ${displayWorkerId(worker.id)} (${worker.deviceSerial}) became unavailable: ${reason}. The run is stopping.${RESET}\n`,
+            );
             maybeResolve();
             return;
           }
@@ -2047,12 +2060,13 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
                 handleParallelTestStartMessage(msg, reporter, opts.workerIndexBase);
                 break;
               case 'test-end': {
-                handleParallelTestEndMessage(
+                const result = handleParallelTestEndMessage(
                   msg,
                   workerTestCounts,
                   reporter,
                   opts.workerIndexBase,
                 );
+                if (!result._willRetry) streamed.get(msg.workerId)?.set(result.fullName, result);
                 // The worker waits for this before it starts another test.
                 if (opts.failureTracker && msg.result.status === 'failed' && !msg.result._willRetry) {
                   sendToWorkerProcess(worker.process, { type: 'failure-verdict', stop: opts.failureTracker.reached }, () => {});

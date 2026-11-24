@@ -2034,7 +2034,6 @@ async function exitEmptyShard(config: TapsmithConfig): Promise<never> {
     process.exit(1);
   }
   beginOutputRun(config, { clear: true });
-  writeLastRun(config, { status: 'passed', tests: [] });
   process.exit(0);
 }
 
@@ -2530,8 +2529,8 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         });
       }
     }
-    for (const { error } of loadFailures) {
-      console.error(red(error?.message ?? ''));
+    for (const { filePath, error } of new Map(loadFailures.map((r) => [r.filePath, r])).values()) {
+      console.error(red(`${relativeTestPath(filePath!, config.rootDir)} failed to load: ${error?.message ?? ''}`));
     }
     if (unread) console.error(red('Some test files could not be read in time to list their tests.'));
     if (listed.length === 0 && loadFailures.length === 0 && !unread && !config.shard) {
@@ -3447,6 +3446,7 @@ async function runTestFileWithRecovery(
     }),
     recover: () => recoverDeviceSessions(sessions, `recovery for ${path.basename(file)}`),
     onTestEnd: (result) => opts.reporter.onTestEnd(result),
+    stopped: opts.stopRequested,
     log: (message) => process.stderr.write(dim(`${message}\n`)),
   });
 }

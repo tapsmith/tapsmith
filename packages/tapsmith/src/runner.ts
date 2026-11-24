@@ -4444,6 +4444,16 @@ export function markFileRetryFlakes(firstAttempt: SuiteResult, retried: SuiteRes
 }
 
 /**
+ * {@link markFileRetryFlakes} for a retry that `stopRequested` cut short: the
+ * tests it did not reach keep the results of the first attempt.
+ */
+export function mergeStoppedRetry(firstAttempt: SuiteResult, retried: SuiteResult): void {
+  markFileRetryFlakes(firstAttempt, retried);
+  const reached = new Set(collectResults(retried).map((t) => t.fullName));
+  retried.tests.push(...collectResults(firstAttempt).filter((t) => !reached.has(t.fullName)));
+}
+
+/**
  * Run a single test file. The file is imported (which registers tests via the
  * global `test` / `describe` functions), then executed sequentially.
  */

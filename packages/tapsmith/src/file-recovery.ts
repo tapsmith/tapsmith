@@ -1,4 +1,4 @@
-import { collectResults, markFileRetryFlakes, takeDeferredNotRunResults, type SuiteResult, type TestResult } from './runner.js';
+import { collectResults, markFileRetryFlakes, mergeStoppedRetry, takeDeferredNotRunResults, type SuiteResult, type TestResult } from './runner.js';
 import { isRecoverableInfrastructureError } from './worker-protocol.js';
 
 // ─── Sequential file recovery ───
@@ -16,6 +16,8 @@ export interface FileRecoveryRun {
   recover: () => Promise<void>
   /** Where the results the runner held back go when an attempt it reported on is used after all. */
   onTestEnd: (result: TestResult) => void
+  /** Whether `maxFailures` is stopping the run (`RunOptions.stopRequested`). */
+  stopped?: () => boolean
   /** The recovery notice. */
   log: (message: string) => void
 }
@@ -44,7 +46,9 @@ export async function runFileWithSessionRecovery(run: FileRecoveryRun): Promise<
         // If this is a retry that produced fewer results than the first
         // attempt (e.g. crashed before running any tests), prefer the
         // first attempt's results so the original failure is visible.
-        if (attempt === 2 && firstAttemptSuite) {
+        if (attempt === 2 && firstAttemptSuite && run.stopped?.()) {
+          mergeStoppedRetry(firstAttemptSuite, suite);
+        } else if (attempt === 2 && firstAttemptSuite) {
           // The first attempt's file has as many tests as it ran plus the
           // ones its abort left unrun.
           const firstCount = collectResults(firstAttemptSuite).length + firstAttemptNotRun.length;
