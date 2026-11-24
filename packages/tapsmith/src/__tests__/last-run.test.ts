@@ -114,9 +114,10 @@ describe('selectLastFailed', () => {
     expect(select([project('p', ['a.test.ts'])], [{ file: 'a.test.ts', project: 'p', title }], [])).toEqual([]);
   });
 
-  it('trusts the record when the file\'s tests are not known', () => {
+  it('runs the whole file when its tests are not known, whatever the recorded title', () => {
     const p = project('p', ['a.test.ts']);
     selectLastFailed([p], [{ file: 'a.test.ts', project: 'p', title: 'one' }], config(), () => undefined);
-    expect(p.fullNamesByFile).toEqual(new Map([[abs('a.test.ts'), ['one']]]));
+    expect(p.testFiles).toEqual([abs('a.test.ts')]);
+    expect(p.fullNamesByFile?.size).toBe(0);
   });
 });

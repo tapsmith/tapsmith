@@ -485,6 +485,16 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     expect(status).toBe(1);
   });
 
+  it('--retries overrides the retries of the config and of every project', () => {
+    fs.writeFileSync(path.join(root, 'tapsmith.config.mjs'),
+      'export default { platform: "android", package: "com.example", launchEmulators: false, trace: "on-first-retry", retries: 0,'
+      + ' projects: [{ name: "a", testMatch: ["**/login.test.ts"], use: { retries: 0 } }, { name: "b", testMatch: ["**/signup.test.ts"] }] };\n');
+    // A retry-only trace mode with no retries warns, per project.
+    const warned = (output: string): string[] => ['a', 'b'].filter((name) => output.includes(`in project "${name}"`));
+    expect(warned(run().output)).toEqual(['a', 'b']);
+    expect(warned(run('--retries', '1').output)).toEqual([]);
+  });
+
   describe('--list', () => {
     it('lists the selected tests with their locations, and touches no device', () => {
       const { status, output, reachedDevice } = run('--list');
@@ -508,6 +518,14 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
       fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'),
         'import { test } from "tapsmith";\ntest.only("a", async () => {});\ntest("b", async () => {});\n');
       expect(run('--list').output).toContain('Total: 3 tests in 2 files');
+    });
+
+    it('writes the whole listing to a pipe', () => {
+      const tests = Array.from({ length: 2_000 }, (_, i) => `test number ${i} ${'x'.repeat(60)}`);
+      fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'), testFile('login', tests));
+      const { output } = run('--list', 'login');
+      expect(output).toContain('test number 1999 ');
+      expect(output).toContain('Total: 2000 tests in 1 file');
     });
 
     it('fails when a file does not load, and lists the others', () => {

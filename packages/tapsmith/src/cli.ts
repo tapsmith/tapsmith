@@ -2016,8 +2016,9 @@ async function preflightLoadFailures(
 }
 
 /** Print `--list`'s listing and end the command. */
-function listAndExit(tests: ListedTest[], rootDir: string, code = 0): never {
-  console.log(formatTestListing(tests, rootDir));
+async function listAndExit(tests: ListedTest[], rootDir: string, code = 0): Promise<never> {
+  // Exiting before a piped stdout has drained would cut the listing short.
+  await new Promise<void>((resolve) => process.stdout.write(`${formatTestListing(tests, rootDir)}\n`, () => resolve()));
   process.exit(code);
 }
 
@@ -2310,7 +2311,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     const { current, total } = config.shard;
     testFiles = shardProjects(projects, config.shard);
     if (testFiles.length === 0) {
-      if (args.list) listAndExit([], config.rootDir);
+      if (args.list) await listAndExit([], config.rootDir);
       console.log(dim(`Shard ${current}/${total}: no test files in this shard.`));
       await exitEmptyShard(config);
     }
@@ -2485,11 +2486,13 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
 
   // After the shard split, as in Playwright: each shard re-runs the failures
   // that fall to it.
+  let lastFailedApplied = false;
   if (args.lastFailed && loadFailures.length === 0) {
     const failed = readLastRun(config);
     if (!failed) {
       console.error(yellow('Note: there is no record of a last run in outputDir, so --last-failed runs every test.'));
     } else {
+      lastFailedApplied = true;
       const names = new Map<import('./project.js').ResolvedProject, Map<string, string[] | undefined>>();
       for (const project of projects) {
         const byFile = new Map<string, string[] | undefined>();
@@ -2502,7 +2505,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
           ? 'no test failed in the last run'
           : 'none of the tests that failed in the last run is in this selection';
         if (config.shard) {
-          if (args.list) listAndExit([], config.rootDir);
+          if (args.list) await listAndExit([], config.rootDir);
           console.log(dim(`Shard ${config.shard.current}/${config.shard.total}: ${why}.`));
           await exitEmptyShard(config);
         }
@@ -2537,7 +2540,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       console.error(red('No tests found.'));
       process.exit(1);
     }
-    listAndExit(listed, config.rootDir, loadFailures.length > 0 || unread ? 1 : 0);
+    await listAndExit(listed, config.rootDir, loadFailures.length > 0 || unread ? 1 : 0);
   }
 
   // Retry-only video/trace modes start no recorder on attempt 0, so with
@@ -2748,8 +2751,9 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // only skipped ones — that's a usage error (typically a typo'd
   // pattern), not a green run. The exit paths below fail loud rather than
   // reporting success.
-  const zeroMatchFilterMessage =
-    'No tests ran: every selected test was filtered out. Check your --grep / --grep-invert pattern (it matches against the full "describe > test" name).';
+  const zeroMatchFilterMessage = lastFailedApplied
+    ? 'No tests ran: every test that failed in the last run was filtered out, or has another title now.'
+    : 'No tests ran: every selected test was filtered out. Check your --grep / --grep-invert pattern (it matches against the full "describe > test" name).';
 
   // ─── Parallel mode ───
   // UI and watch modes handle their own execution — skip the dispatcher path.
@@ -2790,7 +2794,8 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       await reporter.onRunEnd(fullResult);
       preserveEmulatorsForReuse(emulatorsLaunchedThisProcess());
       if (failureTracker?.reached) console.error(red(stoppedEarlyMessage(failureTracker.maxFailures)));
-      const zeroMatch = filterRanNothing(!!selectionFilterActive, fullResult.tests);
+      const zeroMatch = filterRanNothing(!!selectionFilterActive, fullResult.tests)
+        || (lastFailedApplied && fullResult.tests.length === 0);
       if (zeroMatch) console.error(red(zeroMatchFilterMessage));
       else writeLastRun(config, fullResult);
       process.exit((fullResult.status === 'failed' || zeroMatch) ? 1 : 0);
@@ -3325,7 +3330,8 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     };
     await reporter.onRunEnd(fullResult);
     if (failureTracker?.reached) console.error(red(stoppedEarlyMessage(failureTracker.maxFailures)));
-    const zeroMatch = filterRanNothing(!!selectionFilterActive, allResults);
+    const zeroMatch = filterRanNothing(!!selectionFilterActive, allResults)
+      || (lastFailedApplied && allResults.length === 0);
     if (zeroMatch) console.error(red(zeroMatchFilterMessage));
     else writeLastRun(config, fullResult);
     sequentialExitCode = (hasFailed || zeroMatch) ? 1 : 0;

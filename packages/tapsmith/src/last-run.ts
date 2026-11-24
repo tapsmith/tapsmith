@@ -86,8 +86,9 @@ function isLastRunTest(value: unknown): value is LastRunTest {
  * that has a test to run; with none, it runs its own failures, if any.
  *
  * `namesOf`: the tests of a file this run could select, or `undefined` when
- * they are not known. A failure that stood for a whole file (it failed to
- * load, or its device could not start) selects the whole file.
+ * they are not known: the file then runs whole, since a recorded title may be
+ * gone. So does a file with a failure that stood for all of it (it failed to
+ * load, or its device could not start).
  *
  * Returns the run's files as one deduplicated, sorted list.
  */
@@ -127,11 +128,15 @@ function failuresOf(
     const titles = new Set(failed.filter((t) => t.file === rel && t.project === label).map((t) => t.title));
     if (titles.size === 0) continue;
     const names = namesOf(file, project);
-    const selected = names ? names.filter((n) => titles.has(n)) : [...titles];
+    if (names === undefined) {
+      result.set(file, undefined);
+      continue;
+    }
+    const selected = names.filter((n) => titles.has(n));
     const wholeFile = [...titles].some((t) =>
-      (t === fileLoadFailureTitle(file) || t === path.basename(file)) && !names?.includes(t));
+      (t === fileLoadFailureTitle(file) || t === path.basename(file)) && !names.includes(t));
     if (wholeFile) {
-      if (names === undefined || names.length > 0) result.set(file, undefined);
+      if (names.length > 0) result.set(file, undefined);
     } else if (selected.length > 0) {
       result.set(file, selected);
     }
