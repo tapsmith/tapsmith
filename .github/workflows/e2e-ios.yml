@@ -777,6 +777,7 @@ jobs:
         working-directory: e2e
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}-trace.log
+          E2E_OUTPUT_DIR: tapsmith-results/verify-trace
         run: node verify-trace-archive.mjs -c tapsmith.config.ios-ci.mjs
 
       # PILOT-1239: walk the login flow through a headless MCP session, then
@@ -789,6 +790,7 @@ jobs:
         working-directory: e2e
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}-mcp-lines.log
+          E2E_OUTPUT_DIR: tapsmith-results/mcp-lines
         run: node verify-mcp-test-lines.mjs -c tapsmith.config.ios-ci.mjs --device "$TAPSMITH_IOS_UDID"
 
       - name: Summarize iOS timing breakdown

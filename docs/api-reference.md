@@ -2564,6 +2564,9 @@ reporter, the report has one `<testsuite>` per test file and project:
 
 The report is never opened when the `CI` environment variable is set, as in Playwright.
 
+Each report replaces the one before it: the files of the previous report are removed from `outputFolder`. Other files
+in the folder are kept, including those of reports written by versions of Tapsmith that kept no record of them.
+
 The HTML report is a self-contained page with pass/fail summary, filtering, and per-test durations, with links to each failure's trace and video:
 
 ![HTML report with a pass/fail summary, filter chips, and per-test rows including trace and video links for a failed test](images/html-report.png)

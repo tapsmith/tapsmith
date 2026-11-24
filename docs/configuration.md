@@ -63,7 +63,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `devices` | `number \| { name: string; device?: string }[]` | `undefined` | Drive several devices from one test — `devices: 2`, or named members optionally pinned to a serial (at most 10). Project-level only. Tests receive them as the `devices` fixture. See [Multi-device tests](./multi-device.md). |
 | `deviceStrategy` | `"prefer-connected" \| "avd-only"` | contextual | Optional override for device selection (Android). Defaults to `"avd-only"` when `avd` is set, otherwise `"prefer-connected"`. On CI, a default `"avd-only"` whose AVD is not on the machine uses the connected devices instead, with a note ([CI Setup](ci-setup.md#the-avd-in-a-config-from-tapsmith-init)); an explicit `"avd-only"` turns that off. |
 | `rootDir` | `string` | the directory the config is loaded from | Root for test discovery, and the base for relative paths elsewhere in the config (`app`, `apk`, agent artifacts). A relative `rootDir` resolves against the directory the config is loaded from — the working directory for `tapsmith test`, including `tapsmith test -c ../other/tapsmith.config.mjs`, and the config file's own directory for an MCP server that found a config elsewhere. Unset, it *is* that directory. |
-| `outputDir` | `string` | `"tapsmith-results"` | Directory for screenshots and other artifacts. |
+| `outputDir` | `string` | `"tapsmith-results"` | Directory for traces, screenshots and videos. Each run [removes what earlier runs wrote there](#output-of-earlier-runs). |
 | `agentApk` | `string` | auto-resolved | Path to the Tapsmith agent APK (Android). When installed via npm, the APK from `@tapsmith/agent-android` is used automatically. Only set this to override with a custom build. |
 | `agentTestApk` | `string` | auto-resolved | Path to the Tapsmith agent test APK (Android). When installed via npm, the APK from `@tapsmith/agent-android` is used automatically. Only set this to override with a custom build. |
 | `iosXctestrun` | `string` | `undefined` | Path to the iOS agent `.xctestrun` file. **Simulator and device builds are NOT interchangeable** — build one with `xcodebuild -destination 'platform=iOS Simulator,…'` for simulators, or `tapsmith ios build-agent` for physical devices. Use one project per target with its own `iosXctestrun`. When omitted, Tapsmith finds the agent build itself (for physical devices, see [iOS physical devices](./ios-physical-devices.md)). |
@@ -294,6 +294,30 @@ Android uses `adb shell screenrecord` (3-min hard cap per recording, accepted
 in v1); iOS Simulator uses `xcrun simctl io recordVideo`; iOS physical
 devices use `ffmpeg -f avfoundation` and require `ffmpeg` on `PATH`. See the
 full reference at [api-reference.md#video-recording](./api-reference.md#video-recording).
+
+## Output of earlier runs
+
+As in Playwright, `tapsmith test` starts by removing the output of earlier runs from `outputDir`, before any device
+starts: their traces, failure screenshots and videos, and JSON or JUnit reports written there. The
+[HTML reporter](api-reference.md#built-in-reporters) replaces its report when it writes a new one.
+
+Unlike Playwright, the folder itself is not emptied. Tapsmith records each file it writes there (in
+`<outputDir>/.tapsmith-output/`), and removes only those, and only while they are unchanged. These always stay:
+
+- files you put there, such as an [`appState` archive](writing-tests.md), logs, or screenshots a test saved itself;
+- output of a run that is still going, such as another `tapsmith test` or a UI-mode session in the same project;
+- output written by a version of Tapsmith that kept no record. Delete the folder once after upgrading, if you want it gone.
+
+UI mode and watch mode remove earlier output once, when the session starts, and keep everything from then on. An MCP
+server does so with its first `tapsmith_run_tests`. `merge-reports`, `show-report` and
+`verify` remove nothing from `outputDir`.
+
+To keep the output of two runs made one after the other, say Android and then iOS in one CI job, give each its own
+`outputDir`:
+
+```typescript
+outputDir: process.env.TEST_OUTPUT_DIR ?? "tapsmith-results",
+```
 
 ## Example Configurations
 

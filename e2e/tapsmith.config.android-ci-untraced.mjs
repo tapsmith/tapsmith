@@ -17,6 +17,8 @@ export default defineConfig({
   // Tapsmith's own setting and restore on every run (PILOT-971).
   reducedMotion: "reduce",
   retries: 0,
+  // Not the sharded run's: this run would clear it.
+  outputDir: process.env.E2E_OUTPUT_DIR ?? "tapsmith-results",
   reporter: [["list"], ["github"]],
   screenshot: "only-on-failure",
   workers: 1,

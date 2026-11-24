@@ -26,6 +26,7 @@ import {
   type RunOptions,
 } from '../runner.js';
 import type { TapsmithConfig } from '../config.js';
+import { beginOutputRun } from '../output-ledger.js';
 import { Tracing } from '../trace/tracing.js';
 import { getActiveTraceCollector, type TraceCollector } from '../trace/trace-collector.js';
 import { rememberCaptureFailures } from '../capture-warnings.js';
@@ -4008,5 +4009,68 @@ describe('orientation restore after each test (PILOT-1253)', () => {
     expect(result.tests.map((t) => t.status)).toEqual(['passed']);
     expect(a._restoreTestOrientation).toHaveBeenCalledTimes(1);
     expect(b._restoreTestOrientation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('output of earlier runs', () => {
+  it('records the traces (as amended by afterAll), screenshots and videos a run writes, so the next run removes them', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-output-'));
+    const exitListeners = process.listeners('exit');
+    const config = makeConfig({
+      rootDir: tempRoot, outputDir: 'out', screenshot: 'always', video: 'on',
+      trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+    });
+    const video = path.join(tempRoot, 'recording.mp4');
+    const device = {
+      tracing: new Tracing(async () => undefined, async () => undefined),
+      waitForIdle: vi.fn(async () => {}),
+      _startDeviceLogStream: vi.fn(),
+      _stopDeviceLogStream: vi.fn(),
+      _startDaemonLogStream: vi.fn(),
+      _stopDaemonLogStream: vi.fn(),
+      takeScreenshot: vi.fn(async () => ({ success: true, data: Buffer.from('png') })),
+      _startVideoRecording: vi.fn(async () => {
+        fs.writeFileSync(video, 'mp4');
+        return { success: true };
+      }),
+      _stopVideoRecording: vi.fn(async () => ({ success: true, videoPath: video })),
+    };
+    vi.stubEnv('TAPSMITH_OUTPUT_RUN', '');
+    try {
+      beginOutputRun(config, { clear: true });
+      pushContext();
+      tapsmithTest('a test', async () => {});
+      tapsmithAfterAll(async () => {
+        getActiveTraceCollector()!.addActionEvent({
+          category: 'device', action: 'terminateApp', duration: 5, success: true, log: [],
+          hasScreenshotBefore: false, hasScreenshotAfter: false, hasHierarchyBefore: false, hasHierarchyAfter: false,
+        });
+      });
+      pushContext();
+      tapsmithDescribe('broken setup', () => {
+        tapsmithBeforeAll(async () => { throw new Error('boom'); });
+        tapsmithTest('never runs', async () => {});
+      });
+      const broken = popContext();
+      const opts = makeOpts({
+        config,
+        screenshotDir: path.join(tempRoot, 'out', 'screenshots'),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+        devices: [{ name: 'device-1', device }] as any,
+      });
+      await runSuiteContext(broken, '', [], [], opts);
+      await runSuiteContext(popContext(), '', [], [], opts);
+      const written = (): string[] => ['traces', 'screenshots', 'videos'].flatMap((d) =>
+        fs.readdirSync(path.join(tempRoot, 'out', d)).map((f) => `${d}/${f}`));
+      expect(written().map((f) => path.extname(f)).sort()).toEqual(['.mp4', '.png', '.png', '.zip', '.zip']);
+      // The run ends as its process does.
+      for (const l of process.listeners('exit')) if (!exitListeners.includes(l)) l.call(process, 0);
+      beginOutputRun(config, { clear: true });
+      expect(written()).toEqual([]);
+    } finally {
+      for (const l of process.listeners('exit')) if (!exitListeners.includes(l)) process.off('exit', l);
+      vi.unstubAllEnvs();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });

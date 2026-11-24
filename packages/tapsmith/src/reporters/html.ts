@@ -33,7 +33,12 @@ export class HtmlReporter implements TapsmithReporter {
   async onRunEnd(result: FullResult): Promise<void> {
     const rootDir = this._config?.rootDir ?? process.cwd();
     const outputDir = path.resolve(rootDir, this._outputFolder);
+    removePreviousReport(outputDir, result);
     fs.mkdirSync(outputDir, { recursive: true });
+
+    // The folder may be the one the artifacts are in: those are not the
+    // report's, and not its successor's to remove.
+    const copied = new Set<string>();
 
     // Copy screenshots to report folder
     const screenshotMap = new Map<string, string>();
@@ -41,7 +46,10 @@ export class HtmlReporter implements TapsmithReporter {
       if (test.screenshotPath && fs.existsSync(test.screenshotPath)) {
         const basename = path.basename(test.screenshotPath);
         const dest = path.join(outputDir, basename);
-        fs.copyFileSync(test.screenshotPath, dest);
+        if (realPath(test.screenshotPath) !== realPath(dest)) {
+          fs.copyFileSync(test.screenshotPath, dest);
+          copied.add(basename);
+        }
         screenshotMap.set(test.screenshotPath, basename);
       }
     }
@@ -52,7 +60,10 @@ export class HtmlReporter implements TapsmithReporter {
       if (test.tracePath && fs.existsSync(test.tracePath)) {
         const basename = path.basename(test.tracePath);
         const dest = path.join(outputDir, basename);
-        fs.copyFileSync(test.tracePath, dest);
+        if (realPath(test.tracePath) !== realPath(dest)) {
+          fs.copyFileSync(test.tracePath, dest);
+          copied.add(basename);
+        }
         traceMap.set(test.tracePath, basename);
       }
     }
@@ -64,7 +75,10 @@ export class HtmlReporter implements TapsmithReporter {
         try {
           const basename = path.basename(test.videoPath);
           const dest = path.join(outputDir, basename);
-          await fs.promises.copyFile(test.videoPath, dest);
+          if (realPath(test.videoPath) !== realPath(dest)) {
+            await fs.promises.copyFile(test.videoPath, dest);
+            copied.add(basename);
+          }
           videoMap.set(test.videoPath, basename);
         } catch (err) {
           console.warn(`[HtmlReporter] Failed to copy video ${test.videoPath}:`, err);
@@ -75,6 +89,7 @@ export class HtmlReporter implements TapsmithReporter {
     const html = generateHtml(result, this._startTime, screenshotMap, traceMap, videoMap);
     const indexPath = path.join(outputDir, 'index.html');
     fs.writeFileSync(indexPath, html);
+    writeReportLedger(outputDir, ['index.html', ...copied]);
 
     const hasFailed = result.tests.some((t) => t.status === 'failed');
     // Never in CI, as in Playwright: nobody is there to look, and a runner
@@ -97,6 +112,62 @@ export class HtmlReporter implements TapsmithReporter {
     }
 
     process.stderr.write(`HTML report written to ${indexPath}\n`);
+  }
+}
+
+// ─── Replacing the previous report ───
+
+/** Names the files a report consists of, so the next one can remove them. */
+const REPORT_LEDGER = '.tapsmith-report.json';
+
+/**
+ * Remove the previous report's files, so the folder holds one report. Only the
+ * files its ledger names, and only while they are as it recorded them: the
+ * folder may be one the user keeps other files in (`outputFolder: 'public'`).
+ * The artifacts of the run being reported are never removed, wherever they are.
+ */
+function removePreviousReport(outputDir: string, result: FullResult): void {
+  const ledger = path.join(outputDir, REPORT_LEDGER);
+  let files: unknown;
+  try {
+    files = (JSON.parse(fs.readFileSync(ledger, 'utf-8')) as { files?: unknown } | null)?.files;
+  } catch {
+    return; // no earlier report, or one this version does not know
+  }
+  if (!Array.isArray(files)) return;
+  const inUse = new Set(result.tests
+    .flatMap((t) => [t.screenshotPath, t.tracePath, t.videoPath])
+    .flatMap((p) => (p ? [realPath(p)] : [])));
+  for (const entry of files as unknown[]) {
+    const { name, size, mtimeMs } = (entry ?? {}) as { name?: unknown; size?: unknown; mtimeMs?: unknown };
+    if (typeof name !== 'string' || name === '..' || path.basename(name) !== name || name.includes('\\')) continue;
+    const file = path.join(outputDir, name);
+    try {
+      const stat = fs.lstatSync(file);
+      if (stat.isFile() && stat.size === size && stat.mtimeMs === mtimeMs && !inUse.has(realPath(file))) fs.rmSync(file);
+    } catch {
+      // Already gone, or not removable: the report is written regardless.
+    }
+  }
+}
+
+function writeReportLedger(outputDir: string, names: string[]): void {
+  try {
+    const files = names.map((name) => {
+      const { size, mtimeMs } = fs.statSync(path.join(outputDir, name));
+      return { name, size, mtimeMs };
+    });
+    fs.writeFileSync(path.join(outputDir, REPORT_LEDGER), JSON.stringify({ version: 1, files }) + '\n');
+  } catch {
+    // The next report then leaves this one's files behind.
+  }
+}
+
+function realPath(file: string): string {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    return path.resolve(file);
   }
 }
 
