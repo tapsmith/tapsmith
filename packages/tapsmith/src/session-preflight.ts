@@ -5,6 +5,8 @@ import type { Device } from './device.js';
 import { appResetAction, parseHooksMarker, routeDeepLink, satisfies, warmResetTarget, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
 import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
+import { TestAbortedError } from './abort.js';
+import { TestEndedError } from './attempt-fence.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
 import { appDependsOn, appDependsOnTapsmithHooks } from './init-detect.js';
 import { devClientLaunchUrl, devClientScheme, devClientScreen, devServerUrlForDevice, findDevServer, inspectDevBuild, type DevClientScreen, type DevServerFetch } from './dev-client.js';
@@ -1697,6 +1699,8 @@ export const LINK_SETTLE_MS = 2_000;
 interface DevClientDeps {
   fetch?: DevServerFetch
   settleMs?: number
+  /** Only when the app is the one in front. */
+  ifInFront?: boolean
 }
 
 const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
@@ -1706,7 +1710,7 @@ const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-
  * build one of these for a launch they make outside any test session.
  */
 export type DevClientContext = Pick<SessionPreflightContext, 'config' | 'client' | 'deviceSerial' | 'capabilities'> & {
-  device: Pick<SessionDevice, 'openDeepLink' | '_sessionLaunches'>
+  device: Pick<SessionDevice, 'openDeepLink' | 'currentPackage' | '_sessionLaunches'>
 };
 
 /** The build Tapsmith installed for this session, resolved against `rootDir`. */
@@ -1754,7 +1758,7 @@ export function connectDevClientForTool(target: {
   /** The config's build for this app, relative to `rootDir`, when it names one. */
   apk?: string
   app?: string
-}): Promise<boolean> {
+}, deps: DevClientDeps = {}): Promise<boolean> {
   return connectDevClient({
     config: {
       package: target.packageName, platform: target.platform, rootDir: target.rootDir, device: target.serial,
@@ -1764,17 +1768,7 @@ export function connectDevClientForTool(target: {
     device: target.device,
     deviceSerial: target.serial,
     capabilities: {},
-  });
-}
-
-/** One hierarchy read for the dev-client checks; undefined when it fails. */
-async function readHierarchyXml(ctx: DevClientContext): Promise<string | undefined> {
-  try {
-    const h = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
-    return h.hierarchyXml || undefined;
-  } catch {
-    return undefined;
-  }
+  }, deps);
 }
 
 /** The error a session stops with when Metro cannot be used. */
@@ -1808,6 +1802,8 @@ export async function connectDevClient(ctx: DevClientContext, deps: DevClientDep
   if (!pkg) return false;
   const build = devBuildKind(ctx);
   if (build.kind !== 'dev-client' && build.kind !== 'metro') return false;
+  // An Android link may have gone to another app.
+  if (deps.ifInFront && ctx.config.platform !== 'ios' && await ctx.device.currentPackage() !== pkg) return false;
   return leaveDevScreens(ctx, pkg, { kind: build.kind, ...(build.scheme ? { scheme: build.scheme } : {}) }, deps);
 }
 
@@ -1822,15 +1818,37 @@ async function checkReactNativeDevServer(ctx: SessionPreflightContext): Promise<
   await leaveDevScreens(ctx, pkg, { kind: 'metro' }, {});
 }
 
-/** One look at the app: the development screen it shows, or whether its own UI is drawn. */
-async function lookAtApp(ctx: DevClientContext, pkg: string): Promise<{ screen?: DevClientScreen; rendered: boolean } | undefined> {
-  const xml = await readHierarchyXml(ctx);
-  if (!xml) return undefined;
-  const screen = devClientScreen(xml);
-  if (screen) return { screen, rendered: false };
-  // Android's permission prompt hides the app's own nodes: the app is up.
-  if (/\bpackage="com\.(google\.)?android\.permissioncontroller"/.test(xml)) return { rendered: true };
-  return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg) };
+/** What one look at the app found: the development screen it shows, or whether its own UI is drawn. */
+interface DevLook {
+  screen?: DevClientScreen
+  rendered: boolean
+}
+
+/** Reads of the screen that may fail in a row before the failure is the story, not the app. */
+const DEV_READ_FAILURES = 10;
+
+/**
+ * A look at the app, undefined when the read failed: a snapshot can time out
+ * on a busy machine. A stopped run ends it at once, and a device that keeps
+ * failing to answer after {@link DEV_READ_FAILURES} reads.
+ */
+function devLooker(ctx: DevClientContext, pkg: string): () => Promise<DevLook | undefined> {
+  let failures = 0;
+  return async () => {
+    let xml: string;
+    try {
+      xml = (await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS)).hierarchyXml;
+    } catch (err) {
+      if (err instanceof TestAbortedError || err instanceof TestEndedError || ++failures >= DEV_READ_FAILURES) throw err;
+      return undefined;
+    }
+    failures = 0;
+    const screen = devClientScreen(xml);
+    if (screen) return { screen, rendered: false };
+    // Android's permission prompt hides the app's own nodes: the app is up.
+    if (/\bpackage="com\.(google\.)?android\.permissioncontroller"/.test(xml)) return { rendered: true };
+    return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(xml) : androidHierarchyHasRenderedContent(xml, pkg) };
+  };
 }
 
 /** {@link connectDevClient}'s loop: look, act on a development screen, until the app is there. */
@@ -1840,8 +1858,8 @@ async function leaveDevScreens(
   build: { kind: 'dev-client' | 'metro'; scheme?: string },
   deps: DevClientDeps,
 ): Promise<boolean> {
-  const launchedAt = Date.now();
-  let seen = await lookAtApp(ctx, pkg);
+  const look = devLooker(ctx, pkg);
+  let seen = await look();
   if (seen?.rendered) return false;
   let links = 0;
   await withActionProgress('loadDevBundle', pkg, async (progress) => {
@@ -1849,10 +1867,13 @@ async function leaveDevScreens(
     // `launchApp()` comes here straight from the launch), so a screen with
     // nothing on it yet is read again, bounded: an app still blank after that
     // is left to the tests' own waiting.
+    // A read that failed saw nothing, so it does not count towards the bound.
+    let settleBy: number | undefined;
     while (!seen?.screen) {
-      if (seen?.rendered || Date.now() - launchedAt >= (deps.settleMs ?? APP_RENDER_READY_TIMEOUT_MS)) return;
+      if (seen?.rendered) return;
+      if (seen && Date.now() >= (settleBy ??= Date.now() + (deps.settleMs ?? APP_RENDER_READY_TIMEOUT_MS))) return;
       await delay(HIERARCHY_POLL_INTERVAL_MS);
-      seen = await lookAtApp(ctx, pkg);
+      seen = await look();
     }
 
     const start = Date.now();
@@ -1906,7 +1927,7 @@ async function leaveDevScreens(
       }
       if (Date.now() - start >= DEV_BUNDLE_LOAD_TIMEOUT_MS) throw devBundleTimeout(pkg, build.kind, screen, target?.serverUrl);
       await delay(confirming ? DEV_MENU_CONFIRM_MS : HIERARCHY_POLL_INTERVAL_MS);
-      seen = await lookAtApp(ctx, pkg);
+      seen = await look();
     }
   });
   return links > 0;

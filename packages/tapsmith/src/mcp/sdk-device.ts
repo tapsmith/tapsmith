@@ -69,12 +69,11 @@ function afterAppLaunch(client: TapsmithGrpcClient, device: Device, serial: stri
   };
 }
 
-/** Connect a development build after `device`'s launches, and after the iOS links that may relaunch it. */
+/** Connect a development build after `device`'s launches, and after the links that may have started the app. */
 function connectsDevClients(client: TapsmithGrpcClient, device: Device, serial: string | undefined): void {
   const hook = afterAppLaunch(client, device, serial);
   device._afterAppLaunch = hook;
-  // On iOS the current package is always the app the agent drives.
-  if (device.platform === 'ios') device._afterOpenLink = async () => hook(await device.currentPackage());
+  device._afterOpenLink = async () => hook(await device.currentPackage());
 }
 
 /** The SDK Device for `client`'s device (`serial` when the tool resolved one). */

@@ -357,8 +357,8 @@ export class Device {
    */
   _afterAppLaunch?: (packageName: string) => Promise<unknown>;
   /**
-   * @internal — The same, after a deep link that may have relaunched the app
-   * (iOS). True when it had to load the app again, which drops the link.
+   * @internal — The same, after a deep link, which may have started the app
+   * (a stopped one, or an iOS cold delivery). True when it had to load the app again, which drops the link.
    */
   _afterOpenLink?: () => Promise<boolean>;
   /**
@@ -1044,10 +1044,12 @@ export class Device {
         () => this._client.openDeepLink(uri, opts),
         'Open deep link failed'));
     await deliver(effectiveOptions);
-    // An iOS link may have relaunched the app to deliver itself. A development
-    // build cannot take an app's own link cold: once it is in the app, again.
+    // A link may have started the app to deliver itself. A development build
+    // cannot take an app's own link cold: once it is in the app, again. (That
+    // one can go cold too, when it changes nothing on screen.)
     if (!this._sessionLaunches && !isDevClientLink(uri) && await this._afterOpenLink?.()) {
       await deliver(options ? { ...options, forceColdLaunch: false } : undefined);
+      await this._afterOpenLink?.();
     }
   }
 

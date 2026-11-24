@@ -4,6 +4,7 @@ import { strToU8, zipSync } from 'fflate';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { connectDevClient, connectDevClientForTool, ensureSessionReady, executeAppReset, launchConfiguredApp, type SessionPreflightContext } from '../session-preflight.js';
+import { TestAbortedError } from '../abort.js';
 import type { DevServerFetch } from '../dev-client.js';
 
 const fixture = (name: string): string => fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf-8');
@@ -263,6 +264,40 @@ describe('connectDevClient', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('stops at once when the run is stopped', async () => {
+    const { ctx, client } = makeContext([BANNER]);
+    client.getUiHierarchy.mockImplementationOnce(async () => ({ requestId: '1', hierarchyXml: BANNER, errorMessage: '' })).mockRejectedValue(new TestAbortedError());
+    await expect(connectDevClient(ctx, { fetch: metro })).rejects.toBeInstanceOf(TestAbortedError);
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(2);
+  });
+
+  it('looks again after a read that failed, even past the settle bound', async () => {
+    const { ctx, device, client } = makeContext([LAUNCHER, APP]);
+    client.getUiHierarchy.mockRejectedValueOnce(new Error('DEADLINE_EXCEEDED'));
+    expect(await connectDevClient(ctx, { fetch: metro, settleMs: 0 })).toBe(true);
+    expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up on a device that stopped answering, with its error', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ctx, client } = makeContext([BANNER]);
+      client.getUiHierarchy.mockRejectedValue(new Error('agent disconnected'));
+      const failed = expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow('agent disconnected');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves another app a link opened alone', async () => {
+    const { ctx, client, device } = makeContext([LAUNCHER]);
+    device.currentPackage.mockResolvedValueOnce('com.android.chrome');
+    expect(await connectDevClient(ctx, { fetch: metro, ifInFront: true })).toBe(false);
+    expect(client.getUiHierarchy).not.toHaveBeenCalled();
   });
 
   it('reads nothing for a build that carries its JavaScript, even in an expo-dev-client project', async () => {

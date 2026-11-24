@@ -272,8 +272,9 @@ describe('openDeviceSession', () => {
     expect(mocks.preflight.connectDevClient).not.toHaveBeenCalled();
     await session.device._afterAppLaunch!(session.config.package!);
     expect(mocks.preflight.connectDevClient).toHaveBeenCalledExactlyOnceWith(session.context);
-    // Only an iOS link can relaunch the app to deliver itself.
-    expect(session.device._afterOpenLink).toBeUndefined();
+    // A link can start the app, or open another one.
+    await session.device._afterOpenLink!();
+    expect(mocks.preflight.connectDevClient).toHaveBeenLastCalledWith(session.context, expect.objectContaining({ ifInFront: true }));
   });
 
   it('installs onto a device that lacks the app and vouches for the fresh install', async () => {

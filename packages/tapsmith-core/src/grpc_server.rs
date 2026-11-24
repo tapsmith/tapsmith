@@ -1548,6 +1548,12 @@ impl TapsmithServiceImpl {
                 }
             }
         }
+        // A development build's launcher (or dev menu) stands in for the app
+        // until this link loads it: what the probe saw (or missed) there says
+        // nothing about the app's hooks.
+        if is_dev_client_link(uri) {
+            *self.nav_probe_found_no_marker.write().await = false;
+        }
         backend
             .deliver_deep_link(
                 request_id,
@@ -3140,6 +3146,14 @@ impl TapsmithServiceImpl {
 
 /// A getBy* RegExp (PILOT-520) as the agents read it: the SDK-translated
 /// pattern, its `i` flag, and the literal for messages.
+/// Whether `uri` asks an Expo development build to load its bundle from a
+/// server, rather than being the app's own link.
+fn is_dev_client_link(uri: &str) -> bool {
+    uri.contains("://expo-development-client/")
+        || uri.contains("?__expo_url=")
+        || uri.contains("&__expo_url=")
+}
+
 fn text_regex_to_json(re: &proto::TextRegex) -> Value {
     json!({
         "pattern": re.pattern,
@@ -7966,6 +7980,17 @@ mod tests {
     use super::*;
     use crate::proto::tapsmith_service_server::TapsmithService;
     use serde_json::json;
+
+    #[test]
+    fn dev_client_links_are_told_from_the_apps_own() {
+        assert!(is_dev_client_link(
+            "exp+app://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081"
+        ));
+        assert!(is_dev_client_link(
+            "exp+app://?__expo_url=http%3A%2F%2Flocalhost%3A8081"
+        ));
+        assert!(!is_dev_client_link("myapp://settings?url=x"));
+    }
 
     #[test]
     fn agent_timing_fields_list_reported_phases_in_order() {
