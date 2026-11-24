@@ -439,6 +439,46 @@ describe('configureIos() on an Expo project (PILOT-557)', () => {
   });
 });
 
+describe('configureIos() with a React Native Debug build', () => {
+  let logged: string[] = [];
+  let project = '';
+
+  beforeEach(() => {
+    answers.clear();
+    asked.length = 0;
+    questions.length = 0;
+    bundleIds.clear();
+    bundleIds.set(SIM_APP, 'com.example.sim');
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logged.push(args.join(' ')); });
+    project = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-rn-'));
+    fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ dependencies: { expo: '58.0.0', 'react-native': '0.88.0' } }));
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+  });
+
+  afterEach(() => {
+    vi.mocked(process.cwd).mockRestore();
+    fs.rmSync(project, { recursive: true, force: true });
+  });
+
+  it('warns that it needs Metro and gives the Release build', async () => {
+    script('simulators');
+    await configureIos(env, { hasAndroidDir: false, hasIosDir: true, usesTapsmithHooks: true });
+    const warning = logged.find((l) => l.includes('is a Debug build'));
+    expect(warning).toContain(SIM_APP);
+    expect(warning).toContain('Metro');
+    expect(warning).toContain('EXPO_PUBLIC_TAPSMITH_HOOKS=1 xcodebuild');
+  });
+
+  it('says nothing for a Release build', async () => {
+    const release = './ios/Release-iphonesimulator/MyApp.app';
+    bundleIds.set(release, 'com.example.sim');
+    script('simulators', [[/simulator build\)/, release]]);
+    await configureIos(env);
+    expect(logged.some((l) => l.includes('is a Debug build'))).toBe(false);
+  });
+});
+
 describe('configureIos() simulator picker (PILOT-562)', () => {
   const picker = (): Question | undefined => questions.find((q) => /Which simulator/.test(q.message));
   const sim = (name: string, runtime: string, state = 'Shutdown') => ({ name, udid: `${name}-${runtime}`, state, runtime });

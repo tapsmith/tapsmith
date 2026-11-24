@@ -80,6 +80,9 @@ describe('parseSimctlDevicesJson()', () => {
       'com.apple.CoreSimulator.SimRuntime.watchOS-11-0': 'watchOS 11.0',
       'com.apple.CoreSimulator.SimRuntime.xrOS-2-0': 'xrOS 2.0',
       'com.apple.CoreSimulator.SimRuntime.tvOS-18-0': 'tvOS 18.0',
+      // A runtime built for one device model (Xcode 27's iPhone Duo) carries
+      // the model after the version: still just its version.
+      'com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4': 'iOS 27.2',
       // A shape simctl has not used: hyphens still become spaces, as before.
       'com.apple.CoreSimulator.SimRuntime.Some-Future-Runtime': 'Some Future Runtime',
     };

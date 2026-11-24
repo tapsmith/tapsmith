@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { initArgsFromOptions, resolveInitPlan, executeInitPlan, assertConfigWritable, assertProjectWritable, InitError, type DetectFns } from '../init-noninteractive.js';
 import { findApkCandidates, findIosAppCandidates, type ExpoProject } from '../init-detect.js';
 import { generateConfig, needsSimulatorAgent } from '../init.js';
-import { simulatorChoices, type EnvScan } from '../env-scan.js';
+import { simulatorChoices, simulatorPickerChoices, type EnvScan } from '../env-scan.js';
 import type { InitCommandOptions } from '../cli-program.js';
 
 /** `tapsmith init` flags as the CLI hands them over: every boolean present, value flags (and --[no-]network-capture) only when given. */
@@ -378,6 +378,22 @@ describe('resolveInitPlan()', () => {
       expect(rerun.platforms).toEqual(['android', 'ios']);
       expect(rerun.android?.packageName).toBe('com.x');
     }, false));
+
+    it('warns that a React Native Debug build needs Metro, and gives the Release build', () => withProject({ 'react-native': '0.79.0' }, (tmp) => {
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android,ios' }), baseEnv, { ...detectStubs, detectExpoProject: () => undefined }, tmp);
+      const debug = plan.warnings.filter((w) => w.includes('is a Debug build'));
+      expect(debug).toHaveLength(2);
+      expect(debug[0]).toContain('android/app/build/outputs/apk/debug/app-debug.apk');
+      expect(debug[0]).toContain('assembleRelease');
+      expect(debug[1]).toContain('Debug-iphonesimulator/MyApp.app');
+      expect(debug[1]).toContain('-configuration Release');
+    }));
+
+    it('does not warn about a Debug build of a native app', () => withProject({ lodash: '4.0.0' }, (tmp) => {
+      const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android,ios' }), baseEnv, { ...detectStubs, detectExpoProject: () => undefined }, tmp);
+      expect(plan.warnings.filter((w) => w.includes('is a Debug build'))).toEqual([]);
+    }));
 
     it('quotes an --apk path the shell would split', () => withProject({ 'react-native': '0.79.0' }, (tmp) => {
       const plan = resolveInitPlan(initArgs({ yes: true, apk: "my builds/it's.apk" }), baseEnv, { ...detectStubs, detectExpoProject: () => undefined }, tmp);
@@ -1448,6 +1464,25 @@ describe('simulatorChoices() (PILOT-562)', () => {
     // A UDID or unknown name is left alone: init cannot judge it.
     const udid = resolveInitPlan(initArgs({ yes: true, platform: 'ios', simulator: 'SOME-UDID' }), { ...baseEnv, simulators: [persona] }, detectStubs);
     expect(udid.ios?.simulatorDeviceType).toBeUndefined();
+  });
+
+  it('the wizard lists a booted custom-named simulator near the top, keeping the stock default first', () => {
+    const custom = (name: string, state = 'Shutdown') => ({ ...sim(name, 'iOS 18.5', state), deviceTypeName: 'iPhone 16' });
+    const stock = Array.from({ length: 30 }, (_, i) => ({ ...sim(`iPhone ${i}`, 'iOS 26.5'), deviceTypeName: `iPhone ${i}` }));
+    const sims = [custom('Old Custom'), ...stock, custom('Onboard-A iPhone 16', 'Booted')];
+    const names = simulatorPickerChoices(sims).map((s) => s.name);
+    expect(names.slice(0, 2)).toEqual(['iPhone 0', 'Onboard-A iPhone 16']);
+    expect(names.at(-1)).toBe('Old Custom');
+    expect(names).toHaveLength(32);
+    // After every booted stock simulator, which choosing avoids a boot as well.
+    const booted = [{ ...sim('iPhone 16', 'iOS 26.5', 'Booted'), deviceTypeName: 'iPhone 16' }, ...stock, custom('Mine', 'Booted')];
+    expect(simulatorPickerChoices(booted).map((s) => s.name).slice(0, 3)).toEqual(['iPhone 16', 'Mine', 'iPhone 0']);
+    // Nothing to move: the order is simulatorChoices'.
+    expect(simulatorPickerChoices(stock)).toEqual(simulatorChoices(stock));
+    expect(simulatorPickerChoices([custom('Mine', 'Booted')]).map((s) => s.name)).toEqual(['Mine']);
+    // With no stock simulator to keep first, a booted one stays the default.
+    const farm = [custom('Farm 1'), custom('Mine', 'Booted'), custom('Farm 2')];
+    expect(simulatorPickerChoices(farm).map((s) => s.name)).toEqual(['Mine', 'Farm 1', 'Farm 2']);
   });
 
   it('init --yes picks the booted simulator over the newest iPhone', () => {

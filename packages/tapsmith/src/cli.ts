@@ -1119,7 +1119,7 @@ async function ensureSequentialTargetDevice(
 
   // ─── iOS: use simulator instead of ADB device ───
   if (config.platform === 'ios') {
-    const { listSimulators, provisionSimulator, cleanupStaleSimulators, installAppIfAbsent } = await import('./ios-simulator.js');
+    const { listSimulators, provisionSimulator, cleanupStaleSimulators, staleSimulatorsDeletedMessage, installAppIfAbsent } = await import('./ios-simulator.js');
     // If no simulator is configured, try to auto-resolve a single paired
     // physical device. Mirrors how simulators are picked by name — the
     // user should not have to hand-parse `devicectl` JSON in their config.
@@ -1145,8 +1145,8 @@ async function ensureSequentialTargetDevice(
 
     // Clean up stale clones from previous runs
     const staleResult = cleanupStaleSimulators(simulatorName);
-    if (staleResult.killed.length > 0) {
-      const message = `Cleaned up ${staleResult.killed.length} stale simulator(s).`;
+    const message = staleSimulatorsDeletedMessage(staleResult);
+    if (message) {
       if (progress) progress.note(message);
       else process.stderr.write(`${DIM}${message}${RESET}\n`);
     }

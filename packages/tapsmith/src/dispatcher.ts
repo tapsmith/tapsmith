@@ -46,6 +46,7 @@ import {
 import {
   provisionSimulators,
   cleanupStaleSimulators,
+  staleSimulatorsDeletedMessage,
   preserveSimulatorsForReuse,
   forceCleanupSimulators,
   killAgentRunnersForSimulators,
@@ -1123,9 +1124,8 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
     if (config.simulator) {
       const staleResult = cleanupStaleSimulators(config.simulator);
       reusableSimulatorUdids = staleResult.reusable;
-      if (staleResult.killed.length > 0) {
-        note(`Cleaned up ${staleResult.killed.length} stale simulator(s).`);
-      }
+      const deletedMessage = staleSimulatorsDeletedMessage(staleResult);
+      if (deletedMessage) note(deletedMessage);
       if (staleResult.reusable.length > 0) {
         if (launchProgress) {
           launchProgress.update('worker-devices', {

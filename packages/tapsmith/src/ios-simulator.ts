@@ -531,17 +531,19 @@ export function cloneSimulator(sourceUdid: string, newName: string): string {
 }
 
 /**
- * Delete a simulator by UDID.
+ * Delete a simulator by UDID, best-effort. Returns whether simctl deleted it.
  */
-export function deleteSimulator(udid: string): void {
+export function deleteSimulator(udid: string): boolean {
   try {
     shutdownSimulator(udid);
     execFileSync('xcrun', ['simctl', 'delete', udid], {
       timeout: 30_000,
       stdio: 'ignore',
     });
+    return true;
   } catch {
     // Best-effort cleanup
+    return false;
   }
 }
 
@@ -848,8 +850,10 @@ export function killAgentRunnersForSimulators(udids: string[]): void {
 export interface CleanupStaleSimulatorsResult {
   /** UDIDs of healthy clones ready for reuse. */
   reusable: string[]
-  /** UDIDs of deleted clones. */
+  /** UDIDs of clones this sweep set out to delete, and of recorded ones that were already gone. */
   killed: string[]
+  /** Names of the clones simctl confirmed deleted, for saying which. */
+  deleted: string[]
   /**
    * The simulators the sweep listed, less the ones it deleted — current
    * enough for picking a booted one without listing again (~0.3 s). Absent
@@ -870,6 +874,7 @@ export function cleanupStaleSimulators(
 ): CleanupStaleSimulatorsResult {
   const reusable: string[] = [];
   const killed: string[] = [];
+  const deleted: string[] = [];
   const handledUdids = new Set<string>();
   // Clones another live Tapsmith session is driving are neither reused nor
   // deleted here (PILOT-381): both would pull a simulator out from under it.
@@ -907,7 +912,7 @@ export function cleanupStaleSimulators(
         killed.push(entry.udid);
       } else {
         // Exists but unhealthy — delete it
-        deleteSimulator(entry.udid);
+        if (deleteSimulator(entry.udid)) deleted.push(entry.name);
         killed.push(entry.udid);
       }
     }
@@ -931,7 +936,7 @@ export function cleanupStaleSimulators(
       'Skipping simulator cleanup: another Tapsmith run holds the simulator manifest lock. '
       + 'This run will clone fresh simulators instead of reusing any.',
     );
-    return { reusable, killed };
+    return { reusable, killed, deleted };
   }
 
   // Phase 2: heuristic cleanup — delete orphaned "Tapsmith Worker" sims
@@ -948,15 +953,28 @@ export function cleanupStaleSimulators(
     // strength of a snapshot taken before it existed.
     if (isRecordedInManifest(sim.udid)) continue;
 
-    deleteSimulator(sim.udid);
+    if (deleteSimulator(sim.udid)) deleted.push(sim.name);
     killed.push(sim.udid);
   }
 
   // Phase 3: kill stale xcodebuild processes for deleted sims
   killAgentRunnersForSimulators(killed);
 
-  const deleted = new Set(killed);
-  return { reusable, killed, simulators: allSims.filter((sim) => !deleted.has(sim.udid)) };
+  const gone = new Set(killed);
+  return { reusable, killed, deleted, simulators: allSims.filter((sim) => !gone.has(sim.udid)) };
+}
+
+/**
+ * The line a run prints after {@link cleanupStaleSimulators} deleted clones:
+ * which ones, and why they were Tapsmith's to delete — on a shared Mac a bare
+ * count reads as if the run deleted someone's simulators. Undefined when it
+ * deleted none.
+ */
+export function staleSimulatorsDeletedMessage(result: Pick<CleanupStaleSimulatorsResult, 'deleted'>): string | undefined {
+  const n = result.deleted.length;
+  if (n === 0) return undefined;
+  return `Deleted ${n} stale simulator${n === 1 ? '' : 's'} an earlier Tapsmith run cloned for parallel workers and left behind: `
+    + `${result.deleted.join(', ')}.`;
 }
 
 // ─── Reuse helpers ───
