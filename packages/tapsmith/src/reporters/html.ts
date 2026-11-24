@@ -122,7 +122,7 @@ const REPORT_LEDGER = '.tapsmith-report.json';
 
 /**
  * Remove the previous report's files, so the folder holds one report. Only the
- * files its ledger names, and only while they are the size it recorded: the
+ * files its ledger names, and only while they are as it recorded them: the
  * folder may be one the user keeps other files in (`outputFolder: 'public'`).
  * The artifacts of the run being reported are never removed, wherever they are.
  */
@@ -139,12 +139,12 @@ function removePreviousReport(outputDir: string, result: FullResult): void {
     .flatMap((t) => [t.screenshotPath, t.tracePath, t.videoPath])
     .flatMap((p) => (p ? [realPath(p)] : [])));
   for (const entry of files as unknown[]) {
-    const { name, size } = (entry ?? {}) as { name?: unknown; size?: unknown };
+    const { name, size, mtimeMs } = (entry ?? {}) as { name?: unknown; size?: unknown; mtimeMs?: unknown };
     if (typeof name !== 'string' || name === '..' || path.basename(name) !== name || name.includes('\\')) continue;
     const file = path.join(outputDir, name);
     try {
       const stat = fs.lstatSync(file);
-      if (stat.isFile() && stat.size === size && !inUse.has(realPath(file))) fs.rmSync(file);
+      if (stat.isFile() && stat.size === size && stat.mtimeMs === mtimeMs && !inUse.has(realPath(file))) fs.rmSync(file);
     } catch {
       // Already gone, or not removable: the report is written regardless.
     }
@@ -153,7 +153,10 @@ function removePreviousReport(outputDir: string, result: FullResult): void {
 
 function writeReportLedger(outputDir: string, names: string[]): void {
   try {
-    const files = names.map((name) => ({ name, size: fs.statSync(path.join(outputDir, name)).size }));
+    const files = names.map((name) => {
+      const { size, mtimeMs } = fs.statSync(path.join(outputDir, name));
+      return { name, size, mtimeMs };
+    });
     fs.writeFileSync(path.join(outputDir, REPORT_LEDGER), JSON.stringify({ version: 1, files }) + '\n');
   } catch {
     // The next report then leaves this one's files behind.

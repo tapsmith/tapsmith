@@ -439,7 +439,8 @@ jobs:
             > "tapsmith-results/logcat-${{ matrix.shard }}-attempt1.txt" 2>&1 || true
           adb logcat -c || true
 
-          run_shard
+          # Its own folder: a run clears the traces of the runs before it.
+          E2E_OUTPUT_DIR=tapsmith-results/attempt2 run_shard
 
       # Only shards that ran auth.setup produce the archive (hashFiles is
       # empty otherwise), and only a green run may seed the cache. The

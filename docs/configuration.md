@@ -309,8 +309,8 @@ Unlike Playwright, the folder itself is not emptied. Tapsmith records each file 
 - output written by a version of Tapsmith that kept no record. Delete the folder once after upgrading, if you want it gone.
 
 UI mode and watch mode remove earlier output once, when the session starts, and keep everything from then on. An MCP
-server does so with its first `tapsmith_run_tests`. `merge-reports` and `show-report` remove
-nothing from `outputDir`.
+server does so with its first `tapsmith_run_tests`. `merge-reports`, `show-report` and
+`verify` remove nothing from `outputDir`.
 
 To keep the output of two runs made one after the other, say Android and then iOS in one CI job, give each its own
 `outputDir`:

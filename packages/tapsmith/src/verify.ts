@@ -16,6 +16,7 @@ import { formatJson, jsonError, stripAnsi } from './cli-json.js';
 import { isTapsmithNotInstalledError } from './config.js';
 import { needsTsxLoader, tsxIpcPathProblem } from './child-scripts.js';
 import { minimatch } from 'minimatch';
+import { KEEP_OUTPUT_ENV } from './output-ledger.js';
 import { NO_TESTS_MATCH_FILTER_PREFIX } from './test-filter.js';
 
 // ─── Pure helpers (unit-tested) ───
@@ -324,7 +325,8 @@ export async function runVerify(args: VerifyArgs): Promise<void> {
         maxBuffer: 64 * 1024 * 1024,
         // The results file is verify's own, read and deleted below: the
         // reporter need not say where it went.
-        env: { ...process.env, TAPSMITH_JSON_OUTPUT_FILE: resultsFile, TAPSMITH_JSON_REPORT_QUIET: '1' },
+        // A check of the setup: the last run's failures stay readable.
+        env: { ...process.env, TAPSMITH_JSON_OUTPUT_FILE: resultsFile, TAPSMITH_JSON_REPORT_QUIET: '1', [KEEP_OUTPUT_ENV]: '1' },
         timeout: 10 * 60 * 1000,
       });
 

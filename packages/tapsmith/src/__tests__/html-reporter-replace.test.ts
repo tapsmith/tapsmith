@@ -52,6 +52,12 @@ describe('HtmlReporter replacing the previous report', () => {
     fs.writeFileSync(path.join(folder, 'a.zip'), 'something of the user\'s own');
     await report();
     expect(visible()).toEqual(['a.zip', 'favicon.ico', 'index.html']);
+
+    await report({ tracePath: artifact('r/b.zip') });
+    fs.writeFileSync(path.join(folder, 'b.zip'), 'R/B.ZIP'); // the same length
+    fs.utimesSync(path.join(folder, 'b.zip'), new Date(), new Date(Date.now() + 5_000));
+    await report();
+    expect(visible()).toContain('b.zip');
   });
 
   it('never removes the artifacts it is reporting, or ones that were in the folder already', async () => {

@@ -27,6 +27,8 @@ import { processIsLive, thisProcess, type ProcessRef } from './device-claims.js'
 const LEDGER_DIR = '.tapsmith-output';
 /** Carries the run's identity from its root process to everything it forks. */
 const RUN_ENV = 'TAPSMITH_OUTPUT_RUN';
+/** Internal: set by a command whose `tapsmith test` child is a check, not the user's run. */
+export const KEEP_OUTPUT_ENV = 'TAPSMITH_KEEP_OUTPUT';
 /**
  * How long a run of another machine or container, which left no end mark, is
  * taken to be still going: its process cannot be looked up from here.
@@ -64,7 +66,7 @@ function resolveOutputDir(config: OutputConfig): string | undefined {
 export function beginOutputRun(config: OutputConfig, opts: { clear: boolean }): void {
   const outputDir = resolveOutputDir(config);
   if (!outputDir) return;
-  if (opts.clear) clearPreviousOutput(outputDir);
+  if (opts.clear && process.env[KEEP_OUTPUT_ENV] !== '1') clearPreviousOutput(outputDir);
   const run: OutputRun = { id: randomUUID(), host: processHost(), owner: thisProcess(), outputDir };
   process.env[RUN_ENV] = JSON.stringify(run);
   process.once('exit', () => endRun(run));
@@ -181,7 +183,9 @@ function readLedger(ledger: string): { files: Map<string, FileStamp>; over: bool
     if (files.size > 1) continue; // every entry has the same owner
     live = entry.host === processHost()
       ? processIsLive(entry.owner)
-      : Date.now() - fs.statSync(ledger).mtimeMs < FOREIGN_RUN_MS;
+      : Date.now() - fs.statSync(ledger).mtimeMs < FOREIGN_RUN_MS
+        // This machine under another name: macOS takes one from the network.
+        || (entry.owner.startToken !== undefined && processIsLive(entry.owner));
   }
   return { files, over: ended || !live };
 }
