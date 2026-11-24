@@ -347,6 +347,16 @@ describe('connectDevClient', () => {
     expect(client.getUiHierarchy).toHaveBeenCalledTimes(3);
   });
 
+  it('does not take the iOS tools button alone for the app', async () => {
+    const ios = (inner: string): string => `<hierarchy><XCUIElementTypeApplication label="devclient">${inner}</XCUIElementTypeApplication></hierarchy>`;
+    const { ctx, client } = makeContext([
+      ios('<XCUIElementTypeImage label="" identifier="gearshape.fill" /><XCUIElementTypeStaticText label="Tools" />'),
+      ios('<XCUIElementTypeStaticText label="Welcome" />'),
+    ], { platform: 'ios', device: '4178D98F-5543-4DD8-B444-C409CE0EFB78' });
+    await connectDevClient(ctx, { fetch: metro });
+    expect(client.getUiHierarchy).toHaveBeenCalledTimes(2);
+  });
+
   it('leaves Expo Go alone', async () => {
     const { ctx, client } = makeContext([LAUNCHER]);
     ctx.config.package = 'host.exp.Exponent';

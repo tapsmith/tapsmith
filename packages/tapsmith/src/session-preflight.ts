@@ -1866,7 +1866,7 @@ function devLooker(ctx: DevClientContext, pkg: string): () => Promise<DevLook | 
     if (/\bpackage="com\.(google\.)?android\.permissioncontroller"/.test(xml)) return { rendered: true };
     // Expo's floating tools button and Android's launch icon are up before the
     // app is: alone, they are not its content.
-    const content = xml.replace(/\b(text|content-desc|label)="(Tools|Application icon)"/g, '$1=""');
+    const content = xml.replace(/\b(text|content-desc|label|identifier)="(Tools|gearshape\.fill|Application icon)"/g, '$1=""');
     return { rendered: ctx.config.platform === 'ios' ? iosHierarchyHasRenderedContent(content) : androidHierarchyHasRenderedContent(content, pkg) };
   };
 }
