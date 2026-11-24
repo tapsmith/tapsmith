@@ -12,7 +12,28 @@ pub(super) struct IosBackend<'a> {
     pub(super) svc: &'a TapsmithServiceImpl,
 }
 
+/// Whether the `.app` at `app_path` is an Expo development build: its
+/// dev launcher's resources are in the bundle (a Release build has none).
+fn is_dev_client_app(app_path: &str) -> bool {
+    std::path::Path::new(app_path)
+        .join("EXDevLauncher.bundle")
+        .exists()
+}
+
 impl IosBackend<'_> {
+    /// Whether the session's app is an Expo development build, told from the
+    /// build the agent was started with.
+    async fn app_is_dev_client(&self) -> bool {
+        let app_path = self
+            .svc
+            .ios_agent_config
+            .read()
+            .await
+            .as_ref()
+            .and_then(|c| c.app_path.clone());
+        app_path.is_some_and(|p| is_dev_client_app(&p))
+    }
+
     /// `launchApp`/`restartApp` with `waitForIdle` hand back an app that has
     /// drawn its first screen, as a reset rung's relaunch does
     /// (`relaunch_app`). The relaunch probe's idle wait ends as soon as the
@@ -510,6 +531,17 @@ impl DeviceBackend for IosBackend<'_> {
             return self.svc.make_action_response(request_id, result).await;
         }
 
+        // An Expo development build cold-launched by the app's own link opens
+        // on its dev launcher, where no hook can acknowledge anything until
+        // the SDK has connected it to Metro: a reset goes warm or not at all,
+        // and a navigation link is cold-launched without waiting for its ack.
+        let dev_client = !super::is_dev_client_link(uri) && self.app_is_dev_client().await;
+        let delivery = if dev_client && ack_epoch_gt.is_some() {
+            DeepLinkDelivery::WarmOnly
+        } else {
+            delivery
+        };
+
         // Simulator: warm-first, cold fallback.
         //
         // Warm attempt: if the app is already running with rendered
@@ -596,6 +628,8 @@ impl DeviceBackend for IosBackend<'_> {
                 return self.svc.make_action_response(request_id, warm_result).await;
             }
         }
+
+        let ack_nav_gt = if dev_client { None } else { ack_nav_gt };
 
         // Cold fallback: terminate -> simctl openurl -> agent verify,
         // retried as a unit. The first cold, trust-gated openurl on a
@@ -1002,7 +1036,7 @@ impl DeviceBackend for IosBackend<'_> {
     }
 
     async fn supports_cold_deep_link(&self) -> bool {
-        !self.svc.is_active_ios_physical().await
+        !self.svc.is_active_ios_physical().await && !self.app_is_dev_client().await
     }
 
     async fn save_app_state(
@@ -2317,8 +2351,18 @@ fn screenshot_orientation(data: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod screenshot_orientation_tests {
+    use super::is_dev_client_app;
     use super::screenshot_orientation;
     use serde_json::json;
+
+    #[test]
+    fn a_dev_client_app_is_told_by_its_launcher_resources() {
+        let app = tempfile::tempdir().unwrap();
+        let path = app.path().to_string_lossy().to_string();
+        assert!(!is_dev_client_app(&path));
+        std::fs::create_dir(app.path().join("EXDevLauncher.bundle")).unwrap();
+        assert!(is_dev_client_app(&path));
+    }
 
     #[test]
     fn passes_a_known_turn_through() {
