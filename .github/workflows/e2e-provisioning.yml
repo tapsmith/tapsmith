@@ -103,7 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -135,7 +135,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: temurin
           java-version: 17
@@ -190,7 +190,7 @@ jobs:
             test-app/package-lock.json
             packages/tapsmith-react-native/package-lock.json
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         if: steps.test-app-cache.outputs.cache-hit != 'true'
         with:
           distribution: temurin
@@ -243,7 +243,7 @@ jobs:
             packages/tapsmith-core/target/release/tapsmith-ios-hid
           key: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
 
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         if: steps.daemon-cache.outputs.cache-hit != 'true'
 
       - name: Install protobuf compiler
@@ -428,7 +428,7 @@ jobs:
           # expression context the system-image cache path below uses.
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: temurin
           java-version: 17
@@ -605,7 +605,7 @@ jobs:
             echo "::error::sdkmanager/avdmanager still on the PATH"; exit 1
           fi
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: temurin
           java-version: 17
