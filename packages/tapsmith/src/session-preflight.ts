@@ -5,8 +5,8 @@ import type { Device } from './device.js';
 import { appResetAction, parseHooksMarker, routeDeepLink, satisfies, warmResetTarget, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
 import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
-import { TestAbortedError } from './abort.js';
-import { TestEndedError } from './attempt-fence.js';
+import { isAbortError } from './abort.js';
+import { isTestEndedError } from './attempt-fence.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
 import { appDependsOn, appDependsOnTapsmithHooks } from './init-detect.js';
 import { devClientLaunchUrl, devClientScheme, devClientScreen, devServerUrlForDevice, findDevServer, inspectDevBuild, type DevClientScreen, type DevServerFetch } from './dev-client.js';
@@ -1851,7 +1851,7 @@ function devLooker(ctx: DevClientContext, pkg: string): () => Promise<DevLook | 
       if (!read.hierarchyXml) throw new Error(read.errorMessage || 'the UI hierarchy is empty');
       xml = read.hierarchyXml;
     } catch (err) {
-      if (err instanceof TestAbortedError || err instanceof TestEndedError) throw err;
+      if (isAbortError(err) || isTestEndedError(err)) throw err;
       if (Date.now() - (failingSince ??= Date.now()) >= DEV_READ_FAILURE_MS) throw err;
       return undefined;
     }
