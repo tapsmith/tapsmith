@@ -247,6 +247,68 @@ describe('worker-runner IPC reporting', () => {
       expect(fileDoneIndex).toBeGreaterThan(-1);
       expect(testEndIndex).toBeLessThan(fileDoneIndex);
       expect(fileDone).not.toHaveProperty('testEvents');
+
+      // No verdicts awaited without `awaitFailureVerdicts` (no maxFailures).
+      const failed: TestResult = { ...streamedResult, name: 'fails', fullName: 'fails', status: 'failed' };
+      const asked: boolean[] = [];
+      workerRunnerMocks.runTestFile.mockImplementation(async (_file: string, opts: RunOptions): Promise<SuiteResult> => {
+        opts.reporter?.onTestEnd?.({ ...failed, _willRetry: true });
+        opts.reporter?.onTestEnd?.(failed);
+        asked.push(await opts.stopRequested!());
+        return { name: '', tests: [failed], suites: [], durationMs: 1 };
+      });
+      const unlimited = waitForMessage((msg) => msg.type === 'file-done' && msg.filePath === '/tmp/unlimited.test.ts');
+      emitWorkerMessage({ type: 'run-file', filePath: '/tmp/unlimited.test.ts', fullNames: ['fails'] });
+      await unlimited;
+      expect(asked).toEqual([false]);
+      expect(workerRunnerMocks.runTestFile.mock.lastCall![1].fullNames).toEqual(['fails']);
+
+      // With it, the next test waits for the main process's answer.
+      messages.length = 0;
+      const reready = waitForMessage((msg) => msg.type === 'ready');
+      emitWorkerMessage({
+        type: 'init', workerId: 0, deviceSerial: 'device-1', deviceName: 'device-1', daemonPort: 19_000,
+        config: makeSerializedConfig({ package: 'com.example.app' }), forceInstall: false, networkApisInRun: false,
+        awaitFailureVerdicts: true,
+      });
+      await reready;
+      for (const [i, stop] of [false, true].entries()) {
+        const file = `/tmp/verdict-${i}.test.ts`;
+        const end = waitForMessage((msg) => msg.type === 'test-end' && messages.filter((m) => m.type === 'test-end').length >= 2 * (i + 1));
+        const over = waitForMessage((msg) => msg.type === 'file-done' && msg.filePath === file);
+        emitWorkerMessage({ type: 'run-file', filePath: file });
+        await end;
+        await new Promise((r) => setTimeout(r, 10));
+        expect(messages.some((m) => m.type === 'file-done' && m.filePath === file)).toBe(false);
+        emitWorkerMessage({ type: 'failure-verdict', stop });
+        await over;
+      }
+      expect(asked).toEqual([false, false, true]);
+
+      // A stop that lands while the worker recovers keeps the attempt it has.
+      for (const listener of process.listeners('message')) {
+        if (!beforeListeners.includes(listener)) process.removeListener('message', listener);
+      }
+      vi.resetModules();
+      await import('../worker-runner.js');
+      const emitToFresh = process.listeners('message').find((l) => !beforeListeners.includes(l)) as (msg: MainToWorkerMessage) => void;
+      messages.length = 0;
+      const freshReady = waitForMessage((msg) => msg.type === 'ready');
+      emitToFresh({
+        type: 'init', workerId: 0, deviceSerial: 'device-1', deviceName: 'device-1', daemonPort: 19_000,
+        config: makeSerializedConfig({ package: 'com.example.app' }), forceInstall: false, networkApisInRun: false,
+        awaitFailureVerdicts: true,
+      });
+      await freshReady;
+      workerRunnerMocks.runTestFile.mockReset();
+      workerRunnerMocks.runTestFile.mockResolvedValue({
+        name: '', tests: [failed, { ...failed, fullName: 'drops', error: new Error('Agent connection dropped') }], suites: [], durationMs: 1,
+      });
+      void waitForMessage((msg) => msg.type === 'file-retry').then(() => emitToFresh({ type: 'failure-verdict', stop: true }));
+      const kept = waitForMessage((msg) => msg.type === 'file-done');
+      emitToFresh({ type: 'run-file', filePath: '/tmp/recovering.test.ts' });
+      expect((await kept as Extract<WorkerToMainMessage, { type: 'file-done' }>).results.map((r) => r.fullName)).toEqual(['fails', 'drops']);
+      expect(workerRunnerMocks.runTestFile).toHaveBeenCalledTimes(1);
     } finally {
       for (const listener of process.listeners('message')) {
         if (!beforeListeners.includes(listener)) {

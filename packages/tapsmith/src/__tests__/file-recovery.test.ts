@@ -123,6 +123,34 @@ describe('runFileWithSessionRecovery (PILOT-1383)', () => {
     expect(collectResults(suite)[0].retry).toBe(1);
   });
 
+  // `two` reaches maxFailures on the retry: what it left out is not a crash.
+  it.each<[string, Record<string, Array<'infra' | 'fail' | 'pass'>>, Array<[string, string]>]>([
+    ['leaving out the tests no attempt reached', { one: ['infra', 'pass'], two: ['pass', 'fail'], three: ['pass', 'pass'] }, [['one', 'passed'], ['two', 'failed']]],
+    ['keeping the first attempt\'s results it did not reach', { one: ['pass', 'pass'], two: ['pass', 'fail'], three: ['infra', 'pass'] }, [['one', 'passed'], ['two', 'failed'], ['three', 'failed']]],
+  ])('keeps a retry that maxFailures stopped, %s', async (_label, outcomes, expected) => {
+    const file = writeFile(outcomes);
+    let stopped = false;
+    let attempt = 0;
+    const { run, reported } = recoveryRun(file, {
+      runAttempt: async (finalFileAttempt) => {
+        (globalThis as Record<string, unknown>).__pilot1383attempt = ++attempt;
+        return runTestFile(file, makeOpts({
+          finalFileAttempt,
+          stopRequested: () => stopped,
+          reporter: {
+            onTestEnd: (r) => {
+              reported.push(r);
+              if (r.error?.message === 'assertion failed') stopped = true;
+            },
+          },
+        }));
+      },
+      stopped: () => stopped,
+    });
+    expect(statuses(collectResults(await runFileWithSessionRecovery(run)))).toEqual(expected);
+    expect(reported.some((r) => r.error?.message.startsWith('Did not run'))).toBe(false);
+  });
+
   it('adds the tests the first attempt left unrun when the retry crashes and the first attempt is kept', async () => {
     const file = writeFile({ one: ['infra'], two: ['pass'], three: ['pass'] });
     const base = recoveryRun(file);

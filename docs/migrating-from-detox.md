@@ -24,7 +24,7 @@ This guide is for teams with a Detox suite who want to move it to Tapsmith. Of t
 | `.detoxrc.js` (`apps`, `devices`, `configurations`) | [`tapsmith.config.ts`](configuration.md), with one [project](configuration.md#projects-with-per-device-targeting) per app and device pair |
 | `detox build` | Your own build command; Tapsmith installs the result (`apk` / `app` in the config) |
 | `detox test -c ios.sim.release` | `npx tapsmith test --project ios` |
-| `detox test --retries 2` | `retries: 2` in the config (retries the failed test, not the whole file) |
+| `detox test --retries 2` | `npx tapsmith test --retries 2`, or `retries: 2` in the config (retries the failed test, not the whole file) |
 | `--take-screenshots failing` | `screenshot: "only-on-failure"` (the default) |
 | `--record-videos failing` | `video: "retain-on-failure"` ([Video recording](api-reference.md#video-recording)) |
 | `--record-logs failing` | `trace: "retain-on-failure"`: a [trace](trace-viewer.md) with a screenshot, the view hierarchy and the network traffic for every action |
@@ -235,7 +235,7 @@ Run one platform with `npx tapsmith test --project android`, or both with `npx t
 | `detox test --headless` | Emulators Tapsmith launches run headless in CI automatically, and locally with `emulatorLaunchOptions: { headless: true }` ([How Tapsmith launches emulators](configuration.md#how-tapsmith-launches-emulators)) |
 | `--reuse` | The default: Tapsmith installs the app when the build changed |
 | `detox test e2e/login.test.js` | `npx tapsmith test tests/login.tapsmith.ts` |
-| `--retries` | `retries` in the config, `test.use()` or `test.describe.configure()` |
+| `--retries` | `--retries`, or `retries` in the config, `test.use()` or `test.describe.configure()` |
 | Jest's `--maxWorkers 3` | `workers: 3` or `--workers 3`, one device per worker ([Parallel execution](parallel-and-sharding.md)) |
 | Jest's `--shard` | `npx tapsmith test --shard=1/4` and `npx tapsmith merge-reports` ([CI sharding](parallel-and-sharding.md#ci-sharding)) |
 | Jest reporters (`jest-junit`, …) | Built-in `junit`, `html`, `json`, `github` and `blob` [reporters](api-reference.md#reporters) |

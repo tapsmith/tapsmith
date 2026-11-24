@@ -649,6 +649,9 @@ export default defineConfig({
 });
 ```
 
+Or leave the config as it is and pass the flag in the workflow: `npx tapsmith test --retries 2`. Locally,
+`npx tapsmith test --last-failed` then re-runs only what failed.
+
 ### Screenshot Artifacts
 
 Set the `screenshot` option to `"always"` in CI to capture screenshots for every test. This makes debugging failures much easier when you cannot see the emulator screen.

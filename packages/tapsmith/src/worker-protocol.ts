@@ -40,6 +40,8 @@ export interface InitMessage {
    * `forceInstall`.
    */
   networkApisInRun: boolean
+  /** Wait for a `failure-verdict` after each failed test before starting another. */
+  awaitFailureVerdicts?: boolean
   /**
    * The rest of the device group (`devices[1..]`), each on its own daemon.
    * Present only for group projects (`use.devices`); a single-device worker
@@ -85,6 +87,8 @@ export interface RunFileMessage {
    * the worker's `SerializedConfig`.
    */
   projectGrepInvert?: SerializedRegExp[]
+  /** Run only these tests, by exact full name (`RunOptions.fullNames`). */
+  fullNames?: readonly string[]
 }
 
 /** IPC-safe subset of UseOptions for project-level overrides. */
@@ -114,7 +118,17 @@ export interface ShutdownMessage {
   type: 'shutdown'
 }
 
-export type MainToWorkerMessage = InitMessage | RunFileMessage | ShutdownMessage
+/**
+ * Under `maxFailures`: the answer to each failed test a worker reports, and,
+ * with `stop`, sent to every worker when the run stops.
+ */
+export interface FailureVerdictMessage {
+  type: 'failure-verdict'
+  /** Start no further test. */
+  stop: boolean
+}
+
+export type MainToWorkerMessage = InitMessage | RunFileMessage | FailureVerdictMessage | ShutdownMessage
 
 // ─── Worker → Main messages ───
 

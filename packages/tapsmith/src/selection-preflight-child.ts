@@ -13,17 +13,15 @@ import { loadErrorForReport } from './load-failure.js';
 import { discoverTestFile, type DiscoveredSuite, type DiscoveredTest } from './runner.js';
 import type { FilePreflight, PreflightRequest, PreflightResponse } from './selection-preflight.js';
 
-function testNames(suite: DiscoveredSuite, keep: (test: DiscoveredTest) => boolean = () => true): string[] {
-  return [
-    ...suite.tests.filter(keep).map((t) => t.fullName),
-    ...suite.suites.flatMap((child) => testNames(child, keep)),
-  ];
+function testsOf(suite: DiscoveredSuite): DiscoveredTest[] {
+  return [...suite.tests, ...suite.suites.flatMap(testsOf)];
 }
 
 /** What loading the file found: every test's name, and for a file with a `.only`, the focused ones'. */
 function preflightOf(suite: DiscoveredSuite): FilePreflight {
-  const names = testNames(suite);
-  return suite.focused ? { names, focusedNames: testNames(suite, (t) => !t.outOfFocus) } : { names };
+  const tests = testsOf(suite);
+  const found = { names: tests.map((t) => t.fullName), locations: tests.map((t) => t.location) };
+  return suite.focused ? { ...found, focusedNames: tests.filter((t) => !t.outOfFocus).map((t) => t.fullName) } : found;
 }
 
 const hello: PreflightResponse = { type: 'pid', pid: process.pid };

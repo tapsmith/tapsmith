@@ -91,6 +91,14 @@ export interface TapsmithConfig {
   /** Number of times to retry a failed test. */
   retries: number;
 
+  /**
+   * Stop a `tapsmith test` run once this many tests have failed (their retries
+   * included). `0`, the default, means no limit. Mirrors Playwright's
+   * `maxFailures`; the `--max-failures` and `-x` CLI flags override it. UI
+   * mode, watch mode and MCP runs ignore it.
+   */
+  maxFailures?: number;
+
   /** When to capture screenshots. */
   screenshot: ScreenshotMode;
 
@@ -1110,6 +1118,7 @@ const ROOT_CHECKS: { readonly [K in keyof TapsmithConfig]-?: KeyCheck } = {
   // Positive: 0 is not "no timeout" (as in Playwright) but a budget already spent.
   timeout: positiveMs,
   retries: nonNegativeInteger,
+  maxFailures: nonNegativeInteger,
   screenshot: oneOf(['always', 'only-on-failure', 'never']),
   testMatch: globs,
   daemonAddress: aString,

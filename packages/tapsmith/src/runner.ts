@@ -696,8 +696,8 @@ interface TestEntry {
   only: boolean;
   skip: boolean;
   registry?: FixtureRegistry;
-  /** The file whose code declared the test: the test file, or a module it imports. */
-  declaredIn?: string;
+  /** Where the test was declared: in the test file, or a module it imports. */
+  location?: SourceLocation;
 }
 
 interface HookEntry {
@@ -889,7 +889,7 @@ function collectFixtureRegistries(ctx: SuiteContext, registries: Set<FixtureRegi
 /** Where each test a file registered was declared, in every describe (each already materialized). */
 function registeredTestFiles(ctx: SuiteContext): Array<string | undefined> {
   return [
-    ...ctx.tests.map((t) => t.declaredIn),
+    ...ctx.tests.map((t) => t.location?.file),
     ...ctx.suites.flatMap((suite) => registeredTestFiles(materializeSuiteEntry(suite))),
   ];
 }
@@ -1094,18 +1094,18 @@ function createTestFn<F extends object = TestFixtures>(registry: FixtureRegistry
     (...args: unknown[]) => {
       const [name, testFn] = testDeclaration('test', args);
       syncRegistry();
-      currentContext().tests.push({ name, fn: testFn, only: false, skip: false, registry, declaredIn: hookLocation()?.file });
+      currentContext().tests.push({ name, fn: testFn, only: false, skip: false, registry, location: hookLocation() });
     },
     {
       only: (...args: unknown[]) => {
         const [name, testFn] = testDeclaration('test.only', args);
         syncRegistry();
-        currentContext().tests.push({ name, fn: testFn, only: true, skip: false, registry, declaredIn: hookLocation()?.file });
+        currentContext().tests.push({ name, fn: testFn, only: true, skip: false, registry, location: hookLocation() });
       },
       skip: (...args: unknown[]) => {
         if (typeof args[0] === 'string' && typeof args[1] === 'function') {
           syncRegistry();
-          currentContext().tests.push({ name: args[0], fn: args[1] as TestCallback, only: false, skip: true, registry, declaredIn: hookLocation()?.file });
+          currentContext().tests.push({ name: args[0], fn: args[1] as TestCallback, only: false, skip: true, registry, location: hookLocation() });
           return;
         }
         applySkipModifier(args);
@@ -1601,6 +1601,12 @@ export interface RunOptions {
   ) => void;
   /** When aborted, skip remaining tests but still run afterEach/afterAll hooks. */
   abortSignal?: AbortSignal;
+  /**
+   * Asked before each test and each describe: true leaves the rest of the
+   * file out of the run, unreported (`maxFailures`). Unlike `abortSignal` it
+   * interrupts nothing, so `afterAll` hooks still drive the device.
+   */
+  stopRequested?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -2871,6 +2877,8 @@ async function runSuiteContext(
       continue;
     }
 
+    if (await opts.stopRequested?.()) break;
+
     // A test the selection filters exclude is not part of the run at all —
     // neither reported nor counted as skipped, as Playwright filters it out
     // (PILOT-569). testFilter is a case-insensitive substring match against
@@ -4048,6 +4056,8 @@ async function runSuiteContext(
       continue;
     }
 
+    if (await opts.stopRequested?.()) break;
+
     if (suiteEntry.skip || (focused && !suiteFocused(suiteEntry))
       || serialGroup?.failed || ctx.skipped || skippedByBeforeAll) {
       // A describe.skip, a describe a `.only` beside it leaves out, the rest
@@ -4434,6 +4444,16 @@ export function markFileRetryFlakes(firstAttempt: SuiteResult, retried: SuiteRes
 }
 
 /**
+ * {@link markFileRetryFlakes} for a retry that `stopRequested` cut short: the
+ * tests it did not reach keep the results of the first attempt.
+ */
+export function mergeStoppedRetry(firstAttempt: SuiteResult, retried: SuiteResult): void {
+  markFileRetryFlakes(firstAttempt, retried);
+  const reached = new Set(collectResults(retried).map((t) => t.fullName));
+  retried.tests.push(...collectResults(firstAttempt).filter((t) => !reached.has(t.fullName)));
+}
+
+/**
  * Run a single test file. The file is imported (which registers tests via the
  * global `test` / `describe` functions), then executed sequentially.
  */
@@ -4799,6 +4819,8 @@ export interface DiscoveredTest {
   skip: boolean
   /** Set when a `.only` elsewhere in the file leaves this test out of the run. */
   outOfFocus?: true
+  /** Where the test was declared. */
+  location?: SourceLocation
   /** Effective isolation options for this test (suite cascade applied). */
   use?: DiscoveredUseOptions
 }
@@ -4878,6 +4900,7 @@ function discoverSuiteContext(
     only: t.only,
     skip: t.skip || scopeSkipped,
     ...(parentOutOfFocus || (focused && !t.only) ? { outOfFocus: true as const } : {}),
+    ...(t.location ? { location: t.location } : {}),
     ...(use ? { use } : {}),
   }));
 

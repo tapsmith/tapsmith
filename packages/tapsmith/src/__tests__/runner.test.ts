@@ -3145,6 +3145,29 @@ describe('retries', () => {
     expect(result.tests[0].status).toBe('failed');
   });
 
+  it('runs nothing more, but its afterAll hooks, once a stop is requested', async () => {
+    const ran: string[] = [];
+    let stop = false;
+    pushContext();
+    tapsmithAfterAll(async () => { ran.push('afterAll'); });
+    tapsmithTest('fails', async () => {
+      ran.push('fails');
+      stop = true;
+      throw new Error('expected');
+    });
+    tapsmithTest('next', async () => { ran.push('next'); });
+    tapsmithDescribe('nested', () => {
+      tapsmithBeforeAll(async () => { ran.push('nested beforeAll'); });
+      tapsmithTest('inner', async () => { ran.push('inner'); });
+    });
+    const result = await runSuiteContext(popContext(), '', [], [], makeOpts({
+      stopRequested: async () => stop,
+    }));
+    expect(ran).toEqual(['fails', 'afterAll']);
+    expect(result.tests.map((t) => [t.name, t.status])).toEqual([['fails', 'failed']]);
+    expect(result.suites).toEqual([]);
+  });
+
   it('interrupts an in-flight test body when the abort signal fires (PILOT-222)', async () => {
     const ac = new AbortController();
     let afterEachRan = false;

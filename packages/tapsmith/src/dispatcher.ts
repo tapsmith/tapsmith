@@ -20,6 +20,7 @@ import { labelledMessage, withDetail } from './error-detail.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonOutputCapture, type DaemonStartFailed } from './daemon-start.js';
 import type { TestResult, SuiteResult } from './runner.js';
 import type { TapsmithReporter, FullResult } from './reporter.js';
+import type { FailureTracker } from './failure-tracker.js';
 import type {
   WorkerToMainMessage,
   MainToWorkerMessage,
@@ -78,6 +79,13 @@ interface TaggedFile {
   projectName?: string
   projectGrep?: import('./worker-protocol.js').SerializedRegExp[]
   projectGrepInvert?: import('./worker-protocol.js').SerializedRegExp[]
+  fullNames?: readonly string[]
+  /**
+   * The last result reported of each of the file's tests, whichever attempt or
+   * worker ran it: once `maxFailures` stops the run nothing runs again, so a
+   * test the last attempt did not reach keeps the result it had.
+   */
+  streamed?: Map<string, TestResult>
 }
 
 /** A secondary device of a worker's group, with the daemon this dispatcher spawned for it. */
@@ -214,6 +222,10 @@ export interface DispatcherOptions {
   workerIndexBase?: number
   /** Hard cap on total workers across all buckets. Passed to allocateBucketWorkers. */
   workerCap?: number
+  /** Set under `maxFailures`: it is also in `reporter`, so it sees every result. */
+  failureTracker?: FailureTracker
+  /** `ResolvedProject.fullNamesByFile`, for a run with no `projects`. */
+  fullNamesByFile?: ReadonlyMap<string, readonly string[]>
   /** Optional startup checklist used by CLI launch output. */
   launchProgress?: LaunchProgressSink
   /** Internal barrier hook for multi-bucket launch progress. */
@@ -441,6 +453,21 @@ function applyWorkerIndexBaseToSuite(
     tests: suite.tests.map((t) => applyWorkerIndexBase(t, base)),
     suites: suite.suites.map((s) => applyWorkerIndexBaseToSuite(s, base)),
   };
+}
+
+/**
+ * Add to a file's results, in place, the ones an earlier attempt reported for
+ * tests its last attempt did not reach before `maxFailures` stopped the run.
+ */
+export function keepUnreachedResults(
+  suite: SuiteResult,
+  results: TestResult[],
+  streamed: ReadonlyMap<string, TestResult> | undefined,
+): void {
+  const reached = new Set(results.map((r) => r.fullName));
+  const unreached = [...(streamed?.values() ?? [])].filter((r) => !reached.has(r.fullName));
+  suite.tests.push(...unreached);
+  results.push(...unreached);
 }
 
 export function handleParallelTestEndMessage(
@@ -1348,6 +1375,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
 
   const allResults: TestResult[] = [];
   const allSuites: SuiteResult[] = [];
+  let stopListening: (() => void) | undefined;
   let totalStart = 0;
   let setupDuration = 0;
 
@@ -1718,6 +1746,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
           freshEmulator: isFresh,
           forceInstall: opts.forceInstall,
           networkApisInRun: opts.networkApisInRun,
+          awaitFailureVerdicts: opts.failureTracker !== undefined,
           tsxBin,
           daemonPortOverride: slot.daemonPort,
           agentPortOverride: slot.agentPort,
@@ -1867,6 +1896,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
               projectName: project.name,
               projectGrep,
               projectGrepInvert,
+              fullNames: project.fullNamesByFile?.get(file),
             });
           }
         }
@@ -1876,7 +1906,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       }
     } else {
       // No projects — single wave with all files
-      waves.push(testFiles.map((f) => ({ filePath: f })));
+      waves.push(testFiles.map((f) => ({ filePath: f, fullNames: opts.fullNamesByFile?.get(f) })));
     }
 
     // Dispatch one wave at a time. Within a wave, work-stealing across workers.
@@ -1918,6 +1948,8 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
         function dispatchNext(worker: WorkerHandle): void {
           if (worker.retired) return;
 
+          // Enough tests have failed: the files not started yet never run.
+          if (opts.failureTracker?.reached) dropQueuedFiles();
           const next = fileQueue.shift();
           if (!next) {
             worker.busy = false;
@@ -1937,6 +1969,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
             projectName: next.projectName,
             projectGrep: next.projectGrep,
             projectGrepInvert: next.projectGrepInvert,
+            fullNames: next.fullNames,
           };
           sendToWorkerProcess(worker.process, msg, (err) => {
             // The file we just assigned is worker.currentFile, so retiring
@@ -1946,6 +1979,20 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
         }
 
         const workerTestCounts = new Map<number, number>();
+
+        /** Record a file nothing will run again with the results it reported. */
+        function endUnfinishedFile(file: TaggedFile): void {
+          const results = [...(file.streamed?.values() ?? [])];
+          if (results.length === 0) return;
+          allResults.push(...results);
+          allSuites.push({ name: '', tests: results, suites: [], durationMs: 0 });
+          reporter.onTestFileEnd?.(file.filePath, results);
+        }
+
+        /** Leave out the files still queued: a requeued one has run in part. */
+        function dropQueuedFiles(): void {
+          fileQueue.splice(0).forEach(endUnfinishedFile);
+        }
 
         function retireWorker(worker: WorkerHandle, reason: string): void {
           if (worker.retired) return;
@@ -1965,6 +2012,17 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
           worker.busy = false;
 
           cleanupWorkerResources(worker);
+
+          if (opts.failureTracker?.reached) {
+            // The run is stopping: nothing is run again, and no worker is needed.
+            dropQueuedFiles();
+            if (inFlightFile) endUnfinishedFile(inFlightFile);
+            process.stderr.write(
+              `${YELLOW}Worker ${displayWorkerId(worker.id)} (${worker.deviceSerial}) became unavailable: ${reason}. The run is stopping.${RESET}\n`,
+            );
+            maybeResolve();
+            return;
+          }
 
           if (inFlightFile) {
             const discarded = workerTestCounts.get(worker.id) ?? 0;
@@ -2029,12 +2087,17 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
                 handleParallelTestStartMessage(msg, reporter, opts.workerIndexBase);
                 break;
               case 'test-end': {
-                handleParallelTestEndMessage(
+                const result = handleParallelTestEndMessage(
                   msg,
                   workerTestCounts,
                   reporter,
                   opts.workerIndexBase,
                 );
+                if (!result._willRetry && worker.currentFile) (worker.currentFile.streamed ??= new Map()).set(result.fullName, result);
+                // The worker waits for this before it starts another test.
+                if (opts.failureTracker && msg.result.status === 'failed' && !msg.result._willRetry) {
+                  sendToWorkerProcess(worker.process, { type: 'failure-verdict', stop: opts.failureTracker.reached }, () => {});
+                }
                 break;
               }
               case 'file-start':
@@ -2045,12 +2108,14 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
                 break;
               }
               case 'file-done': {
+                const file = worker.currentFile;
                 worker.currentFile = undefined;
                 const { results, suite } = handleParallelFileDoneMessage(
                   msg,
                   workerTestCounts,
                   opts.workerIndexBase,
                 );
+                if (opts.failureTracker?.reached) keepUnreachedResults(suite, results, file?.streamed);
                 allResults.push(...results);
                 allSuites.push(suite);
 
@@ -2096,9 +2161,16 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       });
     }
 
+    stopListening = opts.failureTracker?.onReached(() => {
+      for (const worker of workers) {
+        if (!worker.retired) sendToWorkerProcess(worker.process, { type: 'failure-verdict', stop: true }, () => {});
+      }
+    });
+
     // Execute waves sequentially, with dependency-failure skipping
     if (opts.projectWaves && opts.projects) {
       for (const projectWave of opts.projectWaves) {
+        if (opts.failureTracker?.reached) break;
         const filteredWaveFiles: TaggedFile[] = [];
         for (const project of projectWave) {
           const blockedBy = project.dependencies.find((d) => failedProjects.has(d));
@@ -2124,6 +2196,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
               projectName: project.name,
               projectGrep,
               projectGrepInvert,
+              fullNames: project.fullNamesByFile?.get(file),
             });
           }
         }
@@ -2150,6 +2223,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       await dispatchWave(waves[0] ?? []);
     }
   } finally {
+    stopListening?.();
     process.removeListener('SIGINT', sigintHandler);
     process.removeListener('SIGTERM', sigtermHandler);
     activeEmergencyCleanups.delete(teardownResources);
@@ -2235,7 +2309,8 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
   }
 
   const totalDuration = Date.now() - totalStart;
-  const hasFailed = allResults.some((r) => r.status === 'failed');
+  // A stopped run failed, even if the worker that reported the failure died with its results.
+  const hasFailed = allResults.some((r) => r.status === 'failed') || opts.failureTracker?.reached === true;
 
   return {
     status: hasFailed ? 'failed' : 'passed',
@@ -2287,6 +2362,8 @@ interface InitializeWorkerOptions {
   freshEmulator: boolean
   forceInstall: boolean
   networkApisInRun: boolean
+  /** See `InitMessage.awaitFailureVerdicts`. */
+  awaitFailureVerdicts: boolean
   tsxBin?: string
   /** Override the daemon port instead of computing baseDaemonPort + 1 + workerId. */
   daemonPortOverride?: number
@@ -2488,6 +2565,7 @@ async function initializeWorker(opts: InitializeWorkerOptions): Promise<WorkerHa
         freshEmulator: opts.freshEmulator === true ? true : undefined,
         forceInstall: opts.forceInstall,
         networkApisInRun: opts.networkApisInRun,
+        awaitFailureVerdicts: opts.awaitFailureVerdicts,
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({
             name: m.name,

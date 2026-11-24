@@ -56,6 +56,8 @@ describe('tapsmith test', () => {
       ui: false,
       forceInstall: false,
       tsxReexec: false,
+      lastFailed: false,
+      list: false,
     });
   });
 
@@ -225,11 +227,34 @@ describe('tapsmith test', () => {
   });
 
   it('rejects an unknown option', async () => {
-    // --retries included: documented once, never implemented (a follow-up adds it Playwright-style).
-    expect((await usageError(['test', '--retries', '2'])).err).toMatch(/unknown option '--retries'/);
     const h = await usageError(['test', '--bogus']);
     expect(h.err).toMatch(/unknown option '--bogus'/);
     expect(h.out).toBe('');
+  });
+
+  it('parses the Playwright run flags', async () => {
+    expect(await testArgs([])).toMatchObject({ retries: undefined, maxFailures: undefined, lastFailed: false, list: false });
+    expect(await testArgs(['--retries', '2', '--max-failures=3', '--last-failed', '--list']))
+      .toMatchObject({ retries: 2, maxFailures: 3, lastFailed: true, list: true });
+    expect(await testArgs(['--retries=0'])).toMatchObject({ retries: 0 });
+    expect(await testArgs(['-x'])).toMatchObject({ maxFailures: 1 });
+    expect(await testArgs(['-x', '--max-failures', '5'])).toMatchObject({ maxFailures: 1 });
+  });
+
+  it.each([['--retries'], ['--max-failures']])('rejects a %s that is not a non-negative integer', async (flag) => {
+    expect((await usageError(['test', flag, 'two'])).err).toContain(`${flag} must be a non-negative integer`);
+  });
+
+  it.each([
+    [['--timeout', '5000'], '--timeout', 'Set `timeout` in the config'],
+    [['--output=out'], '--output', 'Set `outputDir` in the config'],
+    [['--repeat-each', '3'], '--repeat-each', 'cannot repeat each test yet'],
+    [['--debug'], '--debug', 'Use --ui'],
+    [['-u'], '-u', 'no snapshot assertions'],
+  ])('says what to do instead of the Playwright flag in %j', async (args, flag, hint) => {
+    const { err } = await usageError(['test', ...args]);
+    expect(err).toContain(`unknown option '${flag}'\n`);
+    expect(err).toContain(hint);
   });
 
   it('rejects -v after the command (version is a top-level flag)', async () => {

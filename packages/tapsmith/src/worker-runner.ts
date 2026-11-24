@@ -8,7 +8,7 @@
  */
 
 import * as path from 'node:path';
-import { runTestFile, collectResults, markFileRetryFlakes, type RunDevice } from './runner.js';
+import { runTestFile, collectResults, markFileRetryFlakes, mergeStoppedRetry, type RunDevice } from './runner.js';
 import type { TapsmithConfig } from './config.js';
 import type {
   MainToWorkerMessage,
@@ -46,6 +46,30 @@ let rootGrepInvert: RegExp[] | undefined;
 /** `InitMessage.networkApisInRun`, for every file this worker runs. */
 let networkApisInRun = false;
 
+// ─── maxFailures ───
+
+/** `InitMessage.awaitFailureVerdicts`. */
+let awaitFailureVerdicts = false;
+/** Failed tests reported to the main process that it has not answered. */
+let unansweredFailures = 0;
+/** The main process said to start no further test. */
+let runStopped = false;
+let onVerdict: (() => void) | undefined;
+
+/** Whether to start no further test, once every failure reported so far is answered. */
+async function stopRequested(): Promise<boolean> {
+  while (unansweredFailures > 0 && !runStopped) {
+    await new Promise<void>((resolve) => { onVerdict = resolve; });
+  }
+  return runStopped;
+}
+
+function handleFailureVerdict(stop: boolean): void {
+  runStopped ||= stop;
+  unansweredFailures = Math.max(0, unansweredFailures - 1);
+  onVerdict?.();
+}
+
 function send(msg: WorkerToMainMessage): void {
   if (process.send) {
     process.send(msg);
@@ -80,6 +104,7 @@ async function handleInit(msg: InitMessage): Promise<void> {
   ];
 
   networkApisInRun = msg.networkApisInRun;
+  awaitFailureVerdicts = msg.awaitFailureVerdicts === true;
   sessions = await openDeviceGroup(specs, config, {
     claimSession: currentSession(),
     startNetworkProxy: msg.networkApisInRun && { multiDevice: specs.length > 1 },
@@ -117,6 +142,7 @@ async function handleRunFile(
   projectName?: string,
   projectGrep?: import('./worker-protocol.js').SerializedRegExp[],
   projectGrepInvert?: import('./worker-protocol.js').SerializedRegExp[],
+  fullNames?: readonly string[],
 ): Promise<void> {
   if (!config || sessions.length === 0) {
     throw new Error(`Worker ${workerId}: Not initialized`);
@@ -146,6 +172,7 @@ async function handleRunFile(
       });
     },
     onTestEnd(result: import('./runner.js').TestResult): void {
+      if (awaitFailureVerdicts && result.status === 'failed' && !result._willRetry) unansweredFailures++;
       send({
         type: 'test-end',
         workerId,
@@ -162,6 +189,7 @@ async function handleRunFile(
     projectName,
     projectGrep,
     projectGrepInvert,
+    fullNames,
   );
 
   const results = collectResults(suiteResult);
@@ -208,6 +236,7 @@ async function runFileWithRecovery(
   projectName?: string,
   projectGrep?: import('./worker-protocol.js').SerializedRegExp[],
   projectGrepInvert?: import('./worker-protocol.js').SerializedRegExp[],
+  fullNames?: readonly string[],
 ): Promise<import('./runner.js').SuiteResult> {
   if (!config || sessions.length === 0) {
     throw new Error(`Worker ${workerId}: Not initialized`);
@@ -242,13 +271,16 @@ async function runFileWithRecovery(
         grepInvert: rootGrepInvert,
         projectGrep: projectGrepRe,
         projectGrepInvert: projectGrepInvertRe,
+        fullNames,
+        stopRequested,
       });
       const infrastructureFailure = findRecoverableInfrastructureFailure(collectResults(suite));
-      if (!infrastructureFailure) {
+      // Once the run stops, nothing runs again: the file ends as it is.
+      if (!infrastructureFailure || runStopped) {
         // Tests that failed on the discarded first attempt must surface as
         // flaky, not as clean passes (see markFileRetryFlakes).
         if (attempt === 2 && firstAttemptSuite) {
-          markFileRetryFlakes(firstAttemptSuite, suite);
+          (runStopped ? mergeStoppedRetry : markFileRetryFlakes)(firstAttemptSuite, suite);
         }
         return suite;
       }
@@ -258,6 +290,7 @@ async function runFileWithRecovery(
       infraError = infrastructureFailure;
       firstAttemptSuite = suite;
     } catch (err) {
+      if (attempt === 2 && runStopped && firstAttemptSuite && isRecoverableInfrastructureError(err)) return firstAttemptSuite;
       if (!isRecoverableInfrastructureError(err) || attempt === 2) {
         throw err;
       }
@@ -269,6 +302,8 @@ async function runFileWithRecovery(
       `Retrying ${path.basename(filePath)} after infrastructure error (attempt 2 of 2)\n`,
     );
     await recoverFileSession(filePath, infraError!);
+    // Stopped by another worker's failure meanwhile.
+    if (runStopped && firstAttemptSuite) return firstAttemptSuite;
   }
 
   throw new Error(`Worker ${workerId}: exhausted recovery attempts for ${path.basename(filePath)}`);
@@ -323,7 +358,11 @@ process.on('message', async (msg: MainToWorkerMessage) => {
           msg.projectName,
           msg.projectGrep,
           msg.projectGrepInvert,
+          msg.fullNames,
         );
+        break;
+      case 'failure-verdict':
+        handleFailureVerdict(msg.stop);
         break;
       case 'shutdown':
         handleShutdown();
