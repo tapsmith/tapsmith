@@ -39,7 +39,7 @@ function makeContext(screens: string[], overrides: { rootDir?: string; platform?
     terminateApp: vi.fn(async () => undefined),
     launchApp: vi.fn(async () => undefined),
     restartApp: vi.fn(async () => undefined),
-    openDeepLink: vi.fn(async (_url: string) => undefined),
+    openDeepLink: vi.fn(async (_url: string, _options?: { forceColdLaunch?: boolean }) => undefined),
     waitForIdle: vi.fn(async () => undefined),
     currentPackage: vi.fn(async () => PKG),
     getByText: vi.fn(() => ({ tap: vi.fn(async () => undefined) }) as never),
@@ -117,12 +117,14 @@ describe('connectDevClient', () => {
   it('does not take Expo\'s splash screen on iOS for the app', async () => {
     const ios = (inner: string): string => `<hierarchy><XCUIElementTypeApplication label="devclient">${inner}</XCUIElementTypeApplication></hierarchy>`;
     const splash = ios('<XCUIElementTypeImage label="" identifier="SplashScreenLogo" />');
-    const { ctx, client } = makeContext(
+    const { ctx, client, device } = makeContext(
       [ios('<XCUIElementTypeOther label="This is the developer menu. It gives you access to useful tools in your development builds." />'), splash, splash, ios('<XCUIElementTypeStaticText label="Welcome" />')],
       { platform: 'ios', device: '4178D98F-5543-4DD8-B444-C409CE0EFB78' },
     );
     await connectDevClient(ctx, { fetch: metro });
     expect(client.getUiHierarchy).toHaveBeenCalledTimes(4);
+    // The open menu outlives a warm link on iOS, so the app is started afresh.
+    expect(device.openDeepLink).toHaveBeenCalledWith(expect.any(String), { forceColdLaunch: true });
   });
 
   it('waits out the loading banner before calling the app ready', async () => {

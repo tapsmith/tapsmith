@@ -1796,7 +1796,11 @@ export async function connectDevClient(ctx: DevClientContext, deps: { fetch?: De
     const serial = ctx.deviceSerial ?? ctx.config.device ?? '';
     const serverUrl = await devServerUrlForDevice({ platform, serial, port: search.server.port });
     progress.setDetail(serverUrl);
-    await ctx.device.openDeepLink(devClientLaunchUrl(scheme, serverUrl));
+    const link = devClientLaunchUrl(scheme, serverUrl);
+    // On iOS the open menu is a window of its own that the link leaves up over
+    // the reloaded app: start the app afresh with it, the menu switched off.
+    if (platform === 'ios' && screen === 'dev-menu') await ctx.device.openDeepLink(link, { forceColdLaunch: true });
+    else await ctx.device.openDeepLink(link);
     await waitForDevBundle(ctx, pkg, platform, serverUrl);
   });
 }
