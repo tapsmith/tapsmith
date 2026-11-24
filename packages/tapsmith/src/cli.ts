@@ -3053,12 +3053,12 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     const failedProjects = new Set<string>();
     /** Report a project on a target that could not start: each file failed. */
     const reportTargetStartFailure = async (project: import('./project.js').ResolvedProject, err: unknown) => {
-      const { deviceTargetLabel, startFailureSuite, targetStartFailureResults } = await import('./dispatcher.js');
+      const { deviceTargetLabel, standInSuite, targetStartFailureResults } = await import('./dispatcher.js');
       for (const result of targetStartFailureResults(deviceTargetLabel(project.deviceSignature), [project], err)) {
         reporter.onTestFileStart(result.filePath!);
         reporter.onTestEnd(result);
         allResults.push(result);
-        allSuites.push(startFailureSuite(result));
+        allSuites.push(standInSuite(result));
         reporter.onTestFileEnd(result.filePath!, [result]);
       }
       failedProjects.add(project.name);
@@ -3080,17 +3080,13 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
         const blockedBy = project.dependencies.find((d) => failedProjects.has(d));
         if (blockedBy) {
           console.log(dim(`Skipping project "${project.name}" — dependency "${blockedBy}" failed`));
+          const { dependencySkipResult, standInSuite } = await import('./dispatcher.js');
           // Mark all tests in this project as skipped
           for (const file of project.testFiles) {
             reporter.onTestFileStart(file);
-            const skippedResult: TestResult = {
-              name: path.basename(file),
-              fullName: path.basename(file),
-              status: 'skipped',
-              durationMs: 0,
-              project: project.name,
-            };
+            const skippedResult = dependencySkipResult(project.name, file);
             allResults.push(skippedResult);
+            allSuites.push(standInSuite(skippedResult));
             reporter.onTestFileEnd(file, [skippedResult]);
           }
           failedProjects.add(project.name);

@@ -381,6 +381,8 @@ describe('runTestFile — hook failures name the hook', () => {
       '"beforeAll" hook at all-throws.test.mjs:9 failed: no login',
       '"beforeAll" hook at all-throws.test.mjs:9 failed: no login',
     ]);
+    // Reporters that group by file need it on these too.
+    expect(results.map((r) => r.filePath)).toEqual([filePath, filePath]);
   });
 
   it('labels one error thrown by two hooks with each hook\'s own location, leaving the first test\'s label alone', async () => {

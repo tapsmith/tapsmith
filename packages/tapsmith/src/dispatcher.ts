@@ -856,7 +856,7 @@ export async function coordinateBuckets(
     status: startFailures.size > 0 ? 'failed' : merged.status,
     tests: [...startFailureResults, ...merged.tests],
     // Suite-driven reporters (JUnit, JSON) would otherwise leave them out.
-    suites: [...startFailureResults.map(startFailureSuite), ...merged.suites],
+    suites: [...startFailureResults.map(standInSuite), ...merged.suites],
   };
 }
 
@@ -918,9 +918,24 @@ export function targetStartWarning(label: string, fileCount: number, retries: bo
     + (retries ? ' Running its tests again retries it.' : '');
 }
 
-/** The one-test suite a start-failure result is reported under. */
-export function startFailureSuite(result: TestResult): SuiteResult {
+/** The one-test suite a result standing in for a whole file is reported under. */
+export function standInSuite(result: TestResult): SuiteResult {
   return { name: result.name, tests: [result], suites: [], durationMs: 0 };
+}
+
+/**
+ * The skipped result standing in for a test file whose project a failed
+ * dependency blocked. Shared by the parallel and sequential paths.
+ */
+export function dependencySkipResult(projectName: string, file: string): TestResult {
+  return {
+    name: path.basename(file),
+    fullName: path.basename(file),
+    filePath: file,
+    status: 'skipped',
+    durationMs: 0,
+    project: projectName,
+  };
 }
 
 /**
@@ -2092,14 +2107,9 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
               `${DIM}Skipping project "${project.name}" — dependency "${blockedBy}" failed${RESET}\n`,
             );
             for (const file of project.testFiles) {
-              const skippedResult: TestResult = {
-                name: path.basename(file),
-                fullName: path.basename(file),
-                status: 'skipped',
-                durationMs: 0,
-                project: project.name,
-              };
+              const skippedResult = dependencySkipResult(project.name, file);
               allResults.push(skippedResult);
+              allSuites.push(standInSuite(skippedResult));
               reporter.onTestEnd?.(skippedResult);
             }
             failedProjects.add(project.name);
