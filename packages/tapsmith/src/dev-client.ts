@@ -74,6 +74,8 @@ export function devClientScreen(hierarchyXml: string): DevClientScreen | undefin
     && (has('Development Build') || has('Fetch development servers') || has('Enter URL manually')
       || has('New development server') || has('Start a local development server with:'))
   ) return 'launcher';
+  // The launcher before its server list has drawn: its header and tabs alone.
+  if (has('Development Build') && has('Home') && has('Updates') && has('Settings') && (has('User') || has('Account'))) return 'launcher';
   // The menu's first-launch introduction, which has none of the menu's own items.
   if (hasPrefix('This is the developer menu.')) return 'dev-menu';
   if (has('Go home') && has('Reload') && (has('Toggle performance monitor') || has('Toggle element inspector'))) {

@@ -1781,7 +1781,7 @@ export function connectDevClientForTool(target: {
 }
 
 /** The error a session stops with when Metro cannot be used. */
-function devServerError(pkg: string, screen: DevClientScreen, why: string): Error {
+function devServerError(pkg: string, screen: DevClientScreen, why: string, metro: 'missing' | 'answers' = 'missing'): Error {
   const where = screen === 'launcher'
     ? 'is an Expo development build and opened on Expo\'s dev launcher'
     : screen === 'dev-menu'
@@ -1790,7 +1790,9 @@ function devServerError(pkg: string, screen: DevClientScreen, why: string): Erro
         ? 'is an Expo development build and could not load its JavaScript ("There was a problem loading the project.")'
         : 'is a React Native Debug build and could not load its JavaScript from Metro (React Native\'s red "Unable to load script" / "No bundle URL present" screen)';
   return new Error(
-    `${pkg} ${where}: ${why}. A Debug build loads the app from the Metro dev server: start it in the app's folder `
+    metro === 'answers'
+      ? `${pkg} ${where}: ${why}, although Metro answers this machine. Check the Metro terminal for a bundling error. See ${GETTING_STARTED_DEV_CLIENT}`
+      : `${pkg} ${where}: ${why}. A Debug build loads the app from the Metro dev server: start it in the app's folder `
     + '(`npx expo start`, or `npx react-native start`) and keep it running while the tests run, or test a Release build, '
     + `which carries its JavaScript. See ${GETTING_STARTED_DEV_CLIENT}`,
   );
@@ -1920,7 +1922,7 @@ async function leaveDevScreens(
         // this machine, and an emulator on a busy one can drop a connection.
         const stale = screen === 'launcher' ? DEV_LAUNCHER_STALE_MS : DEV_SCREEN_STALE_MS;
         if (links === 0 || Date.now() - linkedAt >= stale) {
-          if (failed && links - menuLinks >= 2) throw devServerError(pkg, screen, `the app could not load from ${target!.serverUrl}`);
+          if (failed && links - menuLinks >= 2) throw devServerError(pkg, screen, `the app could not load from ${target!.serverUrl}`, 'answers');
           // Closing the menu is not a retry of the load, so each has its own two.
           if ((screen === 'dev-menu' ? menuLinks : links - menuLinks) < 2) {
             target ??= await devClientTarget(ctx, pkg, screen, build.scheme, deps);
@@ -1939,7 +1941,14 @@ async function leaveDevScreens(
         // No development screen, but nothing readable of the app's either: a
         // first screen without text, or a permission dialog over it. Left to
         // the tests' own waiting, as any other launch is.
-        if (Date.now() - (blankSince ??= Date.now()) >= DEV_BLANK_SCREEN_MS) return;
+        if (Date.now() - (blankSince ??= Date.now()) >= DEV_BLANK_SCREEN_MS) {
+          // Unless it is not there: Expo's error screen can crash on a bundle
+          // that does not compile.
+          if (links > 0 && ctx.config.platform !== 'ios' && await ctx.device.currentPackage() !== pkg) {
+            throw new Error(`${pkg} is an Expo development build and closed while loading from Metro (${target!.serverUrl}). Check the Metro terminal for a bundling error. See ${GETTING_STARTED_DEV_CLIENT}`);
+          }
+          return;
+        }
       }
       if (Date.now() - start >= DEV_BUNDLE_LOAD_TIMEOUT_MS) throw devBundleTimeout(pkg, build.kind, screen, target?.serverUrl);
       await delay(confirming ? DEV_MENU_CONFIRM_MS : HIERARCHY_POLL_INTERVAL_MS);

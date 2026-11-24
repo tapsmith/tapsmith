@@ -155,7 +155,9 @@ npx tapsmith test       # or: npx tapsmith test --watch / --ui
 ```
 
 Build and install the Debug build as you usually do (`npx expo run:android`,
-`npx expo run:ios`, or Android Studio and Xcode). Point the config at it, as for any build:
+`npx expo run:ios`, or Android Studio and Xcode). Point the config at it, as for any build. `npx expo run:ios`
+and Xcode build into Xcode's DerivedData folder, so give that path as `app`, or build with
+`xcodebuild … -derivedDataPath build` as above, with `-configuration Debug`:
 
 ```ts
 // tapsmith.config.ts

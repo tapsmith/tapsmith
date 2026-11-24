@@ -327,6 +327,19 @@ describe('connectDevClient', () => {
     expect(at(buildApk(['assets/index.android.bundle']))).toBe(0);
   });
 
+  it('names a build that closed while loading, rather than calling it loaded', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ctx, device } = makeContext([LAUNCHER, '<hierarchy><node package="com.other" text="Other" /></hierarchy>']);
+      device.currentPackage.mockResolvedValue('com.other');
+      const failed = expect(connectDevClient(ctx, { fetch: metro })).rejects.toThrow(/closed while loading from Metro.*bundling error/);
+      await vi.advanceTimersByTimeAsync(35_000);
+      await failed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reads nothing for a build that carries its JavaScript, even in an expo-dev-client project', async () => {
     const { ctx, client } = makeContext([LAUNCHER]);
     ctx.config.apk = buildApk(['assets/index.android.bundle']);
