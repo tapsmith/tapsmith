@@ -56,7 +56,9 @@ const LANDSCAPE_TEST_NAME = "a landscape screen is captured upright"
  */
 const EXPECTED_HOST = "jsonplaceholder.typicode.com"
 
-const TRACES_DIR = path.join(HERE, "tapsmith-results", "traces")
+// Not the sharded run's folder: this run would clear its traces.
+const OUTPUT_DIR = process.env.E2E_OUTPUT_DIR ?? "tapsmith-results"
+const TRACES_DIR = path.join(HERE, OUTPUT_DIR, "traces")
 
 function runTracedTest(passthrough) {
   const args = [

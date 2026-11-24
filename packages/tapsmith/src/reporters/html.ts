@@ -33,6 +33,7 @@ export class HtmlReporter implements TapsmithReporter {
   async onRunEnd(result: FullResult): Promise<void> {
     const rootDir = this._config?.rootDir ?? process.cwd();
     const outputDir = path.resolve(rootDir, this._outputFolder);
+    removePreviousReport(outputDir, result);
     fs.mkdirSync(outputDir, { recursive: true });
 
     // Copy screenshots to report folder
@@ -75,6 +76,7 @@ export class HtmlReporter implements TapsmithReporter {
     const html = generateHtml(result, this._startTime, screenshotMap, traceMap, videoMap);
     const indexPath = path.join(outputDir, 'index.html');
     fs.writeFileSync(indexPath, html);
+    writeReportLedger(outputDir, new Set(['index.html', ...screenshotMap.values(), ...traceMap.values(), ...videoMap.values()]));
 
     const hasFailed = result.tests.some((t) => t.status === 'failed');
     // Never in CI, as in Playwright: nobody is there to look, and a runner
@@ -97,6 +99,59 @@ export class HtmlReporter implements TapsmithReporter {
     }
 
     process.stderr.write(`HTML report written to ${indexPath}\n`);
+  }
+}
+
+// ─── Replacing the previous report ───
+
+/** Names the files a report consists of, so the next one can remove them. */
+const REPORT_LEDGER = '.tapsmith-report.json';
+
+/**
+ * Remove the previous report's files, so the folder holds one report. Only the
+ * files its ledger names, and only while they are the size it recorded: the
+ * folder may be one the user keeps other files in (`outputFolder: 'public'`).
+ * The artifacts of the run being reported are never removed, wherever they are.
+ */
+function removePreviousReport(outputDir: string, result: FullResult): void {
+  const ledger = path.join(outputDir, REPORT_LEDGER);
+  let files: unknown;
+  try {
+    files = (JSON.parse(fs.readFileSync(ledger, 'utf-8')) as { files?: unknown } | null)?.files;
+  } catch {
+    return; // no earlier report, or one this version does not know
+  }
+  if (!Array.isArray(files)) return;
+  const inUse = new Set(result.tests
+    .flatMap((t) => [t.screenshotPath, t.tracePath, t.videoPath])
+    .flatMap((p) => (p ? [realPath(p)] : [])));
+  for (const entry of files as unknown[]) {
+    const { name, size } = (entry ?? {}) as { name?: unknown; size?: unknown };
+    if (typeof name !== 'string' || name === '..' || path.basename(name) !== name || name.includes('\\')) continue;
+    const file = path.join(outputDir, name);
+    try {
+      const stat = fs.lstatSync(file);
+      if (stat.isFile() && stat.size === size && !inUse.has(realPath(file))) fs.rmSync(file);
+    } catch {
+      // Already gone, or not removable: the report is written regardless.
+    }
+  }
+}
+
+function writeReportLedger(outputDir: string, names: Set<string>): void {
+  try {
+    const files = [...names].map((name) => ({ name, size: fs.statSync(path.join(outputDir, name)).size }));
+    fs.writeFileSync(path.join(outputDir, REPORT_LEDGER), JSON.stringify({ version: 1, files }) + '\n');
+  } catch {
+    // The next report then leaves this one's files behind.
+  }
+}
+
+function realPath(file: string): string {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    return path.resolve(file);
   }
 }
 

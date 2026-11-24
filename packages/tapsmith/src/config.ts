@@ -145,7 +145,7 @@ export interface TapsmithConfig {
   /** Working directory for test discovery. */
   rootDir: string;
 
-  /** Directory to write screenshots and artifacts to. */
+  /** Directory for traces, screenshots and videos. A run starts by removing what earlier runs wrote there. */
   outputDir: string;
 
   /** The app under test: its Android package name, or its iOS bundle identifier. Launched automatically before tests. */

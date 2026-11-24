@@ -14,6 +14,9 @@ export default defineConfig({
   // (compositor stalls, input-injection drops) can outlast a single retry
   // even after the framework's own recovery escalations.
   retries: 2,
+  // A run clears the output of the runs before it. The workflow's extra runs,
+  // after the sharded one, write elsewhere so that its traces reach the upload.
+  outputDir: process.env.E2E_OUTPUT_DIR ?? "tapsmith-results",
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
   // Record every attempt, keep failures and retries: a flaky test keeps its

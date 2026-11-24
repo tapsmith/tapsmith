@@ -12,6 +12,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
+import { recordOutputFile } from '../output-ledger.js';
 import type { TapsmithReporter, FullResult } from '../reporter.js';
 import type { TapsmithConfig } from '../config.js';
 import type { SuiteResult, TestResult } from '../runner.js';
@@ -90,6 +91,7 @@ export class JUnitReporter implements TapsmithReporter {
 
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, lines.join('\n'));
+    recordOutputFile(this._config, outputPath);
     process.stderr.write(`JUnit report written to ${outputPath}\n`);
   }
 }

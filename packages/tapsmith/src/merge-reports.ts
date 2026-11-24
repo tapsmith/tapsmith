@@ -14,6 +14,7 @@ import {
   type ReporterDescription,
   type TapsmithReporter,
 } from './reporter.js';
+import { beginOutputRun } from './output-ledger.js';
 import { parseReporterList } from './reporter-names.js';
 import { BlobMergeError, BlobOutputDirError, BlobReporter, describeMergedBlobs, incompleteMergeMessage, mergeBlobs } from './reporters/blob.js';
 import { bold, dim, green, red } from './reporters/base.js';
@@ -106,6 +107,8 @@ export async function runMergeReports(
   console.log(dim(resolvedDir));
   console.log();
 
+  // Not a test run, so the runs' output stays: the merge may be reporting it.
+  beginOutputRun(config, { clear: false });
   const dispatcher = new ReporterDispatcher(reporters);
   dispatcher.onRunStart(config, 0, { merge: true });
   await dispatcher.onRunEnd(result);

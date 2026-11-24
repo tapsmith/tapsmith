@@ -18,6 +18,7 @@ import { runTestFile, loadFailureResult, collectResults, type RunDevice, type Te
 import { runFileWithSessionRecovery } from './file-recovery.js';
 import { runnerClaimsUnhandledRejection } from './unhandled-errors.js';
 import { telemetry, readSdkVersion, ensureSessionEnv } from './telemetry.js';
+import { beginOutputRun } from './output-ledger.js';
 import { createReporters, ReporterDispatcher, ReporterLoadError, type FullResult } from './reporter.js';
 import { ensureSessionReady } from './session-preflight.js';
 import {
@@ -2023,6 +2024,7 @@ async function exitEmptyShard(config: TapsmithConfig): Promise<never> {
     console.error(red(refusal));
     process.exit(1);
   }
+  beginOutputRun(config, { clear: true });
   process.exit(0);
 }
 
@@ -2475,6 +2477,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // A file that failed to load: report it, as the run would have, to every
   // reporter, and run nothing (PILOT-784).
   if (loadFailures.length > 0) {
+    beginOutputRun(config, { clear: true });
     const fileCount = new Set(loadFailures.map((r) => r.filePath)).size;
     reporter.onRunStart(config, fileCount);
     for (const result of loadFailures) {
@@ -2592,6 +2595,9 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       process.exit(1);
     }
   }
+  // The previous runs' output goes at the same point, for the same reasons; a
+  // UI or watch session keeps everything it writes until it ends.
+  beginOutputRun(config, { clear: true });
   // Whether any file this session can run uses route(), waitForRequest(),
   // waitForResponse() or on('request' | 'response'): if so every device
   // session starts the network proxy before the app launches (PILOT-1013).
