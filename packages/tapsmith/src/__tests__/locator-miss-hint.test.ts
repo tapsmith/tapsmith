@@ -206,6 +206,16 @@ describe("a not-found error lists the near misses the agent finds", () => {
       vitestExpect(await tapError(ios.client, (d) => d.getByText("Apollo 11", { exact: true }))).toContain(offScreen);
     });
 
+    it("is kept when the words are only on an off-screen element, which scrolling would bring up", async () => {
+      // Both agents can list an element scrolled out of view, as not visible.
+      const offScreenHit = { ...element("t", "Delete"), visible: false };
+      const hits = (found: ElementInfo[]) =>
+        missingClient((s) => (s.kind.type === "textContains" ? found : [])).client;
+      const locate = (d: Device) => d.getByRole("button", { name: "Delete" });
+      vitestExpect(await tapError(hits([offScreenHit]), locate)).toContain(offScreen);
+      vitestExpect(await tapError(hits([offScreenHit, element("v", "DELETE")]), locate)).not.toContain("off-screen");
+    });
+
     it("is kept when only the role matches, under other names", async () => {
       const { client } = missingClient((s) =>
         s.kind.type === "role" && s.kind.value.role === "button" ? [element("a", "Log in")] : []);
