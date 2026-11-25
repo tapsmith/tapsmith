@@ -60,7 +60,11 @@ describe('missingConfigFix()', () => {
   it('offers a build made elsewhere before building again', () => {
     expo();
     expect(fix()).toMatch(/Already built somewhere else\?.*--apk <path> or --package <id>.* or --app <path>/);
+    write('ios/Acme.xcodeproj/project.pbxproj');
     write('android/settings.gradle');
+    // init wants a build of each platform in the project, unless told one.
+    expect(fix()).toMatch(/add --apk <path> or --package <id> \(.*\), and --app <path> \(.*\) to the init command \(with only one of the two, also add --platform android or --platform ios\)/);
+    fs.rmSync(path.join(dir, 'ios'), { recursive: true });
     expect(fix()).toContain('add --apk <path> or --package <id>');
     expect(fix()).not.toContain('--app <path>');
     fs.rmSync(path.join(dir, 'app.json'));

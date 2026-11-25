@@ -924,3 +924,61 @@ describe('a setup with no build yet (PILOT-778)', () => {
     expect(steps[2][1]).toBe('npx tapsmith verify');
   });
 });
+
+// ─── What the CLI wires to the coding-agent steps (PILOT-1442) ───
+
+describe('runInit() in a coding agent\'s shell', () => {
+  const cwd = process.cwd();
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-agent-')));
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+    process.chdir(dir);
+    vi.stubEnv('CLAUDECODE', '1');
+    for (const name of ['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_THREAD_ID', 'CURSOR_AGENT']) vi.stubEnv(name, undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    process.chdir(cwd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function run(over: Partial<InitCommandOptions>): Promise<{ out: string; exit: unknown }> {
+    let out = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { out += String(chunk); return true; });
+    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+    const exit = await runInit({
+      yes: false, json: true, force: false, exampleTest: true, agentsMd: true, agentsMdOnly: false, ...over,
+    }).then(() => undefined, (err: unknown) => (err as Error).message);
+    return { out, exit };
+  }
+
+  it('--agents-md-only writes AGENTS.md and nothing else', async () => {
+    const { out, exit } = await run({ agentsMdOnly: true });
+    expect(exit).toBeUndefined();
+    const result = JSON.parse(out) as { filesCreated: string[]; nextSteps: string[] };
+    expect(result.filesCreated).toEqual(['AGENTS.md']);
+    expect(result.nextSteps[0]).toBe('Install Tapsmith in this project: pnpm add -D tapsmith');
+    expect(result.nextSteps[1]).toContain('claude plugin install tapsmith@tapsmith');
+    expect(fs.readdirSync(dir).sort()).toEqual(['AGENTS.md', 'package.json', 'pnpm-lock.yaml']);
+  });
+
+  it('--yes puts the running agent\'s plugin ahead of verify, and names the project\'s own commands in errors', async () => {
+    const setup = { yes: true, platform: 'android', package: 'com.acme.app', avd: 'Pixel_9' };
+    const { out, exit } = await run(setup);
+    expect(exit).toBeUndefined();
+    const { nextSteps } = JSON.parse(out) as { nextSteps: string[] };
+    const at = (text: string): number => nextSteps.findIndex((step) => step.includes(text));
+    expect(at('claude plugin install')).toBeGreaterThan(-1);
+    expect(at('claude plugin install')).toBeLessThan(at('tapsmith verify'));
+    const again = await run(setup);
+    expect(again.exit).toBe('exit 1');
+    const { error } = JSON.parse(again.out) as { error: { code: string; fix: string } };
+    expect(error.code).toBe('CONFIG_EXISTS');
+    expect(error.fix).toContain('pnpm exec tapsmith init --agents-md-only');
+  }, 60_000);
+});

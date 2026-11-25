@@ -12,13 +12,19 @@ import {
 /** What init writes, said because an agent that hand-writes the config misses the rest. */
 const INIT_WRITES = 'It writes the config, and the AGENTS.md section that tells coding agents how to find locators, run and debug tests';
 
-/** For a build outside the folders init searches (an EAS or CI download), or an installed app: as init's own errors offer. */
-function existingBuild(platforms: ReadonlyArray<'android' | 'ios'>): string {
+/**
+ * For a build outside the folders init searches (an EAS or CI download), or
+ * an installed app: as init's own errors offer. `fromLayout` platforms are in
+ * the project, so init wants a build of each unless `--platform` names one.
+ */
+function existingBuild(platforms: ReadonlyArray<'android' | 'ios'>, fromLayout: boolean): string {
   const flags = [
-    ...(platforms.includes('android') ? ['--apk <path>', '--package <id> (an Android app already installed on the device)'] : []),
+    ...(platforms.includes('android') ? ['--apk <path> or --package <id> (an Android app already installed on the device)'] : []),
     ...(platforms.includes('ios') ? ['--app <path> (a simulator .app)'] : []),
   ];
-  return `Already built somewhere else? Don't build again: add ${flags.join(' or ')} to the init command.`;
+  const both = fromLayout && flags.length > 1;
+  return `Already built somewhere else? Don't build again: add ${flags.join(both ? ', and ' : ' or ')} to the init command`
+    + `${both ? ' (with only one of the two, also add --platform android or --platform ios)' : ''}.`;
 }
 
 /**
@@ -36,7 +42,7 @@ function missingBuilds(cwd: string, isMacOS: boolean): { how: string; built: str
     const buildable: Array<'android' | 'ios'> = isMacOS ? ['android', 'ios'] : ['android'];
     return {
       how: expo
-        ? `This Expo project has no android/ or ios/ yet. ${existingBuild(buildable)} ${expoBuildHint(buildable, expo)}`
+        ? `This Expo project has no android/ or ios/ yet. ${existingBuild(buildable, false)} ${expoBuildHint(buildable, expo)}`
         : `No Android or iOS project found here: add --apk <path> (Android) or --app <path> (an iOS simulator .app) to say where the build is. See ${BUILD_DOCS}`,
       built: [],
     };
@@ -48,7 +54,7 @@ function missingBuilds(cwd: string, isMacOS: boolean): { how: string; built: str
   if (missing.length === 0) return undefined;
   const reactNative = isReactNativeProject(cwd);
   return {
-    how: `${existingBuild(missing)} ${expo
+    how: `${existingBuild(missing, true)} ${expo
       ? expoBuildHint(missing, expo)
       : missing.map((p) => `${p === 'android' ? 'Android' : 'iOS'}: ${nativeBuildHint(p, layout, reactNative)}`).join('. ')}`,
     built: platforms.filter((p) => !missing.includes(p)),

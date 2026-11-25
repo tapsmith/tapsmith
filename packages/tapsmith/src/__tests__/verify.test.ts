@@ -226,6 +226,12 @@ describe('runVerify() outcome by what the run executed', () => {
     return JSON.parse(String(stdout.mock.calls[0]?.[0])) as Record<string, unknown>;
   };
 
+  it('--json: with no config, the fix says to build the app before init (PILOT-1442)', async () => {
+    fs.rmSync(path.join(dir, 'tapsmith.config.mjs'));
+    await runVerify({ json: true });
+    expect(jsonOut().error).toMatchObject({ code: 'NO_CONFIG', fix: expect.stringMatching(/^Build the app first, then run: npx tapsmith init --yes --json/) });
+  });
+
   it('--json: a file with no tests is NO_TESTS_RAN in the error envelope, exit 1', async () => {
     childReports([]);
     await runVerify({ json: true });
