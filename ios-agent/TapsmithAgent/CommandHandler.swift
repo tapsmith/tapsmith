@@ -3816,8 +3816,15 @@ class CommandHandler {
     /// so the touch is never failed or made again (PILOT-1495). nil, at no
     /// cost, after any other touch.
     private func warningIfTouchClosedKeyboard() -> String? {
-        guard let watch = keyboardFirstGate.takeWatch(now: Date(), readDeadline: commandReadDeadline),
-              waitForKeyboardDismissed(timeout: watch) else { return nil }
+        guard let watch = keyboardFirstGate.takeWatch(now: Date(), readDeadline: commandReadDeadline) else { return nil }
+        // The touch is made: a read XCTest raises an exception from (an app
+        // the tap closed) is no warning, never a failed touch.
+        var closed = false
+        let raised = ObjCExceptionCatcher.catchException {
+            closed = self.waitForKeyboardDismissed(timeout: watch)
+        }
+        if let raised { NSLog("[TapsmithCommand] could not watch the keyboard after the touch: \(raised.localizedDescription)") }
+        guard closed else { return nil }
         NSLog("[TapsmithCommand] the keyboard closed with the touch, which may have done nothing else")
         return KeyboardFirstGate.touchWarning
     }
