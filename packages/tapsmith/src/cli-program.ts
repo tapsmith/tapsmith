@@ -79,6 +79,8 @@ export interface InitCommandOptions {
   networkCapture?: boolean;
   exampleTest: boolean;
   agentsMd: boolean;
+  /** Write only the AGENTS.md section. */
+  agentsMdOnly: boolean;
 }
 
 /** Raw `tapsmith create-avd` flags. `create-avd.ts` applies defaults and validates. */
@@ -284,6 +286,7 @@ Runs an interactive wizard in a terminal when given no options. Pass --yes
 and/or explicit flags to run non-interactively (scripts and AI agents).
 
 Examples:
+  npx tapsmith init --yes --json   # AI agents: keep the AGENTS.md section
   npx tapsmith init --yes
   npx tapsmith init --yes --platform android --apk ./app-debug.apk
   npx tapsmith init --yes --device emulator-5554
@@ -511,10 +514,11 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--device-type <type>', 'emulator, physical or both (default: emulator)')
     .option('--network-capture', 'Record HTTP(S) traffic in traces (default: on, unless the only device is a Google Play-image emulator)')
     .option('--no-network-capture', 'Write no trace setting (network mocking still works: the proxy starts when the tests need it)')
-    .option('--no-example-test', 'Skip scaffolding tests/example.tapsmith.ts')
-    .option('--no-agents-md', 'Skip scaffolding the AGENTS.md section')
     .option('--force', 'Overwrite an existing tapsmith.config.*', false)
     .addOption(jsonOption())
+    .option('--agents-md-only', 'Add or update only the AGENTS.md section, in a project already set up: writes no config or test', false)
+    .option('--no-example-test', 'Skip the example test, tests/example.tapsmith.ts (default: written)')
+    .option('--no-agents-md', 'Skip the AGENTS.md section, which tells coding agents how to find locators, run and debug tests (default: written)')
     .addHelpText('after', INIT_EXAMPLES)
     .action((opts: InitCommandOptions) => act('init', handlers.init)({ ...opts }));
 

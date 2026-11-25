@@ -983,6 +983,43 @@ describe('doctor config check (PILOT-263 item 1)', () => {
   });
 });
 
+describe('doctor for coding agents (PILOT-1442)', () => {
+  it('with no config and no build, says to build before init', async () => {
+    withAdb();
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"dependencies":{"expo":"54.0.0"}}');
+    fs.writeFileSync(path.join(dir, 'app.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+    const { json } = await doctorJson();
+    expect(check(json, 'config')).toMatchObject({ status: 'warn', fix: expect.stringMatching(/^Build the app first, then run: pnpm exec tapsmith init --yes --json/) });
+    expect(ids(json)).not.toContain('agents-md');
+  });
+
+  it('warns when a config exists but no instructions file has the Tapsmith section', async () => {
+    withAdb();
+    writeConfig('export default {}\n');
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Team rules\n');
+    const { code, json } = await doctorJson();
+    expect(check(json, 'agents-md')).toMatchObject({ status: 'warn', fix: expect.stringContaining('Run: npx tapsmith init --agents-md-only') });
+    expect(code).toBe(0);
+    expect((await doctorText()).text).toContain('↳ Run: npx tapsmith init --agents-md-only');
+    fs.appendFileSync(path.join(dir, 'AGENTS.md'), '<!-- tapsmith:begin -->\n<!-- tapsmith:end -->\n');
+    expect(check((await doctorJson()).json, 'agents-md')).toMatchObject({ status: 'pass', detail: 'AGENTS.md' });
+  });
+
+  it('checks a config that does not load too', async () => {
+    withAdb();
+    writeConfig('export default {\n');
+    expect(check((await doctorJson()).json, 'agents-md')).toMatchObject({ status: 'warn' });
+  });
+
+  it('with -c, the section beside the config counts', async () => {
+    withAdb();
+    const file = writeConfig('export default {}\n', 'ci.config.mjs', path.join(dir, 'configs'));
+    fs.writeFileSync(path.join(dir, 'configs', 'AGENTS.md'), '<!-- tapsmith:begin -->\n<!-- tapsmith:end -->\n');
+    expect(check((await doctorJson({ config: path.relative(dir, file) })).json, 'agents-md')).toMatchObject({ status: 'pass', detail: path.join('configs', 'AGENTS.md') });
+  });
+});
+
 // ─── Item 4: device states ───
 
 describe('doctor Android devices (PILOT-263 item 4)', () => {

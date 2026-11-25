@@ -611,7 +611,7 @@ describe('Flutter projects (PILOT-868)', () => {
 
 describe('debugBuildNote()', () => {
   const rnLayout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true, flutter: false };
-  const expo = { hasAndroidDir: true, hasIosDir: true, usesTapsmithHooks: true };
+  const expo = { hasAndroidDir: true, hasIosDir: true, usesTapsmithHooks: true, usesDevClient: false };
 
   it('warns about a React Native Debug simulator build and gives the Release one', () => {
     const warning = debugBuildNote('ios/build/Build/Products/Debug-iphonesimulator/App.app', 'ios', rnLayout, true);

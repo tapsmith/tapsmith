@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { detectCodingAgents, isOnPath } from '../agent-plugins.js';
+import { detectCodingAgents, findAgentsSection, isOnPath } from '../agent-plugins.js';
 import { childExecArgv, firstWorkspaceFolder, locateTapsmith, projectDir } from '../../../../plugins/source/mcp-launcher.mjs';
 import { generatedFiles, staleFiles } from '../../../../plugins/source/sync.mjs';
 
@@ -573,11 +573,11 @@ describe('detectCodingAgents', () => {
     expect(detectCodingAgents(path.join(tmp, 'e2e'), none)).toEqual([]);
   });
 
-  it('lists the agent running init first, from its environment', () => {
+  it('lists only the agent running init, from its environment', () => {
     write('.git/HEAD', '');
     write('.cursor/rules/x.mdc', '');
-    expect(detectCodingAgents(tmp, { env: { CLAUDECODE: '1' }, onPath: () => false })).toEqual(['claude', 'cursor']);
-    expect(detectCodingAgents(tmp, { env: { CODEX_SANDBOX: 'seatbelt' }, onPath: () => false })).toEqual(['codex', 'cursor']);
+    expect(detectCodingAgents(tmp, { env: { CLAUDECODE: '1' }, onPath: () => false })).toEqual(['claude']);
+    expect(detectCodingAgents(tmp, { env: { CODEX_SANDBOX: 'seatbelt' }, onPath: () => false })).toEqual(['codex']);
     expect(detectCodingAgents(tmp, { env: { CURSOR_AGENT: '1' }, onPath: () => false })).toEqual(['cursor']);
   });
 
@@ -614,5 +614,29 @@ describe('isOnPath', () => {
     expect(isOnPath('codex', env, 'darwin')).toBe(false);
     expect(isOnPath('cursor', env, 'darwin')).toBe(false);
     expect(isOnPath('claude', {}, 'darwin')).toBe(false);
+  });
+});
+
+describe('findAgentsSection', () => {
+  const SECTION = '# Notes\n<!-- tapsmith:begin -->\nx\n<!-- tapsmith:end -->\n';
+
+  it.each(['AGENTS.md', 'CLAUDE.md', '.claude/CLAUDE.md'])('finds the section in %s', (file) => {
+    write(file, SECTION);
+    expect(findAgentsSection(tmp)).toBe(path.join(tmp, file));
+  });
+
+  it('looks in the folders above, up to the git root', () => {
+    write('AGENTS.md', SECTION); // above the git root: another project's
+    write('repo/.git/HEAD', '');
+    fs.mkdirSync(path.join(tmp, 'repo/e2e'));
+    expect(findAgentsSection(path.join(tmp, 'repo/e2e'))).toBeUndefined();
+    write('repo/AGENTS.md', SECTION);
+    expect(findAgentsSection(path.join(tmp, 'repo/e2e'))).toBe(path.join(tmp, 'repo/AGENTS.md'));
+  });
+
+  it('does not take an instructions file without the section', () => {
+    write('AGENTS.md', '# Notes\n');
+    write('CLAUDE.md', SECTION);
+    expect(findAgentsSection(tmp)).toBe(path.join(tmp, 'CLAUDE.md'));
   });
 });

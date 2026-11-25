@@ -387,7 +387,7 @@ describe('configureIos() on a Flutter project (PILOT-868)', () => {
 });
 
 describe('configureIos() on an Expo project (PILOT-557)', () => {
-  const expo: ExpoProject = { iosBundleId: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false };
+  const expo: ExpoProject = { iosBundleId: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false };
   let logged: string[] = [];
 
   beforeEach(() => {
@@ -463,7 +463,7 @@ describe('configureIos() with a React Native Debug build', () => {
 
   it('warns that it needs Metro and gives the Release build', async () => {
     script('simulators');
-    await configureIos(env, { hasAndroidDir: false, hasIosDir: true, usesTapsmithHooks: true });
+    await configureIos(env, { hasAndroidDir: false, hasIosDir: true, usesTapsmithHooks: true, usesDevClient: false });
     const warning = logged.find((l) => l.includes('is a Debug build'));
     expect(warning).toContain(SIM_APP);
     expect(warning).toContain('Metro');

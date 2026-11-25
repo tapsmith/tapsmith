@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { DEFAULT_DOCS_DIR } from './agents-md.js';
+import { AGENTS_BEGIN, DEFAULT_DOCS_DIR } from './agents-md.js';
 
 // ─── Detection ───
 
@@ -63,12 +63,39 @@ function projectFolders(cwd: string): string[] {
   }
 }
 
+/** Where coding agents read a project's instructions, which may hold the Tapsmith section. */
+const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', path.join('.claude', 'CLAUDE.md')];
+
 /**
- * The coding agents a project uses, in the order init lists their plugin
- * installs: the agent running init (from its environment) first, then each
- * whose project files (`.claude/`, `CLAUDE.md`, `.codex/`, `.cursor/`,
+ * The first file holding Tapsmith's section for agents, in `cwd` or a folder
+ * above it up to the git root: agents read a repository's instructions from
+ * a package inside it too.
+ */
+export function findAgentsSection(cwd: string): string | undefined {
+  for (const dir of projectFolders(cwd)) {
+    for (const name of INSTRUCTION_FILES) {
+      const file = path.join(dir, name);
+      try {
+        if (fs.readFileSync(file, 'utf8').includes(AGENTS_BEGIN)) return file;
+      } catch {
+        // Missing or unreadable: not it.
+      }
+    }
+  }
+  return undefined;
+}
+
+/** The coding agents whose shell this process runs in, from its environment. */
+export function runningCodingAgents(env: NodeJS.ProcessEnv = process.env): CodingAgent[] {
+  return AGENTS.filter(({ running }) => running(env)).map(({ agent }) => agent);
+}
+
+/**
+ * The coding agents whose plugin install init lists: the agent running init
+ * (from its environment) alone, since it ignores a list of other agents'
+ * steps. Run by a person, each whose project files (`.claude/`, `CLAUDE.md`, `.codex/`, `.cursor/`,
  * `.cursorrules`) are in `cwd` or a folder above it up to the git root. Only
- * when neither names one does a command on PATH (`claude`, `codex`,
+ * when none is found does a command on PATH (`claude`, `codex`,
  * `cursor`) count: many machines have several installed, and listing every
  * one tells a user of one agent to install the others' plugins.
  */
@@ -76,11 +103,11 @@ export function detectCodingAgents(
   cwd: string,
   { env = process.env, onPath = (cli: string) => isOnPath(cli) }: { env?: NodeJS.ProcessEnv; onPath?: (cli: string) => boolean } = {},
 ): CodingAgent[] {
+  const running = runningCodingAgents(env);
+  if (running.length > 0) return running;
   const folders = projectFolders(cwd);
-  const running = AGENTS.filter(({ running: isRunning }) => isRunning(env));
   const inProject = AGENTS.filter(({ markers }) => folders.some((dir) => markers.some((m) => fs.existsSync(path.join(dir, m)))));
-  const found = [...new Set([...running, ...inProject])];
-  return (found.length > 0 ? found : AGENTS.filter(({ cli }) => onPath(cli))).map(({ agent }) => agent);
+  return (inProject.length > 0 ? inProject : AGENTS.filter(({ cli }) => onPath(cli))).map(({ agent }) => agent);
 }
 
 // ─── Install steps ───

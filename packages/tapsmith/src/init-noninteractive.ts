@@ -9,14 +9,14 @@ import * as path from 'node:path';
 import { runningAvds, simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, connectedDeviceTarget, playwrightNeighbourNote, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
-import { installedDocsDir, writeAgentsMd } from './agents-md.js';
-import { pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
+import { installedDocsDir, updateAgentsMd, writeAgentsMd } from './agents-md.js';
+import { findAgentsSection, pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
 import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
-import type { InstallCommand } from './config.js';
+import { findConfigFile, type InstallCommand } from './config.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 import { appIdWarning } from './app-id.js';
 import { adbMissingFix } from './toolchain.js';
@@ -44,6 +44,8 @@ export interface InitArgs {
   networkCapture?: boolean;
   exampleTest: boolean;
   agentsMd: boolean;
+  /** `--agents-md-only`: write the AGENTS.md section and nothing else. */
+  agentsMdOnly: boolean;
   /** True when any setup-shaping flag was passed (implies non-interactive). */
   anySetupFlag: boolean;
 }
@@ -72,7 +74,8 @@ export interface InitPlan {
 }
 
 export interface InitResult {
-  configPath: string;
+  /** Left out by `--agents-md-only` in a project with no config. */
+  configPath?: string;
   filesCreated: string[];
   warnings: string[];
   nextSteps: string[];
@@ -91,6 +94,12 @@ export interface DetectFns {
 }
 
 // ─── Flag validation ───
+
+/** The setup flags that take a value. */
+const SETUP_FLAGS = {
+  platform: '--platform', apk: '--apk', package: '--package', app: '--app', bundleId: '--bundle-id',
+  avd: '--avd', device: '--device', simulator: '--simulator', deviceType: '--device-type',
+} as const satisfies Partial<Record<keyof InitCommandOptions, string>>;
 
 /**
  * Validate the parsed `tapsmith init` flags and shape them for the planner.
@@ -119,6 +128,17 @@ export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
     });
   }
 
+  if (opts.agentsMdOnly) {
+    const other = Object.entries(SETUP_FLAGS).find(([key]) => opts[key as keyof InitCommandOptions] !== undefined)?.[1]
+      ?? (opts.force ? '--force' : !opts.exampleTest ? '--no-example-test' : !opts.agentsMd ? '--no-agents-md' : undefined)
+      ?? (opts.networkCapture === undefined ? undefined : opts.networkCapture ? '--network-capture' : '--no-network-capture');
+    if (other) {
+      throw new InitError('CONFLICTING_FLAGS', `--agents-md-only cannot be combined with ${other}`, {
+        fix: '--agents-md-only writes the AGENTS.md section and nothing else: pass it alone (with --json if you like), or drop it to set up the project',
+      });
+    }
+  }
+
   const valueFlags = [opts.platform, opts.apk, opts.package, opts.app, opts.bundleId, opts.avd, opts.device, opts.simulator, opts.deviceType];
   return {
     yes: opts.yes,
@@ -136,8 +156,9 @@ export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
     networkCapture: opts.networkCapture,
     exampleTest: opts.exampleTest,
     agentsMd: opts.agentsMd,
+    agentsMdOnly: opts.agentsMdOnly,
     anySetupFlag: valueFlags.some((v) => v !== undefined)
-      || opts.force || opts.networkCapture !== undefined || !opts.exampleTest || !opts.agentsMd,
+      || opts.force || opts.networkCapture !== undefined || !opts.exampleTest || !opts.agentsMd || opts.agentsMdOnly,
   };
 }
 
@@ -469,7 +490,7 @@ export function assertConfigWritable(force: boolean, cwd: string = process.cwd()
   const existing = CONFIG_NAMES.find((name) => fs.existsSync(path.join(cwd, name)));
   if (existing && !force) {
     throw new InitError('CONFIG_EXISTS', `Found existing ${existing}`, {
-      fix: 'Pass --force to overwrite, or delete the existing config',
+      fix: 'Pass --force to overwrite, or delete the existing config. To add or update only the AGENTS.md section for coding agents, run: npx tapsmith init --agents-md-only',
     });
   }
 }
@@ -565,6 +586,72 @@ function writeFailed(cwd: string, interactive: boolean, rel: string, reason: str
         : `Check you can write to ${path.dirname(path.join(cwd, rel))} and the disk has space${skipFlag[rel] ?? ''}, then run init again`,
     },
   );
+}
+
+/**
+ * `--agents-md-only`: the AGENTS.md section for a project set up without it
+ * (a hand-written config, `--no-agents-md`), leaving everything else alone.
+ * The result has the shape `init --yes` prints.
+ */
+export function writeAgentsMdOnly(
+  cwd: string,
+  opts: AgentSteps & { missingTapsmith?: InstallCommand },
+): InitResult {
+  const file = path.join(cwd, 'AGENTS.md');
+  const blocked = unwritableReason(file);
+  const failed = (reason: string, fix: string): InitError => new InitError('WRITE_FAILED', `Could not write AGENTS.md: ${reason}. Nothing was written.`, { fix: `${fix}, then run init again` });
+  if (blocked) throw failed(blocked.reason, blocked.fix);
+  let outcome: ReturnType<typeof updateAgentsMd>;
+  try {
+    outcome = updateAgentsMd(cwd);
+  } catch (err) {
+    throw failed(reasonOf(err), `Check you can read and write ${file} and the disk has space`);
+  }
+  if (outcome === 'malformed') {
+    throw new InitError('AGENTS_MD_MARKERS', `${file} has stray or repeated tapsmith:begin / tapsmith:end markers, so where the Tapsmith section starts and ends is a guess. Nothing was written.`, {
+      fix: 'Remove the old Tapsmith section and its <!-- tapsmith:begin --> and <!-- tapsmith:end --> markers, then run init again',
+    });
+  }
+  // No config here doesn't mean none: `-c`, or an e2e/ folder. So no step to run init.
+  const config = findConfigFile(cwd);
+  const nextSteps = [
+    ...(opts.missingTapsmith ? [`Install Tapsmith in this project: ${opts.missingTapsmith.display}`] : []),
+    ...agentSteps(cwd, opts),
+  ];
+  return {
+    ...(config ? { configPath: config } : {}),
+    filesCreated: outcome === 'written' ? ['AGENTS.md'] : [],
+    warnings: [],
+    nextSteps: nextSteps.map((text) => withTapsmithCommand(text, opts.cli)),
+  };
+}
+
+/** Who reads the Next steps, for the ones meant for coding agents. */
+export interface AgentSteps {
+  json: boolean;
+  /** How the project runs Tapsmith (`tapsmithExecCommand`). */
+  cli: string;
+  /** The agents whose plugin install is listed (`detectCodingAgents`). */
+  codingAgents: readonly CodingAgent[];
+  /** A coding agent is running init, and `codingAgents` is that agent. */
+  agentRunning: boolean;
+}
+
+/** The plugin install, or with no agent found the manual registration of the server the plugin uses (docs/mcp-server.md). */
+function pluginSteps(cwd: string, { codingAgents, agentRunning }: AgentSteps): string[] {
+  if (codingAgents.length === 0) {
+    return ['Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui'];
+  }
+  const what = `the Tapsmith MCP server and a test-writing skill${agentRunning ? '; give this to the user to run, then start a new session to use it' : ''}`;
+  return pluginInstallSteps(codingAgents, installedDocsDir(cwd)).map(([label, how]) => `Install the ${label} (${what}): ${how}`);
+}
+
+/** The steps for an agent: its plugin, and what to read instead of Tapsmith's compiled source. */
+function agentSteps(cwd: string, opts: AgentSteps): string[] {
+  const read = opts.json || opts.agentRunning
+    ? [`Read ${installedDocsDir(cwd)}/agents.md before writing tests (how to find locators, run and debug tests; the API docs are beside it)`]
+    : [];
+  return opts.agentRunning ? [...pluginSteps(cwd, opts), ...read] : [...read, ...pluginSteps(cwd, opts)];
 }
 
 /** The temp file the config is written to before it is renamed into place. */
@@ -664,6 +751,8 @@ export function executeInitPlan(
   cli = 'npx tapsmith',
   /** The coding agents the project uses (`detectCodingAgents`), whose plugin install Next steps lists. */
   codingAgents: readonly CodingAgent[] = [],
+  /** A coding agent is running init: `codingAgents` is that agent, and its steps come first. */
+  agentRunning = false,
 ): InitResult {
   const filesCreated: string[] = [];
   // Plug'n'Play first: `verify`, the next step, would refuse there (PILOT-778).
@@ -706,27 +795,29 @@ export function executeInitPlan(
   if (tsconfig === 'created') filesCreated.push('tsconfig.json');
   else if (typeof tsconfig === 'object') warnings.push(tsconfig.warning);
 
+  if (!args.agentsMd && !findAgentsSection(cwd)) {
+    warnings.push('AGENTS.md section skipped: coding agents in this project won\'t get Tapsmith\'s locator/MCP instructions. Add it later with npx tapsmith init --agents-md-only');
+  }
+
   if (missingTapsmith) {
     warnings.push(`Tapsmith isn't installed in this project, and the files init wrote import it: run ${missingTapsmith.display} ${yarnPnp ? 'once Yarn is switched to node_modules (above)' : 'before anything else'}${missingTapsmith.note ? `. ${missingTapsmith.note}` : ''}`);
   }
 
   const captureStep = plan.captureAvdStep;
+  const forAgents: AgentSteps = { json: args.json, cli, codingAgents, agentRunning };
   const nextSteps = [
     // Before the install, so that installs into node_modules.
     ...(yarnPnp ? [`Switch Yarn to node_modules: ${YARN_PNP_INIT_STEP}`] : []),
     ...(missingTapsmith ? [`Install Tapsmith in this project: ${missingTapsmith.display}`] : []),
+    // An agent reads the top of the list and drops the tail (PILOT-1442).
+    ...(agentRunning ? agentSteps(cwd, forAgents) : []),
     // A Play-image AVD: the AVD to switch to before the first run (PILOT-711),
     // or, when capture is off, an option listed last.
     ...(captureStep && !captureStep.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
     // --json is for agents: a person reading the plain output gets the plain command (PILOT-562).
     `Verify the setup end-to-end: npx tapsmith verify${args.json ? ' --json' : ''}`,
     'Run tests: npx tapsmith test',
-    // The plugin registers the MCP server and adds a test-writing skill; with no
-    // agent found, the manual registration of the server the plugin uses
-    // (docs/mcp-server.md).
-    ...(codingAgents.length > 0
-      ? pluginInstallSteps(codingAgents, installedDocsDir(cwd)).map(([label, how]) => `Install the ${label} (the Tapsmith MCP server and a test-writing skill): ${how}`)
-      : ['Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui']),
+    ...(agentRunning ? [] : agentSteps(cwd, forAgents)),
     ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];
 

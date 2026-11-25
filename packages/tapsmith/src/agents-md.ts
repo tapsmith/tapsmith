@@ -151,12 +151,53 @@ export function mergeAgentsMd(existing: string | undefined, section: string): st
   return `${existing}${separator}${section}`;
 }
 
+/**
+ * Write `text` beside the file and rename it into place: AGENTS.md holds the
+ * user's own text, which a write that fails half-way (a full disk) must not
+ * lose. A symlink (to CLAUDE.md, say) stays one; its target is replaced.
+ */
+function replaceFile(filePath: string, text: string): void {
+  const target = fs.existsSync(filePath) ? fs.realpathSync(filePath) : filePath;
+  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(tmp, text);
+    if (fs.existsSync(target)) fs.chmodSync(tmp, fs.statSync(target).mode);
+    fs.renameSync(tmp, target);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
 /** Writes/updates the tapsmith section in <cwd>/AGENTS.md. Returns the file path. */
 export function writeAgentsMd(cwd: string): string {
   const filePath = path.join(cwd, 'AGENTS.md');
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : undefined;
-  fs.writeFileSync(filePath, mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd))));
+  replaceFile(filePath, mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd))));
   return filePath;
+}
+
+/** Whether `text` has no Tapsmith section, one well-formed one, or markers that leave its extent a guess. */
+function sectionState(text: string): 'none' | 'one' | 'malformed' {
+  const begins = text.split(AGENTS_BEGIN).length - 1;
+  const ends = text.split(AGENTS_END).length - 1;
+  if (begins === 0 && ends === 0) return 'none';
+  return begins === 1 && ends === 1 && text.indexOf(AGENTS_END) > text.indexOf(AGENTS_BEGIN) ? 'one' : 'malformed';
+}
+
+/**
+ * Add the section to `<cwd>/AGENTS.md`, or bring an existing one up to date.
+ * With stray or repeated markers nothing is written: replacing a section
+ * whose extent is a guess could take the user's own text.
+ */
+export function updateAgentsMd(cwd: string): 'written' | 'unchanged' | 'malformed' {
+  const filePath = path.join(cwd, 'AGENTS.md');
+  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : undefined;
+  if (existing !== undefined && sectionState(existing) === 'malformed') return 'malformed';
+  const updated = mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd)));
+  if (updated === existing) return 'unchanged';
+  replaceFile(filePath, updated);
+  return 'written';
 }
 
 /**
@@ -169,11 +210,5 @@ export function refreshAgentsMdDocsDir(cwd: string): void {
   const filePath = path.join(cwd, 'AGENTS.md');
   if (!fs.existsSync(filePath)) return;
   const existing = fs.readFileSync(filePath, 'utf8');
-  // Only a single, well-formed section: with a stray marker the section's
-  // extent is a guess, and replacing it could take the user's own text.
-  const begins = existing.split(AGENTS_BEGIN).length - 1;
-  const ends = existing.split(AGENTS_END).length - 1;
-  if (begins !== 1 || ends !== 1 || existing.indexOf(AGENTS_END) < existing.indexOf(AGENTS_BEGIN)) return;
-  const updated = mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd)));
-  if (updated !== existing) fs.writeFileSync(filePath, updated);
+  if (sectionState(existing) === 'one') updateAgentsMd(cwd);
 }

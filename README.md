@@ -76,6 +76,8 @@ npm install -D tapsmith    # or: yarn add -D tapsmith / pnpm add -D tapsmith
 
 pnpm 11+ and Yarn Plug'n'Play each need one setting first: see [Package manager notes](docs/getting-started.md#package-manager-notes).
 
+Setting up with an AI coding agent? See [Using Tapsmith with AI coding agents](docs/agents.md), which ships in the package as `node_modules/tapsmith/docs/agents.md`.
+
 **2. Configure.** Tapsmith tests a build of your app: an `.apk` for Android, or a simulator `.app`
 for iOS ([how to build one](docs/getting-started.md#build-the-app-under-test), including React
 Native, Expo and Flutter). The wizard finds your builds and devices and writes `tapsmith.config.ts`:

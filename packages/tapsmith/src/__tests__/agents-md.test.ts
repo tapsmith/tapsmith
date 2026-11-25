@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { renderAgentsSection, mergeAgentsMd, installedDocsDir, writeAgentsMd, refreshAgentsMdDocsDir, AGENTS_BEGIN, AGENTS_END } from '../agents-md.js';
+import { renderAgentsSection, mergeAgentsMd, installedDocsDir, writeAgentsMd, refreshAgentsMdDocsDir, updateAgentsMd, AGENTS_BEGIN, AGENTS_END } from '../agents-md.js';
 
 describe('renderAgentsSection()', () => {
   it('renders fenced section with run/debug/MCP guidance', () => {
@@ -207,4 +207,64 @@ describe('the docs path init writes', () => {
     refreshAgentsMdDocsDir(pkg);
     expect(fs.readFileSync(path.join(pkg, 'AGENTS.md'), 'utf8')).toBe(`Intro\n${AGENTS_END}\nmid\n${AGENTS_BEGIN}\nNOTES\n`);
   });
+});
+
+describe('updateAgentsMd()', () => {
+  const inTmp = (body: (dir: string, file: string) => void): void => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-agents-update-'));
+    try {
+      body(dir, path.join(dir, 'AGENTS.md'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('adds the section once, keeping the rest of the file', () => inTmp((dir, file) => {
+    fs.writeFileSync(file, '# Team rules\n');
+    expect(updateAgentsMd(dir)).toBe('written');
+    expect(fs.readFileSync(file, 'utf8')).toBe(`# Team rules\n\n${renderAgentsSection()}`);
+    expect(updateAgentsMd(dir)).toBe('unchanged');
+  }));
+
+  it('replaces an outdated section', () => inTmp((dir, file) => {
+    fs.writeFileSync(file, `# A\n\n${AGENTS_BEGIN}\nold\n${AGENTS_END}\n\n# B\n`);
+    expect(updateAgentsMd(dir)).toBe('written');
+    expect(fs.readFileSync(file, 'utf8')).toBe(`# A\n\n${renderAgentsSection()}\n# B\n`);
+  }));
+
+  it.each([
+    ['a begin without an end', `${AGENTS_BEGIN}\nmine\n`],
+    ['two sections', `${AGENTS_BEGIN}\n${AGENTS_END}\nmine\n${AGENTS_BEGIN}\n${AGENTS_END}\n`],
+    ['an end before the begin', `${AGENTS_END}\nmine\n${AGENTS_BEGIN}\n`],
+  ])('leaves a file with %s alone', (_, text) => inTmp((dir, file) => {
+    fs.writeFileSync(file, text);
+    expect(updateAgentsMd(dir)).toBe('malformed');
+    expect(fs.readFileSync(file, 'utf8')).toBe(text);
+  }));
+
+  it.skipIf(process.platform === 'win32')('replaces the file rather than truncating it, keeping its mode and a symlink to it', () => inTmp((dir, file) => {
+    const target = path.join(dir, 'CLAUDE.md');
+    fs.writeFileSync(target, '# Mine\n');
+    fs.chmodSync(target, 0o640);
+    fs.symlinkSync('CLAUDE.md', file);
+    const before = fs.statSync(target).ino;
+    expect(updateAgentsMd(dir)).toBe('written');
+    expect(fs.statSync(target).ino).not.toBe(before);
+    expect(fs.statSync(target).mode & 0o777).toBe(0o640);
+    expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).toContain('# Mine');
+    expect(fs.readdirSync(dir).sort()).toEqual(['AGENTS.md', 'CLAUDE.md']);
+  }));
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('leaves the file as it was when it cannot be replaced', () => inTmp((dir, file) => {
+    fs.writeFileSync(file, '# Mine\n');
+    fs.chmodSync(dir, 0o555);
+    try {
+      expect(() => updateAgentsMd(dir)).toThrow();
+      expect(fs.readFileSync(file, 'utf8')).toBe('# Mine\n');
+      expect(fs.readdirSync(dir)).toEqual(['AGENTS.md']);
+    } finally {
+      fs.chmodSync(dir, 0o755);
+    }
+  }));
 });

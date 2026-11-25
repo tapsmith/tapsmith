@@ -29,6 +29,8 @@ import { readIosAppInfo, type IosAppInfo } from './ios-app-bundle.js';
 import { isSimulatorUdid } from './ios-devicectl.js';
 import { isYarnPnp, YARN_PNP_FIX } from './yarn-pnp.js';
 import { appIdProblem } from './app-id.js';
+import { missingConfigFix } from './missing-config.js';
+import { findAgentsSection } from './agent-plugins.js';
 
 // ─── ANSI helpers ───
 
@@ -205,18 +207,38 @@ function checkDaemonBin(report: Reporter): void {
 /**
  * Whether there is a config file, found exactly as `loadConfig` finds it:
  * `-c` when given, else every supported name in the working directory. A
- * `-c` path that does not exist is left to the `config-load` failure.
+ * `-c` path that does not exist is left to the `config-load` failure. With a
+ * config, the next check is whether coding agents get Tapsmith's section.
  */
-function checkConfigFile(report: Reporter, configFile: string | undefined, findConfigFile: (dir: string, file?: string) => string | undefined): void {
+function checkConfigFile(report: Reporter, configFile: string | undefined, cli: string, findConfigFile: (dir: string, file?: string) => string | undefined): void {
   try {
     const found = findConfigFile(process.cwd(), configFile);
     if (found && fs.existsSync(found)) {
       pass(report, 'config', 'Config file found', path.relative(process.cwd(), found) || found);
+      checkAgentsMd(report, path.dirname(path.resolve(found)), cli);
     } else if (!configFile) {
-      warn(report, 'config', 'No tapsmith.config.ts (or .js, .mjs) found in current directory', 'Run: npx tapsmith init --yes (or npx tapsmith init for the wizard)');
+      warn(report, 'config', 'No tapsmith.config.ts (or .js, .mjs) found in current directory', missingConfigFix(process.cwd(), cli));
     }
   } catch {
     warn(report, 'config', 'Could not check for config file');
+  }
+}
+
+/**
+ * Whether the project's coding agents get Tapsmith's instructions. A
+ * hand-written config skips init, and with it the AGENTS.md section
+ * (PILOT-1442). Looks from the working directory, where the fix writes, and
+ * from the config's folder.
+ */
+function checkAgentsMd(report: Reporter, configDir: string, cli: string): void {
+  const cwd = process.cwd();
+  const found = findAgentsSection(cwd) ?? findAgentsSection(configDir);
+  if (found) {
+    pass(report, 'agents-md', 'Tapsmith section for coding agents found', path.relative(cwd, found));
+  } else {
+    warn(report, 'agents-md',
+      'No Tapsmith section in AGENTS.md or CLAUDE.md, so coding agents don\'t get how to find locators, run and debug tests',
+      `Run: ${cli} init --agents-md-only (adds the section to AGENTS.md and leaves the config alone)`);
   }
 }
 
@@ -1445,7 +1467,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
 
   // Load the config the way `tapsmith test` does; it decides which platforms
   // are judged and feeds the APK path and AVD image checks.
-  const { loadConfig, findConfigFile, configPathOf, effectiveConfigForProject } = await import('./config.js');
+  const { loadConfig, findConfigFile, configPathOf, effectiveConfigForProject, tapsmithExecCommand } = await import('./config.js');
   const { resolveProjects, projectLabel } = await import('./project.js');
   let config: TapsmithConfig | undefined;
   try {
@@ -1507,7 +1529,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
   checkNodeArch(report);
   checkYarnPnp(report);
   checkDaemonBin(report);
-  checkConfigFile(report, configFile, findConfigFile);
+  checkConfigFile(report, configFile, await tapsmithExecCommand(process.cwd()), findConfigFile);
   // A config's own platforms already fail when none can run (planPlatform);
   // without one, a machine that runs neither must not pass either (PILOT-558).
   const noPlatform = !targets && !adbUsable() && !xcodeUsable();

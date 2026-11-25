@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { initArgsFromOptions, resolveInitPlan, executeInitPlan, assertConfigWritable, assertProjectWritable, InitError, type DetectFns } from '../init-noninteractive.js';
+import { initArgsFromOptions, resolveInitPlan, executeInitPlan, assertConfigWritable, assertProjectWritable, writeAgentsMdOnly, InitError, type DetectFns } from '../init-noninteractive.js';
 import { findApkCandidates, findIosAppCandidates, type ExpoProject } from '../init-detect.js';
 import { generateConfig, needsSimulatorAgent } from '../init.js';
 import { simulatorChoices, simulatorPickerChoices, type EnvScan } from '../env-scan.js';
@@ -11,7 +11,7 @@ import type { InitCommandOptions } from '../cli-program.js';
 /** `tapsmith init` flags as the CLI hands them over: every boolean present, value flags (and --[no-]network-capture) only when given. */
 function initArgs(over: Partial<InitCommandOptions>) {
   return initArgsFromOptions({
-    yes: false, json: false, force: false, exampleTest: true, agentsMd: true, ...over,
+    yes: false, json: false, force: false, exampleTest: true, agentsMd: true, agentsMdOnly: false, ...over,
   });
 }
 
@@ -197,7 +197,7 @@ describe('resolveInitPlan()', () => {
   it('takes --package without --platform as Android, as --apk is (PILOT-721)', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
     try {
-      const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false } as ExpoProject) };
+      const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false } as ExpoProject) };
       const plan = resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, detect, tmp);
       expect(plan.platforms).toEqual(['android']);
       expect(plan.android).toMatchObject({ packageName: 'com.x' });
@@ -309,7 +309,7 @@ describe('resolveInitPlan()', () => {
   });
 
   describe('says when it leaves iOS out of a React Native project on macOS (PILOT-625)', () => {
-    const managedExpo: ExpoProject = { hasAndroidDir: true, hasIosDir: false, usesTapsmithHooks: false };
+    const managedExpo: ExpoProject = { hasAndroidDir: true, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false };
     /** A project with android/ (unless `androidDir` is false) and the given package.json dependencies. */
     function withProject(deps: Record<string, string> | 'unreadable', fn: (dir: string) => void, androidDir = true): void {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
@@ -522,6 +522,7 @@ describe('resolveInitPlan() on an Expo project (PILOT-557)', () => {
     hasAndroidDir: false,
     hasIosDir: false,
     usesTapsmithHooks: false,
+    usesDevClient: false,
   };
   const withExpo = (expo: ExpoProject | undefined, over: Partial<DetectFns> = {}): DetectFns => ({
     ...detectStubs,
@@ -1760,5 +1761,91 @@ describe('resolveInitPlan() with a running emulator or --device (PILOT-1201)', (
     const emulator = generateConfig(['android'], { apkPath: 'a.apk', packageName: 'com.x', useEmulators: true, usePhysicalDevices: false, avd: 'Pixel_8' }, undefined, false);
     expect(emulator).toContain("  avd: 'Pixel_8',");
     expect(emulator).toMatch(/\/\/ .*CI/);
+  });
+});
+
+describe('init for coding agents (PILOT-1442)', () => {
+  const SKIPPED = 'AGENTS.md section skipped: coding agents in this project won\'t get Tapsmith\'s locator/MCP instructions. Add it later with npx tapsmith init --agents-md-only';
+  let tmp: string;
+  beforeEach(() => { tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-agents-'))); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  const run = (over: Partial<InitCommandOptions>, agentRunning = false) => {
+    const args = initArgs({ yes: true, json: true, platform: 'android', exampleTest: false, ...over });
+    return executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), args, tmp, undefined, 'npx tapsmith', ['codex'], agentRunning);
+  };
+
+  it('warns that --no-agents-md leaves agents without instructions, unless they have them already', () => {
+    expect(run({ agentsMd: false }).warnings).toContain(SKIPPED);
+    expect(run({ agentsMd: false, force: true, json: false }).warnings).toContain(SKIPPED);
+    expect(run({ force: true }).warnings).not.toContain(SKIPPED);
+    expect(run({ agentsMd: false, force: true }).warnings).not.toContain(SKIPPED);
+  });
+
+  it('puts the running agent\'s plugin and the docs to read first', () => {
+    const { nextSteps } = run({}, true);
+    expect(nextSteps[0]).toMatch(/^Install the Codex plugin \(.*give this to the user to run.*\): codex plugin marketplace add/);
+    expect(nextSteps[1]).toMatch(/^Read node_modules\/tapsmith\/docs\/agents\.md/);
+    expect(nextSteps[2]).toContain('tapsmith verify --json');
+  });
+
+  it('keeps verify first for a person, and names the docs to read only under --json', () => {
+    expect(run({}).nextSteps[0]).toContain('tapsmith verify');
+    expect(run({ force: true }).nextSteps.join('\n')).toContain('node_modules/tapsmith/docs/agents.md');
+    expect(run({ force: true, json: false }).nextSteps.join('\n')).not.toContain('docs/agents.md');
+  });
+
+  it('CONFIG_EXISTS names the command that adds only the section', () => {
+    run({});
+    expect(expectInitError(() => run({}), 'CONFIG_EXISTS').fix).toContain('npx tapsmith init --agents-md-only');
+  });
+
+  it.each([
+    [{ platform: 'android' }, '--platform'], [{ bundleId: 'com.acme' }, '--bundle-id'], [{ force: true }, '--force'],
+    [{ exampleTest: false }, '--no-example-test'], [{ agentsMd: false }, '--no-agents-md'],
+    [{ networkCapture: true }, '--network-capture'], [{ networkCapture: false }, '--no-network-capture'],
+  ])('refuses --agents-md-only with %j', (over, flag) => {
+    expect(expectInitError(() => initArgs({ agentsMdOnly: true, ...over }), 'CONFLICTING_FLAGS').message).toContain(flag);
+  });
+
+  it('--agents-md-only runs non-interactively, with or without --yes and --json', () => {
+    expect(initArgs({ agentsMdOnly: true })).toMatchObject({ agentsMdOnly: true, anySetupFlag: true });
+    expect(initArgs({ agentsMdOnly: true, yes: true, json: true })).toMatchObject({ agentsMdOnly: true });
+  });
+
+  const only = () => writeAgentsMdOnly(tmp, { json: true, cli: 'pnpm exec tapsmith', codingAgents: ['claude'], agentRunning: true });
+
+  it('--agents-md-only adds the section and touches nothing else', () => {
+    fs.writeFileSync(path.join(tmp, 'tapsmith.config.ts'), '// mine');
+    const result = only();
+    expect(result).toMatchObject({ configPath: path.join(tmp, 'tapsmith.config.ts'), filesCreated: ['AGENTS.md'], warnings: [] });
+    expect(result.nextSteps[0]).toContain('claude plugin install tapsmith@tapsmith');
+    expect(result.nextSteps.join('\n')).not.toContain('init --yes');
+    expect(fs.readFileSync(path.join(tmp, 'tapsmith.config.ts'), 'utf8')).toBe('// mine');
+    expect(fs.readdirSync(tmp).sort()).toEqual(['AGENTS.md', 'tapsmith.config.ts']);
+    expect(only().filesCreated).toEqual([]);
+  });
+
+  it('--agents-md-only reports the config Tapsmith loads', () => {
+    fs.writeFileSync(path.join(tmp, 'tapsmith.config.mjs'), '');
+    fs.writeFileSync(path.join(tmp, 'tapsmith.config.js'), '');
+    expect(only().configPath).toBe(path.join(tmp, 'tapsmith.config.js'));
+  });
+
+  it('--agents-md-only without a config here leaves out configPath, and does not send a project whose config is elsewhere to init', () => {
+    const result = only();
+    expect(result).not.toHaveProperty('configPath');
+    expect(result.nextSteps.join('\n')).not.toContain('init --yes');
+  });
+
+  it('--agents-md-only refuses stray markers rather than guess the section', () => {
+    fs.writeFileSync(path.join(tmp, 'AGENTS.md'), '<!-- tapsmith:begin -->\nmine\n');
+    expectInitError(only, 'AGENTS_MD_MARKERS');
+    expect(fs.readFileSync(path.join(tmp, 'AGENTS.md'), 'utf8')).toBe('<!-- tapsmith:begin -->\nmine\n');
+  });
+
+  it('--agents-md-only reports an AGENTS.md it cannot write', () => {
+    fs.mkdirSync(path.join(tmp, 'AGENTS.md'));
+    expect(expectInitError(only, 'WRITE_FAILED').message).toContain('is a directory');
   });
 });

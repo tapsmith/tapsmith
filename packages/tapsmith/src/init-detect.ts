@@ -438,7 +438,7 @@ export function detectIosBundleId(appPath: string): string | undefined {
 
 // ─── Build hints (PILOT-832) ───
 
-const BUILD_DOCS = 'https://tapsmith.dev/getting-started/#build-the-app-under-test';
+export const BUILD_DOCS = 'https://tapsmith.dev/getting-started/#build-the-app-under-test';
 
 /** `arg` as a shell reads it: bare when it is plain, else single-quoted. */
 function shellArg(arg: string): string {
@@ -606,6 +606,8 @@ export interface ExpoProject {
   hasIosDir: boolean;
   /** `@tapsmith/react-native` is a dependency, so test builds want `EXPO_PUBLIC_TAPSMITH_HOOKS=1`. */
   usesTapsmithHooks: boolean;
+  /** `expo-dev-client` is a dependency, so the build its developer runs is a Debug one that loads from Metro. */
+  usesDevClient: boolean;
 }
 
 const EXPO_DYNAMIC_CONFIG_FILES = ['app.config.ts', 'app.config.js', 'app.config.mjs', 'app.config.cjs', 'app.config.json'];
@@ -722,10 +724,12 @@ export function detectExpoProject(
     hasAndroidDir: fs.existsSync(path.join(cwd, 'android')),
     hasIosDir: fs.existsSync(path.join(cwd, 'ios')),
     usesTapsmithHooks: '@tapsmith/react-native' in deps,
+    usesDevClient: 'expo-dev-client' in deps,
   };
 }
 
 const EXPO_BUILD_DOCS = 'https://tapsmith.dev/getting-started/#react-native-and-expo';
+const METRO_DOCS = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
 const HOOKS_FLAG = 'EXPO_PUBLIC_TAPSMITH_HOOKS=1';
 
 /** What the hooks flag means for this project's test build, said beside the build command. */
@@ -754,7 +758,18 @@ function expoBuildStep(
   const generate = expo.hasIosDir ? '' : '`npx expo prebuild --platform ios` (this Expo project has no ios/ yet), then ';
   return `Build a simulator app with ${generate}\`cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
     + '-configuration Release -sdk iphonesimulator -derivedDataPath build build`; '
-    + '`npx expo run:ios --configuration Release` builds into Xcode\'s DerivedData instead, where init does not look.';
+    + '`npx expo run:ios --configuration Release` builds into Xcode\'s DerivedData instead, where init looks only when the project holds no simulator build (that path exists on this Mac alone).';
+}
+
+/** The Debug build an `expo-dev-client` project is developed with, for one platform. */
+function expoDevClientStep(platform: 'android' | 'ios', expo: ExpoProject): string {
+  if (platform === 'android') {
+    const generate = expo.hasAndroidDir ? '' : '`npx expo prebuild --platform android`, then ';
+    return `Build the Debug app with \`npx expo run:android\` (needs a running emulator or device) or, without one, ${generate}\`cd android && ./gradlew assembleDebug\`: `
+      + 'either writes android/app/build/outputs/apk/debug/app-debug.apk.';
+  }
+  return 'Build the Debug app with `npx expo run:ios`, which builds into Xcode\'s DerivedData, where init looks when the project holds no simulator build '
+    + '(that path exists on this Mac alone).';
 }
 
 /**
@@ -762,11 +777,19 @@ function expoBuildStep(
  * build getting-started documents (a release build runs without Metro) for
  * each platform, with the hooks flag folded in when the app uses them, then
  * `alternative` (the flag that skips the build), the hooks note and the docs.
+ * With `expo-dev-client` it offers both: Debug (with Metro) for local work,
+ * Release for CI or runs without Metro.
  */
 export function expoBuildHint(platforms: Array<'android' | 'ios'>, expo: ExpoProject, alternative?: string): string {
-  const steps = platforms.map((p) => {
-    const step = expoBuildStep(p, expo);
-    return platforms.length > 1 ? `${p === 'android' ? 'Android' : 'iOS'}: ${step}` : step;
-  });
-  return [...steps, ...(alternative ? [alternative] : []), expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
+  const steps = (step: typeof expoBuildStep | typeof expoDevClientStep): string[] => platforms.map((p) =>
+    platforms.length > 1 ? `${p === 'android' ? 'Android' : 'iOS'}: ${step(p, expo)}` : step(p, expo));
+  const alternatives = alternative ? [alternative] : [];
+  const builds = expo.usesDevClient
+    ? [
+        `This project has expo-dev-client, so choose one. For local work, the Debug build, with Metro running (\`npx expo start\`) before \`verify\` or \`test\` (${METRO_DOCS}).`,
+        ...steps(expoDevClientStep),
+        'For CI, or runs without Metro, a Release build.', ...steps(expoBuildStep), ...alternatives,
+      ]
+    : [...steps(expoBuildStep), ...alternatives];
+  return [...builds, expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
 }

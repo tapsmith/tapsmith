@@ -24,7 +24,7 @@ function project(files: Record<string, string | object>, dirs: string[] = []): s
 
 const APP_JSON = { expo: { name: 'myapp', android: { package: 'com.example.myapp' }, ios: { bundleIdentifier: 'com.example.myapp.ios' } } };
 
-const managed: ExpoProject = { hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false };
+const managed: ExpoProject = { hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false };
 
 // ─── parseExpoAppConfig ───
 
@@ -56,6 +56,7 @@ describe('detectExpoProject() (PILOT-557)', () => {
       hasAndroidDir: false,
       hasIosDir: false,
       usesTapsmithHooks: false,
+    usesDevClient: false,
     });
   });
 
@@ -81,10 +82,10 @@ describe('detectExpoProject() (PILOT-557)', () => {
 
   it('reports prebuilt native dirs and the warm-reset hooks dependency', () => {
     const dir = project(
-      { 'package.json': { dependencies: { expo: '~55.0.0', '@tapsmith/react-native': '^0.5.0' } }, 'app.json': APP_JSON },
+      { 'package.json': { dependencies: { expo: '~55.0.0', '@tapsmith/react-native': '^0.5.0', 'expo-dev-client': '~6.0.0' } }, 'app.json': APP_JSON },
       ['android', 'ios'],
     );
-    expect(detectExpoProject(dir, () => APP_JSON)).toMatchObject({ hasAndroidDir: true, hasIosDir: true, usesTapsmithHooks: true });
+    expect(detectExpoProject(dir, () => APP_JSON)).toMatchObject({ hasAndroidDir: true, hasIosDir: true, usesTapsmithHooks: true, usesDevClient: true });
   });
 });
 
@@ -161,7 +162,34 @@ describe('expoBuildHint() (PILOT-557)', () => {
     expect(hint).toContain('`npx expo prebuild --platform ios`');
     expect(hint).toContain('-derivedDataPath build');
     expect(hint).toContain('-configuration Release -sdk iphonesimulator');
-    expect(hint).toContain('DerivedData');
+    // init does look there (`findDerivedDataApps`), but only when the project holds no build.
+    expect(hint).toContain('DerivedData instead, where init looks only when the project holds no simulator build');
+    expect(hint).not.toContain('where init does not look');
+  });
+
+  it('a project with expo-dev-client: Debug with Metro for local work, Release for CI or without Metro', () => {
+    const hint = expoBuildHint(['android', 'ios'], { ...managed, usesDevClient: true });
+    expect(hint).toMatch(/^This project has expo-dev-client, so choose one\. .*Android: Build the Debug app with `npx expo run:android`.*`cd android && \.\/gradlew assembleDebug`.*android\/app\/build\/outputs\/apk\/debug\//);
+    expect(hint).toMatch(/ iOS: Build the Debug app with `npx expo run:ios`, which builds into Xcode's DerivedData/);
+    expect(hint).toMatch(/with Metro running \(`npx expo start`\) before `verify` or `test`/);
+    expect(hint.indexOf('expo run:android')).toBeLessThan(hint.indexOf('assembleRelease'));
+    expect(hint.indexOf('expo run:ios')).toBeLessThan(hint.indexOf('For CI, or runs without Metro, a Release build.'));
+    expect(hint.split('#debug-and-dev-client-builds-with-metro')).toHaveLength(2);
+  });
+
+  it('a dev-client project gets the alternative after both options, since it may be "Then re-run …"', () => {
+    const hint = expoBuildHint(['ios'], { ...managed, usesDevClient: true }, 'Then re-run init.');
+    expect(hint.indexOf('Then re-run init.')).toBeGreaterThan(hint.indexOf('-configuration Release -sdk'));
+  });
+
+  it('a prebuilt dev-client project builds headless with no prebuild step', () => {
+    const hint = expoBuildHint(['android'], { ...managed, hasAndroidDir: true, usesDevClient: true });
+    expect(hint).toContain('`npx expo run:android`');
+    expect(hint).not.toContain('prebuild');
+  });
+
+  it('without expo-dev-client, says nothing of Metro or a Debug build', () => {
+    expect(expoBuildHint(['android', 'ios'], managed)).not.toMatch(/Metro|Debug/i);
   });
 
   it('iOS, prebuilt: no prebuild step', () => {

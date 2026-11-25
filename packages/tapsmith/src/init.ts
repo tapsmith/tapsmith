@@ -42,7 +42,8 @@ import { isPromptCancel, tolerateClosedReadline } from './prompt-cancel.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
-import { detectCodingAgents, pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
+import type { InitResult } from './init-noninteractive.js';
+import { detectCodingAgents, pluginInstallSteps, runningCodingAgents, type CodingAgent } from './agent-plugins.js';
 import { installedDocsDir, refreshAgentsMdDocsDir } from './agents-md.js';
 import { appIdProblem, appIdWarning, type AppIdPlatform } from './app-id.js';
 
@@ -1393,7 +1394,7 @@ export function withTapsmithCommand(text: string, cli: string): string {
 const unexpectedFix = (json: boolean): string => `Run: npx tapsmith doctor${json ? ' --json' : ''} to check the environment`;
 
 export async function runInit(opts: InitCommandOptions): Promise<void> {
-  const { initArgsFromOptions, resolveInitPlan, executeInitPlan, InitError } = await import('./init-noninteractive.js');
+  const { initArgsFromOptions, resolveInitPlan, executeInitPlan, writeAgentsMdOnly, InitError } = await import('./init-noninteractive.js');
 
   let parsed;
   try {
@@ -1432,6 +1433,21 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
 
   if (nonInteractive) {
     try {
+      const agentRunning = runningCodingAgents().length > 0;
+      if (parsed.agentsMdOnly) {
+        const cwd = process.cwd();
+        const result = writeAgentsMdOnly(cwd, {
+          json: parsed.json,
+          cli: await tapsmithExecCommand(cwd),
+          codingAgents: detectCodingAgents(cwd),
+          agentRunning,
+          missingTapsmith: isTapsmithResolvableFrom(cwd) ? undefined : await tapsmithInstallCommand(cwd),
+        });
+        if (!parsed.json && result.filesCreated.length === 0) console.log(`  ${green('✓')} AGENTS.md already has the current section`);
+        printInitResult(result, parsed.json);
+        return;
+      }
+
       const env = scanEnvironment();
       const plan = resolveInitPlan(parsed, env);
 
@@ -1450,24 +1466,16 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
 
       const cwd = process.cwd();
       const missingTapsmith = isTapsmithResolvableFrom(cwd) ? undefined : await tapsmithInstallCommand(cwd);
-      const result = executeInitPlan(plan, parsed, cwd, missingTapsmith, await tapsmithExecCommand(cwd), detectCodingAgents(cwd));
+      const result = executeInitPlan(plan, parsed, cwd, missingTapsmith, await tapsmithExecCommand(cwd), detectCodingAgents(cwd), agentRunning);
 
-      if (parsed.json) {
-        process.stdout.write(formatJson(result));
-      } else {
-        for (const f of result.filesCreated) console.log(`  ${green('✓')} ${f}`);
-        // A warning may span lines (a build failure's excerpt and log path).
-        for (const w of result.warnings) console.log(`  ${YELLOW}⚠${RESET} ${w.replace(/\n/g, '\n    ')}`);
-        console.log();
-        console.log(`  ${bold('Next steps')}`);
-        for (const s of result.nextSteps) console.log(`  - ${s}`);
-      }
+      printInitResult(result, parsed.json);
       return;
     } catch (err) {
       const initErr = err instanceof InitError
         ? err
         : new InitError('UNEXPECTED_ERROR', err instanceof Error ? err.message : String(err), { fix: unexpectedFix(parsed.json) });
-      emitInitError(initErr, parsed.json);
+      const cli = await tapsmithExecCommand(process.cwd());
+      emitInitError({ code: initErr.code, message: initErr.message, fix: initErr.fix && withTapsmithCommand(initErr.fix, cli), candidates: initErr.candidates }, parsed.json);
       process.exit(1);
     }
   }
@@ -1491,6 +1499,19 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
     console.log();
     process.exit(1);
   }
+}
+
+function printInitResult(result: InitResult, json: boolean): void {
+  if (json) {
+    process.stdout.write(formatJson(result));
+    return;
+  }
+  for (const f of result.filesCreated) console.log(`  ${green('✓')} ${f}`);
+  // A warning may span lines (a build failure's excerpt and log path).
+  for (const w of result.warnings) console.log(`  ${YELLOW}⚠${RESET} ${w.replace(/\n/g, '\n    ')}`);
+  console.log();
+  console.log(`  ${bold('Next steps')}`);
+  for (const s of result.nextSteps) console.log(`  - ${s}`);
 }
 
 function emitInitError(err: { code: string; message: string; fix?: string; candidates?: string[] }, json: boolean): void {

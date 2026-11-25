@@ -11,21 +11,58 @@ Tapsmith needs Node.js 22 or newer: check `node --version` before installing. On
 ```bash
 npm install -D tapsmith    # or: yarn add -D tapsmith / pnpm add -D tapsmith
 
-# 1. Diagnose the environment. Every failing check includes a `fix`.
+# 1. Have a build of the app for init to point at: it looks for an APK or a
+#    simulator .app and stops if there is none. Use one that exists, else build
+#    the app. See "Use an existing build, or make one" below.
+
+# 2. Diagnose the environment. Every failing check includes a `fix`.
 npx tapsmith doctor --json
 
-# 2. Configure non-interactively. Auto-detects APK/.app, package name, devices
-#    (a running emulator's AVD first; pin one with --device <serial>).
+# 3. Once the build exists, configure non-interactively. Auto-detects APK/.app,
+#    package name, devices (a running emulator's AVD first). Say which with
+#    --apk <path>, --app <path>, --device <serial> or --simulator <name or UDID>.
 npx tapsmith init --yes --json
 #    Undecidable cases exit 1 with JSON listing candidates and the flag to pass,
 #    e.g. {"error":{"code":"AMBIGUOUS_APK","candidates":[...],"fix":"Pass --apk <path>"}}
 
-# 3. Prove the loop works end-to-end before writing tests.
+# 4. Prove the loop works end-to-end before writing tests.
 npx tapsmith verify --json
 ```
 
-`init` also scaffolds an `AGENTS.md` section (fenced with `<!-- tapsmith:begin/end -->`)
-so the project's agent has durable instructions. Skip with `--no-agents-md`.
+**Use an existing build, or make one.** `init` needs a build to point at, not a fresh one. If the app is
+already built, use that build, and rebuild only if the app has changed since: `init` finds builds in the project, and Xcode's in
+DerivedData when the project holds no simulator build; pass `--apk` or `--app` for one anywhere else. If there is
+none, build it: [Build the app under test](getting-started.md#build-the-app-under-test) has the
+commands, with [React Native and Expo](getting-started.md#react-native-and-expo) in a section of their
+own. An Expo project with no `android/` or `ios/` yet needs `npx expo prebuild` before it can be built.
+
+**`doctor` and `init` only list devices.** They never boot one, install on it or run anything on it, so
+they are safe while the machine's devices are busy. `verify` and `test` use a device.
+
+**Don't hand-write `tapsmith.config.ts`**, even while a long build runs: wait for the build, run
+`npx tapsmith init --yes --json`, then edit the config it writes: changing it is fine. A project set
+up without `init` gets no `AGENTS.md` section.
+
+The `AGENTS.md` section (fenced with `<!-- tapsmith:begin/end -->`) tells every later agent session
+how to find locators, run and debug tests, and which docs to read. Keep it: `--no-agents-md` leaves
+it out, with a warning. For a project that already has a config but no section, add it without
+touching the config:
+
+```bash
+npx tapsmith init --agents-md-only --json
+```
+
+Running it again after a Tapsmith upgrade brings the section up to date. `doctor` has an `agents-md`
+warning while the section is missing.
+
+`init`'s `nextSteps` include the [plugin](#the-plugin-recommended) install for the agent running it.
+Give it to the user in the same turn: it changes their agent's settings, and the MCP tools
+load when the agent's session restarts.
+
+React Native Debug or Expo dev-client build only: it loads its JavaScript from Metro, so Metro must be
+running (`npx expo start` or `npx react-native start`) before `verify` or `test`. JavaScript edits then need
+no rebuild; changes to native code, config plugins or native dependencies do. See
+[Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro).
 
 All `--json` surfaces (`init`, `verify`, `doctor`, `list-devices`, `telemetry`,
 `ios setup-device`) follow the same conventions: one JSON document on stdout, on success
@@ -39,7 +76,7 @@ error code are in the [API reference](api-reference.md#json-output---json).
 
 Run `npx tapsmith init --help` for the full list: `--platform`, `--apk`, `--package`,
 `--app`, `--bundle-id`, `--avd`, `--device`, `--simulator`, `--device-type`, `--network-capture`,
-`--no-network-capture`, `--no-example-test`, `--no-agents-md`, `--force`, `--json`, `--yes`.
+`--no-network-capture`, `--force`, `--agents-md-only`, `--no-example-test`, `--no-agents-md`, `--json`, `--yes`.
 
 With an emulator already running, `init --yes` writes its AVD (one another Tapsmith
 session is using is skipped); `--device <serial>` picks a connected device by its
@@ -114,7 +151,7 @@ under a name of its own, for the cases it does not cover:
   ```
 
 The `AGENTS.md` section `tapsmith init` writes tells your agent the same, and
-`init` lists the plugin install for the coding agent running it, then for each other agent it finds in the project ([`tapsmith init`](api-reference.md#tapsmith-init-options) says how it looks).
+`init` lists the plugin install for the coding agent running it, or, run by a person, for each agent it finds in the project ([`tapsmith init`](api-reference.md#tapsmith-init-options) says how it looks).
 
 Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
 `tapsmith_test_locator`, `tapsmith_run_code` (try assertions and other test statements on the device), `tapsmith_run_tests`, `tapsmith_read_trace`,

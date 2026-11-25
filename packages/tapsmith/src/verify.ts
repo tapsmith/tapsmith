@@ -14,6 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { formatJson, jsonError, stripAnsi } from './cli-json.js';
 import { isTapsmithNotInstalledError } from './config.js';
+import { missingConfigFix } from './missing-config.js';
 import { needsTsxLoader, tsxIpcPathProblem } from './child-scripts.js';
 import { minimatch } from 'minimatch';
 import { KEEP_OUTPUT_ENV } from './output-ledger.js';
@@ -259,10 +260,10 @@ export async function runVerify(args: VerifyArgs): Promise<void> {
     // loadConfig falls back to defaults, so without this guard verify would launch
     // a full 10-minute run against an unconfigured project.
     // Found the same way loadConfig finds it (PILOT-263).
-    const { loadConfig, findConfigFile } = await import('./config.js');
+    const { loadConfig, findConfigFile, tapsmithExecCommand } = await import('./config.js');
     if (!args.config && !findConfigFile(process.cwd())) {
       emitError(args.json, 'NO_CONFIG', 'No tapsmith.config.{ts,js,mjs} found in the current directory',
-        'Run: npx tapsmith init --yes');
+        missingConfigFix(process.cwd(), await tapsmithExecCommand(process.cwd())));
       return;
     }
 

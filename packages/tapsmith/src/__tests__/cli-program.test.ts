@@ -551,7 +551,7 @@ describe('commands', () => {
     expect(h.calls).toEqual([['init', {
       yes: true, json: true, force: true, platform: 'android,ios', apk: './a.apk', package: 'com.x',
       app: './X.app', bundleId: 'com.x.ios', avd: 'Pixel_7', simulator: 'iPhone 16', deviceType: 'both',
-      networkCapture: true, exampleTest: false, agentsMd: false,
+      networkCapture: true, exampleTest: false, agentsMd: false, agentsMdOnly: false,
     }]]);
     expect((await run(['init', '-y', '--platform=android'])).calls[0]![1]).toMatchObject({ yes: true, platform: 'android' });
     // Neither capture flag leaves the choice to init's default (PILOT-775).
