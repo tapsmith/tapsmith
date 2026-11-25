@@ -31,13 +31,17 @@ npx tapsmith verify --json
 **Build the app first.** [Build the app under test](getting-started.md#build-the-app-under-test) has the
 commands, with [React Native and Expo](getting-started.md#react-native-and-expo) in a section of their
 own. An Expo project with no `android/` or `ios/` yet needs `npx expo prebuild` before it can be built.
+With `expo-dev-client`, or a user who already runs `npx expo run:android` / `npx expo run:ios` with Metro,
+their Debug build works locally, so a Release build isn't required. What to set in the config is in
+[Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro).
+For CI, use a Release build.
 
 **`doctor` and `init` only list devices.** They never boot one, install on it or run anything on it, so
 they are safe while the machine's devices are busy. `verify` and `test` use a device.
 
 **Don't hand-write `tapsmith.config.ts`**, even while a long build runs: wait for the build, run
-`npx tapsmith init --yes --json`, then edit the config it writes. A project set up without `init`
-gets no `AGENTS.md` section.
+`npx tapsmith init --yes --json`, then edit the config it writes: changing it is fine. A project set
+up without `init` gets no `AGENTS.md` section.
 
 The `AGENTS.md` section (fenced with `<!-- tapsmith:begin/end -->`) tells every later agent session
 how to find locators, run and debug tests, and which docs to read. Keep it: `--no-agents-md` leaves

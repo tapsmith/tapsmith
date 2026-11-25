@@ -82,6 +82,26 @@ describe('missingConfigFix()', () => {
     expect(fix('npx tapsmith', false)).toMatch(/^Run: /);
   });
 
+  const METRO = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
+
+  it('points a React Native project, Expo or bare, at the Metro docs once, and never at an iOS package-only init', () => {
+    expo();
+    expect(fix().split(METRO)).toHaveLength(2);
+    write('android/settings.gradle');
+    write('ios/Acme.xcodeproj/project.pbxproj');
+    expect(fix().split(METRO)).toHaveLength(2);
+    // init needs a simulator .app for iOS: --package names an Android package.
+    expect(fix()).toMatch(/--package <id> \(an Android app already installed/);
+    write('package.json', '{"dependencies":{"react-native":"0.84.0"}}');
+    expect(fix().split(METRO)).toHaveLength(2);
+  });
+
+  it('says nothing about Metro in a native project', () => {
+    write('android/settings.gradle');
+    write('ios/Acme.xcodeproj/project.pbxproj');
+    expect(fix()).not.toContain('Metro');
+  });
+
   it('asks for the build\'s path where there is no app project', () => {
     expect(fix()).toMatch(/^Build the app first/);
     expect(fix()).toContain('--apk <path>');

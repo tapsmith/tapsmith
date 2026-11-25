@@ -161,7 +161,15 @@ describe('expoBuildHint() (PILOT-557)', () => {
     expect(hint).toContain('`npx expo prebuild --platform ios`');
     expect(hint).toContain('-derivedDataPath build');
     expect(hint).toContain('-configuration Release -sdk iphonesimulator');
-    expect(hint).toContain('DerivedData');
+    // init does look there (`findDerivedDataApps`), but only when the project holds no build.
+    expect(hint).toContain('DerivedData instead, where init looks only when the project holds no simulator build');
+    expect(hint).not.toContain('where init does not look');
+  });
+
+  it('says a Debug or dev-client build is valid locally, and where that is documented', () => {
+    const hint = expoBuildHint(['ios'], managed);
+    expect(hint).toContain('npx expo run:ios');
+    expect(hint).toMatch(/Debug build.*works locally while Metro runs: https:\/\/tapsmith\.dev\/getting-started\/#debug-and-dev-client-builds-with-metro/);
   });
 
   it('iOS, prebuilt: no prebuild step', () => {

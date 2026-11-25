@@ -726,6 +726,9 @@ export function detectExpoProject(
 }
 
 const EXPO_BUILD_DOCS = 'https://tapsmith.dev/getting-started/#react-native-and-expo';
+/** Said beside a Release build's commands: the Debug build a developer already runs is valid too. */
+export const METRO_BUILD_NOTE = 'A Debug build (`npx expo run:android`, `npx expo run:ios`, or an Expo dev client) also works locally while Metro runs: '
+  + 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro.';
 const HOOKS_FLAG = 'EXPO_PUBLIC_TAPSMITH_HOOKS=1';
 
 /** What the hooks flag means for this project's test build, said beside the build command. */
@@ -754,19 +757,20 @@ function expoBuildStep(
   const generate = expo.hasIosDir ? '' : '`npx expo prebuild --platform ios` (this Expo project has no ios/ yet), then ';
   return `Build a simulator app with ${generate}\`cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
     + '-configuration Release -sdk iphonesimulator -derivedDataPath build build`; '
-    + '`npx expo run:ios --configuration Release` builds into Xcode\'s DerivedData instead, where init does not look.';
+    + '`npx expo run:ios --configuration Release` builds into Xcode\'s DerivedData instead, where init looks only when the project holds no simulator build (that path exists on this Mac alone).';
 }
 
 /**
  * How to build an Expo project's app so `tapsmith init` finds it: the release
  * build getting-started documents (a release build runs without Metro) for
  * each platform, with the hooks flag folded in when the app uses them, then
- * `alternative` (the flag that skips the build), the hooks note and the docs.
+ * `alternative` (the flag that skips the build), the Debug build, the hooks
+ * note and the docs.
  */
 export function expoBuildHint(platforms: Array<'android' | 'ios'>, expo: ExpoProject, alternative?: string): string {
   const steps = platforms.map((p) => {
     const step = expoBuildStep(p, expo);
     return platforms.length > 1 ? `${p === 'android' ? 'Android' : 'iOS'}: ${step}` : step;
   });
-  return [...steps, ...(alternative ? [alternative] : []), expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
+  return [...steps, ...(alternative ? [alternative] : []), METRO_BUILD_NOTE, expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
 }
