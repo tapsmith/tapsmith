@@ -689,6 +689,8 @@ pub enum AgentCommand {
     /// Whether the touch just made through the HID helper may have done
     /// nothing but close the keyboard (PILOT-1495). Sent only after a
     /// `resolveActionPoint` answer that said `keyboardStayedUp`.
+    // Only the macOS-only HID gesture paths construct it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     KeyboardAfterTouch {},
     /// Take the system dialogs the agent answered on its own since the last
     /// call: Android's ANR / crash dialogs, iOS's leftover alerts.
