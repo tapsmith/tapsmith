@@ -6873,7 +6873,7 @@ enum HidTarget {
 
 /// How long the daemon waits for the agent's answer to
 /// [`AgentCommand::KeyboardAfterTouch`], which watches the keyboard for up to
-/// 1.5 s and keeps 2 s of this for its last read of the screen.
+/// 1.5 s and keeps 3.5 s of its read deadline for its last read of the screen.
 #[cfg(target_os = "macos")]
 const KEYBOARD_AFTER_TOUCH_TIMEOUT_MS: u64 = 5_000;
 

@@ -165,12 +165,13 @@ describe('tapsmith_read_trace step rendering', () => {
   it('marks the step that failed, and shows what was expected', async () => {
     const trace = writeTrace({
       events: [
-        { type: 'action', action: 'tap', selector: 'device.getByText("Login")', duration: 120 },
+        { type: 'action', action: 'tap', selector: 'device.getByText("Login")', duration: 120, warning: 'may only have closed the keyboard' },
         { type: 'assertion', assertion: 'toHaveText', expected: 'Welcome', actual: 'Error', error: 'Timed out', duration: 5000 },
       ],
     });
     const out = text(await readTrace({ path: trace }));
     expect(out).toContain('1. [OK] tap (120ms)');
+    expect(out).toContain('   Warning: may only have closed the keyboard');
     expect(out).toContain('Locator: device.getByText("Login")');
     expect(out).toContain('2. [FAIL] expect toHaveText (5000ms)');
     expect(out).toContain('Expected: Welcome');

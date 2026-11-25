@@ -7,7 +7,7 @@ import { canonicalLocatorSource, isLocatorError, type EvaluatedLocator } from '.
 import { MCP_ACTION_RUN_TIMEOUT_MS, MCP_ACTION_TIMEOUT_MS, sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
 import type { ElementHandle } from '../../element-handle.js';
 import { LOCATOR_PICKER_HINT } from '../../locator-miss-hint.js';
-import { takeActionWarnings } from '../../action-warnings.js';
+import { takeActionWarnings, takeWarningLines } from '../../action-warnings.js';
 import { checkingLine, webViewLineCheck } from '../action-lines.js';
 import {
   actionLineResult, describeLine, locatorCallLine, pressKeyLine, stringLiteral, swipeLine, type LineCheck,
@@ -105,8 +105,7 @@ async function actOn(
   }
   const lineCheck = check?.() ?? { status: 'unverified' as const, reason: 'the locator was not resolved' };
   const described = describeLine(lineCheck, (checked) => action.line(checked, kind));
-  const noted = takeActionWarnings(client).map((w) => `\nWarning: ${w}`).join('');
-  return actionLineResult((kind === 'webview' && lineCheck.status !== 'unverified' ? `${described}\n${WEBVIEW_LINE_NOTE}` : described) + noted);
+  return actionLineResult((kind === 'webview' && lineCheck.status !== 'unverified' ? `${described}\n${WEBVIEW_LINE_NOTE}` : described) + takeWarningLines(client));
 }
 
 /**

@@ -154,6 +154,14 @@ describe('an action whose answer carries a warning (PILOT-1495)', () => {
     expect(takeActionWarnings(c)).toEqual([]);
   });
 
+  it('setChecked(): nothing, since the state it read back says the tap worked', async () => {
+    const c = client('may only have closed the keyboard');
+    let reads = 0;
+    c.findElements = vi.fn(async () => ({ requestId: '', elements: [{ ...element, checked: reads++ > 0 }], errorMessage: '' })) as never;
+    await new ElementHandle(c, _text('Switch'), 2000).setChecked(true);
+    expect(takeActionWarnings(c)).toEqual([]);
+  });
+
   it('nothing is noted when the answer has none', async () => {
     const c = client('');
     await new ElementHandle(c, _text('Item 7'), 2000).tap();

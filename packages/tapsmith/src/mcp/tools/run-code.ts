@@ -1,3 +1,4 @@
+import { takeActionWarnings, takeWarningLines } from '../../action-warnings.js';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
@@ -205,7 +206,9 @@ async function runStatement(
     if ((statement.method === 'type' || statement.method === 'clearAndType') && !hasOwnTimeout(built.args)) {
       handle = await acting(handle, timeoutMs);
     }
+    // Only this statement's warnings are reported with it.
+    takeActionWarnings(client);
     await invoke(handle, statement.method, built.args);
-    return describeLine(check(), line);
+    return describeLine(check(), line) + takeWarningLines(client);
   }, { timeoutMs });
 }

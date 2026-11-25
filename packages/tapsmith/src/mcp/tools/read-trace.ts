@@ -74,6 +74,7 @@ interface TraceLine {
   expected?: unknown
   actual?: unknown
   error?: unknown
+  warning?: unknown
   success?: boolean
   passed?: boolean
   duration?: number
@@ -208,6 +209,7 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
         lines.push(`${i + 1}. [${status}] ${who}${event.action ?? 'action'}${duration}`);
         if (event.selector) lines.push(`   Locator: ${event.selector}`);
         if (event.error) lines.push(`   Error: ${clipText(String(event.error), STEP_VALUE_CHARS)}`);
+        if (event.warning) lines.push(`   Warning: ${clipText(String(event.warning), STEP_VALUE_CHARS)}`);
       } else if (event.type === 'assertion') {
         lines.push(`${i + 1}. [${status}] ${who}expect ${event.assertion ?? 'assertion'}${duration}`);
         if (event.expected !== undefined) lines.push(`   Expected: ${clipText(String(event.expected), STEP_VALUE_CHARS)}`);

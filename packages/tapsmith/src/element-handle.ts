@@ -3510,7 +3510,8 @@ export class ElementHandle {
           // The agent answered → responsive; drop any earlier transient timeout
           // so a state that simply never changes fails as such, not as infra.
           lastTransientErr = undefined;
-          if (after.checked === checked) return tapRes; // State changed successfully
+          // State changed successfully: the tap did what it was for, whatever it warned.
+          if (after.checked === checked) return { ...tapRes, warning: undefined };
           if (
             after.checked === !checked &&
             retaps < MAX_RETAPS &&

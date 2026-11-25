@@ -28,6 +28,11 @@ export function takeActionWarnings(client: object): string[] {
   return list;
 }
 
+/** @internal The warnings noted on `client` since the last call, as lines of an MCP action tool's answer. */
+export function takeWarningLines(client: object): string {
+  return takeActionWarnings(client).map((w) => `\nWarning: ${w}`).join('');
+}
+
 /** @internal A warning as a test result shows it: which action it is about, and where. */
 export function describeActionWarning(
   action: string,
