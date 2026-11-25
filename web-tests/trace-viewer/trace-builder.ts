@@ -127,6 +127,8 @@ interface ActionOptions {
   duration?: number
   success?: boolean
   error?: string
+  /** What an action that passed warned about. */
+  warning?: string
   screenshots?: { before?: boolean; after?: boolean }
   hierarchies?: { before?: boolean; after?: boolean }
   /**
@@ -153,6 +155,7 @@ export function actionEvent(o: ActionOptions): ActionTraceEvent {
     duration: o.duration ?? 40,
     success: o.success ?? true,
     error: o.error,
+    warning: o.warning,
     hasScreenshotBefore: !!o.screenshots?.before,
     hasScreenshotAfter: !!o.screenshots?.after,
     hasHierarchyBefore: !!o.hierarchies?.before,

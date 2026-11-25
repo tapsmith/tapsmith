@@ -348,6 +348,24 @@ test.describe("Detail tabs", () => {
       await expect(detailTabs.errorEntries).toHaveCount(2)
     })
 
+    test("lists a step that passed with a warning under the test's failure", async ({ viewer, detailTabs, actions }) => {
+      const tap = actionEvent({ actionIndex: 0, action: "tap", warning: "This tap may only have closed the keyboard." })
+      await viewer.open({ metadata: { testStatus: "failed", error: "boom" }, events: [tap] })
+      await detailTabs.select("Errors")
+      await expect(detailTabs.errorEntries).toHaveCount(1)
+      await expect(detailTabs.warningEntries).toHaveCount(1)
+      await expect(detailTabs.warningEntries).toContainText("may only have closed the keyboard")
+      await actions.items.first().click()
+      await detailTabs.select("Call")
+      await expect(detailTabs.callGrid).toContainText("may only have closed the keyboard")
+
+      // A passing test: only on the step.
+      await viewer.open({ events: [tap] })
+      await detailTabs.select("Errors")
+      await expect(detailTabs.noContent).toBeVisible()
+      await expect(detailTabs.warningEntries).toHaveCount(0)
+    })
+
     test("shows no error entries for a passing test", async ({ viewer, detailTabs }) => {
       // Asserted against a failing trace first: an empty list on its own also
       // describes a broken locator.

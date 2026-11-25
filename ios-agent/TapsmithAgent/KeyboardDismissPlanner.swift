@@ -18,14 +18,56 @@ struct KeyboardFirstGate {
     /// Below this much time before the daemon gives up, the step is skipped.
     static let minRemaining: TimeInterval = 3
 
+    /// What a touch's answer says when the touch may have done nothing but
+    /// close the keyboard (PILOT-1495).
+    static let touchWarning = "This tap may only have closed the keyboard. If nothing happened, call device.hideKeyboard() first."
+    /// Longest a touch made with the keyboard still up is watched for the
+    /// keyboard leaving.
+    static let maxWatch: TimeInterval = 1.5
+    /// Time kept back for the answer after the watch: its last read of the
+    /// screen can be slow, and the touch must not be reported as timed out.
+    static let watchReserve: TimeInterval = 2
+
     private(set) var armedAt: Date?
     var isArmed: Bool { armedAt != nil }
 
-    mutating func arm(at now: Date = Date()) { armedAt = now }
-    mutating func disarm() { armedAt = nil }
+    /// The step could not put the keyboard away, and the touch it ran for has
+    /// not been made yet: the touch is watched for closing the keyboard.
+    private(set) var touchPending = false
+
+    mutating func arm(at now: Date = Date()) {
+        armedAt = now
+        touchPending = false
+    }
+
+    mutating func disarm() {
+        armedAt = nil
+        touchPending = false
+    }
+
+    /// The step ran and the keyboard stayed up. Disarmed, so not every tap on
+    /// this screen pays for another try.
+    mutating func couldNotPutAway() {
+        armedAt = nil
+        touchPending = true
+    }
+
+    /// The keyboard went before the touch, or the touch is another one.
+    mutating func forgetTouch() { touchPending = false }
+
+    /// How long to watch the touch just made for the keyboard leaving, or nil
+    /// when it needs no watching (or there is no time). Asked once per touch.
+    mutating func takeWatch(now: Date, readDeadline: Date?) -> TimeInterval? {
+        guard touchPending else { return nil }
+        touchPending = false
+        guard let readDeadline else { return Self.maxWatch }
+        let available = readDeadline.timeIntervalSince(now) - Self.watchReserve
+        return available > 0 ? min(Self.maxWatch, available) : nil
+    }
 
     /// A check found no keyboard on screen.
     mutating func sawNoKeyboard(at now: Date = Date()) {
+        touchPending = false
         guard let armed = armedAt, now.timeIntervalSince(armed) >= Self.armGrace else { return }
         armedAt = nil
     }

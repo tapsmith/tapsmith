@@ -69,6 +69,12 @@ export interface ActionResponse {
   screenshot: Buffer;
   /** StartAgent only: the agent launched the app afresh at this start (after the requested wipe). */
   appLaunchedFresh?: boolean;
+  /**
+   * A successful tap, double tap or long press: what to know about what it may
+   * have done (iOS, when the touch may only have closed the keyboard). Empty or
+   * absent otherwise.
+   */
+  warning?: string;
 }
 
 export interface FindElementResponse {

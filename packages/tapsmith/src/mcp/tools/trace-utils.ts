@@ -9,6 +9,7 @@ export interface TraceEvent {
   selector?: string
   title?: string
   error?: string
+  warning?: string
   expected?: unknown
   actual?: unknown
   duration?: number
@@ -123,6 +124,7 @@ export function readTraceSummary(tracePath: string, maxSteps = 10): TraceSummary
         if (event.type === 'action') {
           const sel = event.selector ? ` on ${event.selector}` : '';
           steps.push(`[${status}] ${who(event)}${event.action ?? 'action'}${sel}${dur}`);
+          if (event.warning) steps.push(`  Warning: ${event.warning}`);
         } else if (event.type === 'assertion') {
           steps.push(`[${status}] ${who(event)}expect ${event.assertion ?? 'assertion'}${dur}`);
           if (event.error) {

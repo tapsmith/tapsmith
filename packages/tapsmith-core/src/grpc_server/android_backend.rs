@@ -194,6 +194,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                     error_message: format!("Could not turn the screen to {orientation}: {reason}"),
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
         }
@@ -431,6 +432,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                     error_message: e.to_string(),
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }));
             }
         };
@@ -582,6 +584,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_message: format!("Failed to clear app data: {}", output.trim()),
                         screenshot,
                         app_launched_fresh: false,
+                        warning: String::new(),
                     }));
                 }
                 Err(e) => {
@@ -594,6 +597,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_message: format!("Failed to clear app data: {e}"),
                         screenshot,
                         app_launched_fresh: false,
+                        warning: String::new(),
                     }));
                 }
                 Ok(_) => {} // Success
@@ -650,6 +654,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_message: format!("Failed to stop app: {e}"),
                 screenshot,
                 app_launched_fresh: false,
+                warning: String::new(),
             }));
         }
 
@@ -1166,6 +1171,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_message: format!("Android device was not ready before starting agent: {e}"),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             });
         }
 
@@ -1186,6 +1192,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         .to_string(),
                     screenshot: Vec::new(),
                     app_launched_fresh: false,
+                    warning: String::new(),
                 });
             }
         } else {
@@ -1211,6 +1218,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_message: format!("Failed to install {label}: {e}"),
                         screenshot: Vec::new(),
                         app_launched_fresh: false,
+                        warning: String::new(),
                     });
                 }
             }
@@ -1235,6 +1243,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                     error_message: format!("{e:#}"),
                     screenshot: Vec::new(),
                     app_launched_fresh: false,
+                    warning: String::new(),
                 });
             }
         };
@@ -1256,6 +1265,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_message: e.to_string(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             });
         }
         // The Android agent never launches the app.

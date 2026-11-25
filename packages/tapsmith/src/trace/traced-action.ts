@@ -241,6 +241,7 @@ export async function tracedAction(
   let success = true;
   let error: string | undefined;
   let errorStack: string | undefined;
+  let warning: string | undefined;
   let caughtErr: unknown;
 
   // Local flag set by the fail handler — immune to interleaving from other actions
@@ -268,6 +269,7 @@ export async function tracedAction(
       error = res.errorMessage || fallbackMsg;
       throw new Error(error);
     }
+    warning = res.warning || undefined;
   } catch (err) {
     success = false;
     if (err instanceof Error) { error = err.message; errorStack = err.stack; }
@@ -288,6 +290,7 @@ export async function tracedAction(
 
   if (success) {
     log.push(`Action completed successfully (${Date.now() - start}ms)`);
+    if (warning) log.push(`Warning: ${warning}`);
   }
 
   // Snapshot action duration before the async capture so it reflects the
@@ -301,7 +304,7 @@ export async function tracedAction(
   ctx.collector.addActionEvent({
     category, action, selector: selectorStr, inputValue: extra?.inputValue,
     detail: resolveDetail(extra), origin: extra?.origin,
-    duration, success, error, errorStack,
+    duration, success, error, errorStack, warning,
     bounds, point, log,
     hasScreenshotBefore: !!beforeCaptures.screenshotBefore,
     hasScreenshotAfter: false,

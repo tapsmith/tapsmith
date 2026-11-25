@@ -303,6 +303,10 @@ function CallTab({ event, metadata }: { event: ActionTraceEvent | AssertionTrace
           <span class="call-label">Error</span>
           <span class="call-value error">{event.error}</span>
         </>}
+        {event.warning && <>
+          <span class="call-label">Warning</span>
+          <span class="call-value warning" data-testid="call-warning">{event.warning}</span>
+        </>}
       </div>
     );
   }
@@ -975,6 +979,12 @@ function ErrorsTab({ event, events, testError, sources, metadata }: {
   const showTestError = testError
     && !failedEvents.some((ev) => ev.error && testError.includes(ev.error));
 
+  // A step that passed but warned (a tap that may only have closed the
+  // keyboard) may be why a later one failed. With no failure it is only on
+  // the step itself.
+  const warnedEvents = events.filter((e): e is ActionTraceEvent =>
+    e.type === 'action' && !!(e as ActionTraceEvent).warning);
+
   if (failedEvents.length === 0 && !testError) return <div class="no-content" data-testid="no-content">No errors</div>;
 
   return (
@@ -994,6 +1004,22 @@ function ErrorsTab({ event, events, testError, sources, metadata }: {
           <div class="error-message">{testError}</div>
         </div>
       )}
+      {warnedEvents.map((ev, i) => (
+        <div key={`warning-${i}`} class="error-entry warning-entry" data-testid="warning-entry">
+          <div class="error-title"><AlertTriangle size={14} class="error-title-icon" />{`Warning: ${ev.action}`}
+            {group && ev.deviceId && (
+              <span class="action-device-tag" style={deviceTagStyle(group, ev.deviceId)}>{ev.deviceId}</span>
+            )}
+          </div>
+          {ev.selector && (
+            <div class="error-grid">
+              <div class="error-grid-key">Locator</div>
+              {formatSelectorForCall(ev.selector)}
+            </div>
+          )}
+          <div class="error-message">{ev.warning}</div>
+        </div>
+      ))}
     </div>
   );
 }

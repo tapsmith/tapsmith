@@ -33,6 +33,7 @@ import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepRespons
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory } from './trace/types.js';
 import { type BeforeState, captureBeforeState, tracedAction } from './trace/traced-action.js';
+import { describeActionWarning, noteActionWarning } from './action-warnings.js';
 import { sleep, isAbortError, throwIfAborted } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
@@ -3066,7 +3067,15 @@ export class ElementHandle {
       findElement: (sel: Selector, timeout: number) => this._client.findElement(sel, timeout),
       captureTraceState: trace.captureTraceState,
     } : undefined;
-    return tracedAction(ctx, action, category, this._selector, fn, fallbackMsg, { ...extra, reservedActionIndex });
+    const run = async (): Promise<ActionResponse> => {
+      const res = await fn();
+      if (res.success && res.warning) {
+        const location = extractStack(new Error().stack ?? '')[0];
+        noteActionWarning(this._client, describeActionWarning(action, this._describe(), res.warning, location));
+      }
+      return res;
+    };
+    return tracedAction(ctx, action, category, this._selector, run, fallbackMsg, { ...extra, reservedActionIndex });
   }
 
   /**

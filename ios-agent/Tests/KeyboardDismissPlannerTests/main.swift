@@ -1145,6 +1145,39 @@ checkGate("too little time: skipped",
           KeyboardFirstGate.stepDeadline(now: t0, readDeadline: t0.addingTimeInterval(KeyboardFirstGate.minRemaining - 0.1)) == nil)
 checkGate("unknown daemon deadline: the full length",
           KeyboardFirstGate.stepDeadline(now: t0, readDeadline: nil) == t0.addingTimeInterval(KeyboardFirstGate.maxStep))
+// PILOT-1495: which touch is watched for closing the keyboard.
+do {
+    var g = KeyboardFirstGate()
+    let far = t0.addingTimeInterval(35)
+    g.arm(at: t0)
+    checkGate("no watch for a touch the step did not run for", g.takeWatch(now: t0, readDeadline: far) == nil)
+    g.disarm()
+    checkGate("no watch once the step put the keyboard away", g.takeWatch(now: t0, readDeadline: far) == nil)
+    g.arm(at: t0)
+    g.couldNotPutAway()
+    checkGate("a keyboard that stayed: not tried again, the touch is watched", !g.isArmed && g.touchPending)
+    checkGate("the watch gets its full length", g.takeWatch(now: t0, readDeadline: far) == KeyboardFirstGate.maxWatch)
+    checkGate("only that one touch is watched", g.takeWatch(now: t0, readDeadline: far) == nil)
+    g.couldNotPutAway()
+    checkGate("an unknown daemon deadline: the full length", g.takeWatch(now: t0, readDeadline: nil) == KeyboardFirstGate.maxWatch)
+    g.couldNotPutAway()
+    checkGate("cut short so the answer is never late",
+              g.takeWatch(now: t0, readDeadline: t0.addingTimeInterval(KeyboardFirstGate.watchReserve + 0.5)) == 0.5)
+    g.couldNotPutAway()
+    checkGate("no time left: no watch",
+              g.takeWatch(now: t0, readDeadline: t0.addingTimeInterval(KeyboardFirstGate.watchReserve)) == nil && !g.touchPending)
+    g.couldNotPutAway()
+    g.arm(at: t0)
+    checkGate("focusing a field forgets the touch", !g.touchPending)
+    g.couldNotPutAway()
+    g.sawNoKeyboard(at: t0)
+    checkGate("a keyboard that went by itself forgets the touch", !g.touchPending)
+    g.couldNotPutAway()
+    g.forgetTouch()
+    checkGate("forgotten touch: no watch", g.takeWatch(now: t0, readDeadline: far) == nil)
+    checkGate("the warning names the way out", KeyboardFirstGate.touchWarning.contains("device.hideKeyboard()"))
+}
+
 checkGate("the blank tap comes first",
           KeyboardDismissPlanner.keyboardFirstStrategies.first == .blankTap)
 checkGate("no drag: it would scroll the content even when the keyboard stays",
