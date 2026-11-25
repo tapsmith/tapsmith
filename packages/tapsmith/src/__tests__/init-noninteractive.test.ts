@@ -1825,10 +1825,10 @@ describe('init for coding agents (PILOT-1442)', () => {
     expect(only().filesCreated).toEqual([]);
   });
 
-  it('--agents-md-only without a config leaves out configPath and says how to write one', () => {
+  it('--agents-md-only without a config here leaves out configPath, and does not send a project whose config is elsewhere to init', () => {
     const result = only();
     expect(result).not.toHaveProperty('configPath');
-    expect(result.nextSteps[0]).toBe('Set up the project: pnpm exec tapsmith init --yes --json');
+    expect(result.nextSteps.join('\n')).not.toContain('init --yes');
   });
 
   it('--agents-md-only refuses stray markers rather than guess the section', () => {

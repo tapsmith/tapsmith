@@ -612,10 +612,10 @@ export function writeAgentsMdOnly(
       fix: 'Remove the old Tapsmith section and its <!-- tapsmith:begin --> and <!-- tapsmith:end --> markers, then run init again',
     });
   }
+  // No config here doesn't mean none: `-c`, or an e2e/ folder. So no step to run init.
   const config = CONFIG_NAMES.map((name) => path.join(cwd, name)).find((p) => fs.existsSync(p));
   const nextSteps = [
     ...(opts.missingTapsmith ? [`Install Tapsmith in this project: ${opts.missingTapsmith.display}`] : []),
-    ...(config ? [] : [`Set up the project: npx tapsmith init --yes${opts.json ? ' --json' : ''}`]),
     ...agentSteps(cwd, opts),
   ];
   return {

@@ -57,6 +57,16 @@ describe('missingConfigFix()', () => {
     expect(fix()).toMatch(/^Run: /);
   });
 
+  it('offers a build made elsewhere before building again', () => {
+    expo();
+    expect(fix()).toMatch(/Already built somewhere else\?.*--apk <path> or --package <id>.* or --app <path>/);
+    write('android/settings.gradle');
+    expect(fix()).toContain('add --apk <path> or --package <id>');
+    expect(fix()).not.toContain('--app <path>');
+    fs.rmSync(path.join(dir, 'app.json'));
+    expect(fix()).toContain('add --apk <path> or --package <id>');
+  });
+
   it('says how to set up only the platform that is built', () => {
     expo();
     write(APK);

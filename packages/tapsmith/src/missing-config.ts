@@ -12,6 +12,15 @@ import {
 /** What init writes, said because an agent that hand-writes the config misses the rest. */
 const INIT_WRITES = 'It writes the config, and the AGENTS.md section that tells coding agents how to find locators, run and debug tests';
 
+/** For a build outside the folders init searches (an EAS or CI download), or an installed app: as init's own errors offer. */
+function existingBuild(platforms: ReadonlyArray<'android' | 'ios'>): string {
+  const flags = [
+    ...(platforms.includes('android') ? ['--apk <path>', '--package <id> (an Android app already installed on the device)'] : []),
+    ...(platforms.includes('ios') ? ['--app <path> (a simulator .app)'] : []),
+  ];
+  return `Already built somewhere else? Don't build again: add ${flags.join(' or ')} to the init command.`;
+}
+
 /**
  * The builds `init --yes` needs and would not find, with how to make them, or
  * undefined when it finds one for each platform the project has. Looks where
@@ -24,9 +33,10 @@ function missingBuilds(cwd: string, isMacOS: boolean): { how: string; built: str
   if (hasAndroidProject(layout)) platforms.push('android');
   if (isMacOS && hasIosProject(layout)) platforms.push('ios');
   if (platforms.length === 0) {
+    const buildable: Array<'android' | 'ios'> = isMacOS ? ['android', 'ios'] : ['android'];
     return {
       how: expo
-        ? `This Expo project has no android/ or ios/ yet. ${expoBuildHint(isMacOS ? ['android', 'ios'] : ['android'], expo)}`
+        ? `This Expo project has no android/ or ios/ yet. ${existingBuild(buildable)} ${expoBuildHint(buildable, expo)}`
         : `No Android or iOS project found here: add --apk <path> (Android) or --app <path> (an iOS simulator .app) to say where the build is. See ${BUILD_DOCS}`,
       built: [],
     };
@@ -38,9 +48,9 @@ function missingBuilds(cwd: string, isMacOS: boolean): { how: string; built: str
   if (missing.length === 0) return undefined;
   const reactNative = isReactNativeProject(cwd);
   return {
-    how: expo
+    how: `${existingBuild(missing)} ${expo
       ? expoBuildHint(missing, expo)
-      : missing.map((p) => `${p === 'android' ? 'Android' : 'iOS'}: ${nativeBuildHint(p, layout, reactNative)}`).join('. '),
+      : missing.map((p) => `${p === 'android' ? 'Android' : 'iOS'}: ${nativeBuildHint(p, layout, reactNative)}`).join('. ')}`,
     built: platforms.filter((p) => !missing.includes(p)),
   };
 }
