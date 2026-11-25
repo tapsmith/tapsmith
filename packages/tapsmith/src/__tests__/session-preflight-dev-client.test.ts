@@ -159,10 +159,20 @@ describe('connectDevClient', () => {
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
   });
 
-  it('reloads through the link when the dev menu opened over the app', async () => {
+  it('starts the app afresh with the link when the dev menu opened over it (Android has no cold link)', async () => {
     const { ctx, device } = makeContext([DEV_MENU, APP]);
     await connectDevClient(ctx, { fetch: metro });
     expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+    // A reload in the running app can crash it (react-native-screens reads a UI manager that is gone).
+    expect(device.terminateApp).toHaveBeenCalledWith(PKG);
+    expect(device.terminateApp.mock.invocationCallOrder[0]!).toBeLessThan(device.openDeepLink.mock.invocationCallOrder[0]!);
+  });
+
+  it('leaves the app running when the link opens on the dev launcher', async () => {
+    const { ctx, device } = makeContext([LAUNCHER, APP]);
+    await connectDevClient(ctx, { fetch: metro });
+    expect(device.openDeepLink).toHaveBeenCalledTimes(1);
+    expect(device.terminateApp).not.toHaveBeenCalled();
   });
 
   it('uses localhost for an iOS simulator', async () => {

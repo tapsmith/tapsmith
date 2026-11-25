@@ -206,12 +206,18 @@ the dev launcher or has the dev menu open, Tapsmith connects it to Metro the way
 then waits for the app to draw. It looks for that server on ports 8081–8090 (or on
 `RCT_METRO_PORT` when you set it), and skips any Metro whose Expo config names a different
 app or project. The link also turns off the dev menu that opens at launch and, on Expo SDK 58
-and later, hides the floating tools button until the app is next restarted. A menu that opens all the same
-is closed by opening the link again. An Android emulator reaches Metro at `10.0.2.2`. For a physical
+and later, hides the floating tools button until the app is next restarted. Expo SDK 56 and the first releases
+of SDK 57 (`expo-dev-launcher` before 57.0.20) ignore that switch, so after a clear the menu still opens over
+the app. Tapsmith closes it by starting the app again with the link, which costs one more bundle load per
+cleared launch: set `showMenuAtLaunch` as below to avoid it. An Android emulator reaches Metro at `10.0.2.2`. For a physical
 Android device, Tapsmith runs `adb reverse` for the port. A physical iPhone connects to
 your Mac's network address, so it must be on the same network. A Debug build without
 `expo-dev-client` finds Metro by itself, so on a physical Android device run
 `adb reverse tcp:8081 tcp:8081` first.
+
+Checked with Debug builds on Expo SDK 54 to 58 and on bare React Native 0.88, on an Android 16 emulator and an
+iOS 26.1 simulator. The physical-device connections (`adb reverse`, the Mac's network address) have not been
+checked on hardware yet.
 
 If Metro is not running, the run stops with an error that names the screen the app is
 stuck on (the dev launcher, or React Native's "Unable to load script" red screen) and
@@ -268,7 +274,9 @@ each relaunch:
 Metro on port 8081, and not a physical device. A cleared app then loads straight from Metro.
 Whenever the launcher, the dev menu or a load error still appears (Metro on another port, say),
 Tapsmith handles it as above. Set `showMenuAtLaunch` to `false` along with it: otherwise the
-dev menu opens over a cleared app, because the saved setting that keeps it closed is cleared too.
+dev menu opens over a cleared app, because the saved setting that keeps it closed is cleared too. Tapsmith
+closes a menu it sees, which loads the app a second time, but one that opens just after the app
+has drawn stays up and the test fails.
 The default `launchMode` (`"most-recent"`) reopens the last server on a relaunch, but a clear
 removes that record, so on its own it does not avoid the launcher.
 
