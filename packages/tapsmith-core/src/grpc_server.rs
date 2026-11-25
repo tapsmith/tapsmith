@@ -1878,6 +1878,7 @@ impl TapsmithServiceImpl {
             error_message,
             screenshot,
             app_launched_fresh: false,
+            warning: String::new(),
         })
     }
 
@@ -2114,6 +2115,7 @@ impl TapsmithServiceImpl {
                 error_message: String::new(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             })),
             Ok(resp) => {
                 let screenshot = self.error_screenshot().await;
@@ -2124,6 +2126,7 @@ impl TapsmithServiceImpl {
                     error_message: resp.error.unwrap_or_else(|| "Unknown error".to_string()),
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
             Err(status) => {
@@ -2135,6 +2138,7 @@ impl TapsmithServiceImpl {
                     error_message: status.message().to_string(),
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
         }
@@ -2204,6 +2208,7 @@ impl TapsmithServiceImpl {
                 error_message: String::new(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             })),
             Err(e) => {
                 let screenshot = self.error_screenshot().await;
@@ -2214,7 +2219,57 @@ impl TapsmithServiceImpl {
                     error_message: e.to_string(),
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
+            }
+        }
+    }
+
+    /// A HID touch's success, with the warning the agent gave for it, if any.
+    #[cfg(target_os = "macos")]
+    fn touch_response(
+        request_id: String,
+        warning: Option<String>,
+    ) -> Response<proto::ActionResponse> {
+        let mut response = Self::success_action_response(request_id);
+        response.get_mut().warning = warning.unwrap_or_default();
+        response
+    }
+
+    /// The answer for a touch the agent made, with the warning it gives for
+    /// it, if any.
+    async fn make_touch_response(
+        &self,
+        request_id: String,
+        result: Result<AgentResponse, Status>,
+    ) -> Result<Response<proto::ActionResponse>, Status> {
+        let asked = matches!(&result, Ok(resp) if resp.success && keyboard_stayed_up(resp));
+        let mut response = self.make_action_response(request_id, result).await?;
+        if let Some(warning) = self.keyboard_after_touch(asked).await {
+            response.get_mut().warning = warning;
+        }
+        Ok(response)
+    }
+
+    /// The warning for a touch just made, when the agent asked to be asked
+    /// about the keyboard after it. The touch was made, so a check that fails
+    /// or runs out of time is no warning, never an error. Sent raw: a timed
+    /// out check is no reason to restart a physical device's agent.
+    async fn keyboard_after_touch(&self, keyboard_stayed_up: bool) -> Option<String> {
+        if !keyboard_stayed_up {
+            return None;
+        }
+        let result = self
+            .send_agent_command_raw(
+                &AgentCommand::KeyboardAfterTouch {},
+                KEYBOARD_AFTER_TOUCH_TIMEOUT_MS,
+            )
+            .await;
+        match result {
+            Ok(resp) => agent_warning(&resp),
+            Err(e) => {
+                debug!(error = %e, "could not check the keyboard after the touch");
+                None
             }
         }
     }
@@ -2227,6 +2282,7 @@ impl TapsmithServiceImpl {
             error_message: String::new(),
             screenshot: Vec::new(),
             app_launched_fresh: false,
+            warning: String::new(),
         })
     }
 
@@ -2258,6 +2314,7 @@ impl TapsmithServiceImpl {
                     error_message: format!("App launched but UI did not become idle: {e}"),
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }));
             }
         }
@@ -2488,6 +2545,7 @@ impl TapsmithServiceImpl {
             error_message,
             screenshot,
             app_launched_fresh: false,
+            warning: String::new(),
         })
     }
 
@@ -2710,14 +2768,20 @@ impl TapsmithServiceImpl {
         if let Err(e) = self.ensure_hid(&udid).await {
             return hid_unavailable(&udid, "double-tap", &e);
         }
-        let (x, y, hold_ms) = match self
+        let (x, y, hold_ms, keyboard_stayed_up) = match self
             .resolve_hid_point(selector, element_id, timeout_ms, false)
             .await
         {
-            HidTarget::Point { x, y, hold_ms, .. } => (x, y, hold_ms),
+            HidTarget::Point {
+                x,
+                y,
+                hold_ms,
+                keyboard_stayed_up,
+                ..
+            } => (x, y, hold_ms, keyboard_stayed_up),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             // Only a resolve `for_tap` is answered with a tap already made.
-            HidTarget::AgentRoute | HidTarget::Tapped => return HidOutcome::NotHandled,
+            HidTarget::AgentRoute | HidTarget::Tapped { .. } => return HidOutcome::NotHandled,
         };
         // One wire command: the helper owns the press/gap timing in-process
         // (each press held as the agent chose for the element, ~120ms gap:
@@ -2738,7 +2802,9 @@ impl TapsmithServiceImpl {
             return HidOutcome::NotHandled;
         }
         info!(%udid, x, y, ?hold_ms, "double-tap injected via HID");
-        HidOutcome::Injected
+        HidOutcome::Injected {
+            warning: self.keyboard_after_touch(keyboard_stayed_up).await,
+        }
     }
 
     /// Tap via the iOS-simulator HID helper: the agent plans the touch as its
@@ -2780,7 +2846,7 @@ impl TapsmithServiceImpl {
         if let Err(e) = self.ensure_hid(&udid).await {
             return hid_unavailable(&udid, "tap", &e);
         }
-        let (x, y, hold_ms) = match self
+        let (x, y, hold_ms, keyboard_stayed_up) = match self
             .resolve_hid_point(selector, element_id, timeout_ms, true)
             .await
         {
@@ -2789,16 +2855,19 @@ impl TapsmithServiceImpl {
                 y,
                 hold_ms,
                 tap_ready: true,
-            } => (x, y, hold_ms),
+                keyboard_stayed_up,
+            } => (x, y, hold_ms, keyboard_stayed_up),
             HidTarget::Point { .. } => {
                 self.agent_predates_hid_tap.store(true, Ordering::Relaxed);
                 return hid_unavailable(&udid, "tap", &AGENT_TOO_OLD);
             }
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
-            HidTarget::Tapped => {
+            HidTarget::Tapped { keyboard_stayed_up } => {
                 debug!(%udid, "tap made by the agent: a rotated screen it could not map");
-                return HidOutcome::Injected;
+                return HidOutcome::Injected {
+                    warning: self.keyboard_after_touch(keyboard_stayed_up).await,
+                };
             }
         };
         match self
@@ -2832,7 +2901,9 @@ impl TapsmithServiceImpl {
         }
         tokio::time::sleep(HID_TAP_BARRIER).await;
         debug!(%udid, x, y, ?hold_ms, "tap injected via HID");
-        HidOutcome::Injected
+        HidOutcome::Injected {
+            warning: self.keyboard_after_touch(keyboard_stayed_up).await,
+        }
     }
 
     /// Ask the agent where a HID touch on `selector` can land without hitting
@@ -2888,7 +2959,7 @@ impl TapsmithServiceImpl {
         if let Err(e) = self.ensure_hid(&udid).await {
             return hid_unavailable(&udid, "long-press", &e);
         }
-        let (x, y) = match self
+        let (x, y, keyboard_stayed_up) = match self
             .resolve_hid_point(
                 selector,
                 &None,
@@ -2898,16 +2969,23 @@ impl TapsmithServiceImpl {
             .await
         {
             // A long press holds for its duration, not a tap's hold.
-            HidTarget::Point { x, y, .. } => (x, y),
+            HidTarget::Point {
+                x,
+                y,
+                keyboard_stayed_up,
+                ..
+            } => (x, y, keyboard_stayed_up),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             // Only a resolve `for_tap` is answered with a tap already made.
-            HidTarget::AgentRoute | HidTarget::Tapped => return HidOutcome::NotHandled,
+            HidTarget::AgentRoute | HidTarget::Tapped { .. } => return HidOutcome::NotHandled,
         };
         if self
             .hid_long_press_at(&udid, x as f32, y as f32, duration_ms)
             .await
         {
-            HidOutcome::Injected
+            HidOutcome::Injected {
+                warning: self.keyboard_after_touch(keyboard_stayed_up).await,
+            }
         } else {
             HidOutcome::NotHandled
         }
@@ -2982,7 +3060,7 @@ impl TapsmithServiceImpl {
             ms = started.elapsed().as_millis() as u64,
             "scroll step: HID drag injected"
         );
-        HidOutcome::Injected
+        HidOutcome::Injected { warning: None }
     }
 
     /// An iOS scroll step (PILOT-998): the HID drag, then the agent's
@@ -3034,7 +3112,7 @@ impl TapsmithServiceImpl {
                 }
             };
             match self.hid_scroll_drag(&path).await {
-                HidOutcome::Injected => {}
+                HidOutcome::Injected { .. } => {}
                 HidOutcome::NotHandled => return scroll_step::unsupported(request_id),
                 HidOutcome::Refused(resp) => {
                     return scroll_step::step_response(request_id, "scrollStepFind", Ok(resp), None)
@@ -3142,6 +3220,7 @@ impl TapsmithServiceImpl {
             error_message: String::new(),
             screenshot: Vec::new(),
             app_launched_fresh: false,
+            warning: String::new(),
         }))
     }
 }
@@ -3648,7 +3727,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             .try_hid_tap(&selector, &element_id, req.timeout_ms)
             .await
         {
-            HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
+            HidOutcome::Injected { warning } => {
+                return Ok(Self::touch_response(request_id, warning))
+            }
             HidOutcome::Refused(resp) => {
                 return self.make_action_response(request_id, Ok(resp)).await
             }
@@ -3664,7 +3745,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let result = self
             .send_agent_command_with_timeout(&command, req.timeout_ms)
             .await;
-        self.make_action_response(request_id, result).await
+        self.make_touch_response(request_id, result).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -3690,7 +3771,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 .try_hid_long_press(&selector, req.timeout_ms, req.duration_ms)
                 .await
             {
-                HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
+                HidOutcome::Injected { warning } => {
+                    return Ok(Self::touch_response(request_id, warning))
+                }
                 HidOutcome::Refused(resp) => {
                     return self.make_action_response(request_id, Ok(resp)).await
                 }
@@ -3711,7 +3794,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 agent_wait_with_gesture_ms(req.timeout_ms, hold_ms(req.duration_ms)),
             )
             .await;
-        self.make_action_response(request_id, result).await
+        self.make_touch_response(request_id, result).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -4048,6 +4131,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_message: String::new(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             })),
             Err(e) => {
                 error!(error = %e, "APK installation failed");
@@ -4059,6 +4143,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_message: e.to_string(),
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
         }
@@ -4226,6 +4311,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_message: String::new(),
                     screenshot: Vec::new(),
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
             Err(e) => Ok(Response::new(proto::ActionResponse {
@@ -4235,6 +4321,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_message: e.to_string(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             })),
         }
     }
@@ -4348,6 +4435,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_message,
                     screenshot,
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
         }
@@ -4395,7 +4483,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             .try_hid_double_tap(&selector, &element_id, req.timeout_ms, req.interval_ms)
             .await
         {
-            HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
+            HidOutcome::Injected { warning } => {
+                return Ok(Self::touch_response(request_id, warning))
+            }
             HidOutcome::Refused(resp) => {
                 return self.make_action_response(request_id, Ok(resp)).await
             }
@@ -4415,7 +4505,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 agent_wait_with_gesture_ms(req.timeout_ms, double_tap_ms(req.interval_ms)),
             )
             .await;
-        self.make_action_response(request_id, result).await
+        self.make_touch_response(request_id, result).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -6427,6 +6517,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             error_message: String::new(),
             screenshot: Vec::new(),
             app_launched_fresh: false,
+            warning: String::new(),
         }))
     }
 
@@ -6478,6 +6569,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_message: String::new(),
                     screenshot: Vec::new(),
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
             Err(e) => {
@@ -6489,6 +6581,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_message: e.to_string(),
                     screenshot: Vec::new(),
                     app_launched_fresh: false,
+                    warning: String::new(),
                 }))
             }
         }
@@ -6776,6 +6869,10 @@ enum HidTarget {
         /// The agent planned the point as its own tap would and did that
         /// tap's bookkeeping (asked with `for_tap`; an older agent doesn't).
         tap_ready: bool,
+        /// The agent could not put the keyboard away before this touch, so it
+        /// is to be asked about the keyboard after it
+        /// ([`AgentCommand::KeyboardAfterTouch`]).
+        keyboard_stayed_up: bool,
     },
     /// Report this failure instead of pressing: the element is covered, gone,
     /// or the check failed or timed out — by then the agent may have waited
@@ -6788,7 +6885,29 @@ enum HidTarget {
     /// The agent made the tap itself (asked with `for_tap`, on a rotated
     /// screen whose turn it could not tell, so it had no point in the
     /// helper's portrait space to hand out): nothing to press.
-    Tapped,
+    Tapped { keyboard_stayed_up: bool },
+}
+
+/// How long the daemon waits for the agent's answer to
+/// [`AgentCommand::KeyboardAfterTouch`], which watches the keyboard for up to
+/// 1.5 s and keeps 3.5 s of its read deadline for its last read of the screen.
+const KEYBOARD_AFTER_TOUCH_TIMEOUT_MS: u64 = 5_000;
+
+/// Whether the agent's answer asks for an [`AgentCommand::KeyboardAfterTouch`].
+fn keyboard_stayed_up(resp: &AgentResponse) -> bool {
+    resp.data.get("keyboardStayedUp").and_then(Value::as_bool) == Some(true)
+}
+
+/// The warning a successful agent answer carries for the touch it is about.
+fn agent_warning(resp: &AgentResponse) -> Option<String> {
+    if !resp.success {
+        return None;
+    }
+    resp.data
+        .get("warning")
+        .and_then(Value::as_str)
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
 }
 
 /// The longest hold the HID helper accepts on a double tap's line
@@ -6867,7 +6986,9 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
         return HidTarget::AgentRoute;
     }
     if resp.data.get("tapped").and_then(Value::as_bool) == Some(true) {
-        return HidTarget::Tapped;
+        return HidTarget::Tapped {
+            keyboard_stayed_up: keyboard_stayed_up(&resp),
+        };
     }
     // The helper parses coordinates with strtod, so only hand it sane
     // numbers — the same bound the agent puts on cached frames.
@@ -6885,12 +7006,14 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
         .and_then(Value::as_u64)
         .filter(|ms| *ms <= HID_MAX_HOLD_MS);
     let tap_ready = resp.data.get("tap").and_then(Value::as_bool) == Some(true);
+    let keyboard_stayed_up = keyboard_stayed_up(&resp);
     match (coord("x"), coord("y")) {
         (Some(x), Some(y)) => HidTarget::Point {
             x,
             y,
             hold_ms,
             tap_ready,
+            keyboard_stayed_up,
         },
         _ => HidTarget::Refuse(AgentResponse {
             success: false,
@@ -6999,8 +7122,8 @@ fn hid_unavailable_when(
 /// Outcome of trying a gesture through the iOS-simulator HID helper.
 #[cfg(target_os = "macos")]
 enum HidOutcome {
-    /// Injected — the gesture is done.
-    Injected,
+    /// Injected — the gesture is done, with the agent's warning about it, if any.
+    Injected { warning: Option<String> },
     /// Refused: the target is covered, gone, or could not be checked in
     /// time. Surface this response.
     Refused(AgentResponse),
@@ -8797,6 +8920,51 @@ mod tests {
     }
 
     #[test]
+    fn hid_target_says_whether_to_ask_about_the_keyboard_after_the_touch() {
+        match hid_target(agent_ok(
+            json!({"x": 1.0, "y": 2.0, "tap": true, "keyboardStayedUp": true}),
+        )) {
+            HidTarget::Point {
+                keyboard_stayed_up, ..
+            } => assert!(keyboard_stayed_up),
+            other => panic!("expected a point, got {other:?}"),
+        }
+        // Any other touch is not followed by the extra command.
+        match hid_target(agent_ok(json!({"x": 1.0, "y": 2.0, "tap": true}))) {
+            HidTarget::Point {
+                keyboard_stayed_up, ..
+            } => assert!(!keyboard_stayed_up),
+            other => panic!("expected a point, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_touchs_warning_comes_from_a_successful_answer_only() {
+        let warned = json!({"success": true, "warning": "may only have closed the keyboard"});
+        assert_eq!(
+            agent_warning(&agent_ok(warned.clone()).unwrap()).as_deref(),
+            Some("may only have closed the keyboard")
+        );
+        for data in [
+            json!({"success": true}),
+            json!({"warning": ""}),
+            json!({"warning": 1}),
+            Value::Null,
+        ] {
+            assert_eq!(agent_warning(&agent_ok(data).unwrap()), None);
+        }
+        assert_eq!(
+            agent_warning(&AgentResponse {
+                success: false,
+                error: None,
+                error_type: None,
+                data: warned,
+            }),
+            None
+        );
+    }
+
+    #[test]
     fn hid_target_says_whether_the_agent_did_a_taps_bookkeeping() {
         // Only an agent that planned the point as a tap (and recorded the
         // focus a tap leaves behind) says so; an older one's point must not
@@ -8822,7 +8990,7 @@ mod tests {
     fn hid_target_knows_a_tap_the_agent_made_itself() {
         assert!(matches!(
             hid_target(agent_ok(json!({"tapped": true}))),
-            HidTarget::Tapped
+            HidTarget::Tapped { .. }
         ));
         // Anything but a true flag still needs a point.
         assert!(matches!(
@@ -9502,6 +9670,94 @@ mod tests {
             crate::daemon_log_bus::DaemonLogBus::new(16),
         );
         (svc, seen)
+    }
+
+    /// Each touch RPC against an agent that answers it `touch`, and
+    /// `keyboardAfterTouch` `after`.
+    async fn touch_answers(
+        touch: Value,
+        after: Value,
+    ) -> Vec<(proto::ActionResponse, Vec<String>)> {
+        let target = || {
+            Some(proto::Selector {
+                selector: Some(proto::selector::Selector::Text("Save".to_string())),
+                ..Default::default()
+            })
+        };
+        let mut answers = Vec::new();
+        for gesture in ["tap", "doubleTap", "longPress"] {
+            let (touch, after) = (touch.clone(), after.clone());
+            let (svc, seen) = service_with_mock_agent(move |method, _| match method {
+                "keyboardAfterTouch" => after.clone(),
+                _ => touch.clone(),
+            })
+            .await;
+            let response = match gesture {
+                "tap" => {
+                    svc.tap(Request::new(proto::TapRequest {
+                        selector: target(),
+                        ..Default::default()
+                    }))
+                    .await
+                }
+                "doubleTap" => {
+                    svc.double_tap(Request::new(proto::DoubleTapRequest {
+                        selector: target(),
+                        ..Default::default()
+                    }))
+                    .await
+                }
+                _ => {
+                    svc.long_press(Request::new(proto::LongPressRequest {
+                        selector: target(),
+                        ..Default::default()
+                    }))
+                    .await
+                }
+            };
+            let seen = seen.lock().unwrap().clone();
+            answers.push((response.unwrap().into_inner(), seen));
+        }
+        answers
+    }
+
+    #[tokio::test]
+    async fn a_touch_the_agent_made_is_followed_by_its_keyboard_question() {
+        let asked = json!({"result": {"success": true, "keyboardStayedUp": true}});
+        let warned = json!({"result": {"success": true, "warning": "may only have closed"}});
+        for (response, seen) in touch_answers(asked, warned).await {
+            assert!(response.success);
+            assert_eq!(response.warning, "may only have closed");
+            assert_eq!(seen.len(), 2, "{seen:?}");
+            assert_eq!(seen[1], "keyboardAfterTouch");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_keyboard_question_is_no_failed_touch_and_no_second_one() {
+        let asked = json!({"result": {"success": true, "keyboardStayedUp": true}});
+        let crashed = json!({"error": {"type": "INTERNAL_ERROR", "message": "app crashed"}});
+        for (response, seen) in touch_answers(asked, crashed).await {
+            assert!(response.success, "{}", response.error_message);
+            assert_eq!(response.warning, "");
+            assert_eq!(seen.len(), 2, "{seen:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn other_touches_are_not_followed_by_a_keyboard_question() {
+        let warned = json!({"result": {"success": true, "warning": "unused"}});
+        for touch in [
+            json!({"result": {"success": true}}),
+            json!({"error": {"type": "ELEMENT_COVERED", "message": "covered"}}),
+        ] {
+            for (_, seen) in touch_answers(touch, warned.clone()).await {
+                assert!(
+                    !seen.contains(&"keyboardAfterTouch".to_string()),
+                    "{seen:?}"
+                );
+            }
+        }
     }
 
     use crate::ios::device::SimTerminate;

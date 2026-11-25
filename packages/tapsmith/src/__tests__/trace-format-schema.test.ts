@@ -87,7 +87,7 @@ beforeAll(async () => {
     category: 'tap', action: 'tap', selector: '{"text":"Send"}', duration: 12, success: true,
     hasScreenshotBefore: true, hasScreenshotAfter: false, hasHierarchyBefore: true, hasHierarchyAfter: false,
     bounds: { left: 0, top: 0, right: 10, bottom: 10 }, point: { x: 5, y: 5 },
-    sourceLocation: frame, stack: [frame], deviceId: 'alice', log: ['resolved'], origin: 'inline',
+    sourceLocation: frame, stack: [frame], deviceId: 'alice', log: ['resolved'], warning: 'may only have closed the keyboard', origin: 'inline',
   }, actionIndex);
   c.addAssertionEvent({
     assertion: 'toBeVisible', selector: '{"text":"Hi"}', passed: false, soft: false, negated: false,

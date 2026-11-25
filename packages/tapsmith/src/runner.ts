@@ -48,6 +48,7 @@ import {
 } from './app-reset.js';
 import { collectAnsweredSystemDialogs, executeAppReset, reopenStartRoute, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
 import { deviceGroupSize, resolveDeviceGroup, validateAppResetOptions, validateDevicesOption, validateRecordingModes } from './config.js';
+import { takeActionWarnings } from './action-warnings.js';
 import { type AttemptToken } from './attempt-fence.js';
 import { isRunnerTimeoutError, runBounded } from './run-bounded.js';
 import { closeErrorScope, mergeUnhandledErrors, openErrorScope, ownUnhandledErrors } from './unhandled-errors.js';
@@ -123,6 +124,14 @@ function primaryDevice(opts: RunOptions): Device | undefined {
 /** Every device of the run, primary first. */
 function allDevices(opts: RunOptions): Device[] {
   return opts.devices.map((d) => d.device);
+}
+
+/** What the actions on every device of the run have warned about since the last call. */
+function takeDeviceActionWarnings(opts: RunOptions): string[] {
+  const devices = allDevices(opts);
+  // Optional client: lifecycle mocks have none.
+  return devices.flatMap((d) => (d._client ? takeActionWarnings(d._client) : []).map((w) =>
+    devices.length > 1 && d._traceDeviceId ? `[${d._traceDeviceId}] ${w}` : w));
 }
 
 /**
@@ -2810,7 +2819,7 @@ async function runSuiteContext(
       const failed = failAll(ctx, parentPrefix, beforeAllError, opts, beforeAllScreenshot, beforeAllTrace);
       // A dialog the scope-entry reset closed may be why the scope failed.
       drainPreflightNotices(opts, null);
-      const scopeWarnings = opts._preflightWarnings?.splice(0) ?? [];
+      const scopeWarnings = [...(opts._preflightWarnings?.splice(0) ?? []), ...takeDeviceActionWarnings(opts)];
       for (const tr of collectResults(failed)) {
         if (scopeWarnings.length > 0) tr.warnings = [...scopeWarnings];
         result.tests.push(tr);
@@ -2928,6 +2937,10 @@ async function runSuiteContext(
     // reports its error). The result says so (KEPT_SCREENS_HINT).
     let firstFailureOnKeptScreens: boolean | undefined;
     let lastAttemptOnKeptScreens = false;
+    // What the actions of those same two attempts warned about: it may be why
+    // they failed. A passing attempt's warnings are only in its trace.
+    let firstFailureActionWarnings: string[] = [];
+    let lastAttemptActionWarnings: string[] = [];
     const traceConfig = runTraceConfig(opts);
     const videoConfig = resolveVideoConfig(opts.config.video);
 
@@ -2942,6 +2955,8 @@ async function runSuiteContext(
       // the a11y tree stayed healthy, observed on CI July 2026). Attempt 0
       // resets the flag so a previous test's retry doesn't leak into it.
       for (const d of devices) d._setForceColdDeepLinks?.(attempt > 0);
+      // From a beforeAll, or a UI-mode or MCP tool call between tests.
+      takeDeviceActionWarnings(opts);
       // A retry re-runs the file's setup (PILOT-715), as does any test after
       // a failed test (PILOT-739) or after a retry whose setup failed
       // part-way. Either way this attempt's trace shows the setup that just
@@ -3933,6 +3948,10 @@ async function runSuiteContext(
       // back fails nothing here.
       await forEachDeviceBestEffort(opts, (d) => d._restoreTestOrientation?.());
 
+      const actionWarnings = takeDeviceActionWarnings(opts);
+      lastAttemptActionWarnings = status === 'failed' ? actionWarnings : [];
+      if (status === 'failed' && !firstFailure) firstFailureActionWarnings = actionWarnings;
+
       lastAttemptOnKeptScreens = onKeptScreens;
       if (status === 'failed' && firstFailureOnKeptScreens === undefined) firstFailureOnKeptScreens = onKeptScreens;
       if (status !== 'failed' || attempt === maxRetries || opts.abortSignal?.aborted) break;
@@ -3965,7 +3984,9 @@ async function runSuiteContext(
         retry: attempt,
         // Shown under the attempt the dialog interrupted; the final result
         // carries them too.
-        ...(opts._preflightWarnings?.length ? { warnings: [...opts._preflightWarnings] } : {}),
+        ...(opts._preflightWarnings?.length || actionWarnings.length > 0
+          ? { warnings: [...(opts._preflightWarnings ?? []), ...actionWarnings] }
+          : {}),
         _willRetry: true,
         filePath: opts.testFilePath,
       });
@@ -3977,6 +3998,7 @@ async function runSuiteContext(
     const reportedOnKeptScreens = status === 'failed'
       ? lastAttemptOnKeptScreens
       : firstFailure !== undefined && firstFailureOnKeptScreens === true;
+    const reportedActionWarnings = status === 'failed' ? lastAttemptActionWarnings : firstFailureActionWarnings;
 
     // Skipped on a retry after a failed attempt: reported as the failure, so a
     // skip never hides it. (Stricter than Playwright, which calls it flaky;
@@ -4011,6 +4033,7 @@ async function runSuiteContext(
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
     if (reportedOnKeptScreens && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
+    warnings.push(...reportedActionWarnings);
     const testResult: TestResult = {
       name: entry.name,
       fullName,

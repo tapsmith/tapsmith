@@ -1851,6 +1851,7 @@ html, body, #app {
 .call-value { color: var(--fg); word-break: break-all; font-size: 12.5px; }
 .call-value.mono { font-family: var(--font-mono); font-size: 11.5px; }
 .call-value.error { color: var(--fail); }
+.call-value.warning { color: var(--color-warning); }
 .call-value.success { color: var(--pass); }
 .call-value .sel-fn { color: var(--accent-dim); }
 .call-value .sel-val { color: var(--fg); }
@@ -1947,6 +1948,7 @@ html, body, #app {
 .error-entry-selected { }
 .error-title { color: var(--fg); font-weight: 600; font-size: 13px; margin-bottom: 10px; word-break: break-word; display: flex; align-items: flex-start; gap: 8px; }
 .error-title-icon { color: var(--fail); flex-shrink: 0; margin-top: 2px; }
+.warning-entry .error-title-icon { color: var(--color-warning); }
 .error-grid {
   display: grid; grid-template-columns: 80px 1fr; gap: 3px 12px;
   font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6;

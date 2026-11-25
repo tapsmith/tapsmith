@@ -169,6 +169,17 @@ describe('tapsmith_run_code', () => {
     expect(Date.now() - started).toBeLessThan(4_000);
   });
 
+  it('reports a warning with the statement it came from, also when a later one fails (PILOT-1495)', async () => {
+    daemon.tap.mockResolvedValueOnce({ ...ok(), warning: 'This tap may only have closed the keyboard.' } as never);
+    const out = text(await runCode([
+      'await device.getByText("Sign in").tap();',
+      'await device.getByText("Register").tap();',
+      'await expect(device.getByText("Saved")).toBeVisible();',
+    ].join('\n'), { timeout: 100 }));
+    expect(out.match(/This tap may only have closed the keyboard\./g)).toHaveLength(1);
+    expect(out.indexOf('Warning: tap() on')).toBeLessThan(out.indexOf('Statement 2'));
+  });
+
   it('runs statements in order and stops at the first failure, saying which did not run', async () => {
     const res = await runCode([
       'await device.getByRole("button", { name: "Sign in" }).tap();',

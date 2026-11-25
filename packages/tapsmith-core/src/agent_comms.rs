@@ -686,6 +686,11 @@ pub enum AgentCommand {
     },
     HideKeyboard {},
     IsKeyboardShown {},
+    /// Whether the touch just made may have done nothing but close the
+    /// keyboard (PILOT-1495). Sent only after an iOS answer that said
+    /// `keyboardStayedUp`: the touch's own, or the `resolveActionPoint` the
+    /// HID helper's touch was planned with.
+    KeyboardAfterTouch {},
     /// Take the system dialogs the agent answered on its own since the last
     /// call: Android's ANR / crash dialogs, iOS's leftover alerts.
     TakeSystemDialogEvents {
@@ -779,6 +784,7 @@ impl AgentCommand {
             AgentCommand::AcceptOpenInAppDialog { .. } => "acceptOpenInAppDialog",
             AgentCommand::HideKeyboard {} => "hideKeyboard",
             AgentCommand::IsKeyboardShown {} => "isKeyboardShown",
+            AgentCommand::KeyboardAfterTouch {} => "keyboardAfterTouch",
             AgentCommand::TakeSystemDialogEvents { .. } => "takeSystemDialogEvents",
             AgentCommand::GetSystemAlert {} => "systemAlert",
             AgentCommand::CancelLeftoverOpenInPrompt {} => "cancelLeftoverOpenInPrompt",
@@ -1190,6 +1196,7 @@ impl AgentCommand {
             }
             AgentCommand::HideKeyboard {} => ("hideKeyboard", json!({})),
             AgentCommand::IsKeyboardShown {} => ("isKeyboardShown", json!({})),
+            AgentCommand::KeyboardAfterTouch {} => ("keyboardAfterTouch", json!({})),
             AgentCommand::TakeSystemDialogEvents {
                 answer_leftover_alerts,
             } => (

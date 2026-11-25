@@ -1,3 +1,4 @@
+import { takeActionWarnings, takeWarningLines } from '../../action-warnings.js';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
@@ -104,12 +105,14 @@ export function registerRunCodeTool(server: McpServer, dispatcher?: TestDispatch
           report.lines.push(`${header} was not run: ${RUN_IN_PROGRESS}`, ...notRun(statements.slice(i + 1)));
           return errorResult(withWebviewNote(report, stoppedAt(statement, total, i, 'a test run started')));
         }
+        // Only this statement's warnings are reported with it.
+        takeActionWarnings(target.client);
         try {
           const line = await runStatement(statement, prebuilt.get(statement), sdkDevice, target.client, timeoutMs, report);
-          report.lines.push(`${header}: OK`, line);
+          report.lines.push(`${header}: OK`, line + takeWarningLines(target.client));
         } catch (err) {
-          if (isStatementError(err)) report.lines.push(`${header} failed: ${err.message}`);
-          else report.lines.push(`${header} failed: ${actionErrorText(err, locatorOf(statement))}`);
+          const why = isStatementError(err) ? err.message : actionErrorText(err, locatorOf(statement));
+          report.lines.push(`${header} failed: ${why}${takeWarningLines(target.client)}`);
           report.lines.push(...notRun(statements.slice(i + 1)));
           return errorResult(withWebviewNote(report, stoppedAt(statement, total, i, 'it failed')));
         }

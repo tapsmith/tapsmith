@@ -28,7 +28,7 @@ describe('readTraceSummary()', () => {
 
   it('extracts action and assertion steps', () => {
     const events = [
-      { type: 'action', action: 'tap', selector: 'device.getByText("Login")', duration: 100 },
+      { type: 'action', action: 'tap', selector: 'device.getByText("Login")', duration: 100, warning: 'may only have closed the keyboard' },
       { type: 'assertion', assertion: 'toBeVisible', duration: 50 },
       { type: 'assertion', assertion: 'toHaveText', error: 'Expected "A" toHaveText "B"', expected: 'B', actual: 'A', duration: 200 },
     ];
@@ -39,8 +39,9 @@ describe('readTraceSummary()', () => {
       expect(summary!.steps.length).toBeGreaterThanOrEqual(3);
       expect(summary!.steps[0]).toContain('[OK] tap');
       expect(summary!.steps[0]).toContain('device.getByText("Login")');
-      expect(summary!.steps[1]).toContain('[OK] expect toBeVisible');
-      expect(summary!.steps[2]).toContain('[FAIL] expect toHaveText');
+      expect(summary!.steps[1]).toBe('  Warning: may only have closed the keyboard');
+      expect(summary!.steps[2]).toContain('[OK] expect toBeVisible');
+      expect(summary!.steps[3]).toContain('[FAIL] expect toHaveText');
       expect(summary!.steps.some((s) => s.includes('Expected:'))).toBe(true);
       expect(summary!.steps.some((s) => s.includes('Actual:'))).toBe(true);
     } finally {

@@ -133,4 +133,9 @@ export class DetailTabsPane {
   get errorEntries() {
     return this.page.getByTestId("error-entry")
   }
+
+  /** Steps that passed with a warning, listed under a failed test's errors. */
+  get warningEntries() {
+    return this.page.getByTestId("warning-entry")
+  }
 }

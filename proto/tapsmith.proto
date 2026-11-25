@@ -237,6 +237,10 @@ message ActionResponse {
   // clear_app_data_first, only after the app's data was wiped. The caller can
   // then take that launch as its clean startup launch. False everywhere else.
   bool app_launched_fresh = 6;
+  // A successful tap, double tap or long press: something the caller should
+  // know about what it may have done, or empty. Today only iOS sets it, when
+  // the touch may have done nothing but close the keyboard (PILOT-1495).
+  string warning = 7;
 }
 
 // ─── Requests ───

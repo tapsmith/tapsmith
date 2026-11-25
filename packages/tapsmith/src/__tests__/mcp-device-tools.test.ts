@@ -526,6 +526,15 @@ describe('tapsmith_tap', () => {
     expect(elementId).toBe('el-1');
   });
 
+  it('passes on a warning the tap came back with (PILOT-1495)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Item 7' })] });
+    daemon.tap.mockResolvedValueOnce({ ...ok(), warning: 'This tap may only have closed the keyboard.' });
+    hoisted.client = daemon.client;
+    const warned = text(await callTool('tapsmith_tap', { locator: 'device.getByText("Item 7")' }));
+    expect(warned).toMatch(/\nWarning: tap\(\) on .*This tap may only have closed the keyboard\.$/);
+    expect(text(await callTool('tapsmith_tap', { locator: 'device.getByText("Item 7")' }))).not.toContain('Warning');
+  });
+
   it('taps with getByRole\'s state filters, not without them (PILOT-655)', async () => {
     // The parser used to drop `selected`, so the agent tapped whichever
     // "Space" card came first, selected or not.

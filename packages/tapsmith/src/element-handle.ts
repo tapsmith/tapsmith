@@ -33,6 +33,7 @@ import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepRespons
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory } from './trace/types.js';
 import { type BeforeState, captureBeforeState, tracedAction } from './trace/traced-action.js';
+import { describeActionWarning, noteActionWarning } from './action-warnings.js';
 import { sleep, isAbortError, throwIfAborted } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
@@ -3047,6 +3048,13 @@ export class ElementHandle {
     }
   }
 
+  /** @internal — Keep what an answer warned about for the result of a test that fails. */
+  private _noteWarning(action: string, res: ActionResponse): void {
+    if (!res.warning) return;
+    const location = extractStack(new Error().stack ?? '')[0];
+    noteActionWarning(this._client, describeActionWarning(action, this._describe(), res.warning, location));
+  }
+
   /** @internal — Wrap an action with trace recording. */
   private async _tracedAction(
     action: string,
@@ -3066,7 +3074,12 @@ export class ElementHandle {
       findElement: (sel: Selector, timeout: number) => this._client.findElement(sel, timeout),
       captureTraceState: trace.captureTraceState,
     } : undefined;
-    return tracedAction(ctx, action, category, this._selector, fn, fallbackMsg, { ...extra, reservedActionIndex });
+    const run = async (): Promise<ActionResponse> => {
+      const res = await fn();
+      this._noteWarning(action, res);
+      return res;
+    };
+    return tracedAction(ctx, action, category, this._selector, run, fallbackMsg, { ...extra, reservedActionIndex });
   }
 
   /**
@@ -3501,7 +3514,8 @@ export class ElementHandle {
           // The agent answered → responsive; drop any earlier transient timeout
           // so a state that simply never changes fails as such, not as infra.
           lastTransientErr = undefined;
-          if (after.checked === checked) return tapRes; // State changed successfully
+          // State changed successfully: the tap did what it was for, whatever it warned.
+          if (after.checked === checked) return { ...tapRes, warning: undefined };
           if (
             after.checked === !checked &&
             retaps < MAX_RETAPS &&
@@ -3541,11 +3555,18 @@ export class ElementHandle {
         }
       }
 
-      if (lastTransientErr) throw lastTransientErr;
-      return synthetic(
-        false,
-        `setChecked(${checked}): element ${this._describe()} checked state did not change after tap (still ${!checked})`,
-      );
+      // The tap changed nothing: what it warned about may be why.
+      if (lastTransientErr) {
+        this._noteWarning('setChecked', tapRes);
+        throw lastTransientErr;
+      }
+      return {
+        ...synthetic(
+          false,
+          `setChecked(${checked}): element ${this._describe()} checked state did not change after tap (still ${!checked})`,
+        ),
+        warning: tapRes.warning,
+      };
     }, 'setChecked failed');
   }
 

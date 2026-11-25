@@ -906,6 +906,7 @@ impl DeviceBackend for IosBackend<'_> {
             error_message: String::new(),
             screenshot: Vec::new(),
             app_launched_fresh: false,
+            warning: String::new(),
         }))
     }
 
@@ -1013,6 +1014,7 @@ impl DeviceBackend for IosBackend<'_> {
                 error_message: String::new(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             }));
         }
         let serial = self.svc.active_serial().await?;
@@ -1032,6 +1034,7 @@ impl DeviceBackend for IosBackend<'_> {
             error_message: String::new(),
             screenshot: Vec::new(),
             app_launched_fresh: false,
+            warning: String::new(),
         }))
     }
 
@@ -1748,6 +1751,7 @@ impl DeviceBackend for IosBackend<'_> {
                     .to_string(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
+                warning: String::new(),
             });
         }
         Ok(())
@@ -1832,6 +1836,7 @@ impl DeviceBackend for IosBackend<'_> {
                     error_message: e.to_string(),
                     screenshot: Vec::new(),
                     app_launched_fresh: false,
+                    warning: String::new(),
                 });
             }
         };
