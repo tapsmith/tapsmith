@@ -241,4 +241,30 @@ describe('updateAgentsMd()', () => {
     expect(updateAgentsMd(dir)).toBe('malformed');
     expect(fs.readFileSync(file, 'utf8')).toBe(text);
   }));
+
+  it.skipIf(process.platform === 'win32')('replaces the file rather than truncating it, keeping its mode and a symlink to it', () => inTmp((dir, file) => {
+    const target = path.join(dir, 'CLAUDE.md');
+    fs.writeFileSync(target, '# Mine\n');
+    fs.chmodSync(target, 0o640);
+    fs.symlinkSync('CLAUDE.md', file);
+    const before = fs.statSync(target).ino;
+    expect(updateAgentsMd(dir)).toBe('written');
+    expect(fs.statSync(target).ino).not.toBe(before);
+    expect(fs.statSync(target).mode & 0o777).toBe(0o640);
+    expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).toContain('# Mine');
+    expect(fs.readdirSync(dir).sort()).toEqual(['AGENTS.md', 'CLAUDE.md']);
+  }));
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('leaves the file as it was when it cannot be replaced', () => inTmp((dir, file) => {
+    fs.writeFileSync(file, '# Mine\n');
+    fs.chmodSync(dir, 0o555);
+    try {
+      expect(() => updateAgentsMd(dir)).toThrow();
+      expect(fs.readFileSync(file, 'utf8')).toBe('# Mine\n');
+      expect(fs.readdirSync(dir)).toEqual(['AGENTS.md']);
+    } finally {
+      fs.chmodSync(dir, 0o755);
+    }
+  }));
 });

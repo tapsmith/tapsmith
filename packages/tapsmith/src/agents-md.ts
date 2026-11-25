@@ -151,11 +151,29 @@ export function mergeAgentsMd(existing: string | undefined, section: string): st
   return `${existing}${separator}${section}`;
 }
 
+/**
+ * Write `text` beside the file and rename it into place: AGENTS.md holds the
+ * user's own text, which a write that fails half-way (a full disk) must not
+ * lose. A symlink (to CLAUDE.md, say) stays one; its target is replaced.
+ */
+function replaceFile(filePath: string, text: string): void {
+  const target = fs.existsSync(filePath) ? fs.realpathSync(filePath) : filePath;
+  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(tmp, text);
+    if (fs.existsSync(target)) fs.chmodSync(tmp, fs.statSync(target).mode);
+    fs.renameSync(tmp, target);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
 /** Writes/updates the tapsmith section in <cwd>/AGENTS.md. Returns the file path. */
 export function writeAgentsMd(cwd: string): string {
   const filePath = path.join(cwd, 'AGENTS.md');
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : undefined;
-  fs.writeFileSync(filePath, mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd))));
+  replaceFile(filePath, mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd))));
   return filePath;
 }
 
@@ -178,7 +196,7 @@ export function updateAgentsMd(cwd: string): 'written' | 'unchanged' | 'malforme
   if (existing !== undefined && sectionState(existing) === 'malformed') return 'malformed';
   const updated = mergeAgentsMd(existing, renderAgentsSection(installedDocsDir(cwd)));
   if (updated === existing) return 'unchanged';
-  fs.writeFileSync(filePath, updated);
+  replaceFile(filePath, updated);
   return 'written';
 }
 
