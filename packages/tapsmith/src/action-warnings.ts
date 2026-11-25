@@ -1,6 +1,6 @@
 // ─── Action warnings ───
 //
-// What a successful action's answer warned about: today, an iOS tap that may
+// What an action's answer warned about: today, an iOS tap that may
 // only have closed the keyboard (PILOT-1495). A warning is no failure and a
 // passing test prints nothing about it; the runner adds the warnings of a
 // failed attempt to its result, where they may explain the failure. They are

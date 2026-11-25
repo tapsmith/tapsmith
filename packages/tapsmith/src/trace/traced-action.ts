@@ -264,12 +264,12 @@ export async function tracedAction(
 
   try {
     const res = await fn();
+    warning = res.warning || undefined;
     if (!res.success) {
       success = false;
       error = res.errorMessage || fallbackMsg;
       throw new Error(error);
     }
-    warning = res.warning || undefined;
   } catch (err) {
     success = false;
     if (err instanceof Error) { error = err.message; errorStack = err.stack; }
@@ -290,8 +290,9 @@ export async function tracedAction(
 
   if (success) {
     log.push(`Action completed successfully (${Date.now() - start}ms)`);
-    if (warning) log.push(`Warning: ${warning}`);
   }
+
+  if (warning) log.push(`Warning: ${warning}`);
 
   // Snapshot action duration before the async capture so it reflects the
   // actual action time, not action + screenshot overhead.

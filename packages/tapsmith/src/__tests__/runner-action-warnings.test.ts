@@ -162,6 +162,17 @@ describe('an action whose answer carries a warning (PILOT-1495)', () => {
     expect(takeActionWarnings(c)).toEqual([]);
   });
 
+  it('setChecked(): the warning, on the step and in the test, when the state did not change', async () => {
+    const c = client('may only have closed the keyboard');
+    c.findElements = vi.fn(async () => ({ requestId: '', elements: [{ ...element, checked: false }], errorMessage: '' })) as never;
+    const collector = tracing._currentCollector!;
+    const handle = new ElementHandle(c, _text('Switch'), 300);
+    Object.defineProperty(handle, '_traceCapture', { get: () => ({ collector, takeScreenshot: async () => undefined, captureHierarchy: async () => undefined }) });
+    await expect(handle.setChecked(true)).rejects.toThrow('did not change');
+    expect(collector.events.find((e) => e.type === 'action')).toMatchObject({ success: false, warning: 'may only have closed the keyboard' });
+    expect(takeActionWarnings(c)).toEqual([expect.stringMatching(/^setChecked\(\) on .*: may only have closed the keyboard$/)]);
+  });
+
   it('nothing is noted when the answer has none', async () => {
     const c = client('');
     await new ElementHandle(c, _text('Item 7'), 2000).tap();

@@ -96,8 +96,8 @@ export interface ActionTraceEvent extends TraceEvent {
   /** Error stack trace. */
   errorStack?: string
   /**
-   * What a successful action warned about (e.g. an iOS tap that may only have
-   * closed the keyboard). The action still counts as passed.
+   * What the action warned about (e.g. an iOS tap that may only have closed
+   * the keyboard), whether it passed or then failed.
    */
   warning?: string
   /** Element bounds at the time of the action. */

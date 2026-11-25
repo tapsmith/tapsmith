@@ -131,7 +131,7 @@ Every event has these fields:
 
 | `type` | Required fields | Notes |
 |---|---|---|
-| `action` | `category`, `action`, `duration`, `success`, `hasScreenshotBefore`, `hasScreenshotAfter`, `hasHierarchyBefore`, `hasHierarchyAfter` | Optional: `selector` (serialized JSON), `inputValue`, `error`, `errorStack`, `bounds`, `point`, `endPoint`, `sourceLocation`, `stack`, `waitTime`, `retryCount`, `log`, `warning` (what a successful action warned about, such as an iOS tap that may only have closed the keyboard), `detail`, `origin`, plus the timing fields below. |
+| `action` | `category`, `action`, `duration`, `success`, `hasScreenshotBefore`, `hasScreenshotAfter`, `hasHierarchyBefore`, `hasHierarchyAfter` | Optional: `selector` (serialized JSON), `inputValue`, `error`, `errorStack`, `bounds`, `point`, `endPoint`, `sourceLocation`, `stack`, `waitTime`, `retryCount`, `log`, `warning` (what the action warned about, passed or failed, such as an iOS tap that may only have closed the keyboard), `detail`, `origin`, plus the timing fields below. |
 | `assertion` | `assertion`, `passed`, `soft`, `negated`, `duration`, `attempts` | Optional: `selector`, `expected`, `actual`, `error`, `bounds`, `sourceLocation`, `stack`, the `has*` capture flags, and the timing fields. |
 | `group-start`, `group-end` | `name` | Brackets hook and test phases, for example `beforeEach Hooks` or `Test`. |
 | `console` | `level`, `message`, `source` | `source`: `test` is the test code's console, `device` is logcat or syslog, and `daemon` is tapsmith-core. |

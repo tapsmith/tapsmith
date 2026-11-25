@@ -222,7 +222,7 @@
         "waitTime": { "type": "number", "minimum": 0 },
         "retryCount": { "type": "integer", "minimum": 0 },
         "log": { "type": "array", "items": { "type": "string" } },
-        "warning": { "description": "What a successful action warned about.", "type": "string" },
+        "warning": { "description": "What the action warned about.", "type": "string" },
         "detail": { "type": "string" },
         "origin": { "description": "Open set (known: inline, prepared, skipped).", "type": "string" }
       }

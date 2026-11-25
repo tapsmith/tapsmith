@@ -3048,6 +3048,13 @@ export class ElementHandle {
     }
   }
 
+  /** @internal — Keep what an answer warned about for the result of a test that fails. */
+  private _noteWarning(action: string, res: ActionResponse): void {
+    if (!res.warning) return;
+    const location = extractStack(new Error().stack ?? '')[0];
+    noteActionWarning(this._client, describeActionWarning(action, this._describe(), res.warning, location));
+  }
+
   /** @internal — Wrap an action with trace recording. */
   private async _tracedAction(
     action: string,
@@ -3069,10 +3076,7 @@ export class ElementHandle {
     } : undefined;
     const run = async (): Promise<ActionResponse> => {
       const res = await fn();
-      if (res.success && res.warning) {
-        const location = extractStack(new Error().stack ?? '')[0];
-        noteActionWarning(this._client, describeActionWarning(action, this._describe(), res.warning, location));
-      }
+      this._noteWarning(action, res);
       return res;
     };
     return tracedAction(ctx, action, category, this._selector, run, fallbackMsg, { ...extra, reservedActionIndex });
@@ -3551,11 +3555,18 @@ export class ElementHandle {
         }
       }
 
-      if (lastTransientErr) throw lastTransientErr;
-      return synthetic(
-        false,
-        `setChecked(${checked}): element ${this._describe()} checked state did not change after tap (still ${!checked})`,
-      );
+      // The tap changed nothing: what it warned about may be why.
+      if (lastTransientErr) {
+        this._noteWarning('setChecked', tapRes);
+        throw lastTransientErr;
+      }
+      return {
+        ...synthetic(
+          false,
+          `setChecked(${checked}): element ${this._describe()} checked state did not change after tap (still ${!checked})`,
+        ),
+        warning: tapRes.warning,
+      };
     }, 'setChecked failed');
   }
 
