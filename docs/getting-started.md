@@ -127,11 +127,11 @@ Tapsmith tests either kind of React Native build:
 
 ```bash
 # Android (the React Native template signs release builds with the debug keystore)
-cd android && ./gradlew assembleRelease   # android/app/build/outputs/apk/release/app-release.apk
+(cd android && ./gradlew assembleRelease)   # android/app/build/outputs/apk/release/app-release.apk
 
 # iOS Simulator
-cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
-  -configuration Release -sdk iphonesimulator -derivedDataPath build build
+(cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
+  -configuration Release -sdk iphonesimulator -derivedDataPath build build)
 ```
 
 When a debug APK is also lying around, the wizard lists it first and `tapsmith init --yes` picks it over the release one: choose the release APK in the wizard, or pass `--apk android/app/build/outputs/apk/release/app-release.apk`.
@@ -158,11 +158,11 @@ Build the Debug app to a path inside the project:
 
 ```bash
 # Android: writes android/app/build/outputs/apk/debug/app-debug.apk
-cd android && ./gradlew assembleDebug
+(cd android && ./gradlew assembleDebug)
 
 # iOS Simulator: writes ios/build/Build/Products/Debug-iphonesimulator/MyApp.app
-cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
-  -configuration Debug -sdk iphonesimulator -derivedDataPath build build
+(cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
+  -configuration Debug -sdk iphonesimulator -derivedDataPath build build)
 ```
 
 An Expo project without `android/` and `ios/` folders needs `npx expo prebuild` first. `npx expo run:android`
@@ -271,6 +271,9 @@ What to expect while you iterate:
 
 - **When to rebuild.** JavaScript edits need no rebuild and no config change: the app loads them from
   Metro. A change to native code, a config plugin or a native dependency needs a new build, at the same path.
+  The Gradle, `xcodebuild` and `npx expo run` commands do not apply a changed config plugin to an `android/` or `ios/` folder that already exists:
+  run `npx expo prebuild` first (with `--clean` it regenerates the folders, and edits made in them by hand are lost). After
+  adding a native dependency, run `pod install` in `ios/` before `xcodebuild`.
 - **The configured build wins.** On an emulator or simulator, Tapsmith replaces an installed app that differs
   from the configured build, whichever of the two is newer. After `npx expo run:ios` without `--output`, an older build at
   the `app` path is put back over the app you just installed. A path with no build stops the
