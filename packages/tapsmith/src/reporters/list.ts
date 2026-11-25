@@ -187,6 +187,7 @@ export class ListReporter implements TapsmithReporter {
           const worker = this._multipleWorkers ? workerTag(test.workerIndex) : '';
           const project = this._showProjectTags ? projectTag(test.project) : '';
           this._write(`  ${red('✗')} ${worker}${project}${test.fullName}\n`);
+          for (const line of formatWarnings(test)) this._write(line + '\n');
           this._write(formatError(test.error) + '\n');
           if (test.screenshotPath) {
             this._write(`        ${dim(`Screenshot: ${test.screenshotPath}`)}\n`);

@@ -15,6 +15,7 @@ import {
   bold,
   formatError,
   formatSummaryLine,
+  formatWarnings,
   formatFlakySection,
   countFlaky,
   workerTag,
@@ -84,6 +85,7 @@ export class DotReporter implements TapsmithReporter {
       for (const test of failedTests) {
         const project = this._showProjectTags ? projectTag(test.project) : '';
         process.stdout.write(`  ${red('✗')} ${workerTag(test.workerIndex)}${project}${test.fullName}\n`);
+        for (const line of formatWarnings(test)) process.stdout.write(line + '\n');
         if (test.error) {
           process.stdout.write(formatError(test.error) + '\n\n');
         }

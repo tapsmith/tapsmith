@@ -1539,3 +1539,25 @@ describe('base formatting utilities', () => {
     }
   });
 });
+
+describe('a failed test\'s warnings in the failure summary (PILOT-1495)', () => {
+  it.each(['list', 'line', 'dot'])('%s prints them with the error', async (name) => {
+    const { ListReporter } = await import('../reporters/list.js');
+    const { LineReporter } = await import('../reporters/line.js');
+    const { DotReporter } = await import('../reporters/dot.js');
+    const Reporter = { list: ListReporter, line: LineReporter, dot: DotReporter }[name]!;
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const reporter = new Reporter() as TapsmithReporter;
+      reporter.onRunStart!(makeConfig(), 1);
+      const failed = makeTestResult({ status: 'failed', error: new Error('not visible'), warnings: ['may only have closed the keyboard'] });
+      const passed = makeTestResult({ status: 'passed' });
+      await reporter.onRunEnd!(makeFullResult({ status: 'failed', tests: [failed, passed] }));
+      const output = spy.mock.calls.map((c) => String(c[0])).join('');
+      expect(output.slice(output.indexOf('Failures:'))).toContain('⚠ may only have closed the keyboard');
+      expect(output.split('may only have closed').length).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
