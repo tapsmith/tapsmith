@@ -97,26 +97,34 @@ struct KeyboardDismissPlanner {
     typealias Node = OcclusionAnalyzer.Node
 
     /// A way of dismissing the keyboard, in the order they are tried.
-    enum Strategy: CaseIterable {
-        case scrollSwipe, dismissKey, blankTap, returnKey
+    enum Strategy {
+        case scrollSwipe, dismissKey, blankTap, scrollerBlankTap, returnKey
 
         var summary: String {
             switch self {
             case .scrollSwipe: return "dragging a scroll view"
             case .dismissKey: return "the keyboard's dismiss key"
             case .blankTap: return "tapping a blank spot"
+            case .scrollerBlankTap: return "tapping a blank spot in the target's scroll view"
             case .returnKey: return "the return key"
             }
         }
     }
 
+    /// Strategies `hideKeyboard` uses, in order. Not the blank tap in a
+    /// target's scroll view: hideKeyboard has no target.
+    static let hideKeyboardStrategies: [Strategy] = [.scrollSwipe, .dismissKey, .blankTap, .returnKey]
+
     /// Strategies a touch's keyboard-first step may use (PILOT-622), in
     /// order. A blank tap: it is what the user's own first tap would have
-    /// done on a React Native ScrollView. Never the drag, which scrolls the
+    /// done on a React Native ScrollView — first in the scroll view the
+    /// target is in, the one that would eat the touch (PILOT-1432: a search
+    /// field above a list sits in a plain view, where a tap beside the field
+    /// leaves the keyboard up), then beside the field. Never the drag, which scrolls the
     /// content even when the keyboard stays (then the touch would no longer
     /// go ahead as before), and never the return key, which submits the
     /// field — the touch about to be made may be that submit.
-    static let keyboardFirstStrategies: [Strategy] = [.blankTap, .dismissKey]
+    static let keyboardFirstStrategies: [Strategy] = [.scrollerBlankTap, .blankTap, .dismissKey]
 
     /// What happened to a strategy: it ran and the keyboard stayed, or it was
     /// not possible on this screen (the reason says why).
@@ -465,6 +473,121 @@ struct KeyboardDismissPlanner {
             if let point { return point }
         }
         return nil
+    }
+
+    /// A blank spot inside the scroll view `target` is in (keyboard first,
+    /// PILOT-1432): above the keyboard and below the status bar, the spot
+    /// furthest from anything else. That scroll view is the one a React
+    /// Native ScrollView with `keyboardShouldPersistTaps` "never" or
+    /// "handled" puts the keyboard away for on a touch no child takes — the
+    /// touch it would otherwise spend the target's tap on. The innermost such
+    /// scroll view is tried first, then the ones around it.
+    ///
+    /// Not a scroll view that the focused field (at `focusedFrame`) is drawn
+    /// over: the field is drawn after it, outside it, in containers of its
+    /// own that overlap it — a sheet or modal, where a touch on the list
+    /// behind lands on the backdrop. A bar beside the list (a chat composer
+    /// below it) is no cover.
+    ///
+    /// What holds the scroll view never blocks (React Native wraps a list
+    /// with an accessibility label in a labeled view of its size). The
+    /// target's own row (its container under the outermost container in the
+    /// list holding two or more rows) is kept out, and anything that is not
+    /// a plain container blocks. A spot clear of every row comes first; only a
+    /// list with none (packed with rows) gets one in a row's plain margin,
+    /// and then only a row that shows a control of its own — a row holding
+    /// only text or images may itself be the control.
+    ///
+    /// nil when the target or the focused field is not found in the tree,
+    /// the target is in no such scroll view, or none has a spot on screen.
+    func blankPointInScroller(of target: OcclusionAnalyzer.Target, focusedFrame: CGRect?) -> CGPoint? {
+        let area = touchableArea
+        guard !area.isNull, let t = analyzer.locate(target), let field = fieldIndex(focusedFrame) else { return nil }
+        let up = analyzer.ancestors(of: t)
+        let fieldUp = analyzer.ancestors(of: field)
+        for scroller in up where OcclusionAnalyzer.keyboardEatingScrollerTypes.contains(nodes[scroller].elementType) {
+            let inside = (scroller + 1)..<nodes[scroller].subtreeEnd
+            let rect = clippedToScrollers(nodes[scroller].frame.intersection(area), around: scroller)
+            if rect.isNull { continue }
+            let holders = Set([scroller] + analyzer.ancestors(of: scroller))
+            if field > scroller, !inside.contains(field) {
+                // The field's own containers: below what it shares with the
+                // list. They, or what is drawn beside them after the list
+                // (a sheet's backdrop next to the sheet), lie over it.
+                let own = [field] + fieldUp.prefix { !holders.contains($0) }
+                if own.contains(where: { nodes[$0].frame.intersects(rect) }) { continue }
+                if let top = own.last, let shared = nodes[top].parent,
+                   children(of: shared).contains(where: { $0 > scroller && $0 != top && nodes[$0].frame.intersects(rect) }) {
+                    continue
+                }
+            }
+            // The target's row: its container under the outermost list
+            // container around it in this scroll view (one holding two or
+            // more rows) — a row holding two controls of its own is such a
+            // container too, inside the list's. With none,
+            // every container of the target in the list but one covering all
+            // of the list on screen (a content view grown to fill it).
+            let path = Array(up.prefix { $0 != scroller }) + [scroller]
+            let rowOfTarget: [Int]
+            if let list = path.lastIndex(where: { isListContainer($0) }) {
+                rowOfTarget = [list == 0 ? t : path[list - 1]]
+            } else {
+                rowOfTarget = up.filter { inside.contains($0) && !nodes[$0].frame.insetBy(dx: -1, dy: -1).contains(rect) }
+            }
+            let keepOut = (statusBar.map { [$0] } ?? []) + [nodes[t].frame] + rowOfTarget.map { nodes[$0].frame }
+            let blocks = { (i: Int, strict: Bool) -> Bool in
+                if holders.contains(i) || i == t { return false }
+                if inside.contains(i), !up.contains(i) {
+                    if strict { return true }
+                    if self.isPlain(i), self.holdsContentButNoControl(i) { return true }
+                }
+                return !self.isPlain(i)
+            }
+            if let point = clearestPoint(in: rect, avoiding: keepOut, blockers: { blocks($0, true) })
+                ?? clearestPoint(in: rect, avoiding: keepOut, blockers: { blocks($0, false) }) {
+                return point
+            }
+        }
+        return nil
+    }
+
+    /// Whether node `i` holds more than one row. A row is a child that is a
+    /// control, a container with something not plain in it, or anything else
+    /// not plain but a text or image (a role-less Pressable is a labeled
+    /// `.other`); XCUITest often lists a React Native list's rows straight
+    /// under one wrapper. Texts and images are a row's own content, and a
+    /// scroll view's scroll bars are no rows.
+    private func isListContainer(_ i: Int) -> Bool {
+        var rows = 0
+        for c in children(of: i) where !analyzer.isScrollIndicator(nodes[c]) {
+            let type = nodes[c].elementType
+            let hasContent = nodes[c].subtreeEnd > c + 1
+                && ((c + 1)..<nodes[c].subtreeEnd).contains(where: { !isPlain($0) })
+            if OcclusionAnalyzer.interactiveTypes.contains(type) || hasContent
+                || (!isPlain(c) && !OcclusionAnalyzer.textRunTypes.contains(type) && type != .image) {
+                rows += 1
+                if rows >= 2 { return true }
+            }
+        }
+        return false
+    }
+
+    /// The direct children of node `i`, in order.
+    private func children(of i: Int) -> [Int] {
+        var result: [Int] = []
+        var c = i + 1
+        while c < nodes[i].subtreeEnd {
+            result.append(c)
+            c = nodes[c].subtreeEnd
+        }
+        return result
+    }
+
+    /// Whether node `i` holds something not plain but no control: a row
+    /// that may take a touch itself without showing as an element.
+    private func holdsContentButNoControl(_ i: Int) -> Bool {
+        let content = ((i + 1)..<nodes[i].subtreeEnd).filter { !isPlain($0) }
+        return !content.isEmpty && !content.contains { OcclusionAnalyzer.interactiveTypes.contains(nodes[$0].elementType) }
     }
 
     // MARK: - 4. Return key

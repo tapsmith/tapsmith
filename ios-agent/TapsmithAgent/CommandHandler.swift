@@ -3756,7 +3756,9 @@ class CommandHandler {
         }
         NSLog("[TapsmithCommand] \(element.elementId): the keyboard is up and the element is in a scroll view; putting the keyboard away first")
         do {
-            try dismissKeyboard(strategies: KeyboardDismissPlanner.keyboardFirstStrategies, deadline: stepDeadline)
+            try dismissKeyboard(
+                strategies: KeyboardDismissPlanner.keyboardFirstStrategies, deadline: stepDeadline, target: cachedTarget(element)
+            )
             settleAfterKeyboardDismissed(by: stepDeadline)
         } catch {
             if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
@@ -3797,8 +3799,9 @@ class CommandHandler {
     /// With a `deadline`, strategies are tried only until then and their
     /// waits end there (a touch is waiting on it).
     private func dismissKeyboard(
-        strategies: [KeyboardDismissPlanner.Strategy] = KeyboardDismissPlanner.Strategy.allCases,
-        deadline: Date? = nil
+        strategies: [KeyboardDismissPlanner.Strategy] = KeyboardDismissPlanner.hideKeyboardStrategies,
+        deadline: Date? = nil,
+        target: OcclusionAnalyzer.Target? = nil
     ) throws {
         // Whether a strategy touched the app (it may have moved focus: the
         // return key's submit handler focusing the next field). The caller
@@ -3826,7 +3829,7 @@ class CommandHandler {
                 NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area (a hardware keyboard parks it off screen); nothing to dismiss")
                 return
             }
-            let outcome = runDismissStrategy(strategy, planner: planner, deadline: deadline)
+            let outcome = runDismissStrategy(strategy, planner: planner, deadline: deadline, target: target)
             if outcome == .keyboardStayed { touchedScreen = true }
             if outcome == .keyboardStayed,
                waitForKeyboardDismissed(timeout: Self.clipped(dismissWait(for: strategy), to: deadline)) {
@@ -3907,7 +3910,8 @@ class CommandHandler {
     private func runDismissStrategy(
         _ strategy: KeyboardDismissPlanner.Strategy,
         planner: KeyboardDismissPlanner,
-        deadline: Date? = nil
+        deadline: Date? = nil,
+        target: OcclusionAnalyzer.Target? = nil
     ) -> KeyboardDismissPlanner.Outcome {
         let screen = snapshotFinder.screenSize
         // The planner's points are in the app's interface space, as its
@@ -3956,6 +3960,14 @@ class CommandHandler {
                 return .notPossible("no blank spot beside the field above the keyboard")
             }
             // A blank spot: nothing known is there.
+            guard EventSynthesizer.tap(at: space.point(point), hold: TapTiming.hold(for: nil)) else { return .notPossible("the tap could not be synthesized") }
+            return .keyboardStayed
+        case .scrollerBlankTap:
+            guard let target else { return .notPossible("no element is about to be touched") }
+            guard let point = planner.blankPointInScroller(of: target, focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame) else {
+                return .notPossible("no blank spot in the element's scroll view above the keyboard")
+            }
+            NSLog("[TapsmithCommand] keyboard first: tapping a blank spot in the element's scroll view at \(NSCoder.string(for: point))")
             guard EventSynthesizer.tap(at: space.point(point), hold: TapTiming.hold(for: nil)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .returnKey:
