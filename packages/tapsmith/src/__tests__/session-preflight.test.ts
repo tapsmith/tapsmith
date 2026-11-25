@@ -1139,6 +1139,8 @@ describe('session-preflight', () => {
       expect(androidHierarchyHasRenderedContent(splash.hierarchyXml, 'com.example.app')).toBe(false);
       expect(androidHierarchyHasRenderedContent(rendered.hierarchyXml, 'com.example.app')).toBe(true);
       expect(androidHierarchyHasRenderedContent('<hierarchy><node package="com.example.app" content-desc="Menu" /></hierarchy>', 'com.example.app')).toBe(true);
+      // A value holding a double quote is written in single quotes.
+      expect(androidHierarchyHasRenderedContent(`<hierarchy><node package="com.example.app" text='Say "hi"' /></hierarchy>`, 'com.example.app')).toBe(true);
       // System UI text does not count: the app has not drawn anything yet.
       expect(androidHierarchyHasRenderedContent('<hierarchy><node package="com.android.systemui" text="10:06" /><node package="com.example.app" /></hierarchy>', 'com.example.app')).toBe(false);
     });

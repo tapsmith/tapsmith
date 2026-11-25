@@ -2022,7 +2022,8 @@ export function androidHierarchyHasRenderedContent(hierarchyXml: string, package
   for (const match of hierarchyXml.matchAll(nodeRe)) {
     const node = match[0];
     if (!node.includes(pkgAttr)) continue;
-    if (/\btext="[^"]+"/.test(node) || /\bcontent-desc="[^"]+"/.test(node)) return true;
+    // A value that holds a double quote is written in single quotes.
+    if (/\b(?:text|content-desc)=(?:"[^"]+"|'[^']+')/.test(node)) return true;
   }
   return false;
 }

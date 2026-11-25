@@ -33,6 +33,10 @@ describe('devClientScreen', () => {
     expect(devClientScreen(fixture('android-dev-launcher-load-error.xml'))).toBe('load-error');
   });
 
+  it('recognises React Native\'s red screen on Android, whose text holds double quotes (single-quoted in the dump)', () => {
+    expect(devClientScreen(fixture('android-redbox-no-metro.xml'))).toBe('no-dev-server');
+  });
+
   it('recognises the iOS dev launcher (SDK 58, Tapsmith agent dump)', () => {
     expect(devClientScreen(fixture('ios-dev-launcher.xml'))).toBe('launcher');
   });
