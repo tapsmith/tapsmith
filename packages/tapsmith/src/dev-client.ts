@@ -38,11 +38,17 @@ import { readIosUrlSchemes } from './ios-app-bundle.js';
  */
 export type DevClientScreen = 'launcher' | 'dev-menu' | 'load-error' | 'no-dev-server' | 'loading';
 
+const TEXT_ATTRIBUTES = new Set(['text', 'content-desc', 'label', 'value', 'name']);
+
 /** Every text-bearing attribute value in a hierarchy dump (Android or iOS), decoded. */
 function hierarchyTexts(hierarchyXml: string): Set<string> {
   const texts = new Set<string>();
-  for (const m of hierarchyXml.matchAll(/\b(?:text|content-desc|label|value|name)="([^"]*)"/g)) {
-    const value = decodeXmlEntities(m[1]!).trim();
+  // A value that holds a double quote (React Native's red screen does) is
+  // written in single quotes. Every attribute is read, so one inside another's
+  // value is not taken for its own.
+  for (const m of hierarchyXml.matchAll(/([\w-]+)=(?:"([^"]*)"|'([^']*)')/g)) {
+    if (!TEXT_ATTRIBUTES.has(m[1]!)) continue;
+    const value = decodeXmlEntities(m[2] ?? m[3]!).trim();
     if (value) texts.add(value);
   }
   return texts;

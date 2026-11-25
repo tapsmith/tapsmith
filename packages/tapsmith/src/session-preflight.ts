@@ -1710,7 +1710,7 @@ const GETTING_STARTED_DEV_CLIENT = 'https://tapsmith.dev/getting-started/#debug-
  * build one of these for a launch they make outside any test session.
  */
 export type DevClientContext = Pick<SessionPreflightContext, 'config' | 'client' | 'deviceSerial' | 'capabilities'> & {
-  device: Pick<SessionDevice, 'openDeepLink' | 'currentPackage' | '_sessionLaunches'>
+  device: Pick<SessionDevice, 'openDeepLink' | 'terminateApp' | 'currentPackage' | '_sessionLaunches'>
 };
 
 /** The build Tapsmith installed for this session, resolved against `rootDir`. */
@@ -1905,8 +1905,9 @@ async function leaveDevScreens(
     for (;;) {
       const screen = seen?.screen;
       if (seen?.rendered) {
-        // A build that ignores the link's dev-menu switches (SDK 56 and 57)
-        // opens the menu as its content appears: look once more.
+        // A build that ignores the link's dev-menu switches (SDK 56, and
+        // 57 before expo-dev-launcher 57.0.20) opens the menu as its content
+        // appears: look once more.
         if (confirming || links === 0) return;
         confirming = true;
       } else {
@@ -1936,10 +1937,17 @@ async function leaveDevScreens(
             target ??= await devClientTarget(ctx, pkg, screen, build.scheme, deps);
             progress.setDetail(target.serverUrl);
             const { link } = target;
-            // On iOS the open menu is a window of its own that the link leaves
-            // up over the reloaded app: start the app afresh with the link.
-            const cold = ctx.config.platform === 'ios' && screen === 'dev-menu';
-            await sessionLaunch(ctx, () => (cold ? ctx.device.openDeepLink(link, { forceColdLaunch: true }) : ctx.device.openDeepLink(link)));
+            // The open menu is a window of its own on iOS, that a warm link
+            // leaves up over the reloaded app, and on Android a warm link
+            // reloads an app that is still starting, which can crash it (a red
+            // screen from react-native-screens): start it afresh with the link.
+            const fresh = screen === 'dev-menu';
+            const cold = fresh && ctx.config.platform === 'ios';
+            await sessionLaunch(ctx, async () => {
+              // Android delivers a link to the running app: stop it first.
+              if (fresh && !cold) await ctx.device.terminateApp(pkg);
+              await (cold ? ctx.device.openDeepLink(link, { forceColdLaunch: true }) : ctx.device.openDeepLink(link));
+            });
             links++;
             if (screen === 'dev-menu') menuLinks++;
             linkedAt = Date.now();
@@ -2014,7 +2022,8 @@ export function androidHierarchyHasRenderedContent(hierarchyXml: string, package
   for (const match of hierarchyXml.matchAll(nodeRe)) {
     const node = match[0];
     if (!node.includes(pkgAttr)) continue;
-    if (/\btext="[^"]+"/.test(node) || /\bcontent-desc="[^"]+"/.test(node)) return true;
+    // A value that holds a double quote is written in single quotes.
+    if (/\b(?:text|content-desc)=(?:"[^"]+"|'[^']+')/.test(node)) return true;
   }
   return false;
 }
