@@ -32,6 +32,9 @@ npx tapsmith verify --json
 commands, with [React Native and Expo](getting-started.md#react-native-and-expo) in a section of their
 own. An Expo project with no `android/` or `ios/` yet needs `npx expo prebuild` before it can be built.
 
+**`doctor` and `init` only list devices.** They never boot one, install on it or run anything on it, so
+they are safe while the machine's devices are busy. `verify` and `test` use a device.
+
 **Don't hand-write `tapsmith.config.ts`**, even while a long build runs: wait for the build, run
 `npx tapsmith init --yes --json`, then edit the config it writes. A project set up without `init`
 gets no `AGENTS.md` section.
