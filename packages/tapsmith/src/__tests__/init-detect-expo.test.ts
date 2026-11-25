@@ -177,6 +177,11 @@ describe('expoBuildHint() (PILOT-557)', () => {
     expect(hint.split('#debug-and-dev-client-builds-with-metro')).toHaveLength(2);
   });
 
+  it('a dev-client project gets the alternative after both options, since it may be "Then re-run …"', () => {
+    const hint = expoBuildHint(['ios'], { ...managed, usesDevClient: true }, 'Then re-run init.');
+    expect(hint.indexOf('Then re-run init.')).toBeGreaterThan(hint.indexOf('-configuration Release -sdk'));
+  });
+
   it('a prebuilt dev-client project builds headless with no prebuild step', () => {
     const hint = expoBuildHint(['android'], { ...managed, hasAndroidDir: true, usesDevClient: true });
     expect(hint).toContain('`npx expo run:android`');

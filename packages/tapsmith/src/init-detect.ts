@@ -787,8 +787,8 @@ export function expoBuildHint(platforms: Array<'android' | 'ios'>, expo: ExpoPro
   const builds = expo.usesDevClient
     ? [
         `This project has expo-dev-client, so choose one. For local work, the Debug build, with Metro running (\`npx expo start\`) before \`verify\` or \`test\` (${METRO_DOCS}).`,
-        ...steps(expoDevClientStep), ...alternatives,
-        'For CI, or runs without Metro, a Release build.', ...steps(expoBuildStep),
+        ...steps(expoDevClientStep),
+        'For CI, or runs without Metro, a Release build.', ...steps(expoBuildStep), ...alternatives,
       ]
     : [...steps(expoBuildStep), ...alternatives];
   return [...builds, expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
