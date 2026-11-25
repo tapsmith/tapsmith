@@ -1,7 +1,7 @@
 /**
  * What to do about a project with no Tapsmith config, for `doctor` and
  * `verify`: run `tapsmith init`, after building the app when init would find
- * no build and stop (PILOT-1442).
+ * no build and stop.
  */
 
 import {

@@ -93,7 +93,7 @@ export function runningCodingAgents(env: NodeJS.ProcessEnv = process.env): Codin
 /**
  * The coding agents whose plugin install init lists: the agent running init
  * (from its environment) alone, since it ignores a list of other agents'
- * steps (PILOT-1442). Run by a person, each whose project files (`.claude/`, `CLAUDE.md`, `.codex/`, `.cursor/`,
+ * steps. Run by a person, each whose project files (`.claude/`, `CLAUDE.md`, `.codex/`, `.cursor/`,
  * `.cursorrules`) are in `cwd` or a folder above it up to the git root. Only
  * when none is found does a command on PATH (`claude`, `codex`,
  * `cursor`) count: many machines have several installed, and listing every
