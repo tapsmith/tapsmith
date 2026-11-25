@@ -2365,7 +2365,7 @@ class CommandHandler {
             // UI-mode mirror), so `as? Int` would fail — go via NSNumber.
             let x = (params["x"] as? NSNumber)?.intValue ?? -1
             let y = (params["y"] as? NSNumber)?.intValue ?? -1
-            var warning: String?
+            var answer: [String: Any] = ["success": true]
             if x >= 0 && y >= 0 {
                 // What is at the point is unknown: held across a frame
                 // (`TapTiming.frameSpanningHold`), shorter than a known
@@ -2379,7 +2379,7 @@ class CommandHandler {
                 try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params))
                 snapshotFinder.recordFocusedTextInputHint(element)
                 // Before the gate is armed again, which forgets the touch.
-                warning = warningIfTouchClosedKeyboard()
+                answer = touchAnswer()
                 if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
             }
             // Force-flush pending touch events: take a snapshot() which does
@@ -2388,14 +2388,14 @@ class CommandHandler {
             // have been fully processed before we return. Without this, the
             // next command's snapshot IPC can race with touch delivery.
             touchBarrier()
-            return touchAnswer(warning: warning)
+            return answer
 
         case "doubleTap":
             let element = try resolveElement(params)
             let intervalMs = params["intervalMs"] as? Int ?? 0
             try doubleTapResolvedElement(element, intervalMs: intervalMs, timeoutMs: actionTimeoutMs(params))
             touchBarrier()
-            return touchAnswer(warning: warningIfTouchClosedKeyboard())
+            return touchAnswer()
 
         case "longPress":
             // NSNumber coercion: JSON numbers aren't directly castable to Int/
@@ -2418,15 +2418,19 @@ class CommandHandler {
                     try actionExecutor.longPress(xcElem, durationMs: duration)
                 }
                 touchBarrier()
-                return touchAnswer(warning: warningIfTouchClosedKeyboard())
+                return touchAnswer()
             }
             touchBarrier()
             return ["success": true]
 
         case "keyboardAfterTouch":
-            // Asked by the daemon once it has made the touch whose
-            // `resolveActionPoint` answer said `keyboardStayedUp`.
-            return touchAnswer(warning: warningIfTouchClosedKeyboard())
+            // Asked by the daemon after the touch whose answer (or
+            // `resolveActionPoint` answer) said `keyboardStayedUp`. A command
+            // of its own, so nothing that goes wrong here (a crashed or hung
+            // app) can fail or delay the answer of a touch already made.
+            var answer: [String: Any] = ["success": true]
+            if let warning = warningIfTouchClosedKeyboard() { answer["warning"] = warning }
+            return answer
 
         case "resolveActionPoint":
             // Where an element-addressed touch can land without hitting a
@@ -2485,11 +2489,9 @@ class CommandHandler {
                     guard forTap else { return ["useElement": true] }
                     actionExecutor.tap(at: point, in: plannedTouchSpace(), hold: hold)
                     snapshotFinder.recordFocusedTextInputHint(element)
-                    let warning = warningIfTouchClosedKeyboard()
+                    let answer = touchAnswer("tapped")
                     if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
                     touchBarrier()
-                    var answer: [String: Any] = ["tapped": true]
-                    if let warning { answer["warning"] = warning }
                     return answer
                 }
                 // holdMs: how long the daemon's HID tap, and each tap of its
@@ -3816,22 +3818,16 @@ class CommandHandler {
     /// so the touch is never failed or made again (PILOT-1495). nil, at no
     /// cost, after any other touch.
     private func warningIfTouchClosedKeyboard() -> String? {
-        guard let watch = keyboardFirstGate.takeWatch(now: Date(), readDeadline: commandReadDeadline) else { return nil }
-        // The touch is made: a read XCTest raises an exception from (an app
-        // the tap closed) is no warning, never a failed touch.
-        var closed = false
-        let raised = ObjCExceptionCatcher.catchException {
-            closed = self.waitForKeyboardDismissed(timeout: watch)
-        }
-        if let raised { NSLog("[TapsmithCommand] could not watch the keyboard after the touch: \(raised.localizedDescription)") }
-        guard closed else { return nil }
+        guard let watch = keyboardFirstGate.takeWatch(now: Date(), readDeadline: commandReadDeadline),
+              waitForKeyboardDismissed(timeout: watch) else { return nil }
         NSLog("[TapsmithCommand] the keyboard closed with the touch, which may have done nothing else")
         return KeyboardFirstGate.touchWarning
     }
 
-    private func touchAnswer(warning: String?) -> [String: Any] {
-        guard let warning else { return ["success": true] }
-        return ["success": true, "warning": warning]
+    /// The answer for a touch the agent made: whether the daemon is to ask
+    /// `keyboardAfterTouch` about it.
+    private func touchAnswer(_ key: String = "success") -> [String: Any] {
+        keyboardFirstGate.touchPending ? [key: true, "keyboardStayedUp": true] : [key: true]
     }
 
     /// `element` as the analyzer looks for it — no live read. Its frame is

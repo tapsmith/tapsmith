@@ -2115,7 +2115,7 @@ impl TapsmithServiceImpl {
                 error_message: String::new(),
                 screenshot: Vec::new(),
                 app_launched_fresh: false,
-                warning: agent_warning(&resp).unwrap_or_default(),
+                warning: String::new(),
             })),
             Ok(resp) => {
                 let screenshot = self.error_screenshot().await;
@@ -2236,16 +2236,31 @@ impl TapsmithServiceImpl {
         response
     }
 
-    /// The warning for a HID touch just made, when the agent asked to look at
-    /// the keyboard after it. The touch was made, so a check that fails or
-    /// runs out of time is no warning, never an error.
-    #[cfg(target_os = "macos")]
+    /// The answer for a touch the agent made, with the warning it gives for
+    /// it, if any.
+    async fn make_touch_response(
+        &self,
+        request_id: String,
+        result: Result<AgentResponse, Status>,
+    ) -> Result<Response<proto::ActionResponse>, Status> {
+        let asked = matches!(&result, Ok(resp) if resp.success && keyboard_stayed_up(resp));
+        let mut response = self.make_action_response(request_id, result).await?;
+        if let Some(warning) = self.keyboard_after_touch(asked).await {
+            response.get_mut().warning = warning;
+        }
+        Ok(response)
+    }
+
+    /// The warning for a touch just made, when the agent asked to be asked
+    /// about the keyboard after it. The touch was made, so a check that fails
+    /// or runs out of time is no warning, never an error. Sent raw: a timed
+    /// out check is no reason to restart a physical device's agent.
     async fn keyboard_after_touch(&self, keyboard_stayed_up: bool) -> Option<String> {
         if !keyboard_stayed_up {
             return None;
         }
         let result = self
-            .send_agent_command_with_timeout(
+            .send_agent_command_raw(
                 &AgentCommand::KeyboardAfterTouch {},
                 KEYBOARD_AFTER_TOUCH_TIMEOUT_MS,
             )
@@ -2848,9 +2863,11 @@ impl TapsmithServiceImpl {
             }
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
-            HidTarget::Tapped { warning } => {
+            HidTarget::Tapped { keyboard_stayed_up } => {
                 debug!(%udid, "tap made by the agent: a rotated screen it could not map");
-                return HidOutcome::Injected { warning };
+                return HidOutcome::Injected {
+                    warning: self.keyboard_after_touch(keyboard_stayed_up).await,
+                };
             }
         };
         match self
@@ -3728,7 +3745,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let result = self
             .send_agent_command_with_timeout(&command, req.timeout_ms)
             .await;
-        self.make_action_response(request_id, result).await
+        self.make_touch_response(request_id, result).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -3777,7 +3794,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 agent_wait_with_gesture_ms(req.timeout_ms, hold_ms(req.duration_ms)),
             )
             .await;
-        self.make_action_response(request_id, result).await
+        self.make_touch_response(request_id, result).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -4488,7 +4505,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 agent_wait_with_gesture_ms(req.timeout_ms, double_tap_ms(req.interval_ms)),
             )
             .await;
-        self.make_action_response(request_id, result).await
+        self.make_touch_response(request_id, result).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -6868,16 +6885,20 @@ enum HidTarget {
     /// The agent made the tap itself (asked with `for_tap`, on a rotated
     /// screen whose turn it could not tell, so it had no point in the
     /// helper's portrait space to hand out): nothing to press.
-    Tapped { warning: Option<String> },
+    Tapped { keyboard_stayed_up: bool },
 }
 
 /// How long the daemon waits for the agent's answer to
 /// [`AgentCommand::KeyboardAfterTouch`], which watches the keyboard for up to
 /// 1.5 s and keeps 3.5 s of its read deadline for its last read of the screen.
-#[cfg(target_os = "macos")]
 const KEYBOARD_AFTER_TOUCH_TIMEOUT_MS: u64 = 5_000;
 
-/// The warning a successful agent answer carries for the touch it made.
+/// Whether the agent's answer asks for an [`AgentCommand::KeyboardAfterTouch`].
+fn keyboard_stayed_up(resp: &AgentResponse) -> bool {
+    resp.data.get("keyboardStayedUp").and_then(Value::as_bool) == Some(true)
+}
+
+/// The warning a successful agent answer carries for the touch it is about.
 fn agent_warning(resp: &AgentResponse) -> Option<String> {
     if !resp.success {
         return None;
@@ -6966,7 +6987,7 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
     }
     if resp.data.get("tapped").and_then(Value::as_bool) == Some(true) {
         return HidTarget::Tapped {
-            warning: agent_warning(&resp),
+            keyboard_stayed_up: keyboard_stayed_up(&resp),
         };
     }
     // The helper parses coordinates with strtod, so only hand it sane
@@ -6985,8 +7006,7 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
         .and_then(Value::as_u64)
         .filter(|ms| *ms <= HID_MAX_HOLD_MS);
     let tap_ready = resp.data.get("tap").and_then(Value::as_bool) == Some(true);
-    let keyboard_stayed_up =
-        resp.data.get("keyboardStayedUp").and_then(Value::as_bool) == Some(true);
+    let keyboard_stayed_up = keyboard_stayed_up(&resp);
     match (coord("x"), coord("y")) {
         (Some(x), Some(y)) => HidTarget::Point {
             x,
@@ -9650,6 +9670,94 @@ mod tests {
             crate::daemon_log_bus::DaemonLogBus::new(16),
         );
         (svc, seen)
+    }
+
+    /// Each touch RPC against an agent that answers it `touch`, and
+    /// `keyboardAfterTouch` `after`.
+    async fn touch_answers(
+        touch: Value,
+        after: Value,
+    ) -> Vec<(proto::ActionResponse, Vec<String>)> {
+        let target = || {
+            Some(proto::Selector {
+                selector: Some(proto::selector::Selector::Text("Save".to_string())),
+                ..Default::default()
+            })
+        };
+        let mut answers = Vec::new();
+        for gesture in ["tap", "doubleTap", "longPress"] {
+            let (touch, after) = (touch.clone(), after.clone());
+            let (svc, seen) = service_with_mock_agent(move |method, _| match method {
+                "keyboardAfterTouch" => after.clone(),
+                _ => touch.clone(),
+            })
+            .await;
+            let response = match gesture {
+                "tap" => {
+                    svc.tap(Request::new(proto::TapRequest {
+                        selector: target(),
+                        ..Default::default()
+                    }))
+                    .await
+                }
+                "doubleTap" => {
+                    svc.double_tap(Request::new(proto::DoubleTapRequest {
+                        selector: target(),
+                        ..Default::default()
+                    }))
+                    .await
+                }
+                _ => {
+                    svc.long_press(Request::new(proto::LongPressRequest {
+                        selector: target(),
+                        ..Default::default()
+                    }))
+                    .await
+                }
+            };
+            let seen = seen.lock().unwrap().clone();
+            answers.push((response.unwrap().into_inner(), seen));
+        }
+        answers
+    }
+
+    #[tokio::test]
+    async fn a_touch_the_agent_made_is_followed_by_its_keyboard_question() {
+        let asked = json!({"result": {"success": true, "keyboardStayedUp": true}});
+        let warned = json!({"result": {"success": true, "warning": "may only have closed"}});
+        for (response, seen) in touch_answers(asked, warned).await {
+            assert!(response.success);
+            assert_eq!(response.warning, "may only have closed");
+            assert_eq!(seen.len(), 2, "{seen:?}");
+            assert_eq!(seen[1], "keyboardAfterTouch");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_keyboard_question_is_no_failed_touch_and_no_second_one() {
+        let asked = json!({"result": {"success": true, "keyboardStayedUp": true}});
+        let crashed = json!({"error": {"type": "INTERNAL_ERROR", "message": "app crashed"}});
+        for (response, seen) in touch_answers(asked, crashed).await {
+            assert!(response.success, "{}", response.error_message);
+            assert_eq!(response.warning, "");
+            assert_eq!(seen.len(), 2, "{seen:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn other_touches_are_not_followed_by_a_keyboard_question() {
+        let warned = json!({"result": {"success": true, "warning": "unused"}});
+        for touch in [
+            json!({"result": {"success": true}}),
+            json!({"error": {"type": "ELEMENT_COVERED", "message": "covered"}}),
+        ] {
+            for (_, seen) in touch_answers(touch, warned.clone()).await {
+                assert!(
+                    !seen.contains(&"keyboardAfterTouch".to_string()),
+                    "{seen:?}"
+                );
+            }
+        }
     }
 
     use crate::ios::device::SimTerminate;

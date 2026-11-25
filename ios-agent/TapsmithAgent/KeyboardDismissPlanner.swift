@@ -24,10 +24,9 @@ struct KeyboardFirstGate {
     /// Longest a touch made with the keyboard still up is watched for the
     /// keyboard leaving.
     static let maxWatch: TimeInterval = 1.5
-    /// Time kept back for the answer after the watch: a touch that was made
-    /// must not be reported as timed out (the daemon makes it again on a
-    /// physical device). The watch's last read of the screen can start a poll
-    /// late and hang for XCTest's accessibility timeout (2 s, plus slack).
+    /// Time kept back for the answer after the watch, so the daemon still
+    /// reads it: the watch's last read of the screen can start a poll late and
+    /// hang for XCTest's accessibility timeout (2 s, plus slack).
     static let watchReserve: TimeInterval = 3.5
 
     private(set) var armedAt: Date?
