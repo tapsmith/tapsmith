@@ -88,7 +88,7 @@ describe('missingConfigFix()', () => {
     expo();
     write('package.json', '{"dependencies":{"expo":"54.0.0","expo-dev-client":"6.0.0","react-native":"0.81.5"}}');
     expect(fix()).toContain('Build the Debug app with `npx expo run:android`');
-    expect(fix()).toContain('Build the Debug app with `npx expo run:ios`');
+    expect(fix()).toMatch(/-configuration Debug -sdk iphonesimulator -derivedDataPath build build`.*`npx expo run:ios`/);
     expect(fix().split(METRO)).toHaveLength(2);
     expect(fix()).toContain('./gradlew assembleRelease');
     write('android/settings.gradle');

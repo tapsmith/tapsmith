@@ -127,11 +127,11 @@ Tapsmith tests either kind of React Native build:
 
 ```bash
 # Android (the React Native template signs release builds with the debug keystore)
-cd android && ./gradlew assembleRelease   # android/app/build/outputs/apk/release/app-release.apk
+(cd android && ./gradlew assembleRelease)   # android/app/build/outputs/apk/release/app-release.apk
 
 # iOS Simulator
-cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
-  -configuration Release -sdk iphonesimulator -derivedDataPath build build
+(cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
+  -configuration Release -sdk iphonesimulator -derivedDataPath build build)
 ```
 
 When a debug APK is also lying around, the wizard lists it first and `tapsmith init --yes` picks it over the release one: choose the release APK in the wizard, or pass `--apk android/app/build/outputs/apk/release/app-release.apk`.
@@ -154,10 +154,26 @@ npx expo start          # or: npx react-native start
 npx tapsmith test       # or: npx tapsmith test --watch / --ui
 ```
 
-Build and install the Debug build as you usually do (`npx expo run:android`,
-`npx expo run:ios`, or Android Studio and Xcode). Point the config at it, as for any build. `npx expo run:ios`
-and Xcode build into Xcode's DerivedData folder, so give that path as `app`, or build with
-`xcodebuild … -derivedDataPath build` as above, with `-configuration Debug`:
+Build the Debug app to a path inside the project:
+
+```bash
+# Android: writes android/app/build/outputs/apk/debug/app-debug.apk
+(cd android && ./gradlew assembleDebug)
+
+# iOS Simulator: writes ios/build/Build/Products/Debug-iphonesimulator/MyApp.app
+(cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
+  -configuration Debug -sdk iphonesimulator -derivedDataPath build build)
+```
+
+An Expo project without `android/` and `ios/` folders needs `npx expo prebuild` first. `npx expo run:android`
+does all of that on a running emulator or device and writes the same APK. `npx expo run:ios` alone does not write that `.app`: it builds into
+Xcode's DerivedData. On Expo SDK 56 and later, give it the output folder:
+
+```bash
+npx expo run:ios --output ios/build/Build/Products/Debug-iphonesimulator
+```
+
+Either way, the config names those builds:
 
 ```ts
 // tapsmith.config.ts
@@ -184,6 +200,8 @@ export default defineConfig({
   ],
 });
 ```
+
+For other ways to build, such as Xcode or EAS, see [Which build to name in the config](#which-build-to-name-in-the-config).
 
 Tests need nothing special. They start on your app, not on Expo's dev launcher:
 
@@ -239,6 +257,47 @@ What to expect while you iterate:
   `console.error` as LogBox notices at the bottom of the screen, where they can cover
   what a test taps. Fix the warnings, or hide them in test runs with
   `LogBox.ignoreAllLogs()`.
+
+##### Which build to name in the config
+
+| How you build | What to set |
+|---|---|
+| Android: `npx expo run:android`, or Gradle's `assembleDebug` | `apk: "android/app/build/outputs/apk/debug/app-debug.apk"` |
+| iOS: `xcodebuild … -configuration Debug -derivedDataPath build`, in `ios/` | `app: "ios/build/Build/Products/Debug-iphonesimulator/MyApp.app"` |
+| iOS: `npx expo run:ios --output …` as above (SDK 56 and later) | The same `app` path |
+| iOS: `npx expo run:ios` without `--output`, or Xcode | The build is in DerivedData. Build one of the two ways above instead, or, on your own machine only, [leave `app` out](#testing-the-build-already-on-the-device) |
+| EAS development build | The APK, or the `.app` extracted from the `.tar.gz`, in a folder of the project. The build profile needs `"developmentClient": true`, with `"ios": { "simulator": true }` for a simulator (not checked with Tapsmith yet) |
+| CI | A [Release build](#react-native-and-expo), not a Debug one |
+
+- **When to rebuild.** JavaScript edits need no rebuild and no config change: the app loads them from
+  Metro. A change to native code, a config plugin or a native dependency needs a new build, at the same path.
+  The Gradle, `xcodebuild` and `npx expo run` commands do not apply a changed config plugin to an `android/` or `ios/` folder that already exists:
+  run `npx expo prebuild` first (with `--clean` it regenerates the folders, and edits made in them by hand are lost). After
+  adding a native dependency, run `pod install` in `ios/` before `xcodebuild`.
+- **The configured build wins.** On an emulator or simulator, Tapsmith replaces an installed app that differs
+  from the configured build, whichever of the two is newer. After `npx expo run:ios` without `--output`, an older build at
+  the `app` path is put back over the app you just installed. A path with no build stops the
+  run. A physical iPhone only gets a check that the app is present, so after a rebuild run
+  [`tapsmith test --force-install`](api-reference.md#tapsmith-test---force-install).
+- **A DerivedData path from `tapsmith init`.** When the project holds no simulator build, `init` can pick up the one
+  `npx expo run:ios` or Xcode made, and warns about it. The path exists on your Mac alone and
+  goes when DerivedData is cleared, so replace it with the project path above before you commit the config.
+  (The `xcodebuild` command in that warning makes a Release build: use it with `-configuration Debug` for this section's path.)
+
+##### Testing the build already on the device
+
+On your own machine you can leave `apk` or `app` out and set only `platform` and `package`. Tapsmith then
+installs nothing and tests the app that `npx expo run:ios` or `npx expo run:android` put on the device, clearing
+it between test files as usual. It is a shortcut, not a setup to commit:
+
+- **Nothing checks which build is installed.** An older build, or a Release one, is tested without a word.
+- **The app must be on every device already.** A new emulator or simulator, or a CI machine, does not have it, so the
+  app cannot be launched and the run stops (an Android run reports only that the launch failed). With `--workers`, the
+  devices that lack the app drop out and the run carries on with fewer workers: on iOS the worker fails and says the app is
+  not installed, and on Android the device is skipped.
+- **Keep the config in the app's folder.** With no build to read, Tapsmith recognises an Expo development build from
+  `expo-dev-client` in the `package.json` beside the config or above it. From a separate folder of a monorepo it does not, and a
+  cleared app stays on the dev launcher. Naming the build fixes that.
 
 ##### Skipping the dev launcher in the build
 
