@@ -82,7 +82,7 @@ let dir: string;
 let out: string[];
 
 async function wizard(): Promise<{ exit: unknown; output: string }> {
-  const opts: InitCommandOptions = { yes: false, json: false, force: false, exampleTest: true, agentsMd: true };
+  const opts: InitCommandOptions = { yes: false, json: false, force: false, exampleTest: true, agentsMd: true, agentsMdOnly: false };
   const exit = await runInit(opts).then(() => undefined, (err: unknown) => (err as Error).message);
   return { exit, output: out.join('\n') };
 }

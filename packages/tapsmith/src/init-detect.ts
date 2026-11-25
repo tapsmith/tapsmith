@@ -438,7 +438,7 @@ export function detectIosBundleId(appPath: string): string | undefined {
 
 // ─── Build hints (PILOT-832) ───
 
-const BUILD_DOCS = 'https://tapsmith.dev/getting-started/#build-the-app-under-test';
+export const BUILD_DOCS = 'https://tapsmith.dev/getting-started/#build-the-app-under-test';
 
 /** `arg` as a shell reads it: bare when it is plain, else single-quoted. */
 function shellArg(arg: string): string {

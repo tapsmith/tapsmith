@@ -6,7 +6,7 @@ This guide walks you through installing Tapsmith, writing your first test, and r
 
 > **Moving an existing suite?** The migration guides map your current tool onto Tapsmith and port a test side by side: [from Maestro](migrating-from-maestro.md), [from Detox](migrating-from-detox.md) and [from Appium](migrating-from-appium.md).
 
-> **Setting up with an AI coding agent?** See [Using Tapsmith with AI coding agents](agents.md) for the non-interactive setup loop (`doctor --json` → `init --yes` → `verify --json`).
+> **Setting up with an AI coding agent?** See [Using Tapsmith with AI coding agents](agents.md) for the non-interactive setup loop (build the app → `doctor --json` → `init --yes --json` → `verify --json`).
 
 ## Prerequisites
 

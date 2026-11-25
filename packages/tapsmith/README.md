@@ -57,6 +57,8 @@ npx tapsmith verify        # proves the whole loop works with one real test
 npx tapsmith test
 ```
 
+Setting up with an AI coding agent? Read `node_modules/tapsmith/docs/agents.md` ([online](https://tapsmith.dev/guides/agents/)).
+
 Tapsmith tests a build of your app: an `.apk` for Android, or a simulator `.app` for iOS
 ([how to build one](https://tapsmith.dev/getting-started/#build-the-app-under-test), including
 React Native and Expo). If something is missing, `npx tapsmith doctor` checks your environment and
