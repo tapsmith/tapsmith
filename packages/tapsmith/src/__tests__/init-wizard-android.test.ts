@@ -316,7 +316,7 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
 });
 
 describe('configureAndroid() on an Expo project (PILOT-557)', () => {
-  const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: true };
+  const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: true, usesDevClient: false };
 
   beforeEach(() => {
     answers.clear();
@@ -397,7 +397,7 @@ describe('configureAndroid() with no build yet (PILOT-778)', () => {
   });
 
   it('a suggested package can still be skipped, by "Skip for now" (PILOT-778)', async () => {
-    const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false };
+    const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false };
     script([
       [/Where is your Android APK/, ''],
       [/package name/, 'Skip for now'],
@@ -409,7 +409,7 @@ describe('configureAndroid() with no build yet (PILOT-778)', () => {
   });
 
   it('"Enter another…" beside a suggested package types one, and an empty one skips', async () => {
-    const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false };
+    const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false };
     script([
       [/Where is your Android APK/, ''],
       [/package name\? \S*\(Enter to skip/, ' com.acme.typed '],

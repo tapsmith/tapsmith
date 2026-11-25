@@ -6,7 +6,7 @@
 
 import {
   BUILD_DOCS, detectExpoProject, detectProjectLayout, expoBuildHint, findApkCandidates, findDerivedDataApps, findIosAppCandidates,
-  hasAndroidProject, hasIosProject, isReactNativeProject, METRO_BUILD_NOTE, nativeBuildHint,
+  hasAndroidProject, hasIosProject, isReactNativeProject, nativeBuildHint,
 } from './init-detect.js';
 
 /** What init writes, said because an agent that hand-writes the config misses the rest. */
@@ -56,7 +56,7 @@ function missingBuilds(cwd: string, isMacOS: boolean): { how: string; built: str
   return {
     how: `${existingBuild(missing, true)} ${expo
       ? expoBuildHint(missing, expo)
-      : missing.map((p) => `${p === 'android' ? 'Android' : 'iOS'}: ${nativeBuildHint(p, layout, reactNative)}`).join('. ') + (reactNative ? `. ${METRO_BUILD_NOTE}` : '')}`,
+      : missing.map((p) => `${p === 'android' ? 'Android' : 'iOS'}: ${nativeBuildHint(p, layout, reactNative)}`).join('. ')}`,
     built: platforms.filter((p) => !missing.includes(p)),
   };
 }

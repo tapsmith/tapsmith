@@ -11,8 +11,9 @@ Tapsmith needs Node.js 22 or newer: check `node --version` before installing. On
 ```bash
 npm install -D tapsmith    # or: yarn add -D tapsmith / pnpm add -D tapsmith
 
-# 1. Build the app, before init: init looks for an APK or simulator .app and
-#    stops if there is none. See "Build the app first" below.
+# 1. Have a build of the app for init to point at: it looks for an APK or a
+#    simulator .app and stops if there is none. Use one that exists, else build
+#    the app. See "Use an existing build, or make one" below.
 
 # 2. Diagnose the environment. Every failing check includes a `fix`.
 npx tapsmith doctor --json
@@ -28,13 +29,12 @@ npx tapsmith init --yes --json
 npx tapsmith verify --json
 ```
 
-**Build the app first.** [Build the app under test](getting-started.md#build-the-app-under-test) has the
+**Use an existing build, or make one.** `init` needs a build to point at, not a fresh one. If the app is
+already built, use that build, and rebuild only if the app has changed since: `init` finds builds in the project, and Xcode's in
+DerivedData when the project holds no simulator build; pass `--apk` or `--app` for one anywhere else. If there is
+none, build it: [Build the app under test](getting-started.md#build-the-app-under-test) has the
 commands, with [React Native and Expo](getting-started.md#react-native-and-expo) in a section of their
 own. An Expo project with no `android/` or `ios/` yet needs `npx expo prebuild` before it can be built.
-With `expo-dev-client`, or a user who already runs `npx expo run:android` / `npx expo run:ios` with Metro,
-their Debug build works locally, so a Release build isn't required. What to set in the config is in
-[Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro).
-For CI, use a Release build.
 
 **`doctor` and `init` only list devices.** They never boot one, install on it or run anything on it, so
 they are safe while the machine's devices are busy. `verify` and `test` use a device.
@@ -58,6 +58,11 @@ warning while the section is missing.
 `init`'s `nextSteps` include the [plugin](#the-plugin-recommended) install for the agent running it.
 Give it to the user in the same turn: it changes their agent's settings, and the MCP tools
 load when the agent's session restarts.
+
+React Native Debug or Expo dev-client build only: it loads its JavaScript from Metro, so Metro must be
+running (`npx expo start` or `npx react-native start`) before `verify` or `test`. JavaScript edits then need
+no rebuild; changes to native code, config plugins or native dependencies do. See
+[Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro).
 
 All `--json` surfaces (`init`, `verify`, `doctor`, `list-devices`, `telemetry`,
 `ios setup-device`) follow the same conventions: one JSON document on stdout, on success

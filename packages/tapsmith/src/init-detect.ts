@@ -606,6 +606,8 @@ export interface ExpoProject {
   hasIosDir: boolean;
   /** `@tapsmith/react-native` is a dependency, so test builds want `EXPO_PUBLIC_TAPSMITH_HOOKS=1`. */
   usesTapsmithHooks: boolean;
+  /** `expo-dev-client` is a dependency, so the build its developer runs is a Debug one that loads from Metro. */
+  usesDevClient: boolean;
 }
 
 const EXPO_DYNAMIC_CONFIG_FILES = ['app.config.ts', 'app.config.js', 'app.config.mjs', 'app.config.cjs', 'app.config.json'];
@@ -722,13 +724,12 @@ export function detectExpoProject(
     hasAndroidDir: fs.existsSync(path.join(cwd, 'android')),
     hasIosDir: fs.existsSync(path.join(cwd, 'ios')),
     usesTapsmithHooks: '@tapsmith/react-native' in deps,
+    usesDevClient: 'expo-dev-client' in deps,
   };
 }
 
 const EXPO_BUILD_DOCS = 'https://tapsmith.dev/getting-started/#react-native-and-expo';
-/** Said beside a Release build's commands: the Debug build a developer already runs is valid too. */
-export const METRO_BUILD_NOTE = 'A Debug build (`npx expo run:android`, `npx expo run:ios`, or an Expo dev client) also works locally while Metro runs: '
-  + 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro.';
+const METRO_DOCS = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
 const HOOKS_FLAG = 'EXPO_PUBLIC_TAPSMITH_HOOKS=1';
 
 /** What the hooks flag means for this project's test build, said beside the build command. */
@@ -760,17 +761,35 @@ function expoBuildStep(
     + '`npx expo run:ios --configuration Release` builds into Xcode\'s DerivedData instead, where init looks only when the project holds no simulator build (that path exists on this Mac alone).';
 }
 
+/** The Debug build an `expo-dev-client` project is developed with, for one platform. */
+function expoDevClientStep(platform: 'android' | 'ios', expo: ExpoProject): string {
+  if (platform === 'android') {
+    const generate = expo.hasAndroidDir ? '' : '`npx expo prebuild --platform android`, then ';
+    return `Build the Debug app with \`npx expo run:android\` (needs a running emulator or device) or, without one, ${generate}\`cd android && ./gradlew assembleDebug\`: `
+      + 'either writes android/app/build/outputs/apk/debug/app-debug.apk.';
+  }
+  return 'Build the Debug app with `npx expo run:ios`, which builds into Xcode\'s DerivedData, where init looks when the project holds no simulator build '
+    + '(that path exists on this Mac alone).';
+}
+
 /**
  * How to build an Expo project's app so `tapsmith init` finds it: the release
  * build getting-started documents (a release build runs without Metro) for
  * each platform, with the hooks flag folded in when the app uses them, then
- * `alternative` (the flag that skips the build), the Debug build, the hooks
- * note and the docs.
+ * `alternative` (the flag that skips the build), the hooks note and the docs.
+ * With `expo-dev-client` it offers both: Debug (with Metro) for local work,
+ * Release for CI or runs without Metro.
  */
 export function expoBuildHint(platforms: Array<'android' | 'ios'>, expo: ExpoProject, alternative?: string): string {
-  const steps = platforms.map((p) => {
-    const step = expoBuildStep(p, expo);
-    return platforms.length > 1 ? `${p === 'android' ? 'Android' : 'iOS'}: ${step}` : step;
-  });
-  return [...steps, ...(alternative ? [alternative] : []), METRO_BUILD_NOTE, expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
+  const steps = (step: typeof expoBuildStep | typeof expoDevClientStep): string[] => platforms.map((p) =>
+    platforms.length > 1 ? `${p === 'android' ? 'Android' : 'iOS'}: ${step(p, expo)}` : step(p, expo));
+  const alternatives = alternative ? [alternative] : [];
+  const builds = expo.usesDevClient
+    ? [
+        `This project has expo-dev-client, so choose one. For local work, the Debug build, with Metro running (\`npx expo start\`) before \`verify\` or \`test\` (${METRO_DOCS}).`,
+        ...steps(expoDevClientStep), ...alternatives,
+        'For CI, or runs without Metro, a Release build.', ...steps(expoBuildStep),
+      ]
+    : [...steps(expoBuildStep), ...alternatives];
+  return [...builds, expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
 }

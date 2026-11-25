@@ -84,22 +84,32 @@ describe('missingConfigFix()', () => {
 
   const METRO = 'https://tapsmith.dev/getting-started/#debug-and-dev-client-builds-with-metro';
 
-  it('points a React Native project, Expo or bare, at the Metro docs once, and never at an iOS package-only init', () => {
+  it('offers a dev-client project its Debug build and a Release one, and runs init once a Debug one is found', () => {
     expo();
+    write('package.json', '{"dependencies":{"expo":"54.0.0","expo-dev-client":"6.0.0","react-native":"0.81.5"}}');
+    expect(fix()).toContain('Build the Debug app with `npx expo run:android`');
+    expect(fix()).toContain('Build the Debug app with `npx expo run:ios`');
     expect(fix().split(METRO)).toHaveLength(2);
+    expect(fix()).toContain('./gradlew assembleRelease');
     write('android/settings.gradle');
-    write('ios/Acme.xcodeproj/project.pbxproj');
-    expect(fix().split(METRO)).toHaveLength(2);
-    // init needs a simulator .app for iOS: --package names an Android package.
-    expect(fix()).toMatch(/--package <id> \(an Android app already installed/);
-    write('package.json', '{"dependencies":{"react-native":"0.84.0"}}');
-    expect(fix().split(METRO)).toHaveLength(2);
+    write('android/app/build/outputs/apk/debug/app-debug.apk');
+    expect(fix()).toMatch(/^Run: /);
   });
 
-  it('says nothing about Metro in a native project', () => {
+  it.each<[string, () => void]>([
+    ['native', () => undefined],
+    ['Flutter', () => { write('pubspec.yaml', 'name: acme\nflutter:\n  uses-material-design: true\n'); }],
+    ['bare React Native', () => write('package.json', '{"dependencies":{"react-native":"0.84.0"}}')],
+    ['Expo', expo],
+  ])('adds no Metro advice of its own to a %s project', (_name, setUp) => {
+    setUp();
     write('android/settings.gradle');
     write('ios/Acme.xcodeproj/project.pbxproj');
-    expect(fix()).not.toContain('Metro');
+    expect(fix()).toMatch(/^Build the app first/);
+    expect(fix()).not.toContain(METRO);
+    expect(fix()).not.toMatch(/dev client|expo-dev-client|run:android`|run:ios`/);
+    // init needs a simulator .app for iOS: --package names an Android package.
+    expect(fix()).toMatch(/--package <id> \(an Android app already installed/);
   });
 
   it('asks for the build\'s path where there is no app project', () => {

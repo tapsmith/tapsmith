@@ -197,7 +197,7 @@ describe('resolveInitPlan()', () => {
   it('takes --package without --platform as Android, as --apk is (PILOT-721)', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
     try {
-      const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false } as ExpoProject) };
+      const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false } as ExpoProject) };
       const plan = resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, detect, tmp);
       expect(plan.platforms).toEqual(['android']);
       expect(plan.android).toMatchObject({ packageName: 'com.x' });
@@ -309,7 +309,7 @@ describe('resolveInitPlan()', () => {
   });
 
   describe('says when it leaves iOS out of a React Native project on macOS (PILOT-625)', () => {
-    const managedExpo: ExpoProject = { hasAndroidDir: true, hasIosDir: false, usesTapsmithHooks: false };
+    const managedExpo: ExpoProject = { hasAndroidDir: true, hasIosDir: false, usesTapsmithHooks: false, usesDevClient: false };
     /** A project with android/ (unless `androidDir` is false) and the given package.json dependencies. */
     function withProject(deps: Record<string, string> | 'unreadable', fn: (dir: string) => void, androidDir = true): void {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
@@ -522,6 +522,7 @@ describe('resolveInitPlan() on an Expo project (PILOT-557)', () => {
     hasAndroidDir: false,
     hasIosDir: false,
     usesTapsmithHooks: false,
+    usesDevClient: false,
   };
   const withExpo = (expo: ExpoProject | undefined, over: Partial<DetectFns> = {}): DetectFns => ({
     ...detectStubs,
