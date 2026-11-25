@@ -1825,6 +1825,12 @@ describe('init for coding agents (PILOT-1442)', () => {
     expect(only().filesCreated).toEqual([]);
   });
 
+  it('--agents-md-only reports the config Tapsmith loads', () => {
+    fs.writeFileSync(path.join(tmp, 'tapsmith.config.mjs'), '');
+    fs.writeFileSync(path.join(tmp, 'tapsmith.config.js'), '');
+    expect(only().configPath).toBe(path.join(tmp, 'tapsmith.config.js'));
+  });
+
   it('--agents-md-only without a config here leaves out configPath, and does not send a project whose config is elsewhere to init', () => {
     const result = only();
     expect(result).not.toHaveProperty('configPath');

@@ -16,7 +16,7 @@ import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
 import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
-import type { InstallCommand } from './config.js';
+import { findConfigFile, type InstallCommand } from './config.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 import { appIdWarning } from './app-id.js';
 import { adbMissingFix } from './toolchain.js';
@@ -613,7 +613,7 @@ export function writeAgentsMdOnly(
     });
   }
   // No config here doesn't mean none: `-c`, or an e2e/ folder. So no step to run init.
-  const config = CONFIG_NAMES.map((name) => path.join(cwd, name)).find((p) => fs.existsSync(p));
+  const config = findConfigFile(cwd);
   const nextSteps = [
     ...(opts.missingTapsmith ? [`Install Tapsmith in this project: ${opts.missingTapsmith.display}`] : []),
     ...agentSteps(cwd, opts),
