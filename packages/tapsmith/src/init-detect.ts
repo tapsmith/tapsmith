@@ -768,7 +768,10 @@ function expoDevClientStep(platform: 'android' | 'ios', expo: ExpoProject): stri
     return `Build the Debug app with \`npx expo run:android\` (needs a running emulator or device) or, without one, ${generate}\`cd android && ./gradlew assembleDebug\`: `
       + 'either writes android/app/build/outputs/apk/debug/app-debug.apk.';
   }
-  return 'Build the Debug app with `npx expo run:ios`, which builds into Xcode\'s DerivedData, where init looks when the project holds no simulator build '
+  const generate = expo.hasIosDir ? '' : '`npx expo prebuild --platform ios`, then ';
+  return `Build the Debug app with ${generate}\`cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> `
+    + '-configuration Debug -sdk iphonesimulator -derivedDataPath build build`, which writes it under ios/build/Build/Products/Debug-iphonesimulator/. '
+    + '`npx expo run:ios` builds into Xcode\'s DerivedData instead, where init looks only when the project holds no simulator build '
     + '(that path exists on this Mac alone).';
 }
 

@@ -170,7 +170,7 @@ describe('expoBuildHint() (PILOT-557)', () => {
   it('a project with expo-dev-client: Debug with Metro for local work, Release for CI or without Metro', () => {
     const hint = expoBuildHint(['android', 'ios'], { ...managed, usesDevClient: true });
     expect(hint).toMatch(/^This project has expo-dev-client, so choose one\. .*Android: Build the Debug app with `npx expo run:android`.*`cd android && \.\/gradlew assembleDebug`.*android\/app\/build\/outputs\/apk\/debug\//);
-    expect(hint).toMatch(/ iOS: Build the Debug app with `npx expo run:ios`, which builds into Xcode's DerivedData/);
+    expect(hint).toMatch(/ iOS: Build the Debug app with `npx expo prebuild --platform ios`, then `cd ios && xcodebuild [^`]*-configuration Debug -sdk iphonesimulator -derivedDataPath build build`.*`npx expo run:ios` builds into Xcode's DerivedData/);
     expect(hint).toMatch(/with Metro running \(`npx expo start`\) before `verify` or `test`/);
     expect(hint.indexOf('expo run:android')).toBeLessThan(hint.indexOf('assembleRelease'));
     expect(hint.indexOf('expo run:ios')).toBeLessThan(hint.indexOf('For CI, or runs without Metro, a Release build.'));
