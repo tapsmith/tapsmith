@@ -203,7 +203,8 @@ export function resolveInitPlan(
   // settings.gradle and an Xcode project (native, PILOT-832). A given build
   // names its platform (PILOT-626) — an Expo managed project has no android/
   // or ios/ — and adds to, rather than replaces, what the layout implies, so
-  // `--apk` alone in a project with both never drops iOS. `--package`, an Android package (installed already
+  // `--apk` alone in a project with both never drops iOS for want of a
+  // layout, only for want of an iOS build (below, PILOT-1510). `--package`, an Android package (installed already
   // when there is no APK, PILOT-721), names Android too, unless something
   // points at iOS (`--app`, an iOS project): the config's `package` key
   // also holds the iOS bundle id, so it may be meant as one. Beside
@@ -232,13 +233,18 @@ export function resolveInitPlan(
     }
     // Both inferred, but only one has a build: that is the platform the user
     // is testing. The other would fail for want of an app (PILOT-1510).
-    if (inferred.length === 2 && !args.platforms) {
+    let narrowed = false;
+    if (inferred.length === 2) {
       const androidBuilt = !!args.apk || (detect.preferDebugApk ?? detectDefaults.preferDebugApk)(detect.findApkCandidates(cwd)).length > 0;
       const iosBuilt = !!args.app || (env.isMacOS && (
         detect.findIosAppCandidates(cwd).length > 0
         || (detect.findDerivedDataApps ?? detectDefaults.findDerivedDataApps)(cwd, layout.iosProjects, 'iphonesimulator').length > 0));
-      // A bare --package may be an installed Android app or an iOS id: no call to make.
-      if (androidBuilt !== iosBuilt && (androidBuilt || !args.packageName)) {
+      // No call to make when a flag names the platform that would be dropped:
+      // a bare --package may be an installed Android app or an iOS id.
+      const dropsAndroid = !androidBuilt && (!!args.packageName || !!args.avd || !!args.device);
+      const dropsIos = !iosBuilt && (!!args.bundleId || !!args.simulator);
+      if (androidBuilt !== iosBuilt && !dropsAndroid && !dropsIos) {
+        narrowed = true;
         const [kept, left] = androidBuilt ? ['android', 'iOS'] : ['ios', 'Android'];
         inferred.splice(0, inferred.length, kept as Platform);
         warnings.push(`${left} left out of the config: only the ${kept === 'ios' ? 'iOS' : 'Android'} build was found. To test ${left} too, build it, then re-run \`npx tapsmith init --force --platform android,ios\`.`);
@@ -247,7 +253,7 @@ export function resolveInitPlan(
     platforms = inferred;
     // A React Native app usually targets both, so an inferred Android-only
     // setup on a Mac says why iOS is missing and how to add it (PILOT-625).
-    if (env.isMacOS && !inferred.includes('ios') && reactNative) {
+    if (env.isMacOS && !inferred.includes('ios') && reactNative && !narrowed) {
       // Once ios/ exists, --package alone no longer names Android, so a
       // re-run it configured must name both platforms.
       const packageOnly = packageNamesAndroid && !args.apk && !detectDefaults.hasAndroidProject(layout);
@@ -383,17 +389,17 @@ export function resolveInitPlan(
         fromDerivedData = candidates.length > 0;
       }
       if (candidates.length === 0) {
+        const androidOnly = !args.platforms && args.packageName ? ' Or pass --platform android to set up Android only.' : '';
         const expoProject = expo();
         if (expoProject) {
           throw new InitError('NO_IOS_APP', noIosAppMessage(layout), {
-            fix: detectDefaults.expoBuildHint(['ios'], expoProject, 'Or pass --app <path>.'),
+            fix: detectDefaults.expoBuildHint(['ios'], expoProject, `Or pass --app <path>.${androidOnly}`),
           });
         }
-        // iOS was inferred from ios/ while an Android build or package was given:
-        // the user may only mean Android (PILOT-1510).
-        const androidOnlyHint = !args.platforms && !args.app && (args.apk || args.packageName) ? ', or pass --platform android to set up Android only' : '';
+        // iOS was inferred from ios/ while an Android package was given: the
+        // user may only mean Android (PILOT-1510).
         throw new InitError('NO_IOS_APP', noIosAppMessage(layout), {
-          fix: `${detectDefaults.nativeBuildHint('ios', layout, reactNative)}, or pass --app <path>${androidOnlyHint}`,
+          fix: `${detectDefaults.nativeBuildHint('ios', layout, reactNative)}, or pass --app <path>.${androidOnly}`,
         });
       }
       if (candidates.length > 1) {

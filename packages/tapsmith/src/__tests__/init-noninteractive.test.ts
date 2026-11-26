@@ -235,6 +235,29 @@ describe('resolveInitPlan()', () => {
     }
   });
 
+  it('narrows without the false "no ios/ directory" note, and leaves flags that name a platform alone (PILOT-1510)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
+    try {
+      fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ dependencies: { 'react-native': '0.79.0' } }));
+      fs.mkdirSync(path.join(tmp, 'android'));
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const apkOnly = { ...detectStubs, findIosAppCandidates: () => [], findDerivedDataApps: () => [] };
+      const plan = resolveInitPlan(initArgs({ yes: true }), baseEnv, apkOnly, tmp);
+      expect(plan.platforms).toEqual(['android']);
+      expect(plan.warnings.filter((w) => w.includes('iOS left out'))).toHaveLength(1);
+      expect(plan.warnings.join('\n')).not.toContain('no ios/ directory');
+      // An explicit --apk with no .app narrows the same way.
+      expect(resolveInitPlan(initArgs({ yes: true, apk: 'a.apk', package: 'com.x' }), baseEnv, apkOnly, tmp).platforms).toEqual(['android']);
+      // A flag naming the platform that would be dropped keeps it (and its error).
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true, bundleId: 'com.x.ios' }), baseEnv, apkOnly, tmp), 'NO_IOS_APP');
+      // An iOS build only, found in DerivedData.
+      const derived = { ...detectStubs, findApkCandidates: () => [], findIosAppCandidates: () => [], findDerivedDataApps: () => ['/dd/MyApp.app'] };
+      expect(resolveInitPlan(initArgs({ yes: true }), baseEnv, derived, tmp).platforms).toEqual(['ios']);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('does not add Android for a --package meant as an iOS bundle id, and says so (PILOT-721)', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
     try {
