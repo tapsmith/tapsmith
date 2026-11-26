@@ -247,7 +247,10 @@ describe('resolveInitPlan()', () => {
       expect(plan.warnings.filter((w) => w.includes('iOS left out'))).toHaveLength(1);
       expect(plan.warnings.join('\n')).not.toContain('no ios/ directory');
       // An explicit --apk with no .app narrows the same way.
-      expect(resolveInitPlan(initArgs({ yes: true, apk: 'a.apk', package: 'com.x' }), baseEnv, apkOnly, tmp).platforms).toEqual(['android']);
+      const withApk = resolveInitPlan(initArgs({ yes: true, apk: 'dist/my app.apk', package: 'com.x' }), baseEnv, apkOnly, tmp);
+      expect(withApk.platforms).toEqual(['android']);
+      // The printed re-run repeats the given build, or the re-run would not find it.
+      expect(withApk.warnings.join('\n')).toContain(`init --force --platform android,ios --apk 'dist/my app.apk'\``);
       // A flag naming the platform that would be dropped keeps it (and its error).
       expectInitError(() => resolveInitPlan(initArgs({ yes: true, bundleId: 'com.x.ios' }), baseEnv, apkOnly, tmp), 'NO_IOS_APP');
       // Flags naming the platform that would be dropped keep it.

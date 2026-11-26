@@ -247,7 +247,10 @@ export function resolveInitPlan(
         narrowed = true;
         const [kept, left] = androidBuilt ? ['android', 'iOS'] : ['ios', 'Android'];
         inferred.splice(0, inferred.length, kept as Platform);
-        warnings.push(`${left} left out of the config: only the ${kept === 'ios' ? 'iOS' : 'Android'} build was found. To test ${left} too, build it, then re-run \`npx tapsmith init --force --platform android,ios\`.`);
+        const quote = (v: string) => (/^[\w./@:+=-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`);
+        // Repeat the build the user gave: a path outside the searched folders is not found on the re-run.
+        const buildFlag = args.apk ? ` --apk ${quote(args.apk)}` : args.app ? ` --app ${quote(args.app)}` : '';
+        warnings.push(`${left} left out of the config: only the ${kept === 'ios' ? 'iOS' : 'Android'} build was found. To test ${left} too, build it, then re-run \`npx tapsmith init --force --platform android,ios${buildFlag}\` with any other flags you passed this time.`);
       }
     }
     platforms = inferred;
