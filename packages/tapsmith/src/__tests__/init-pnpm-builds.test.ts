@@ -46,15 +46,28 @@ describe('writePnpmAllowBuilds()', () => {
     expect(fs.existsSync(ws())).toBe(false);
   });
 
-  it("adds the entries to an existing workspace file, keeping its comments and settings, without asking pnpm's version", () => {
+  it('adds the entries to an existing workspace file, keeping its comments and settings', () => {
     fs.writeFileSync(ws(), '# workspace\npackages:\n  - apps/*   # the apps\n\nallowBuilds:\n  sharp: true\n');
-    const outcome = writePnpmAllowBuilds(dir, pnpm(9));
+    const outcome = writePnpmAllowBuilds(dir, pnpm(11));
     expect(outcome).toMatchObject({ status: 'written', created: false, names: ['esbuild', 'protobufjs'] });
-    expect(asked).toBe(0);
     const text = read();
     expect(text).toContain('# workspace');
     expect(text).toContain('# the apps');
     expect(parse(text)).toEqual({ packages: ['apps/*'], allowBuilds: { sharp: true, esbuild: false, protobufjs: false } });
+  });
+
+  // pnpm 10 still reads onlyBuiltDependencies, which allowBuilds overrides.
+  it.each([[10], [undefined]])('leaves an existing workspace file alone when pnpm is %s', (major) => {
+    const text = 'onlyBuiltDependencies:\n  - esbuild\n';
+    fs.writeFileSync(ws(), text);
+    expect(writePnpmAllowBuilds(dir, pnpm(major))).toEqual({ status: 'skipped' });
+    expect(read()).toBe(text);
+  });
+
+  it("asks pnpm's version only when there is something to write", () => {
+    fs.writeFileSync(ws(), 'allowBuilds:\n  esbuild: false\n  protobufjs: false\n');
+    expect(writePnpmAllowBuilds(dir, pnpm(10))).toEqual({ status: 'present' });
+    expect(asked).toBe(0);
   });
 
   it('adds an allowBuilds mapping to a workspace file without one, or with an empty one', () => {

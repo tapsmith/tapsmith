@@ -135,17 +135,18 @@ export function pnpmMajorVersion(cwd: string): number | undefined {
  * decided to `false` under `allowBuilds` in its pnpm-workspace.yaml, so
  * that installs (init's own, and CI's `pnpm install --frozen-lockfile`)
  * exit 0. An existing file keeps its comments and other settings; pnpm's
- * "set this to true or false" placeholders are replaced. A new file is
- * created only for pnpm 11 and later: pnpm 10 only warns about the
- * scripts, and pnpm 9 and early 10 releases reject a pnpm-workspace.yaml
- * without `packages`.
+ * "set this to true or false" placeholders are replaced. Only for pnpm 11
+ * and later, which fail the install: pnpm 10 only warns about the scripts,
+ * and still reads its `onlyBuiltDependencies`-style lists, which an
+ * `allowBuilds` entry would override; pnpm 9 and early 10 releases also
+ * reject a new pnpm-workspace.yaml without `packages`.
  */
 export function writePnpmAllowBuilds(
   cwd: string,
   opts: {
     /** The project's package manager, as projectPackageManager() names it. */
     agent: string;
-    /** pnpm's major version, asked only when there is no pnpm-workspace.yaml yet. */
+    /** pnpm's major version, asked only when there is something to write. */
     pnpmMajor: () => number | undefined;
   },
 ): PnpmBuildsOutcome {
@@ -164,10 +165,8 @@ export function writePnpmAllowBuilds(
   }
   const names = undecided(existing?.doc);
   if (names.length === 0) return { status: 'present' };
-  if (!existing) {
-    const major = opts.pnpmMajor();
-    if (major === undefined || major < 11) return { status: 'skipped' };
-  }
+  const major = opts.pnpmMajor();
+  if (major === undefined || major < 11) return { status: 'skipped' };
 
   const doc = existing?.doc ?? parseDocument('');
   const allowBuilds = doc.get('allowBuilds', true);
