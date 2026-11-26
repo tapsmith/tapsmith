@@ -4087,6 +4087,13 @@ async function runSuiteContext(
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
     noteWarningsShown(opts, warnings);
+    // A failure whose error already carries the stale-build note does not
+    // repeat it as a warning right above it.
+    if (status === 'failed' && error && opts._staleBuildWarningKeys) {
+      for (let i = warnings.length - 1; i >= 0; i--) {
+        if (opts._staleBuildWarningKeys.has(warnings[i]!) && error.message.includes(warnings[i]!)) warnings.splice(i, 1);
+      }
+    }
     if (reportedOnKeptScreens && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
     warnings.push(...reportedActionWarnings);
     const testResult: TestResult = {

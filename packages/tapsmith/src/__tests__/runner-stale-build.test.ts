@@ -129,6 +129,14 @@ describe('runTestFile with a build older than the app source (PILOT-1398)', () =
     expect(next[0].warnings).toEqual([expect.stringContaining(HINT)]);
   });
 
+  it('does not repeat the note as a warning on a failure that already carries it, and counts it as shown', async () => {
+    const failed = collectResults(await runTestFile(writeTest('h1.test.mjs', "test('fails', async () => { throw new Error('boom'); });"), makeOpts({ runMode: 'mcp' })));
+    expect(failed[0].error?.message).toContain(HINT);
+    expect(failed[0].warnings).toBeUndefined();
+    const next = collectResults(await runTestFile(writeTest('h2.test.mjs', "test('passes', async () => {});"), makeOpts({ runMode: 'mcp' })));
+    expect(next[0].warnings).toBeUndefined();
+  });
+
   it('says nothing when the build is current', async () => {
     mocks.stale = [];
     const file = writeTest('e.test.mjs', "test('fails', async () => { throw new Error('boom'); });");

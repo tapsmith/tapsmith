@@ -348,6 +348,28 @@ test.describe("Detail tabs", () => {
       await expect(detailTabs.errorEntries).toHaveCount(2)
     })
 
+    // PILOT-1398: the runner appends a note (the app changed after its build)
+    // to a failed step's message; the step's entry stands for the message,
+    // and the note gets its own.
+    test("keeps a note the test error adds to a failed step's message", async ({ viewer, detailTabs }) => {
+      const stepError = "Expected 1 to be 2"
+      const note = "Note: src/app/todos.tsx changed after app-release.apk was built."
+      await viewer.open({
+        metadata: { testStatus: "failed", error: `${stepError}\n\n${note}` },
+        events: [actionEvent({ actionIndex: 0, action: "tap", success: false, error: stepError })],
+      })
+      await detailTabs.select("Errors")
+      await expect(detailTabs.errorEntries).toHaveCount(2)
+      await expect(detailTabs.errorEntries.nth(1)).toContainText(note)
+      // Without a note, still one entry.
+      await viewer.open({
+        metadata: { testStatus: "failed", error: stepError },
+        events: [actionEvent({ actionIndex: 0, action: "tap", success: false, error: stepError })],
+      })
+      await detailTabs.select("Errors")
+      await expect(detailTabs.errorEntries).toHaveCount(1)
+    })
+
     test("lists a step that passed with a warning under the test's failure", async ({ viewer, detailTabs, actions }) => {
       const tap = actionEvent({ actionIndex: 0, action: "tap", warning: "This tap may only have closed the keyboard." })
       await viewer.open({ metadata: { testStatus: "failed", error: "boom" }, events: [tap] })
