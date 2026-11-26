@@ -92,6 +92,18 @@ describe('appSourceRoot', () => {
     expect(appSourceRoot(app)).toBe(root);
   });
 
+  it('does not take a test project that keeps a downloaded build for the app, but takes an Expo app without native folders', () => {
+    const home = project();
+    const tests = path.join(home, 'qa');
+    write(path.join(tests, 'package.json'), BEFORE, JSON.stringify({ devDependencies: { tapsmith: '1' } }));
+    const apk = write(path.join(tests, 'builds', 'app-release.apk'), BUILT);
+    expect(appSourceRoot(apk, home)).toBeUndefined();
+    const managed = path.join(home, 'expo-app');
+    write(path.join(managed, 'package.json'), BEFORE, JSON.stringify({ dependencies: { expo: '58' } }));
+    const eas = write(path.join(managed, 'builds', 'app.apk'), BUILT);
+    expect(appSourceRoot(eas, home)).toBe(managed);
+  });
+
   it('has no answer for a build outside any project', () => {
     const home = project();
     const apk = write(path.join(home, 'Downloads', 'app.apk'), BUILT);
@@ -187,6 +199,12 @@ describe('findSourceChangedAfterBuild', () => {
     ['ios', 'ios/MyApp/Info.plist'],
     ['ios', 'ios/MyApp/Images.xcassets/AppIcon.appiconset/Contents.json'],
     ['ios', 'ios/MyApp.xcodeproj/project.pbxproj'],
+    ['android', 'android/gradle.properties'],
+    ['android', 'android/app/src/main/assets/fonts/Inter.ttf'],
+    ['android', 'android/app/google-services.json'],
+    ['ios', 'ios/Podfile'],
+    ['ios', 'ios/MyApp/en.lproj/Localizable.strings'],
+    ['ios', 'ios/Config/Release.xcconfig'],
   ] as const)('counts %s build input %s whatever the build type', async (platform, rel) => {
     const { root, apk } = expoApp();
     write(path.join(root, rel), AFTER);
@@ -207,6 +225,24 @@ describe('findSourceChangedAfterBuild', () => {
     const nestedApk = write(path.join(nested, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'), BUILT);
     write(path.join(nested, 'README.md'), AFTER);
     expect(await findSourceChangedAfterBuild(nestedApk, { platform: 'android', countJs: false })).toBeUndefined();
+  });
+
+  it('counts the assets a Release bundle embeds, but not tool JSON', async () => {
+    const { root, apk } = expoApp();
+    for (const rel of ['tsconfig.json', 'eas.json', 'package-lock.json', 'tsconfig.base.json']) write(path.join(root, rel), AFTER);
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toBeUndefined();
+    write(path.join(root, 'src', 'locales', 'en.json'), AFTER);
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toMatchObject({ newestRelative: 'src/locales/en.json' });
+    // A Debug build loads them from Metro.
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toBeUndefined();
+  });
+
+  it("counts a Flutter app's pubspec.yaml and assets for any build type", async () => {
+    const root = project();
+    write(path.join(root, 'pubspec.yaml'), BEFORE);
+    const apk = write(path.join(root, 'build', 'app', 'outputs', 'flutter-apk', 'app-debug.apk'), BUILT);
+    write(path.join(root, 'assets', 'images', 'logo.png'), AFTER);
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toMatchObject({ newestRelative: 'assets/images/logo.png' });
   });
 
   it('does not count an XML file outside Android resources (a test report)', async () => {
@@ -430,6 +466,21 @@ describe('unchangedSinceBuild', () => {
     fs.utimesSync(file, T1 + 5, T1 + 5);
     expect(await unchangedSinceBuild(root, [file], (T_BUILD + 10) * 1000)).toEqual(new Set());
     expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+  });
+
+  it("never lets git vouch for a file the baseline recorded differently (built from an edit, then a round trip)", async () => {
+    const { root, apk, file } = repo();
+    fs.writeFileSync(file, 'v1 experiment');
+    fs.utimesSync(file, T_BUILD - 5, T_BUILD - 5);
+    fs.utimesSync(apk, T_BUILD + 10, T_BUILD + 10);
+    const baselineDir = path.join(root, '.baselines');
+    // A run after the build records the edit the build holds.
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true, baselineDir })).toBeUndefined();
+    git(root, T1, 'stash', '-q');
+    git(root, T1 + 1, 'checkout', '-q', 'feature');
+    git(root, T1 + 2, 'checkout', '-q', 'main');
+    fs.utimesSync(file, T1 + 5, T1 + 5);
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true, baselineDir })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
   });
 
   it('reports a new file the commit never held', async () => {

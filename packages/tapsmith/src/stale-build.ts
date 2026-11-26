@@ -25,7 +25,7 @@ import { isCI } from 'ci-info';
 import { minimatch } from 'minimatch';
 import { allTestMatchPatterns, type TapsmithConfig } from './config.js';
 import { inspectDevBuild } from './dev-client.js';
-import { firstStaleBuildWarning, forgetStaleBuildWarnings } from './stale-build-warnings.js';
+import { forgetStaleBuildWarnings, markStaleBuildWarned, staleBuildWarned } from './stale-build-warnings.js';
 import { discoverTestFiles, matchesTestIgnore } from './test-file-discovery.js';
 
 /** What {@link findSourceChangedAfterBuild} found. */
@@ -53,8 +53,20 @@ export interface StaleBuild {
  */
 const NATIVE_EXTENSIONS = {
   android: new Set(['.kt', '.java', '.c', '.cc', '.cpp', '.h', '.dart', '.gradle', '.kts']),
-  ios: new Set(['.swift', '.m', '.mm', '.h', '.c', '.cc', '.cpp', '.dart', '.storyboard', '.xib', '.plist', '.entitlements', '.pbxproj']),
+  ios: new Set(['.swift', '.m', '.mm', '.h', '.c', '.cc', '.cpp', '.dart', '.storyboard', '.xib', '.plist', '.entitlements', '.pbxproj',
+    '.xcconfig', '.strings', '.xcstrings']),
 };
+/** Build files counted by name, per platform. */
+const NATIVE_FILE_NAMES = {
+  android: new Set(['gradle.properties', 'google-services.json']),
+  ios: new Set(['Podfile', 'GoogleService-Info.plist']),
+};
+/**
+ * Assets a JavaScript bundle embeds (`require('./logo.png')`, imported JSON),
+ * counted with the JavaScript. Not the JSON of tools and package managers.
+ */
+const JS_ASSET_EXTENSIONS = new Set(['.json', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ttf', '.otf', '.mp3', '.mp4', '.lottie']);
+const NON_ASSET_JSON = /^(?:package(?:-lock)?|tsconfig(?:\..*)?|jsconfig|eas|tapsmith|lerna|nx|turbo|biome|components|composer|vercel|netlify|renovate|\.[^.].*)\.json$/;
 /** The other platform's native folder in a React Native or Flutter app: never in this build. */
 const OTHER_PLATFORM_DIR = { android: 'ios', ios: 'android' } as const;
 /** Files counted only when the build embeds its JavaScript (a Release React Native build). */
@@ -81,14 +93,32 @@ const NON_APP_FILE_PATTERNS = [
   'eslint.config.*', 'prettier.config.*', 'jest.config.*', 'vitest.config.*', 'jest.setup.*',
 ];
 
-/** Markers of a project folder. */
-const PROJECT_FILES = ['package.json', 'pubspec.yaml', 'settings.gradle', 'settings.gradle.kts', 'Package.swift'];
+/** Markers of a native or Flutter project folder. */
+const PROJECT_FILES = ['pubspec.yaml', 'settings.gradle', 'settings.gradle.kts', 'Package.swift'];
+
+/**
+ * Whether `dir` is a React Native or Expo app: a `package.json` that depends
+ * on `react-native` or `expo`, or an Expo app config beside it. A plain
+ * package (a test project that keeps a downloaded build) is not: nothing in
+ * it is built into the app.
+ */
+function isJsAppDir(dir: string): boolean {
+  let pkg: { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as typeof pkg;
+  } catch {
+    return false;
+  }
+  const deps = { ...pkg.devDependencies, ...pkg.dependencies };
+  return 'react-native' in deps || 'expo' in deps
+    || [...APP_CONFIG_NAMES].some((f) => fs.existsSync(path.join(dir, f)));
+}
 
 /** Bounds of one scan: a project far bigger than an app's gives up rather than stall a run. */
 const DEFAULT_LIMITS = { maxEntries: 50_000, maxMs: 1_500 };
 
 function isProjectDir(dir: string): boolean {
-  if (PROJECT_FILES.some((f) => fs.existsSync(path.join(dir, f)))) return true;
+  if (PROJECT_FILES.some((f) => fs.existsSync(path.join(dir, f))) || isJsAppDir(dir)) return true;
   try {
     return fs.readdirSync(dir).some((f) => f.endsWith('.xcodeproj') || f.endsWith('.xcworkspace'));
   } catch {
@@ -97,12 +127,13 @@ function isProjectDir(dir: string): boolean {
 }
 
 /**
- * The app's project folder: the nearest folder above the build with a
- * project file (`package.json`, `pubspec.yaml`, `settings.gradle(.kts)`, an
- * `.xcodeproj` / `.xcworkspace`, `Package.swift`). A React Native or Flutter
- * app's `android/` or `ios/` folder stands for the app above it. Undefined
- * for a build outside any project (a download), or when the nearest one is
- * the home folder or the filesystem root.
+ * The app's project folder: the nearest folder above the build that is an
+ * app project (`pubspec.yaml`, `settings.gradle(.kts)`, an `.xcodeproj` /
+ * `.xcworkspace`, `Package.swift`, or a React Native / Expo `package.json`).
+ * A React Native or Flutter app's `android/` or `ios/` folder stands for the
+ * app above it. Undefined for a build outside any app project (a download,
+ * also one kept in a separate test project), or when the nearest one is the
+ * home folder or the filesystem root.
  */
 export function appSourceRoot(artifact: string, home = process.env.HOME): string | undefined {
   let dir = path.dirname(path.resolve(artifact));
@@ -146,14 +177,14 @@ export function buildTime(artifact: string): number | undefined {
 }
 
 /**
- * An Android resource (under a Gradle source set's `res`, e.g.
- * `app/src/main/res/…`) or manifest, or a file of an iOS asset catalog.
+ * An Android resource or asset (under a Gradle source set's `res` or
+ * `assets`, e.g. `app/src/main/res/…`) or manifest, or a file of an iOS asset catalog.
  * Judged on the path below the app's project folder, so neither a folder
  * above the project nor a JavaScript `src/res/` folder counts.
  */
 function isPackagedResource(platform: 'android' | 'ios', rel: string, name: string): boolean {
   return platform === 'android'
-    ? name === 'AndroidManifest.xml' || /(?:^|\/)src\/[^/]+\/res(?:\/|$)/.test(rel)
+    ? name === 'AndroidManifest.xml' || /(?:^|\/)src\/[^/]+\/(?:res|assets)(?:\/|$)/.test(rel)
     : rel.split('/').some((seg) => seg.endsWith('.xcassets'));
 }
 
@@ -209,6 +240,8 @@ export async function findSourceChangedAfterBuild(
     ...(opts.skipDirs ?? []).map((d) => path.resolve(d)),
   ]);
   const native = NATIVE_EXTENSIONS[opts.platform];
+  // Flutter packages its declared assets into every build, Debug included.
+  const flutter = fs.existsSync(path.join(root, 'pubspec.yaml'));
   const deadline = Date.now() + limits.maxMs;
   let visited = 0;
   const candidates: Array<{ file: string; mtimeMs: number }> = [];
@@ -235,9 +268,11 @@ export async function findSourceChangedAfterBuild(
       }
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name);
-      const counted = native.has(ext) || APP_CONFIG_NAMES.has(entry.name)
-        || isPackagedResource(opts.platform, path.relative(root, dir).split(path.sep).join('/'), entry.name)
-        || (opts.countJs && JS_EXTENSIONS.has(ext));
+      const relDir = path.relative(root, dir).split(path.sep).join('/');
+      const counted = native.has(ext) || APP_CONFIG_NAMES.has(entry.name) || NATIVE_FILE_NAMES[opts.platform].has(entry.name)
+        || isPackagedResource(opts.platform, relDir, entry.name)
+        || (flutter && (entry.name === 'pubspec.yaml' || relDir === 'assets' || relDir.startsWith('assets/')))
+        || (opts.countJs && (JS_EXTENSIONS.has(ext) || (JS_ASSET_EXTENSIONS.has(ext) && !NON_ASSET_JSON.test(entry.name))));
       if (!counted || isNonAppFile(entry.name)) continue;
       let mtimeMs: number;
       try {
@@ -258,7 +293,10 @@ export async function findSourceChangedAfterBuild(
     candidates.splice(0, candidates.length, ...candidates.filter((_, i) => !same[i]));
   }
   if (candidates.length === 0) return undefined;
-  const unchanged = await unchangedSinceBuild(root, candidates.map((c) => c.file), built);
+  // Git only for files the baseline knows nothing about: one it recorded
+  // differently is known to differ from the build, whatever git says.
+  const unknown = candidates.filter((c) => baseline?.[relativeTo(root, c.file)] === undefined).map((c) => c.file);
+  const unchanged = await unchangedSinceBuild(root, unknown, built);
   if (unchanged.size > 0) candidates.splice(0, candidates.length, ...candidates.filter((c) => !unchanged.has(c.file)));
   if (candidates.length === 0) return undefined;
   const tests = opts.isTestCode ? await opts.isTestCode(candidates.map((c) => c.file)) : new Set<string>();
@@ -552,15 +590,23 @@ export function addStaleBuildHint(error: Error, stale: StaleBuild | undefined): 
 }
 
 /**
- * A test-result warning for `stale`, the first time this session sees this
- * edit (file and modification time) of this build; undefined after that.
- * Watch and MCP children share the session's record through their parent
+ * The test-result warning for `stale` and its key, while no result this
+ * session has carried it yet for this edit (file and modification time) of
+ * this build; undefined after that. Call {@link markStaleBuildWarningShown}
+ * once a result actually carries it: a file whose tests are all skipped or
+ * filtered out shows nothing, and the next file must still say it. Watch and
+ * MCP children share the session's record through their parent
  * (`stale-build-warnings.ts`).
  */
-export function takeStaleBuildWarning(stale: StaleBuild | undefined): string | undefined {
+export function pendingStaleBuildWarning(stale: StaleBuild | undefined): { key: string; message: string } | undefined {
   if (!stale) return undefined;
   const key = `${stale.artifact}\0${stale.buildMtimeMs}\0${stale.newest}\0${stale.newestMtimeMs}`;
-  return firstStaleBuildWarning(key) ? staleBuildMessage(stale) : undefined;
+  return staleBuildWarned(key) ? undefined : { key, message: staleBuildMessage(stale) };
+}
+
+/** A test result carried the warning with this key ({@link pendingStaleBuildWarning}). */
+export function markStaleBuildWarningShown(key: string): void {
+  markStaleBuildWarned(key);
 }
 
 /**

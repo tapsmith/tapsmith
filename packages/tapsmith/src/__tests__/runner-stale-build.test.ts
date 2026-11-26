@@ -122,6 +122,13 @@ describe('runTestFile with a build older than the app source (PILOT-1398)', () =
     expect(next[0].warnings).toBeUndefined();
   });
 
+  it('keeps the warning for the next file when a file reports no result that carries it (all skipped)', async () => {
+    const skipped = collectResults(await runTestFile(writeTest('g1.test.mjs', "test.skip('later', async () => {});"), makeOpts({ runMode: 'mcp' })));
+    expect(skipped.every((r) => !r.warnings)).toBe(true);
+    const next = collectResults(await runTestFile(writeTest('g2.test.mjs', "test('passes', async () => {});"), makeOpts({ runMode: 'mcp' })));
+    expect(next[0].warnings).toEqual([expect.stringContaining(HINT)]);
+  });
+
   it('says nothing when the build is current', async () => {
     mocks.stale = [];
     const file = writeTest('e.test.mjs', "test('fails', async () => { throw new Error('boom'); });");

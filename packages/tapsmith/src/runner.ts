@@ -62,7 +62,7 @@ import { TlsRejectWarnings, osServiceTlsRejectNote, tlsRejectWarning } from './t
 import { loopbackCaptureWarning, loopbackUnfiredRouteReason } from './loopback-capture-warning.js';
 import { defineStandIns, notSupportedYet } from './not-supported.js';
 import { captureFailureNotice } from './capture-warnings.js';
-import { addStaleBuildHint, checkStaleBuilds, takeStaleBuildWarning, type CheckedConfig, type StaleBuild } from './stale-build.js';
+import { addStaleBuildHint, checkStaleBuilds, markStaleBuildWarningShown, pendingStaleBuildWarning, type CheckedConfig, type StaleBuild } from './stale-build.js';
 
 // ─── Trace Device Info ───
 
@@ -223,10 +223,21 @@ async function noteStaleBuilds(opts: RunOptions): Promise<void> {
   opts._staleBuilds = stale;
   if (opts.runMode === 'test' || opts.runMode === 'test-parallel') return;
   for (const s of stale) {
-    const warning = takeStaleBuildWarning(s);
+    const warning = pendingStaleBuildWarning(s);
     if (!warning) continue;
     const pending = (opts._preflightWarnings ??= []);
-    if (!pending.includes(warning)) pending.push(warning);
+    if (!pending.includes(warning.message)) pending.push(warning.message);
+    (opts._staleBuildWarningKeys ??= new Map()).set(warning.message, warning.key);
+  }
+}
+
+/** The warnings a result just took: a stale-build one among them has now been shown. */
+function noteWarningsShown(opts: RunOptions, warnings: readonly string[]): void {
+  const keys = opts._staleBuildWarningKeys;
+  if (!keys) return;
+  for (const w of warnings) {
+    const key = keys.get(w);
+    if (key !== undefined) markStaleBuildWarningShown(key);
   }
 }
 
@@ -1598,6 +1609,8 @@ export interface RunOptions {
    * error then says so.
    */
   _staleBuilds?: StaleBuild[];
+  /** @internal The session key of each stale-build warning waiting in `_preflightWarnings`, by its text. */
+  _staleBuildWarningKeys?: Map<string, string>;
   /**
    * Run only tests whose fullName contains this value (case-insensitive
    * substring match). All other tests are left out of the run, unreported.
@@ -2859,6 +2872,7 @@ async function runSuiteContext(
       // A dialog the scope-entry reset closed may be why the scope failed.
       drainPreflightNotices(opts, null);
       const scopeWarnings = [...(opts._preflightWarnings?.splice(0) ?? []), ...takeDeviceActionWarnings(opts)];
+      noteWarningsShown(opts, scopeWarnings);
       for (const tr of collectResults(failed)) {
         if (scopeWarnings.length > 0) tr.warnings = [...scopeWarnings];
         result.tests.push(tr);
@@ -4072,6 +4086,7 @@ async function runSuiteContext(
     // launch, a scope-entry reset, this test's own preflight) belongs here.
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
+    noteWarningsShown(opts, warnings);
     if (reportedOnKeptScreens && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
     warnings.push(...reportedActionWarnings);
     const testResult: TestResult = {

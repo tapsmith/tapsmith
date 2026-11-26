@@ -20,11 +20,14 @@ export function rememberStaleBuildWarnings(keys: readonly string[] | undefined):
   for (const key of keys ?? []) warned.add(key);
 }
 
-/** Whether this edit is new to the session, recording it if so. */
-export function firstStaleBuildWarning(key: string): boolean {
-  if (warned.has(key)) return false;
+/** Whether the session has already shown the warning for this edit. */
+export function staleBuildWarned(key: string): boolean {
+  return warned.has(key);
+}
+
+/** Record that a test result carried the warning for this edit. */
+export function markStaleBuildWarned(key: string): void {
   warned.add(key);
-  return true;
 }
 
 /** Forget every edit (tests). */
