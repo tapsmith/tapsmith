@@ -17,7 +17,7 @@ push — never only at the end.
 - Mode: interactive | auto | worker (+auto) · flags: no-jira? leave-draft? merge? plan-review? after=<branch>? max-qa=<n>
 - Base: <base> · Branch: <branch> · Worktree: <path or "main checkout">
 - PR: <url or none> · draft? yes/no
-- Phase: 0-setup | 1-understand | 2-plan | 3-build | 4-review | 5-qa | 6-ci-threads | 7-gate | done | blocked (in <phase>) | best-effort | held
+- Phase: 0-setup | 1-understand | 2-plan | 3-build | 4-review | 5-qa | 6-ci-threads | 7-gate | done | blocked (in <phase>) | escalated (in <phase>) | best-effort | held
 - Head SHA: <sha> · pushed: yes/no
 
 ## Slices
@@ -27,7 +27,9 @@ push — never only at the end.
 ## Loops
 - review-loop: <n runs> · last outcome <clean|max-rounds|oscillation|skipped: docs only> · clean round at <sha> · FIX counts per round <…> · ledger <path>
 - QA cycles: <n>/<max> · last verdict <…> at <sha> · report <path>
-- CI: last head run <run id> <state> · reruns: <job: count, reason>
+- CI: last head run <run id> <state> · reruns: <job: count, reason> · fix attempts: <failure signature: n>
+  (bump the count each time you push a fix for a branch-caused failure; a fresh worker
+  reads it to apply stop rule 4 and the *Escalation* triggers)
 - Review threads: <open count> · last checked <time>
 - Device leases held: <targets, or none>
 
@@ -62,7 +64,8 @@ On invocation, or after noticing the conversation was summarised:
 2. Check reality against it: the branch's head matches `Head SHA`; nothing uncommitted
    you did not expect; the PR's state. Reality wins — update the file.
 3. Continue from the recorded phase (for `blocked (in <phase>)`, that phase, once the
-   answer is in hand). A half-done slice restarts from its red test. A
+   answer is in hand; for `escalated (in <phase>)`, that phase, starting from the
+   *Escalation* section and any *Consult:* the prompt names). A half-done slice restarts from its red test. A
    review-loop that was mid-round resumes from its own ledger (it has its own resume
    rule). A QA run that was interrupted is re-run from scratch — QA is always a full
    retest anyway. After a hand-off, start from *Next*, and let the *Loops* records stand

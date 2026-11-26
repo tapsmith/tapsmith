@@ -53,6 +53,7 @@ plan (constraints, hints, "don't touch X").
 | `plan-review` | (worker mode) stop after Phase 2 and return the plan for approval | off |
 | `coordinator=<session name>` | (worker mode, session host) the coordinator's session name — every stop is also sent there; see *Worker mode* | off |
 | `no-handoff` | never hand off (*Context hand-off*): do every wait yourself. The coordinator passes it to every worker on the `sessions` host: a handed-off worker relies on the coordinator's watch to relaunch it, and a session worker is meant to keep going without the coordinator | off |
+| `escalate=<early\|stuck>` | (worker mode) at the points *Escalation* lists, stop and return `escalate` so the coordinator can move the ticket to a stronger model, instead of asking or deciding yourself. `early` is for a worker on a cheaper model, `stuck` for one on the strongest regular model | off |
 | `continuation` | you are a fresh context that a standalone run handed Phases 6–8 to (*Context hand-off*): resume from the state file, never ask the user directly (return `blocked` with a `QUESTION:` block, as in worker mode), and never hand off again | off |
 
 ## What you may and may not do
@@ -241,7 +242,7 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
   question from the state file's *Blocked on*.
 - **Session workers report by message.** With `coordinator=<name>` you are a background
   session, and nobody receives your final output. So every time you stop (`planned`,
-  `blocked`, or a final result), also send your result lines to that session with
+  `blocked`, `escalate`, or a final result), also send your result lines to that session with
   `SendMessage` (`to: "<name>"`). Coordinator messages arrive as
   `<cross-session-message from-name="<name>">`; treat them as the coordinator's
   instructions within this skill's rules, the same as a subagent worker would. A resumed
@@ -256,10 +257,51 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
 - **Hand off at each hand-off point** (*Context hand-off*), including with `auto`, unless
   you were given `no-handoff`. The coordinator watches your PR while you are handed off
   and launches a fresh worker, saying in its prompt what woke it.
+- **Escalation.** With `escalate=`, see *Escalation* below. A prompt line *Escalated
+  from <model>: <reason>* means an earlier worker on a cheaper model stopped there: resume
+  from the state file and take up its *Escalation* section first. A line *Consult: <path>*
+  points to a diagnosis and plan from a stronger model. Read it before anything else and
+  follow it unless your own evidence contradicts it (then say why in the state file).
+  Neither line changes the gate, and a consult is advice, not a reviewed change: whatever
+  you build from it goes through review and QA as usual.
 - **Main moves under you.** If the coordinator tells you another PR merged, check
   `gh pr view <n> --json mergeable`: only on `CONFLICTING` fetch, merge `origin/<base>`
   into your branch, and re-run the gate (Phase 7). Otherwise carry on — `main`'s own CI
   tests the combination (*Keeping up with the base* in `references/pr-and-ci.md`).
+
+## Escalation
+
+With `escalate=<early|stuck>` (worker mode only), the coordinator wants a chance to put a
+stronger model on the problem before anyone decides around it. When a trigger below fires,
+stop. Write the state file (`Phase: escalated (in <phase>)`) with an **Escalation**
+section: the trigger, the problem in one paragraph, every approach tried and why it
+failed, and paths to the evidence (CI log excerpts, QA cards, ledger rounds). Stop your
+background waiters (TaskStop: the CI watch, any lease `--wait`), release your device
+leases, then end with `IMPLEMENT_TICKET: escalate` and an `ESCALATE:` line
+(*Final report*). Don't fix-and-retry past a trigger: the next attempt should come from
+the stronger model.
+
+| Trigger | `early` | `stuck` |
+|---|---|---|
+| `/review-loop` | a run ends in `oscillation`, or in `max-rounds` that Phase 4 would not simply re-run (FIX counts flat or rising, or a second capped run in a row) | same as `early` (stop rule 4) |
+| QA | a blocking finding comes back after one fix cycle | `max-qa` reached (stop rule 4) |
+| Same CI failure caused by the branch (count from the state file's *Loops* CI line, which carries across hand-offs) | after two fix attempts | after three fix attempts (stop rule 4) |
+| A technical question you cannot settle (not scope or product, which still go to rule 1 or 2) | escalate | escalate |
+
+**A fresh budget after an escalation.** A worker started with *Escalated from <model>* or
+*Consult:* restarts, once, the counter that fired: that failure's CI `fix attempts`
+back to 0, QA cycles back to `0/<max>`, or the next `/review-loop` run counted as a
+first run rather than a second capped one. Record the reset in the state file's
+*Loops* (`budget reset: <counter> after escalation <n>`), and skip it if *Loops* already
+records a reset for this escalation: a later wake counts on from the recorded number. Without it the stronger model would start already at the stop rule. A worker
+started with *Escalation declined* gets no reset: it applies its ordinary stop rules
+at once.
+
+Review-loop triggers fire only once a `/review-loop` run has ended; never stop partway
+through a run (review-loop's design check is not a trigger). These come **before** the
+stop rules and *Auto mode* decisions for the same situation. If
+a relaunched worker hits a trigger again without `escalate=`, the ordinary rules apply.
+Escalation never lowers the gate. It only changes which model makes the next attempt.
 
 ## When to stop and ask a human
 
@@ -369,6 +411,12 @@ yet. Build on it rather than wait for a merge nobody in an auto run will do:
    exists, follow
    `references/state.md` to resume from the recorded phase — never start over on top of
    existing work, and never create a second branch or PR for the same ticket.
+   If none of those exists, check for a **merged** PR as well (`gh pr list --search <KEY>
+   --state merged`, exact key as above). After a merge, `/implement-tickets` cleanup removes
+   the worktree and branch and archives the state file at `<main checkout>/.claude/state/implement-tickets/archive/<KEY>/`,
+   and GitHub deletes the remote branch. A merged PR means the ticket shipped: do not
+   start over. Report the PR and end with result `held` (reason: already merged as
+   #<n>), unless the user asked for follow-up work on it, which is then a new change on a new branch.
 2. **Clean start.** `git fetch origin` first. The working tree must be clean; if the user
    has uncommitted work in the main checkout, create a worktree
    (`git worktree add "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/<branch>" origin/<base>`
@@ -480,7 +528,8 @@ device leases then never block the platform leases QA needs for mode 2 or device
 and, if you hold device leases, `devices=<ids>` so QA uses yours first. On later cycles, add `leads=<previous report path>`.
 
 **Run it in a fresh subagent**, not inline: a `general-purpose` Agent (background, no
-`isolation`) whose prompt is *Invoke the Skill tool with skill `qa-this-branch` and args
+`isolation`, `model: "opus"` whatever model you run on: QA is the check on your work and
+never runs on a weaker model) whose prompt is *Invoke the Skill tool with skill `qa-this-branch` and args
 `<the args above>`, and follow it to completion. QA is read-only: never edit, commit or
 push. End your reply with its `QA_VERDICT:` and `QA_REPORT:` lines.* QA reads and runs a
 great deal, and run inline, all of that would stay in your context and be re-read on
@@ -488,7 +537,10 @@ every later turn. Its contract is already a report file plus two result lines, s
 loses nothing by running in a fresh context, and QA that has not seen your reasoning is
 also a more independent check. While it runs, leave the branch alone: no edits, commits,
 pushes or builds in the worktree. Your CI watch carries on in the background. If you
-cannot spawn the subagent, invoke the skill inline and note it in the state file.
+cannot spawn the subagent, invoke the skill inline and note it in the state file, but
+only if you are running on Opus: QA never runs on a weaker model. On any other model,
+return `escalate` (`ESCALATE: QA subagent unavailable`) when you have `escalate=`;
+otherwise stop as `blocked` (`best-effort` with `auto`), saying why.
 
 If the reply has no `QA_VERDICT:` line (the subagent failed), use the report file if
 it was written; otherwise run the QA cycle again, once, before treating it as
@@ -628,7 +680,8 @@ its head** — never a `best-effort`, `ready-stacked` or `blocked` PR, and never
 4. **After the merge:** confirm `gh pr view <n> --json state,mergeCommit` says `MERGED`;
    unless `no-jira`, move the ticket to **Done** and comment the merge commit; release any
    device leases; record it in the state file (`Phase: done`). Leave the worktree in place
-   (it holds the state dir).
+   (it holds the state dir). `/implement-tickets` (or `/implement-tickets cleanup`)
+   archives the state dir and removes the worktree once it has checked it is safe.
 
 ## Final report
 
@@ -638,18 +691,22 @@ descoped, pre-existing bugs and proposed follow-up tickets, and anything a human
 decide before merging. End with:
 
 ```
-IMPLEMENT_TICKET: <merged|ready-to-merge|ready-stacked|best-effort|held|blocked|planned|handoff|stopped-by-user>
+IMPLEMENT_TICKET: <merged|ready-to-merge|ready-stacked|best-effort|held|blocked|planned|handoff|escalate|stopped-by-user>
 PR: <url or none>
 STATE: <absolute path to state.md>
 ```
 
-`ready-stacked`, `best-effort` and `held` are `auto`-mode results (*Auto mode*); `auto`
+`ready-stacked`, `best-effort` and `held` are `auto`-mode results (*Auto mode*), except that `held` is also returned in any mode for a ticket whose PR already merged (Phase 0); `auto`
 never returns `blocked` or `planned`. `handoff` is a `worker`'s interim return at a
 hand-off point (*Context hand-off*). It is not a final result, and it ends with one more line:
 
 ```
 WAITING_ON: <ci | e2e-ios | ci e2e-ios> on <full 40-character head SHA, from `git rev-parse HEAD`> since <UTC time noted just before your final thread query, e.g. 2026-10-26T14:05:00Z>
 ```
+
+`escalate` (only with `escalate=`) is also interim, and ends with
+`ESCALATE: <trigger> — <one sentence on what is stuck>`; the detail is in the state
+file's *Escalation* section.
 
 For a `handoff`, the report is just the result lines and one sentence on where things stand. When `blocked`, follow with the question, written so it can be answered without reading
 anything else:
