@@ -18,6 +18,7 @@ import {
 // tests, since Tapsmith tests the installed build, never the source.
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-stale-build-')));
+const BASELINES = path.join(TMP, 'baselines');
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
 const BUILT = new Date('2026-01-01T10:00:00Z');
@@ -192,6 +193,22 @@ describe('findSourceChangedAfterBuild', () => {
     expect(await findSourceChangedAfterBuild(apk, { platform, countJs: false })).toMatchObject({ newestRelative: rel });
   });
 
+  it("does not count a JavaScript res/ folder, Xcode's IDE state, or a res folder above the project", async () => {
+    const { root, apk } = expoApp();
+    write(path.join(root, 'src', 'res', 'colors.ts'), AFTER);
+    write(path.join(root, 'src', 'res', 'logo.png'), AFTER);
+    write(path.join(root, 'ios', 'MyApp.xcodeproj', 'xcuserdata', 'me.xcuserdatad', 'xcschemes', 'xcschememanagement.plist'), AFTER);
+    write(path.join(root, 'ios', 'MyApp.xcworkspace', 'xcshareddata', 'IDEWorkspaceChecks.plist'), AFTER);
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toBeUndefined();
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'ios', countJs: false })).toBeUndefined();
+    const nested = path.join(project(), 'res');
+    fs.mkdirSync(nested);
+    write(path.join(nested, 'settings.gradle'), BEFORE);
+    const nestedApk = write(path.join(nested, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'), BUILT);
+    write(path.join(nested, 'README.md'), AFTER);
+    expect(await findSourceChangedAfterBuild(nestedApk, { platform: 'android', countJs: false })).toBeUndefined();
+  });
+
   it('does not count an XML file outside Android resources (a test report)', async () => {
     const { root, apk } = expoApp();
     write(path.join(root, 'junit.xml'), AFTER);
@@ -229,22 +246,22 @@ describe('checkStaleBuild', () => {
   it('reads the build type from the APK: a Release build counts JavaScript, a Debug one does not', async () => {
     const release = expoApp();
     write(path.join(release.root, 'src', 'app', 'todos.tsx'), AFTER);
-    expect(await checkStaleBuild(config(release.root, release.apk), { ci: false })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+    expect(await checkStaleBuild(config(release.root, release.apk), { ci: false, baselineDir: BASELINES })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
 
     const debug = expoApp({ debug: true });
     write(path.join(debug.root, 'src', 'app', 'todos.tsx'), AFTER);
-    expect(await checkStaleBuild(config(debug.root, debug.apk), { ci: false })).toBeUndefined();
+    expect(await checkStaleBuild(config(debug.root, debug.apk), { ci: false, baselineDir: BASELINES })).toBeUndefined();
   });
 
   it('leaves out test files and the modules they import, but not the app code beside them', async () => {
     const { root, apk } = expoApp();
     write(path.join(root, 'e2e', 'todos.test.ts'), AFTER, "import { open } from './screens/todos';\nopen();\n");
     write(path.join(root, 'e2e', 'screens', 'todos.ts'), AFTER, 'export function open() {}\n');
-    expect(await checkStaleBuild(config(root, apk), { ci: false })).toBeUndefined();
+    expect(await checkStaleBuild(config(root, apk), { ci: false, baselineDir: BASELINES })).toBeUndefined();
 
     resetStaleBuildChecks();
-    write(path.join(root, 'src', 'app', 'todos.tsx'), AFTER);
-    expect(await checkStaleBuild(config(root, apk), { ci: false })).toMatchObject({ newestRelative: 'src/app/todos.tsx', count: 1 });
+    write(path.join(root, 'src', 'app', 'todos.tsx'), AFTER, 'edited');
+    expect(await checkStaleBuild(config(root, apk), { ci: false, baselineDir: BASELINES })).toMatchObject({ newestRelative: 'src/app/todos.tsx', count: 1 });
   });
 
   it("leaves out every project's tests, and a worker's serialized config keeps them all", async () => {
@@ -252,41 +269,41 @@ describe('checkStaleBuild', () => {
     write(path.join(root, 'flows', 'auth.setup.ts'), AFTER, "import { login } from './login';\nlogin();\n");
     write(path.join(root, 'flows', 'login.ts'), AFTER, 'export function login() {}\n');
     const withProjects = config(root, apk, { projects: [{ name: 'setup', testMatch: ['flows/*.setup.ts'] }] });
-    expect(await checkStaleBuild(withProjects, { ci: false })).toBeUndefined();
+    expect(await checkStaleBuild(withProjects, { ci: false, baselineDir: BASELINES })).toBeUndefined();
     // What a worker, UI worker or watch/MCP child runs with.
     const { configFromSerialized, serializeConfig } = await import('../worker-protocol.js');
     const worker = configFromSerialized(serializeConfig({ ...makeFullConfig(), ...withProjects }), 'localhost:1');
     expect(worker.testMatch).toEqual(['**/*.test.ts', 'flows/*.setup.ts']);
     resetStaleBuildChecks();
-    expect(await checkStaleBuild(worker, { ci: false })).toBeUndefined();
+    expect(await checkStaleBuild(worker, { ci: false, baselineDir: BASELINES })).toBeUndefined();
   });
 
   it('still counts app code a test imports from outside the test folders (shared test ids)', async () => {
     const { root, apk } = expoApp();
     write(path.join(root, 'e2e', 'login.test.ts'), AFTER, "import { ids } from '../src/testIds';\nids;\n");
     write(path.join(root, 'src', 'testIds.ts'), AFTER, "export const ids = { submit: 'login-submit' };\n");
-    expect(await checkStaleBuild(config(root, apk), { ci: false })).toMatchObject({ newestRelative: 'src/testIds.ts', count: 1 });
+    expect(await checkStaleBuild(config(root, apk), { ci: false, baselineDir: BASELINES })).toMatchObject({ newestRelative: 'src/testIds.ts', count: 1 });
   });
 
   it('leaves out a Tapsmith project in a subfolder of the app', async () => {
     const { root, apk } = expoApp();
     const e2e = path.join(root, 'e2e');
     write(path.join(e2e, 'scripts', 'seed.ts'), AFTER);
-    expect(await checkStaleBuild(config(e2e, path.relative(e2e, apk)), { ci: false })).toBeUndefined();
+    expect(await checkStaleBuild(config(e2e, path.relative(e2e, apk)), { ci: false, baselineDir: BASELINES })).toBeUndefined();
   });
 
   it('says nothing in CI or without a configured build', async () => {
     const { root, apk } = expoApp();
     write(path.join(root, 'src', 'app', 'todos.tsx'), AFTER);
-    expect(await checkStaleBuild(config(root, apk), { ci: true })).toBeUndefined();
-    expect(await checkStaleBuild(config(root, apk, { apk: undefined }), { ci: false })).toBeUndefined();
-    expect(await checkStaleBuild(config(root, path.join(root, 'nope.apk')), { ci: false })).toBeUndefined();
+    expect(await checkStaleBuild(config(root, apk), { ci: true, baselineDir: BASELINES })).toBeUndefined();
+    expect(await checkStaleBuild(config(root, apk, { apk: undefined }), { ci: false, baselineDir: BASELINES })).toBeUndefined();
+    expect(await checkStaleBuild(config(root, path.join(root, 'nope.apk')), { ci: false, baselineDir: BASELINES })).toBeUndefined();
   });
 
   it('reuses an answer for 30 s, and looks again once the app is rebuilt', async () => {
     const { root, apk } = expoApp();
     let now = 1_000_000;
-    const deps = { ci: false, now: () => now };
+    const deps = { ci: false, now: () => now, baselineDir: BASELINES };
     write(path.join(root, 'src', 'app', 'todos.tsx'), AFTER);
     expect(await checkStaleBuild(config(root, apk), deps)).toBeDefined();
     // Rebuilt: the build's time is part of the key.
@@ -294,10 +311,48 @@ describe('checkStaleBuild', () => {
     fs.utimesSync(apk, rebuilt, rebuilt);
     expect(await checkStaleBuild(config(root, apk), deps)).toBeUndefined();
     // Edited again within the 30 s: the remembered answer stands until it expires.
-    write(path.join(root, 'src', 'app', 'todos.tsx'), new Date(rebuilt.getTime() + 1000));
+    write(path.join(root, 'src', 'app', 'todos.tsx'), new Date(rebuilt.getTime() + 1000), 'edited again');
     expect(await checkStaleBuild(config(root, apk), deps)).toBeUndefined();
     now += 30_000;
     expect(await checkStaleBuild(config(root, apk), deps)).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+  });
+});
+
+describe('the content baseline', () => {
+  it('lets an edit that was undone clear without a rebuild, and still reports a build made from an edit that was reverted', async () => {
+    const { root, apk } = expoApp();
+    const file = path.join(root, 'src', 'app', 'todos.tsx');
+    const check = () => checkStaleBuild(config(root, apk), { ci: false, fresh: true, baselineDir: BASELINES });
+    // A run after the build records each file as built.
+    expect(await check()).toBeUndefined();
+    write(file, AFTER, 'edited');
+    expect(await check()).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+    // Undone and saved: newer than the build, but what the build was made from.
+    write(file, AFTER, 'x');
+    expect(await check()).toBeUndefined();
+
+    // Built from an edit, which is reverted afterwards.
+    const wip = expoApp();
+    const wipFile = path.join(wip.root, 'src', 'app', 'todos.tsx');
+    write(wipFile, BEFORE, 'experiment');
+    const wipCheck = () => checkStaleBuild(config(wip.root, wip.apk), { ci: false, fresh: true, baselineDir: BASELINES });
+    expect(await wipCheck()).toBeUndefined();
+    write(wipFile, AFTER, 'x');
+    expect(await wipCheck()).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+  });
+
+  it('starts afresh for a rebuild of the same path', async () => {
+    const { root, apk } = expoApp();
+    const file = path.join(root, 'src', 'app', 'todos.tsx');
+    const check = () => checkStaleBuild(config(root, apk), { ci: false, fresh: true, baselineDir: BASELINES });
+    expect(await check()).toBeUndefined();
+    // Rebuilt from 'v2'; the old build's record of 'x' must not vouch for a later 'x'.
+    write(file, BEFORE, 'v2');
+    const rebuilt = new Date(BUILT.getTime() + 1000);
+    fs.utimesSync(apk, rebuilt, rebuilt);
+    expect(await check()).toBeUndefined();
+    write(file, AFTER, 'x');
+    expect(await check()).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
   });
 });
 
@@ -362,6 +417,17 @@ describe('unchangedSinceBuild', () => {
     fs.utimesSync(apk, T_BUILD + 10, T_BUILD + 10);
     git(root, T1, 'checkout', '--', 'src/app/todos.tsx');
     fs.utimesSync(file, T1, T1);
+    expect(await unchangedSinceBuild(root, [file], (T_BUILD + 10) * 1000)).toEqual(new Set());
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+  });
+
+  it('still reports it after a stash or a new branch on the same commit, which are not round trips', async () => {
+    const { root, apk, file } = repo();
+    fs.writeFileSync(file, 'v1 experiment');
+    fs.utimesSync(apk, T_BUILD + 10, T_BUILD + 10);
+    git(root, T1, 'stash', '-q');
+    git(root, T1 + 1, 'checkout', '-q', '-b', 'try');
+    fs.utimesSync(file, T1 + 5, T1 + 5);
     expect(await unchangedSinceBuild(root, [file], (T_BUILD + 10) * 1000)).toEqual(new Set());
     expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
   });

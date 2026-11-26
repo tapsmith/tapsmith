@@ -18,7 +18,9 @@
 
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { isCI } from 'ci-info';
 import { minimatch } from 'minimatch';
 import { allTestMatchPatterns, type TapsmithConfig } from './config.js';
@@ -61,7 +63,9 @@ const JS_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
 const APP_CONFIG_NAMES = new Set(['app.json', 'app.config.js', 'app.config.ts', 'app.config.mjs', 'app.config.cjs']);
 
 /** Folders never holding app source, on top of the discovery ignore list. */
-const SKIPPED_DIRS = new Set(['node_modules', 'Pods', 'DerivedData', 'build', 'dist', 'coverage', '__tests__', '__mocks__', 'tapsmith-results', 'tapsmith-report']);
+const SKIPPED_DIRS = new Set(['node_modules', 'Pods', 'DerivedData', 'build', 'dist', 'coverage', '__tests__', '__mocks__', 'tapsmith-results', 'tapsmith-report',
+  // Xcode's per-user and shared IDE state inside a project or workspace.
+  'xcuserdata', 'xcshareddata']);
 
 /**
  * Test sources of native and Flutter projects, never in the app's build:
@@ -141,12 +145,16 @@ export function buildTime(artifact: string): number | undefined {
   }
 }
 
-/** An Android resource or manifest, or a file of an iOS asset catalog. */
-function isPackagedResource(platform: 'android' | 'ios', dir: string, name: string): boolean {
-  const segments = dir.split(path.sep);
+/**
+ * An Android resource (under a Gradle source set's `res`, e.g.
+ * `app/src/main/res/…`) or manifest, or a file of an iOS asset catalog.
+ * Judged on the path below the app's project folder, so neither a folder
+ * above the project nor a JavaScript `src/res/` folder counts.
+ */
+function isPackagedResource(platform: 'android' | 'ios', rel: string, name: string): boolean {
   return platform === 'android'
-    ? name === 'AndroidManifest.xml' || segments.includes('res')
-    : segments.some((seg) => seg.endsWith('.xcassets'));
+    ? name === 'AndroidManifest.xml' || /(?:^|\/)src\/[^/]+\/res(?:\/|$)/.test(rel)
+    : rel.split('/').some((seg) => seg.endsWith('.xcassets'));
 }
 
 function isNonAppFile(name: string): boolean {
@@ -165,6 +173,11 @@ export interface StaleBuildCheckOptions {
   isTestCode?: (files: string[]) => Promise<Set<string>>
   /** Scan bounds. */
   limits?: { maxEntries: number; maxMs: number }
+  /**
+   * Where to keep each build's content baseline (see {@link findSourceChangedAfterBuild});
+   * none when unset.
+   */
+  baselineDir?: string
 }
 
 /**
@@ -172,6 +185,14 @@ export interface StaleBuildCheckOptions {
  * app's project folder ({@link appSourceRoot}). Undefined when none is newer,
  * when the build or its project cannot be found, or when the scan ran past
  * its bounds (a monorepo far bigger than one app: no answer beats a slow one).
+ *
+ * A newer file whose content is known to be what the build was made from is
+ * left out, since a rebuild would find nothing to do (Gradle compares
+ * content and leaves the APK as it is) and the warning could never clear.
+ * The evidence: the content hash the file had while it was still older than
+ * this build (`baselineDir`: every check records the files it finds older),
+ * or git ({@link unchangedSinceBuild}). Without evidence the file counts: a
+ * stale build that passes in silence is worse than a warning too many.
  */
 export async function findSourceChangedAfterBuild(
   artifact: string,
@@ -191,6 +212,7 @@ export async function findSourceChangedAfterBuild(
   const deadline = Date.now() + limits.maxMs;
   let visited = 0;
   const candidates: Array<{ file: string; mtimeMs: number }> = [];
+  const asBuilt: string[] = [];
   const pending = [root];
   while (pending.length > 0) {
     const dir = pending.pop()!;
@@ -214,7 +236,7 @@ export async function findSourceChangedAfterBuild(
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name);
       const counted = native.has(ext) || APP_CONFIG_NAMES.has(entry.name)
-        || isPackagedResource(opts.platform, dir, entry.name)
+        || isPackagedResource(opts.platform, path.relative(root, dir).split(path.sep).join('/'), entry.name)
         || (opts.countJs && JS_EXTENSIONS.has(ext));
       if (!counted || isNonAppFile(entry.name)) continue;
       let mtimeMs: number;
@@ -224,12 +246,18 @@ export async function findSourceChangedAfterBuild(
         continue;
       }
       if (mtimeMs > built) candidates.push({ file: abs, mtimeMs });
+      else asBuilt.push(abs);
     }
   }
+  const baseline = opts.baselineDir ? await updateBaseline(opts.baselineDir, artifact, built, root, asBuilt) : undefined;
+  if (baseline) {
+    const same = await Promise.all(candidates.map(async (c) => {
+      const recorded = baseline[relativeTo(root, c.file)];
+      return recorded !== undefined && recorded === await contentHash(c.file);
+    }));
+    candidates.splice(0, candidates.length, ...candidates.filter((_, i) => !same[i]));
+  }
   if (candidates.length === 0) return undefined;
-  // A file a branch round trip rewrote with the content the build was made
-  // from only looks newer: a rebuild would find nothing to do (Gradle
-  // compares content), so the warning could never be cleared.
   const unchanged = await unchangedSinceBuild(root, candidates.map((c) => c.file), built);
   if (unchanged.size > 0) candidates.splice(0, candidates.length, ...candidates.filter((c) => !unchanged.has(c.file)));
   if (candidates.length === 0) return undefined;
@@ -248,6 +276,75 @@ export async function findSourceChangedAfterBuild(
   };
 }
 
+function relativeTo(root: string, file: string): string {
+  return path.relative(root, file).split(path.sep).join('/');
+}
+
+/** A file's content hash; undefined when it cannot be read or is too big to be worth it. */
+async function contentHash(file: string): Promise<string | undefined> {
+  try {
+    const st = await fs.promises.stat(file);
+    if (st.size > MAX_BASELINE_FILE_BYTES) return undefined;
+    return createHash('sha1').update(await fs.promises.readFile(file)).digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Largest file a baseline hashes, and most files one check adds to it. */
+const MAX_BASELINE_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_BASELINE_ADDS = 5_000;
+
+/** The default home of the build baselines: `~/.tapsmith/stale-build`. */
+export function defaultBaselineDir(): string {
+  return path.join(os.homedir(), '.tapsmith', 'stale-build');
+}
+
+/**
+ * Read this build's baseline (the content hash of each source file, taken
+ * while it was older than the build, by root-relative path), add the files
+ * `asBuilt` lists that it lacks, and write it back. A baseline of another
+ * build of the same path is replaced. Undefined when it cannot be read or
+ * written: then only git can say a newer file is unchanged.
+ */
+async function updateBaseline(
+  dir: string,
+  artifact: string,
+  built: number,
+  root: string,
+  asBuilt: string[],
+): Promise<Record<string, string> | undefined> {
+  const file = path.join(dir, `${createHash('sha1').update(path.resolve(artifact)).digest('hex')}.json`);
+  let hashes: Record<string, string> = {};
+  try {
+    const saved = JSON.parse(await fs.promises.readFile(file, 'utf8')) as { built?: unknown; hashes?: unknown };
+    if (saved.built === built && saved.hashes && typeof saved.hashes === 'object') hashes = saved.hashes as Record<string, string>;
+  } catch {
+    // None yet, or unreadable: start this build's afresh.
+  }
+  let added = 0;
+  for (const abs of asBuilt) {
+    if (added >= MAX_BASELINE_ADDS) break;
+    const rel = relativeTo(root, abs);
+    if (hashes[rel] !== undefined) continue;
+    const hash = await contentHash(abs);
+    if (hash === undefined) continue;
+    hashes[rel] = hash;
+    added++;
+  }
+  if (added > 0) {
+    try {
+      await fs.promises.mkdir(dir, { recursive: true });
+      const tmp = `${file}.${process.pid}.tmp`;
+      await fs.promises.writeFile(tmp, JSON.stringify({ artifact: path.resolve(artifact), built, hashes }));
+      await fs.promises.rename(tmp, file);
+    } catch {
+      // Read-only home: this check still uses what it hashed.
+    }
+  }
+  return hashes;
+}
+
 function git(cwd: string, args: string[]): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile('git', args, { cwd, encoding: 'utf8', timeout: 5_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => resolve(err ? undefined : String(stdout)));
@@ -256,13 +353,13 @@ function git(cwd: string, args: string[]): Promise<string | undefined> {
 
 /**
  * The files among `files` whose content is exactly what the commit checked
- * out when the build was made holds, provided HEAD has moved since the build
- * (a checkout of another branch and back, a rebase): their modification
- * times moved with the checkouts, not their content. The commit is the one
- * HEAD pointed to at `builtMs`, from HEAD's reflog. While HEAD has not moved,
- * nothing is filtered: a build made from uncommitted edits holds them, and
- * a file reverted to the commit since (`git checkout -- file`, a stash)
- * really differs from the build. Empty outside a git repository, when the
+ * out when the build was made holds, after a round trip: HEAD went to
+ * another commit since the build and is back on that one (a checkout of
+ * another branch and back), so the files' modification times moved with the
+ * checkouts, not their content. The commit is the one HEAD pointed to at
+ * `builtMs`, from HEAD's reflog. Without a round trip nothing is filtered:
+ * a build made from uncommitted edits holds them, and a file reverted to the
+ * commit since (`git checkout -- file`, a stash) really differs from the build. Empty outside a git repository, when the
  * reflog does not reach back to the build, or on any git failure: then
  * modification times decide alone.
  */
@@ -274,19 +371,27 @@ export async function unchangedSinceBuild(root: string, files: string[], builtMs
   const reflog = await git(top, ['reflog', 'show', '--format=%H %gd', '--date=unix', 'HEAD']);
   if (!reflog) return unchanged;
   const builtSec = Math.floor(builtMs / 1000);
+  // Newest first: HEAD now, the commits it moved through since the build,
+  // then the one it was on when the build was made.
+  let current: string | undefined;
   let commit: string | undefined;
-  let movedSince = false;
+  const since: string[] = [];
   for (const line of reflog.split('\n')) {
     const m = /^([0-9a-f]{40,64}) \S*@\{(\d+)\}$/.exec(line.trim());
     if (!m) continue;
+    current ??= m[1];
     if (Number(m[2]) > builtSec) {
-      movedSince = true;
+      since.push(m[1]!);
       continue;
     }
     commit = m[1];
     break;
   }
-  if (!commit || !movedSince) return unchanged;
+  // Only a round trip: HEAD is back on the build's commit after being on
+  // another one. A stash, `checkout -b` or a commit since says nothing
+  // about a file now equal to the commit (the build may hold an uncommitted
+  // edit that was reverted since).
+  if (!commit || current !== commit || !since.some((sha) => sha !== commit)) return unchanged;
   let realTop: string;
   let realRoot: string;
   try {
@@ -364,7 +469,7 @@ export function resetStaleBuildChecks(): void {
  */
 export async function checkStaleBuild(
   config: CheckedConfig,
-  deps: { ci?: boolean; now?: () => number; fresh?: boolean } = {},
+  deps: { ci?: boolean; now?: () => number; fresh?: boolean; baselineDir?: string } = {},
 ): Promise<StaleBuild | undefined> {
   if (deps.ci ?? isCI) return undefined;
   const artifact = configuredArtifact(config);
@@ -375,7 +480,7 @@ export async function checkStaleBuild(
   const key = `${artifact}\0${built}\0${config.rootDir}\0${allTestMatchPatterns(config).join('\0')}`;
   const memo = checks.get(key);
   if (memo && !deps.fresh && now() - memo.at < CHECK_TTL_MS) return memo.result;
-  const result = runCheck(config, artifact).catch(() => undefined);
+  const result = runCheck(config, artifact, deps.baselineDir ?? defaultBaselineDir()).catch(() => undefined);
   checks.set(key, { at: now(), result });
   return result;
 }
@@ -401,7 +506,7 @@ function testSideModules(root: string, testFiles: string[], modules: string[]): 
   });
 }
 
-async function runCheck(config: CheckedConfig, artifact: string): Promise<StaleBuild | undefined> {
+async function runCheck(config: CheckedConfig, artifact: string, baselineDir: string): Promise<StaleBuild | undefined> {
   const root = appSourceRoot(artifact);
   if (!root) return undefined;
   const rootDir = path.resolve(config.rootDir);
@@ -415,6 +520,7 @@ async function runCheck(config: CheckedConfig, artifact: string): Promise<StaleB
     platform: config.platform === 'ios' ? 'ios' : 'android',
     countJs: info?.embedsJs === true,
     skipDirs,
+    baselineDir,
     isTestCode: async () => {
       // Every project's tests, not only the ones this run selects: any of
       // them may import the file.
