@@ -33,7 +33,7 @@ import { TraceCollector, extractSourceLocation, screenshotFileName, setActiveTra
 import type { AnyTraceEvent, SourceLocation } from './trace/types.js';
 import { getSimulatorScreenScale } from './ios-simulator.js';
 import type { NetworkCaptureRoute, NetworkEntry, TraceDeviceInfo } from './trace/types.js';
-import { TestAbortedError, isAbortError } from './abort.js';
+import { STOPPED_BY_USER, TestAbortedError, isAbortError } from './abort.js';
 import {
   appResetAction,
   appResetPolicyEquals,
@@ -255,7 +255,9 @@ function dropWarningsTheErrorCarries(opts: RunOptions, warnings: string[], error
 
 /** Say on a failed test's error that the build is older than the app's source. */
 function hintStaleBuild(error: Error | undefined, opts: RunOptions): void {
-  if (!error) return;
+  // A user's stop is not a failure, and UI mode and MCP recognise it by its
+  // exact message.
+  if (!error || isAbortError(error) || error.message === STOPPED_BY_USER) return;
   for (const s of opts._staleBuilds ?? []) addStaleBuildHint(error, s);
 }
 

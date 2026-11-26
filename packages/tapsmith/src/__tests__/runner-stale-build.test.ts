@@ -151,6 +151,16 @@ describe('runTestFile with a build older than the app source (PILOT-1398)', () =
     }
   });
 
+  it('leaves a user stop exactly as it is, so it still reads as interrupted', async () => {
+    const { STOPPED_BY_USER } = await import('../abort.js');
+    const controller = new AbortController();
+    const file = writeTest('j1.test.mjs', "test('stopped', async () => { await new Promise((r) => setTimeout(r, 2000)); });");
+    setTimeout(() => controller.abort(), 100);
+    const [result] = collectResults(await runTestFile(file, makeOpts({ runMode: 'ui', abortSignal: controller.signal })));
+    expect(result.status).toBe('failed');
+    expect(result.error?.message).toBe(STOPPED_BY_USER);
+  });
+
   it('says nothing when the build is current', async () => {
     mocks.stale = [];
     const file = writeTest('e.test.mjs', "test('fails', async () => { throw new Error('boom'); });");
