@@ -141,7 +141,7 @@ export function listAdoptableBootedSimulators(
 
 /**
  * What a run says when it adopts already-booted simulators by the configured
- * name while other simulators are booted too (PILOT-1517): a booted one of
+ * name while other simulators are booted too: a booted one of
  * that name may be someone else's, and the developer's own may be another.
  * Names the driven simulators and the others with their UDIDs, and how to pin
  * one. Not counted as others: Tapsmith's worker clones, non-iOS simulators,

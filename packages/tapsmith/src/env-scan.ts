@@ -225,7 +225,7 @@ export function simulatorPickerChoices(simulators: SimulatorInfo[]): SimulatorIn
  * The simulator init proposes from `choices` ({@link simulatorChoices} or
  * {@link simulatorPickerChoices}): the first, unless a booted simulator has
  * the app installed and the first does not — that is the one the developer
- * is already using (PILOT-1517). Only booted simulators are asked about, and
+ * is already using. Only booted simulators are asked about, and
  * nobody when the first choice is the only one booted, so `hasApp` (a simctl
  * lookup) runs only when there is a choice to make.
  */
@@ -243,7 +243,7 @@ export function preferredSimulator(
 
 /**
  * What `init --yes` says when a simulator other than the one it picked is
- * booted (PILOT-1517): the runner adopts a booted simulator of the configured
+ * booted: the runner adopts a booted simulator of the configured
  * name, so a pick the developer did not mean drives someone else's simulator,
  * or boots a second one beside theirs. Names every booted simulator, which one
  * the config names and why, and how to choose another. Undefined when the
