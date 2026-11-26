@@ -110,6 +110,18 @@ describe('runTestFile with a build older than the app source (PILOT-1398)', () =
     expect(edited[0].warnings).toEqual([expect.stringContaining(HINT)]);
   });
 
+  it('stays quiet in a watch or MCP child whose parent says the edit was already warned about', async () => {
+    const { knownStaleBuildWarnings, rememberStaleBuildWarnings } = await import('../stale-build-warnings.js');
+    const first = collectResults(await runTestFile(writeTest('f1.test.mjs', "test('passes', async () => {});"), makeOpts({ runMode: 'mcp' })));
+    expect(first[0].warnings).toEqual([expect.stringContaining(HINT)]);
+    // What the child reports back, and the parent hands the next child.
+    const handedOn = knownStaleBuildWarnings();
+    resetStaleBuildChecks();
+    rememberStaleBuildWarnings(handedOn);
+    const next = collectResults(await runTestFile(writeTest('f2.test.mjs', "test('passes', async () => {});"), makeOpts({ runMode: 'mcp' })));
+    expect(next[0].warnings).toBeUndefined();
+  });
+
   it('says nothing when the build is current', async () => {
     mocks.stale = [];
     const file = writeTest('e.test.mjs', "test('fails', async () => { throw new Error('boom'); });");

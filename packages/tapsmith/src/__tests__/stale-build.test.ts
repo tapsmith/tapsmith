@@ -177,6 +177,27 @@ describe('findSourceChangedAfterBuild', () => {
     expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toBeUndefined();
   });
 
+  it.each([
+    ['android', 'android/app/src/main/res/values/strings.xml'],
+    ['android', 'android/app/src/main/AndroidManifest.xml'],
+    ['android', 'android/app/build.gradle'],
+    ['android', 'app.config.ts'],
+    ['ios', 'ios/MyApp/Base.lproj/LaunchScreen.storyboard'],
+    ['ios', 'ios/MyApp/Info.plist'],
+    ['ios', 'ios/MyApp/Images.xcassets/AppIcon.appiconset/Contents.json'],
+    ['ios', 'ios/MyApp.xcodeproj/project.pbxproj'],
+  ] as const)('counts %s build input %s whatever the build type', async (platform, rel) => {
+    const { root, apk } = expoApp();
+    write(path.join(root, rel), AFTER);
+    expect(await findSourceChangedAfterBuild(apk, { platform, countJs: false })).toMatchObject({ newestRelative: rel });
+  });
+
+  it('does not count an XML file outside Android resources (a test report)', async () => {
+    const { root, apk } = expoApp();
+    write(path.join(root, 'junit.xml'), AFTER);
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toBeUndefined();
+  });
+
   it('counts app.json, which a build reads, even for a build that loads its JavaScript from Metro', async () => {
     const { root, apk } = expoApp();
     write(path.join(root, 'app.json'), AFTER);
@@ -238,6 +259,13 @@ describe('checkStaleBuild', () => {
     expect(worker.testMatch).toEqual(['**/*.test.ts', 'flows/*.setup.ts']);
     resetStaleBuildChecks();
     expect(await checkStaleBuild(worker, { ci: false })).toBeUndefined();
+  });
+
+  it('still counts app code a test imports from outside the test folders (shared test ids)', async () => {
+    const { root, apk } = expoApp();
+    write(path.join(root, 'e2e', 'login.test.ts'), AFTER, "import { ids } from '../src/testIds';\nids;\n");
+    write(path.join(root, 'src', 'testIds.ts'), AFTER, "export const ids = { submit: 'login-submit' };\n");
+    expect(await checkStaleBuild(config(root, apk), { ci: false })).toMatchObject({ newestRelative: 'src/testIds.ts', count: 1 });
   });
 
   it('leaves out a Tapsmith project in a subfolder of the app', async () => {
@@ -325,6 +353,25 @@ describe('unchangedSinceBuild', () => {
     git(root, T1, 'checkout', '-q', 'feature');
     fs.utimesSync(file, T1, T1);
     expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+  });
+
+  it('still reports a file reverted after a build made from an uncommitted edit (HEAD never moved)', async () => {
+    const { root, apk, file } = repo();
+    // Built with an uncommitted edit, then the edit is thrown away.
+    fs.writeFileSync(file, 'v1 experiment');
+    fs.utimesSync(apk, T_BUILD + 10, T_BUILD + 10);
+    git(root, T1, 'checkout', '--', 'src/app/todos.tsx');
+    fs.utimesSync(file, T1, T1);
+    expect(await unchangedSinceBuild(root, [file], (T_BUILD + 10) * 1000)).toEqual(new Set());
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toMatchObject({ newestRelative: 'src/app/todos.tsx' });
+  });
+
+  it('reports a new file the commit never held', async () => {
+    const { root, apk } = repo();
+    git(root, T1, 'checkout', '-q', 'feature');
+    git(root, T1, 'checkout', '-q', 'main');
+    write(path.join(root, 'src', 'app', 'new-screen.tsx'), new Date(T1 * 1000));
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: true })).toMatchObject({ newestRelative: 'src/app/new-screen.tsx' });
   });
 
   it('decides nothing outside a repository or before the reflog begins', async () => {

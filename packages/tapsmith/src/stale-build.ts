@@ -23,6 +23,7 @@ import { isCI } from 'ci-info';
 import { minimatch } from 'minimatch';
 import { allTestMatchPatterns, type TapsmithConfig } from './config.js';
 import { inspectDevBuild } from './dev-client.js';
+import { firstStaleBuildWarning, forgetStaleBuildWarnings } from './stale-build-warnings.js';
 import { discoverTestFiles, matchesTestIgnore } from './test-file-discovery.js';
 
 /** What {@link findSourceChangedAfterBuild} found. */
@@ -41,17 +42,23 @@ export interface StaleBuild {
   buildMtimeMs: number
 }
 
-/** Files always counted, per platform: compiled into the app whatever the build type. */
+/**
+ * Files always counted, per platform: compiled or packaged into the app
+ * whatever the build type. Code and Gradle scripts; iOS storyboards, xibs,
+ * property lists, entitlements and the Xcode project. Android resources
+ * (anything under a `res` folder) and manifests, and iOS asset catalogs
+ * (anything inside an `.xcassets` folder), count whole.
+ */
 const NATIVE_EXTENSIONS = {
-  android: new Set(['.kt', '.java', '.c', '.cc', '.cpp', '.h', '.dart']),
-  ios: new Set(['.swift', '.m', '.mm', '.h', '.c', '.cc', '.cpp', '.dart']),
+  android: new Set(['.kt', '.java', '.c', '.cc', '.cpp', '.h', '.dart', '.gradle', '.kts']),
+  ios: new Set(['.swift', '.m', '.mm', '.h', '.c', '.cc', '.cpp', '.dart', '.storyboard', '.xib', '.plist', '.entitlements', '.pbxproj']),
 };
 /** The other platform's native folder in a React Native or Flutter app: never in this build. */
 const OTHER_PLATFORM_DIR = { android: 'ios', ios: 'android' } as const;
 /** Files counted only when the build embeds its JavaScript (a Release React Native build). */
 const JS_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
 /** Expo's app config: read when the native app is built (prebuild), so a change needs a rebuild whatever the build type. */
-const APP_CONFIG_NAMES = new Set(['app.json']);
+const APP_CONFIG_NAMES = new Set(['app.json', 'app.config.js', 'app.config.ts', 'app.config.mjs', 'app.config.cjs']);
 
 /** Folders never holding app source, on top of the discovery ignore list. */
 const SKIPPED_DIRS = new Set(['node_modules', 'Pods', 'DerivedData', 'build', 'dist', 'coverage', '__tests__', '__mocks__', 'tapsmith-results', 'tapsmith-report']);
@@ -134,6 +141,14 @@ export function buildTime(artifact: string): number | undefined {
   }
 }
 
+/** An Android resource or manifest, or a file of an iOS asset catalog. */
+function isPackagedResource(platform: 'android' | 'ios', dir: string, name: string): boolean {
+  const segments = dir.split(path.sep);
+  return platform === 'android'
+    ? name === 'AndroidManifest.xml' || segments.includes('res')
+    : segments.some((seg) => seg.endsWith('.xcassets'));
+}
+
 function isNonAppFile(name: string): boolean {
   return NON_APP_FILE_PATTERNS.some((p) => minimatch(name, p, { dot: true }));
 }
@@ -199,6 +214,7 @@ export async function findSourceChangedAfterBuild(
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name);
       const counted = native.has(ext) || APP_CONFIG_NAMES.has(entry.name)
+        || isPackagedResource(opts.platform, dir, entry.name)
         || (opts.countJs && JS_EXTENSIONS.has(ext));
       if (!counted || isNonAppFile(entry.name)) continue;
       let mtimeMs: number;
@@ -211,9 +227,9 @@ export async function findSourceChangedAfterBuild(
     }
   }
   if (candidates.length === 0) return undefined;
-  // A file whose content is what it was when the app was built only looks
-  // newer (a branch round trip, a stash): a rebuild would find nothing to do
-  // (Gradle compares content), so the warning could never be cleared.
+  // A file a branch round trip rewrote with the content the build was made
+  // from only looks newer: a rebuild would find nothing to do (Gradle
+  // compares content), so the warning could never be cleared.
   const unchanged = await unchangedSinceBuild(root, candidates.map((c) => c.file), built);
   if (unchanged.size > 0) candidates.splice(0, candidates.length, ...candidates.filter((c) => !unchanged.has(c.file)));
   if (candidates.length === 0) return undefined;
@@ -238,42 +254,58 @@ function git(cwd: string, args: string[]): Promise<string | undefined> {
   });
 }
 
-/** Most candidates compared with git; a bigger set is left as found. */
-const MAX_GIT_COMPARED = 500;
-
 /**
  * The files among `files` whose content is exactly what the commit checked
- * out when the build was made holds: the commit HEAD pointed to at `builtMs`,
- * from HEAD's reflog. Their modification time moved since (a checkout of
- * another branch and back, a stash and pop, a formatter that changed
- * nothing), not their content. Empty outside a git repository, when the
+ * out when the build was made holds, provided HEAD has moved since the build
+ * (a checkout of another branch and back, a rebase): their modification
+ * times moved with the checkouts, not their content. The commit is the one
+ * HEAD pointed to at `builtMs`, from HEAD's reflog. While HEAD has not moved,
+ * nothing is filtered: a build made from uncommitted edits holds them, and
+ * a file reverted to the commit since (`git checkout -- file`, a stash)
+ * really differs from the build. Empty outside a git repository, when the
  * reflog does not reach back to the build, or on any git failure: then
  * modification times decide alone.
  */
 export async function unchangedSinceBuild(root: string, files: string[], builtMs: number): Promise<Set<string>> {
   const unchanged = new Set<string>();
-  if (files.length === 0 || files.length > MAX_GIT_COMPARED) return unchanged;
+  if (files.length === 0) return unchanged;
   const top = (await git(root, ['rev-parse', '--show-toplevel']))?.trim();
   if (!top) return unchanged;
   const reflog = await git(top, ['reflog', 'show', '--format=%H %gd', '--date=unix', 'HEAD']);
   if (!reflog) return unchanged;
   const builtSec = Math.floor(builtMs / 1000);
   let commit: string | undefined;
+  let movedSince = false;
   for (const line of reflog.split('\n')) {
     const m = /^([0-9a-f]{40,64}) \S*@\{(\d+)\}$/.exec(line.trim());
-    if (m && Number(m[2]) <= builtSec) {
-      commit = m[1];
-      break;
+    if (!m) continue;
+    if (Number(m[2]) > builtSec) {
+      movedSince = true;
+      continue;
     }
+    commit = m[1];
+    break;
   }
-  if (!commit) return unchanged;
+  if (!commit || !movedSince) return unchanged;
   let realTop: string;
+  let realRoot: string;
   try {
     realTop = fs.realpathSync(top);
+    realRoot = fs.realpathSync(root);
   } catch {
     return unchanged;
   }
-  const rels = new Map<string, string>();
+  const scope = path.relative(realTop, realRoot).split(path.sep).join('/') || '.';
+  if (scope.startsWith('..')) return unchanged;
+  // What the commit holds under the app's folder, and which of those files
+  // differ from it now (by content): no argument list, so no size limit.
+  const [tree, diff] = await Promise.all([
+    git(top, ['ls-tree', '-r', '-z', '--name-only', commit, '--', scope]),
+    git(top, ['diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', commit, '--', scope]),
+  ]);
+  if (tree === undefined || diff === undefined) return unchanged;
+  const committed = new Set(tree.split('\0').filter(Boolean));
+  const differing = new Set(diff.split('\0').filter(Boolean));
   for (const file of files) {
     let real: string;
     try {
@@ -281,27 +313,9 @@ export async function unchangedSinceBuild(root: string, files: string[], builtMs
     } catch {
       continue;
     }
-    const rel = path.relative(realTop, real);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
-    rels.set(rel.split(path.sep).join('/'), file);
+    const rel = path.relative(realTop, real).split(path.sep).join('/');
+    if (committed.has(rel) && !differing.has(rel)) unchanged.add(file);
   }
-  if (rels.size === 0) return unchanged;
-  const paths = [...rels.keys()];
-  const [tree, hashes] = await Promise.all([
-    git(top, ['ls-tree', '-z', commit, '--', ...paths]),
-    git(top, ['hash-object', '--', ...paths]),
-  ]);
-  if (tree === undefined || hashes === undefined) return unchanged;
-  const committed = new Map<string, string>();
-  for (const entry of tree.split('\0')) {
-    const m = /^\d+ blob ([0-9a-f]+)\t(.+)$/s.exec(entry);
-    if (m) committed.set(m[2]!, m[1]!);
-  }
-  const current = hashes.trim().split('\n');
-  if (current.length !== paths.length) return unchanged;
-  paths.forEach((rel, i) => {
-    if (committed.get(rel) === current[i]) unchanged.add(rels.get(rel)!);
-  });
   return unchanged;
 }
 
@@ -337,7 +351,7 @@ const checks = new Map<string, { at: number; result: Promise<StaleBuild | undefi
 /** Forget remembered answers (tests). */
 export function resetStaleBuildChecks(): void {
   checks.clear();
-  warned.clear();
+  forgetStaleBuildWarnings();
 }
 
 /**
@@ -366,6 +380,27 @@ export async function checkStaleBuild(
   return result;
 }
 
+/**
+ * The modules of the tests' import graph that are test code: the ones in a
+ * top-level folder of the app's project that holds test files (`e2e/`,
+ * `tests/`). A module elsewhere is app code a test happens to import (shared
+ * test ids, strings): the app's build holds it too, so an edit to it still
+ * needs a rebuild.
+ */
+function testSideModules(root: string, testFiles: string[], modules: string[]): string[] {
+  const topFolder = (file: string): string | undefined => {
+    const rel = path.relative(root, path.resolve(file));
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+    const segments = rel.split(path.sep);
+    return segments.length > 1 ? segments[0] : undefined;
+  };
+  const testFolders = new Set(testFiles.map(topFolder).filter((f): f is string => f !== undefined));
+  return modules.filter((m) => {
+    const folder = topFolder(m);
+    return folder !== undefined && testFolders.has(folder);
+  });
+}
+
 async function runCheck(config: CheckedConfig, artifact: string): Promise<StaleBuild | undefined> {
   const root = appSourceRoot(artifact);
   if (!root) return undefined;
@@ -386,7 +421,7 @@ async function runCheck(config: CheckedConfig, artifact: string): Promise<StaleB
       const files = await discoverTestFiles(allTestMatchPatterns(config), rootDir);
       const { testFileModules } = await import('./network-api-scan.js');
       const modules = await testFileModules(files).catch(() => files);
-      return new Set([...files, ...modules].map((f) => path.resolve(f)));
+      return new Set([...files, ...testSideModules(root, files, modules)].map((f) => path.resolve(f)));
     },
   });
 }
@@ -410,19 +445,16 @@ export function addStaleBuildHint(error: Error, stale: StaleBuild | undefined): 
   }
 }
 
-/** Keys of the changes this process has warned about, so a long-lived worker warns once per edit. */
-const warned = new Set<string>();
-
 /**
- * A test-result warning for `stale`, the first time this process sees this
+ * A test-result warning for `stale`, the first time this session sees this
  * edit (file and modification time) of this build; undefined after that.
+ * Watch and MCP children share the session's record through their parent
+ * (`stale-build-warnings.ts`).
  */
 export function takeStaleBuildWarning(stale: StaleBuild | undefined): string | undefined {
   if (!stale) return undefined;
   const key = `${stale.artifact}\0${stale.buildMtimeMs}\0${stale.newest}\0${stale.newestMtimeMs}`;
-  if (warned.has(key)) return undefined;
-  warned.add(key);
-  return staleBuildMessage(stale);
+  return firstStaleBuildWarning(key) ? staleBuildMessage(stale) : undefined;
 }
 
 /**
