@@ -109,6 +109,19 @@ describe('offerTapsmithInstall()', () => {
     expect(out).toMatch(/allowBuilds:\n\s+esbuild: false\n\s+protobufjs: false/);
   });
 
+  // PILOT-930: init denies the builds before the install where it can; a
+  // failure then is about something else, and the snippet would mislead.
+  it('gives no allowBuilds snippet when the project has decided both builds', async () => {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}\n');
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+    fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  esbuild: false\n  protobufjs: false\n');
+    const failingButInstalled = (): true | string => { installTapsmithStub(); return 'pnpm exited with code 1'; };
+    expect(await offerTapsmithInstall(dir, failingButInstalled)).toBeUndefined();
+    const out = logged.join('\n');
+    expect(out).toContain('✓ Tapsmith installed (pnpm exited with code 1)');
+    expect(out).not.toContain('allowBuilds');
+  });
+
   it('gives no pnpm snippet to another package manager whose install failed after installing', async () => {
     fs.writeFileSync(path.join(dir, 'package.json'), '{}\n');
     const failingButInstalled = (): true | string => { installTapsmithStub(); return 'npm exited with code 1'; };
