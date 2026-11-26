@@ -380,6 +380,14 @@ const threeThings = [
             <span class="tp-hero-req">Requires Node.js 22+</span>
           </div>
 
+          <!-- Coding agents read this page first: point them at init -->
+          <p class="tp-hero-agent">
+            <strong>Setting up with a coding agent?</strong> Once the app is built, run
+            <code>npx tapsmith init --yes --json</code> instead of writing the config by hand: it also
+            adds the Tapsmith section to <code>AGENTS.md</code> and lists the agent plugin.
+            <a href="/guides/agents/">Agent setup guide →</a>
+          </p>
+
           <div class="tp-hero-visual">
             <div class="tp-code-window">
               <div class="tp-code-chrome">
@@ -1128,7 +1136,32 @@ const threeThings = [
       .tp-hero-ctas {
         display: flex;
         gap: 12px;
+        margin-bottom: 20px;
+      }
+      .tp-hero-agent {
+        font-size: 14px;
+        line-height: 1.6;
+        color: var(--tp-ink-3);
+        max-width: 640px;
         margin-bottom: 64px;
+      }
+      .tp-hero-agent strong {
+        color: var(--tp-ink-2);
+        font-weight: 600;
+      }
+      .tp-hero-agent code {
+        font-family: var(--tp-font-mono);
+        font-size: 0.9em;
+        color: var(--tp-ink);
+        background: var(--tp-bg-2);
+        border: 1px solid var(--tp-border);
+        border-radius: var(--tp-radius-sm);
+        padding: 1px 6px;
+        white-space: nowrap;
+      }
+      .tp-hero-agent a {
+        color: var(--tp-ink-2);
+        white-space: nowrap;
       }
       .tp-btn-npm .tp-npm-dollar {
         font-family: var(--tp-font-mono);
@@ -1784,6 +1817,9 @@ const threeThings = [
         }
         .tp-hero-ctas {
           flex-direction: column;
+          margin-bottom: 20px;
+        }
+        .tp-hero-agent {
           margin-bottom: 48px;
         }
         .tp-hero-visual {
