@@ -83,6 +83,7 @@ import {
   unrecordSimulators,
   provisionSimulators,
   getSimulatorScreenScale,
+  otherBootedSimulatorsWarning,
 } from '../ios-simulator.js';
 import type { SimulatorInfo } from '../ios-simulator.js';
 
@@ -268,6 +269,33 @@ describe('listAdoptableBootedSimulators (PILOT-511)', () => {
 });
 
 // ─── bootSimulator ───
+
+describe('otherBootedSimulatorsWarning (PILOT-1517)', () => {
+  const ios = 'com.apple.CoreSimulator.SimRuntime.iOS-27-2';
+  const sim = (name: string, udid: string, state = 'Booted', runtime = ios): SimulatorInfo => ({ name, udid, state, runtime, isAvailable: true, deviceType: '' });
+  const driven = sim('iPhone 17e', '378267EB');
+
+  it('names the driven simulator and every other booted one, and how to pin the right one', () => {
+    const warning = otherBootedSimulatorsWarning(driven, [driven, sim('iPhone Onboard F', '3B630329'), sim('iPad Air', 'IPAD', 'Shutdown')]);
+    expect(warning).toBe(
+      "Simulator 'iPhone 17e' (378267EB) was already booted before this run, and the config names it, so the app is installed and tested on it. " +
+      "Other simulators are booted too: 'iPhone Onboard F' (3B630329). If you meant one of those, set `simulator` in the config to its UDID.",
+    );
+  });
+
+  it('says nothing when no other simulator is booted', () => {
+    expect(otherBootedSimulatorsWarning(driven, [driven, sim('iPhone 16', 'OFF', 'Shutdown')])).toBeUndefined();
+  });
+
+  it('leaves out Tapsmith worker clones, simulators the run expects (pinned group members), and non-iOS ones', () => {
+    const others = [
+      sim('iPhone 17e (Tapsmith Worker 1)', 'CLONE'),
+      sim('Bob', 'PINNED-BOB'),
+      sim('Apple Watch Ultra', 'WATCH', 'Booted', 'com.apple.CoreSimulator.SimRuntime.watchOS-11-0'),
+    ];
+    expect(otherBootedSimulatorsWarning(driven, [driven, ...others], ['PINNED-BOB'])).toBeUndefined();
+  });
+});
 
 describe('bootSimulator', () => {
   it('calls simctl boot', () => {

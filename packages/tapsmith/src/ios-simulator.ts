@@ -140,6 +140,32 @@ export function listAdoptableBootedSimulators(
 }
 
 /**
+ * What a run says when it adopts an already-booted simulator by the
+ * configured name while other simulators are booted too (PILOT-1517): the
+ * booted one of that name may be someone else's, and the developer's own may
+ * be another. Names the driven simulator and the others with their UDIDs,
+ * and how to pin one. Tapsmith's worker clones, simulators the run expects
+ * (`expected`: UDIDs it pins, such as other group members) and non-iOS
+ * simulators are not counted. Undefined when no other simulator is booted.
+ */
+export function otherBootedSimulatorsWarning(
+  driven: Pick<SimulatorInfo, 'name' | 'udid'>,
+  simulators: readonly SimulatorInfo[],
+  expected: readonly string[] = [],
+): string | undefined {
+  const others = simulators.filter((s) =>
+    s.state === 'Booted'
+    && s.udid !== driven.udid
+    && /(^|\.)iOS-/.test(s.runtime)
+    && !/ \(Tapsmith Worker \d+\)$/.test(s.name)
+    && !expected.includes(s.udid));
+  if (others.length === 0) return undefined;
+  return `Simulator '${driven.name}' (${driven.udid}) was already booted before this run, and the config names it, so the app is installed and tested on it. ` +
+    `Other simulators are booted too: ${others.map((s) => `'${s.name}' (${s.udid})`).join(', ')}. ` +
+    'If you meant one of those, set `simulator` in the config to its UDID.';
+}
+
+/**
  * Boot a simulator by UDID.
  */
 export function bootSimulator(udid: string): void {
