@@ -510,7 +510,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--bundle-id <id>', 'iOS bundle identifier (default: read from Info.plist)')
     .option('--avd <name>', 'Android AVD to auto-launch (default: a running emulator\'s AVD, else the newest that supports HTTPS capture)')
     .option('--device <serial>', 'Android device to use, by its `adb devices` serial: an emulator writes its AVD, a physical device pins `device`')
-    .option('--simulator <name>', 'iOS simulator name (default: a booted iOS simulator, else the newest available iPhone; stock names before renamed ones)')
+    .option('--simulator <name>', 'iOS simulator name (default: a booted iOS simulator with the app installed, else a booted one, else the newest available iPhone; stock names before renamed ones)')
     .option('--device-type <type>', 'emulator, physical or both (default: emulator)')
     .option('--network-capture', 'Record HTTP(S) traffic in traces (default: on, unless the only device is a Google Play-image emulator)')
     .option('--no-network-capture', 'Write no trace setting (network mocking still works: the proxy starts when the tests need it)')

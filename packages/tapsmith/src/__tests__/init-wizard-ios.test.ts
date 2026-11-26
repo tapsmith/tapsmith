@@ -60,6 +60,17 @@ vi.mock('../setup-ios-device.js', () => {
   };
 });
 
+// Which simulators the app is installed on (PILOT-1517): never a real simctl lookup.
+let appInstalledOn: string[] = [];
+const appLookups: string[] = [];
+vi.mock('../ios-simulator.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../ios-simulator.js')>(),
+  isAppInstalled: (udid: string, bundleId: string) => {
+    appLookups.push(`${udid} ${bundleId}`);
+    return appInstalledOn.includes(udid);
+  },
+}));
+
 const { configureIos, generateConfig, placeholderKeys } = await import('../init.js');
 
 const env: EnvScan = {
@@ -533,6 +544,34 @@ describe('configureIos() simulator picker (PILOT-562)', () => {
     expect(q?.choices?.[0]).toMatchObject({ name: 'iPhone 17', hint: 'iOS 26.5' });
     expect(q?.choices?.[1]).toMatchObject({ name: 'PersonaA iPhone', hint: 'iOS 26.5, booted, custom name: this Mac only' });
     expect(ios).toMatchObject({ simulator: 'PersonaA iPhone', simulatorDeviceType: 'iPhone 17' });
+  });
+
+  it('selects the booted simulator the app is installed on when the default lacks it (PILOT-1517)', async () => {
+    bundleIds.set(SIM_APP, 'com.example.app');
+    appInstalledOn = ['MINE'];
+    appLookups.length = 0;
+    script('simulators', [[/Which simulator/, 'Onboard F']]);
+    const simulators = [
+      { name: 'iPhone 17e', udid: 'THEIRS', state: 'Booted', runtime: 'iOS 27.2', deviceTypeName: 'iPhone 17e' },
+      { name: 'Onboard F', udid: 'MINE', state: 'Booted', runtime: 'iOS 18.5', deviceTypeName: 'iPhone 16' },
+    ];
+
+    await configureIos({ ...env, simulators });
+
+    const q = picker();
+    expect(q?.choices?.map((c) => c.name)).toEqual(['iPhone 17e', 'Onboard F']);
+    expect(q?.initial).toBe(1);
+    expect(q?.choices?.[1]).toMatchObject({ hint: 'iOS 18.5, booted, app installed, custom name: this Mac only' });
+    expect(appLookups).toEqual(['THEIRS com.example.app', 'MINE com.example.app']);
+    // With the app on neither, or on the default too, the default stays selected.
+    for (const installed of [[], ['THEIRS', 'MINE']]) {
+      appInstalledOn = installed;
+      questions.length = 0;
+      await configureIos({ ...env, simulators });
+      expect(picker()?.initial).toBe(0);
+      expect(picker()?.choices?.[1]?.hint).toBe('iOS 18.5, booted, custom name: this Mac only');
+    }
+    appInstalledOn = [];
   });
 
   it('with only worker clones to offer, falls back to a default simulator instead of an empty list', async () => {

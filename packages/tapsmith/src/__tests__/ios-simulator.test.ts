@@ -83,6 +83,8 @@ import {
   unrecordSimulators,
   provisionSimulators,
   getSimulatorScreenScale,
+  otherBootedSimulatorsWarning,
+  adoptedSimulatorsWarning,
 } from '../ios-simulator.js';
 import type { SimulatorInfo } from '../ios-simulator.js';
 
@@ -268,6 +270,71 @@ describe('listAdoptableBootedSimulators (PILOT-511)', () => {
 });
 
 // ─── bootSimulator ───
+
+describe('otherBootedSimulatorsWarning (PILOT-1517)', () => {
+  const ios = 'com.apple.CoreSimulator.SimRuntime.iOS-27-2';
+  const sim = (name: string, udid: string, state = 'Booted', runtime = ios): SimulatorInfo => ({ name, udid, state, runtime, isAvailable: true, deviceType: '' });
+  const driven = sim('iPhone 17e', '378267EB');
+
+  it('names the driven simulator and every other booted one, and how to pin the right one', () => {
+    const warning = otherBootedSimulatorsWarning([driven], [driven, sim('iPhone Onboard F', '3B630329'), sim('iPad Air', 'IPAD', 'Shutdown')]);
+    expect(warning).toBe(
+      "Simulator 'iPhone 17e' (378267EB) was already booted before this run, and the config names it, so the app is installed and tested on it. " +
+      "Other simulators are booted too: 'iPhone Onboard F' (3B630329). If you meant one of those, set `simulator` in the config to its UDID.",
+    );
+  });
+
+  it('says nothing when no other simulator is booted', () => {
+    expect(otherBootedSimulatorsWarning([driven], [driven, sim('iPhone 16', 'OFF', 'Shutdown')])).toBeUndefined();
+    // Nothing adopted: nothing to say, whatever else is booted.
+    expect(otherBootedSimulatorsWarning([], [driven, sim('Mine', 'MINE')])).toBeUndefined();
+  });
+
+  it('leaves out Tapsmith worker clones, simulators the run expects (pinned group members), and non-iOS ones', () => {
+    const others = [
+      sim('iPhone 17e (Tapsmith Worker 1)', 'CLONE'),
+      sim('Bob', 'PINNED-BOB'),
+      sim('Apple Watch Ultra', 'WATCH', 'Booted', 'com.apple.CoreSimulator.SimRuntime.watchOS-11-0'),
+    ];
+    expect(otherBootedSimulatorsWarning([driven], [driven, ...others], ['PINNED-BOB'])).toBeUndefined();
+  });
+
+  it('leaves out simulators another Tapsmith session holds: they cannot be the one meant (passed in exclude)', () => {
+    const held = sim('iPhone 17 Pro', 'HELD');
+    expect(otherBootedSimulatorsWarning([driven], [driven, held], new Set(['HELD']))).toBeUndefined();
+  });
+
+  it('names every adopted simulator of a parallel run, and never lists one of them as another', () => {
+    const second = sim('iPhone 17e', 'SECOND');
+    const warning = otherBootedSimulatorsWarning([driven, second], [driven, second, sim('Mine', 'MINE')]);
+    expect(warning).toBe(
+      "Simulators 'iPhone 17e' (378267EB), 'iPhone 17e' (SECOND) were already booted before this run, and the config names them, so the app is installed and tested on them. " +
+      "Other simulators are booted too: 'Mine' (MINE). If you meant one of those, set `simulator` in the config to its UDID.",
+    );
+  });
+});
+
+describe('adoptedSimulatorsWarning (PILOT-1517)', () => {
+  const ios = 'com.apple.CoreSimulator.SimRuntime.iOS-27-2';
+  const sim = (name: string, udid: string): SimulatorInfo => ({ name, udid, state: 'Booted', runtime: ios, isAvailable: true, deviceType: '' });
+  const theirs = sim('iPhone 17e', 'THEIRS');
+  const mine = sim('Mine', 'MINE');
+
+  it('names the already-booted simulators a parallel run took by name, and the others booted', () => {
+    const warning = adoptedSimulatorsWarning('iPhone 17e', ['THEIRS', 'CLONE-NEW'], [theirs, mine]);
+    expect(warning).toContain("Simulator 'iPhone 17e' (THEIRS) was already booted before this run");
+    expect(warning).toContain("Other simulators are booted too: 'Mine' (MINE).");
+  });
+
+  it('says nothing when the run took only simulators it booted or cloned, the configured UDID, or when the others are held', () => {
+    const clone = sim('iPhone 17e (Tapsmith Worker 1)', 'CLONE');
+    expect(adoptedSimulatorsWarning('iPhone 17e', ['CLONE', 'FRESH'], [clone, mine])).toBeUndefined();
+    expect(adoptedSimulatorsWarning('THEIRS', ['THEIRS'], [theirs, mine])).toBeUndefined();
+    expect(adoptedSimulatorsWarning('iPhone 17e', ['THEIRS'], [theirs, mine], new Set(['MINE']))).toBeUndefined();
+    // A booted clone this run did not take is Tapsmith's, not someone's.
+    expect(adoptedSimulatorsWarning('iPhone 17e', ['THEIRS'], [theirs, clone])).toBeUndefined();
+  });
+});
 
 describe('bootSimulator', () => {
   it('calls simctl boot', () => {

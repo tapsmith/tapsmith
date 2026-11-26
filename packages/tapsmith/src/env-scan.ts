@@ -221,6 +221,54 @@ export function simulatorPickerChoices(simulators: SimulatorInfo[]): SimulatorIn
   return [...rest.slice(0, at), ...bootedCustom, ...rest.slice(at)];
 }
 
+/**
+ * The simulator init proposes from `choices` ({@link simulatorChoices} or
+ * {@link simulatorPickerChoices}): the first, unless a booted simulator has
+ * the app installed and the first does not — that is the one the developer
+ * is already using. Only booted simulators are asked about, and
+ * nobody when the first choice is the only one booted, so `hasApp` (a simctl
+ * lookup) runs only when there is a choice to make.
+ */
+export function preferredSimulator(
+  choices: SimulatorInfo[],
+  hasApp: (sim: SimulatorInfo) => boolean,
+): SimulatorInfo | undefined {
+  const first = choices[0];
+  if (!first) return undefined;
+  const otherBooted = choices.filter((s) => s !== first && s.state === 'Booted');
+  if (otherBooted.length === 0) return first;
+  if (first.state === 'Booted' && hasApp(first)) return first;
+  return otherBooted.find(hasApp) ?? first;
+}
+
+/**
+ * What `init --yes` says when a simulator other than the one it picked is
+ * booted: the runner adopts a booted simulator of the configured
+ * name, so a pick the developer did not mean drives someone else's simulator,
+ * or boots a second one beside theirs. Names every booted simulator, which one
+ * the config names and why, and how to choose another. Undefined when the
+ * pick is the only booted simulator, or none is booted.
+ */
+export function bootedSimulatorsNote(
+  choices: SimulatorInfo[],
+  picked: SimulatorInfo,
+  /** `appInstalled`: why the pick was made — the app and the booted simulators it is on. */
+  opts: { appInstalled?: { bundleId: string; on: SimulatorInfo[] }; rerun: string },
+): string | undefined {
+  const booted = choices.filter((s) => s.state === 'Booted');
+  if (booted.every((s) => s === picked)) return undefined;
+  const list = booted.map((s) => `'${s.name}' (${s.udid}, ${s.runtime})`).join(', ');
+  const how = `To use another, re-run \`${opts.rerun}\` with any other flags you passed this time.`;
+  if (picked.state !== 'Booted') {
+    return `${list} ${booted.length === 1 ? 'is' : 'are'} booted, but the config names '${picked.name}', which is not: tests boot it instead. ${how}`;
+  }
+  const app = opts.appInstalled;
+  const why = !app ? ''
+    : app.on.length > 1 ? `, the first in the list of booted simulators ${app.bundleId} is installed on (${app.on.map((s) => `'${s.name}'`).join(', ')})`
+    : `, the one ${app.bundleId} is installed on`;
+  return `${booted.length} iOS simulators are booted: ${list}; the config names '${picked.name}'${why}. ${how}`;
+}
+
 /** Booted first, then the newer runtime. */
 function rank(a: SimulatorInfo, b: SimulatorInfo): number {
   return Number(b.state === 'Booted') - Number(a.state === 'Booted') || newestFirst(a, b);

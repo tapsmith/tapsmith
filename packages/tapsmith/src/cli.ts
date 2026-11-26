@@ -10,7 +10,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { claimBanner, printsBanner, runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
-import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
+import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDeviceGroup, primaryDevicePin, pinnedDeviceSerials, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
@@ -34,7 +34,7 @@ import {
   type DeviceSession,
 } from './device-session.js';
 import type { PreparedState, ResetCapabilities } from './app-reset.js';
-import { claimDeviceOrThrow, claimFirstFree, claimUpTo, currentSession, ensureClaimSession, devicesHeldByThisProcess, heldDevicesNote, listDeviceClaims, releaseDeviceClaim, skippedHeldDeviceMessage, withoutHeldDevices } from './device-claims.js';
+import { claimDeviceOrThrow, claimFirstFree, claimUpTo, currentSession, ensureClaimSession, devicesHeldByThisProcess, devicesHeldElsewhere, heldDevicesNote, listDeviceClaims, releaseDeviceClaim, skippedHeldDeviceMessage, withoutHeldDevices } from './device-claims.js';
 import { installActionProgressPrinter } from './action-progress-renderer.js';
 import { discoverTestFiles, noConfigFoundMessage, noTestFilesFoundMessage, relativeTestPath, resolveTestFileArgs } from './test-file-discovery.js';
 import { resolveTsxBin, tsxIpcPathProblem } from './child-scripts.js';
@@ -654,6 +654,10 @@ async function setupSequentialDeviceClaimed(
 
   cfg.device = target.selectedSerial;
   const deviceSerial = cfg.device;
+  // Which simulator this run drives, by name and UDID (PILOT-1517).
+  const selectedLine = target.selectedName && target.selectedName !== deviceSerial
+    ? `${target.selectedName} (${deviceSerial}) selected`
+    : `${deviceSerial} selected`;
 
   // CI=false (string) must be treated as falsy — some systems export CI=false
   // for "not in CI" which is truthy in JavaScript. Normalise once here.
@@ -811,7 +815,7 @@ async function setupSequentialDeviceClaimed(
           const step = phaseSteps[phase];
           if (state === 'start') {
             // Selecting and waking are done once the install begins.
-            completePrimary(`${deviceSerial} selected`);
+            completePrimary(selectedLine);
             currentStep = step;
             progress?.start(step, detail);
             if (!progress && phase === 'agent' && cfg.platform === 'ios') {
@@ -821,7 +825,7 @@ async function setupSequentialDeviceClaimed(
             progress?.complete(step, detail);
             if (!progress) console.log(dim(phaseLine(phase, detail)));
           } else if (state === 'skip') {
-            completePrimary(`${deviceSerial} selected`);
+            completePrimary(selectedLine);
             progress?.skip(step, detail);
           } else {
             progress?.fail(step, detail);
@@ -836,7 +840,7 @@ async function setupSequentialDeviceClaimed(
     try { client.close(); } catch { /* already closed */ }
     throw err;
   }
-  completePrimary(`${deviceSerial} selected`);
+  completePrimary(selectedLine);
   if (!progress) console.log(dim(`Using device: ${deviceSerial}`));
 
   // Physical-iOS provisioning-profile expiry warning, now that the xctestrun
@@ -1093,6 +1097,8 @@ async function ensureSequentialTargetDevice(
   launched: LaunchedEmulator[]
   /** The iOS simulator was booted here and the app installed onto it fresh. */
   appInstalledFresh?: boolean
+  /** The selected iOS simulator's name, for the `<name> (<udid>) selected` line (PILOT-1517). */
+  selectedName?: string
   /** On CI the configured AVD is not on the machine, so nothing was booted. */
   avdMissingOnCi?: true
 }> {
@@ -1114,8 +1120,9 @@ async function ensureSequentialTargetDevice(
         // previous tapsmith run OR from something else entirely (e.g. a CI
         // workflow step that pre-boots the simulator).
         const message = `Reusing already-booted simulator ${sim.udid} (${sim.name}).`;
-        if (progress) progress.update('primary-device', { state: 'running', detail: `reusing already-booted ${sim.name}` });
+        if (progress) progress.update('primary-device', { state: 'running', detail: `reusing already-booted ${sim.name} (${sim.udid})` });
         else process.stderr.write(`${DIM}${message}${RESET}\n`);
+        return { selectedSerial: pinned, launched: [], selectedName: sim.name };
       }
     }
     return { selectedSerial: pinned, launched: [] };
@@ -1123,7 +1130,7 @@ async function ensureSequentialTargetDevice(
 
   // ─── iOS: use simulator instead of ADB device ───
   if (config.platform === 'ios') {
-    const { listSimulators, provisionSimulator, cleanupStaleSimulators, staleSimulatorsDeletedMessage, installAppIfAbsent } = await import('./ios-simulator.js');
+    const { listSimulators, provisionSimulator, cleanupStaleSimulators, staleSimulatorsDeletedMessage, installAppIfAbsent, otherBootedSimulatorsWarning } = await import('./ios-simulator.js');
     // If no simulator is configured, try to auto-resolve a single paired
     // physical device. Mirrors how simulators are picked by name — the
     // user should not have to hand-parse `devicectl` JSON in their config.
@@ -1167,9 +1174,19 @@ async function ensureSequentialTargetDevice(
     const matching = booted.find((s) => s.udid === matchingUdid);
     if (matching) {
       const message = `Reusing already-booted simulator ${matching.udid} (${matching.name}).`;
-      if (progress) progress.update('primary-device', { state: 'running', detail: `reusing already-booted ${matching.name}` });
+      if (progress) progress.update('primary-device', { state: 'running', detail: `reusing already-booted ${matching.name} (${matching.udid})` });
       else process.stderr.write(`${DIM}${message}${RESET}\n`);
-      return { selectedSerial: matching.udid, launched: [] };
+      // Adopted by name, booted by someone else: with other simulators booted
+      // it may not be the one the developer means (PILOT-1517). A UDID in the
+      // config is a choice, not a guess: nothing to say then.
+      const othersBooted = matching.udid === simulatorName
+        ? undefined
+        : otherBootedSimulatorsWarning([matching], booted, [...pinnedDeviceSerials(config), ...devicesHeldElsewhere()]);
+      if (othersBooted) {
+        if (progress) progress.note(othersBooted);
+        else process.stderr.write(`${YELLOW}${othersBooted}${RESET}\n`);
+      }
+      return { selectedSerial: matching.udid, launched: [], selectedName: matching.name };
     }
 
     // Boot the simulator
@@ -1195,7 +1212,7 @@ async function ensureSequentialTargetDevice(
           progress?.update('primary-device', { state: 'running', detail: `${path.basename(app)}: ${early.outcome}` });
         }
       }
-      return { selectedSerial: udid, launched: [], appInstalledFresh };
+      return { selectedSerial: udid, launched: [], appInstalledFresh, selectedName: simulatorName };
     } catch (e) {
       throw new Error(`Failed to provision iOS simulator: ${(e as Error).message}`);
     }
