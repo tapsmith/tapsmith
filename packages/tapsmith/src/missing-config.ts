@@ -76,7 +76,7 @@ export interface FixAgents {
  * Tapsmith (`tapsmithExecCommand`). One text for `--json` and plain output,
  * in lines: the init command alone first, what init writes, the build steps
  * when init would find no build, then the plugin, which an agent read in a
- * single long line missed (PILOT-1523).
+ * single long line missed.
  */
 export function missingConfigFix(
   cwd: string,

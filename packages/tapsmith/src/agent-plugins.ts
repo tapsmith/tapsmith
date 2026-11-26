@@ -139,7 +139,7 @@ export function pluginInstallSteps(agents: readonly CodingAgent[], docsDir: stri
  * found the manual registration of the server the plugin uses
  * (docs/mcp-server.md). Run by an agent (`agentRunning`), the step asks it to
  * tell the user: the install changes the user's agent settings, and the MCP
- * tools load in a new session (PILOT-1523).
+ * tools load in a new session.
  */
 export function pluginNextSteps(agents: readonly CodingAgent[], agentRunning: boolean, docsDir: string = DEFAULT_DOCS_DIR): string[] {
   if (agents.length === 0) {
