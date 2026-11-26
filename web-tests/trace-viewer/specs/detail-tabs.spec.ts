@@ -363,6 +363,14 @@ test.describe("Detail tabs", () => {
       // Titled "Note", so the text drops its own "Note: ".
       await expect(detailTabs.errorEntries.nth(1)).toContainText("src/app/todos.tsx changed after app-release.apk was built.")
       await expect(detailTabs.errorEntries.nth(1)).not.toContainText("Note: ")
+      // Two stale builds append two notes: both are kept.
+      await viewer.open({
+        metadata: { testStatus: "failed", error: `${stepError}\n\n${note}\n\nNote: src/lib/b.ts changed after Other.app was built.` },
+        events: [actionEvent({ actionIndex: 0, action: "tap", success: false, error: stepError })],
+      })
+      await detailTabs.select("Errors")
+      await expect(detailTabs.errorEntries.nth(1)).toContainText("src/app/todos.tsx changed after app-release.apk was built.")
+      await expect(detailTabs.errorEntries.nth(1)).toContainText("src/lib/b.ts changed after Other.app was built.")
       // Without a note, still one entry.
       await viewer.open({
         metadata: { testStatus: "failed", error: stepError },

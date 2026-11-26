@@ -171,12 +171,14 @@ export function appSourceRoot(artifact: string, home = process.env.HOME): string
     if (isProjectDir(dir)) {
       const name = path.basename(dir);
       if ((name === 'android' || name === 'ios')
+        && !(home && path.resolve(parent) === path.resolve(home))
         && ['package.json', 'pubspec.yaml'].some((f) => fs.existsSync(path.join(parent, f)))) {
         return parent;
       }
       // A Kotlin Multiplatform app's iOS host project, beside the Gradle build
       // that compiles its shared code.
       if ((name === 'iosApp' || name === 'ios')
+        && !(home && path.resolve(parent) === path.resolve(home))
         && ['settings.gradle', 'settings.gradle.kts'].some((f) => fs.existsSync(path.join(parent, f)))) {
         return parent;
       }

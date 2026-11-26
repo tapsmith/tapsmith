@@ -966,9 +966,11 @@ function buildCodeFrame(sources: Map<string, string>, loc: { file: string; line:
  * assertion summary, `--- Additionally ---`) is not a note.
  */
 function testErrorNote(testError: string): string | undefined {
-  const at = testError.lastIndexOf('\n\nNote: ');
-  const note = at >= 0 ? testError.slice(at + 2) : testError.startsWith('Note: ') ? testError : undefined;
-  return note?.trim() || undefined;
+  // One note per stale build, each appended after a blank line: keep them all.
+  const parts = testError.split('\n\n');
+  let first = parts.length;
+  while (first > 0 && parts[first - 1]!.startsWith('Note: ')) first--;
+  return first < parts.length ? parts.slice(first).join('\n\n').trim() : undefined;
 }
 
 function ErrorsTab({ event, events, testError, sources, metadata }: {

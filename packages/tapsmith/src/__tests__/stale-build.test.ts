@@ -105,6 +105,14 @@ describe('appSourceRoot', () => {
     expect(appSourceRoot(eas, home)).toBe(managed);
   });
 
+  it('does not promote an android/ folder to the home folder itself', () => {
+    const home = project();
+    write(path.join(home, 'package.json'), BEFORE, '{}');
+    write(path.join(home, 'android', 'build.gradle'), BEFORE, '');
+    const apk = write(path.join(home, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk'), BUILT);
+    expect(appSourceRoot(apk, home)).toBeUndefined();
+  });
+
   it("maps a build in Xcode's DerivedData to the project Xcode recorded, or to nothing without that record", () => {
     const home = project();
     const app = path.join(home, 'expo-app');

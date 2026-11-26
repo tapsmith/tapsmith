@@ -2850,6 +2850,7 @@ async function runSuiteContext(
       // Package whatever the beforeAll collector recorded into a trace ZIP.
       // The trace captures every action that ran before the failure — invaluable
       // for debugging why beforeAll couldn't find an element or timed out.
+      hintStaleBuild(beforeAllError, opts);
       let beforeAllTrace: string | undefined;
       if (beforeAllCollector) {
         try {
@@ -3867,6 +3868,8 @@ async function runSuiteContext(
         if (networkEntries && opts.onNetworkEntries) {
           opts.onNetworkEntries(networkEntries, traceConfig.network, captureRoute(), httpsPassthrough());
         }
+        // The note goes on the error first, so the packaged trace carries it too.
+        if (status === 'failed') hintStaleBuild(error, opts);
         if (collector) {
           const retain = shouldRetain(traceConfig.mode, status !== 'failed', attempt);
           if (retain) {
