@@ -69,7 +69,7 @@ npm install -D tapsmith
 
 This installs the TypeScript SDK, test runner, the Tapsmith daemon binary for your platform, and the Android agent APKs (via the `@tapsmith/agent-android` optional dependency).
 
-These docs run the CLI as `npx tapsmith …`. With Yarn, run `yarn tapsmith …` instead, and with pnpm, `pnpm exec tapsmith …` (`npx tapsmith` also works in a pnpm project).
+These docs run the CLI as `npx tapsmith …`. With Yarn, run `yarn tapsmith …` instead, and with pnpm, `pnpm exec tapsmith …` (`npx tapsmith` also works in a pnpm project, and on pnpm 11 is the one to use until `tapsmith init` has written the `allowBuilds` entries in [Package manager notes](#pnpm-err_pnpm_ignored_builds)).
 
 An install that ends with an `allow-scripts` warning (npm) or `ERR_PNPM_IGNORED_BUILDS` (pnpm), a pnpm project where `tapsmith doctor` reports `Android agent not found`, and Yarn Plug'n'Play each need one small change, covered in [Package manager notes](#package-manager-notes) at the end of this page.
 
