@@ -59,11 +59,16 @@ vi.mock('../init-detect.js', async (importOriginal) => ({
 // The wizard's install offer runs the package manager; a test that accepts
 // it stands in for the install with `installHook`.
 let installHook: ((cwd: string) => void) | undefined;
+// What `pnpm --version` prints, when a test sets it (PILOT-930).
+let pnpmVersion: string | undefined;
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
     spawnSync: ((command: string, args: readonly string[], options?: { cwd?: string }) => {
+      if (pnpmVersion !== undefined && command === 'pnpm' && args[0] === '--version') {
+        return { status: 0, signal: null, output: [], pid: 0, stdout: `${pnpmVersion}\n`, stderr: '' };
+      }
       if (installHook && args.includes('tapsmith')) {
         installHook(options?.cwd ?? process.cwd());
         return { status: 0, signal: null, output: [], pid: 0, stdout: '', stderr: '' };
@@ -319,5 +324,82 @@ describe('init wizard in a workspace package that hoists its install', () => {
     const { exit, output } = await wizard();
     expect(exit).toBeUndefined();
     expect(output).toContain('tests/example.tapsmith.ts is in tests/ beside the tests of Playwright (playwright.config.ts).');
+  });
+});
+
+// ─── pnpm 11+ build scripts (PILOT-930) ───
+
+describe('init in a pnpm project', () => {
+  const installAt = (at: string): void => {
+    const pkg = path.join(at, 'node_modules', 'tapsmith');
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'tapsmith', version: '0.0.0', main: 'index.js' }));
+    fs.writeFileSync(path.join(pkg, 'index.js'), 'module.exports = {};\n');
+  };
+
+  beforeEach(() => {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'app', private: true }));
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+    pnpmVersion = '12.23.0';
+  });
+
+  afterEach(() => {
+    installHook = undefined;
+    pnpmVersion = undefined;
+  });
+
+  it('denies the builds in pnpm-workspace.yaml before its own install, so pnpm 11+ exits 0, and prints no snippet', async () => {
+    const rest = [...answers].filter(([k]) => k.source !== 'Install it now');
+    answers.clear();
+    answers.set(/Install it now/, true);
+    for (const [k, v] of rest) answers.set(k, v);
+    let atInstall: string | undefined;
+    installHook = (cwd) => {
+      atInstall = fs.readFileSync(path.join(cwd, 'pnpm-workspace.yaml'), 'utf8');
+      installAt(cwd);
+    };
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    expect(atInstall).toBe('allowBuilds:\n  esbuild: false\n  protobufjs: false\n');
+    expect(output).toContain('✓ pnpm-workspace.yaml created: esbuild and protobufjs set to false under allowBuilds');
+    expect(output).toContain('Commit it so CI installs pass too');
+    expect(output).toContain('✓ Tapsmith installed');
+    expect(output).not.toContain('pnpm stopped over the build scripts');
+  });
+
+  it('does it with --yes too, listing the file in --json', async () => {
+    installAt(dir);
+    fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  esbuild: set this to true or false\n  protobufjs: set this to true or false\n');
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    let stdout = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { stdout += String(chunk); return true; });
+    const exit = await runInit({
+      yes: true, json: true, force: false, exampleTest: true, agentsMd: true, agentsMdOnly: false,
+      platform: 'android', apk: APK, package: 'com.acme.app', avd: 'Pixel_API_36',
+    }).then(() => undefined, (err: unknown) => (err as Error).message);
+    expect(exit).toBeUndefined();
+    const result = JSON.parse(stdout) as { filesCreated: string[]; warnings: string[] };
+    expect(result.filesCreated).toContain('pnpm-workspace.yaml');
+    expect(fs.readFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'utf8')).toBe('allowBuilds:\n  esbuild: false\n  protobufjs: false\n');
+  });
+
+  it('says what it wrote in --yes text output, once', async () => {
+    installAt(dir);
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    const exit = await runInit({
+      yes: true, json: false, force: false, exampleTest: true, agentsMd: true, agentsMdOnly: false,
+      platform: 'android', apk: APK, package: 'com.acme.app', avd: 'Pixel_API_36',
+    }).then(() => undefined, (err: unknown) => (err as Error).message);
+    expect(exit).toBeUndefined();
+    const lines = out.filter((l) => l.includes('pnpm-workspace.yaml'));
+    expect(lines).toEqual([expect.stringContaining('✓ pnpm-workspace.yaml created: esbuild and protobufjs set to false under allowBuilds')]);
+  });
+
+  it('leaves a pnpm 10 project without a workspace file alone', async () => {
+    pnpmVersion = '10.32.1';
+    installAt(dir);
+    const { exit } = await wizard();
+    expect(exit).toBeUndefined();
+    expect(fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))).toBe(false);
   });
 });

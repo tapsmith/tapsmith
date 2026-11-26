@@ -69,7 +69,7 @@ npm install -D tapsmith
 
 This installs the TypeScript SDK, test runner, the Tapsmith daemon binary for your platform, and the Android agent APKs (via the `@tapsmith/agent-android` optional dependency).
 
-These docs run the CLI as `npx tapsmith …`. With Yarn, run `yarn tapsmith …` instead, and with pnpm, `pnpm exec tapsmith …` (`npx tapsmith` also works in a pnpm project).
+These docs run the CLI as `npx tapsmith …`. With Yarn, run `yarn tapsmith …` instead, and with pnpm, `pnpm exec tapsmith …` (`npx tapsmith` also works in a pnpm project, and on pnpm 11 is the one to use until `tapsmith init` has written the `allowBuilds` entries in [Package manager notes](#pnpm-err_pnpm_ignored_builds)).
 
 An install that ends with an `allow-scripts` warning (npm) or `ERR_PNPM_IGNORED_BUILDS` (pnpm), a pnpm project where `tapsmith doctor` reports `Android agent not found`, and Yarn Plug'n'Play each need one small change, covered in [Package manager notes](#package-manager-notes) at the end of this page.
 
@@ -716,7 +716,7 @@ allowBuilds:
   protobufjs: false
 ```
 
-Then run `pnpm install`. If `tapsmith init` ran the install for you, it prints this snippet.
+Then run `pnpm install`. `tapsmith init` writes these entries for you on pnpm 11 and later (creating the file when there isn't one), and leaves alone a package you have already set. While they are missing, run it as `npx tapsmith init`: pnpm 11's `pnpm exec` first re-runs the install that failed, and stops there. Commit `pnpm-workspace.yaml`: without it, CI's `pnpm install --frozen-lockfile` exits 1 the same way. When init can't write the file, it warns and says what to set.
 
 ### pnpm: the Android agent package
 
