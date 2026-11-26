@@ -180,12 +180,27 @@ export function buildTime(artifact: string): number | undefined {
  * An Android resource or asset (under a Gradle source set's `res` or
  * `assets`, e.g. `app/src/main/res/…`) or manifest, or a file of an iOS asset catalog.
  * Judged on the path below the app's project folder, so neither a folder
- * above the project nor a JavaScript `src/res/` folder counts.
+ * above the project nor a JavaScript `src/res/` or `src/common/assets/`
+ * folder counts.
  */
-function isPackagedResource(platform: 'android' | 'ios', rel: string, name: string): boolean {
-  return platform === 'android'
-    ? name === 'AndroidManifest.xml' || /(?:^|\/)src\/[^/]+\/(?:res|assets)(?:\/|$)/.test(rel)
-    : rel.split('/').some((seg) => seg.endsWith('.xcassets'));
+function isPackagedResource(platform: 'android' | 'ios', root: string, rel: string, name: string): boolean {
+  if (platform === 'ios') return rel.split('/').some((seg) => seg.endsWith('.xcassets'));
+  if (name === 'AndroidManifest.xml') return true;
+  const m = /^(?:(.*)\/)?src\/[^/]+\/(?:res|assets)(?:\/|$)/.exec(rel);
+  // Only a Gradle module's source set (`app/src/main/res`): the folder above
+  // `src` has a build script. A JavaScript `src/common/assets` has none.
+  return !!m && isGradleModule(path.join(root, m[1] ?? ''));
+}
+
+const gradleModules = new Map<string, boolean>();
+
+function isGradleModule(dir: string): boolean {
+  let known = gradleModules.get(dir);
+  if (known === undefined) {
+    known = fs.existsSync(path.join(dir, 'build.gradle')) || fs.existsSync(path.join(dir, 'build.gradle.kts'));
+    gradleModules.set(dir, known);
+  }
+  return known;
 }
 
 function isNonAppFile(name: string): boolean {
@@ -270,7 +285,7 @@ export async function findSourceChangedAfterBuild(
       const ext = path.extname(entry.name);
       const relDir = path.relative(root, dir).split(path.sep).join('/');
       const counted = native.has(ext) || APP_CONFIG_NAMES.has(entry.name) || NATIVE_FILE_NAMES[opts.platform].has(entry.name)
-        || isPackagedResource(opts.platform, relDir, entry.name)
+        || isPackagedResource(opts.platform, root, relDir, entry.name)
         || (flutter && (entry.name === 'pubspec.yaml' || relDir === 'assets' || relDir.startsWith('assets/')))
         || (opts.countJs && (JS_EXTENSIONS.has(ext) || (JS_ASSET_EXTENSIONS.has(ext) && !NON_ASSET_JSON.test(entry.name))));
       if (!counted || isNonAppFile(entry.name)) continue;
@@ -494,6 +509,7 @@ const checks = new Map<string, { at: number; result: Promise<StaleBuild | undefi
 /** Forget remembered answers (tests). */
 export function resetStaleBuildChecks(): void {
   checks.clear();
+  gradleModules.clear();
   forgetStaleBuildWarnings();
 }
 
@@ -611,7 +627,7 @@ export function markStaleBuildWarningShown(key: string): void {
 
 /**
  * The stale builds of a run's devices: the run's own config and each
- * device's session config (a group can mix platforms), each build once.
+ * device's session config, each build once.
  * `fresh` looks again whatever an earlier check found (a file just changed).
  */
 export async function checkStaleBuilds(configs: CheckedConfig[], opts: { fresh?: boolean } = {}): Promise<StaleBuild[]> {

@@ -44,6 +44,7 @@ function expoApp(opts: { debug?: boolean } = {}): { root: string; apk: string } 
   const root = project();
   write(path.join(root, 'package.json'), BEFORE, '{}');
   write(path.join(root, 'android', 'settings.gradle'), BEFORE);
+  write(path.join(root, 'android', 'app', 'build.gradle'), BEFORE);
   write(path.join(root, 'src', 'app', 'todos.tsx'), BEFORE);
   const apk = path.join(root, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
   fs.mkdirSync(path.dirname(apk), { recursive: true });
@@ -192,6 +193,7 @@ describe('findSourceChangedAfterBuild', () => {
 
   it.each([
     ['android', 'android/app/src/main/res/values/strings.xml'],
+    ['android', 'android/app/src/debug/res/values/strings.xml'],
     ['android', 'android/app/src/main/AndroidManifest.xml'],
     ['android', 'android/app/build.gradle'],
     ['android', 'app.config.ts'],
@@ -215,6 +217,8 @@ describe('findSourceChangedAfterBuild', () => {
     const { root, apk } = expoApp();
     write(path.join(root, 'src', 'res', 'colors.ts'), AFTER);
     write(path.join(root, 'src', 'res', 'logo.png'), AFTER);
+    write(path.join(root, 'src', 'common', 'assets', 'logo.png'), AFTER);
+    write(path.join(root, 'src', 'ui', 'res', 'strings.ts'), AFTER);
     write(path.join(root, 'ios', 'MyApp.xcodeproj', 'xcuserdata', 'me.xcuserdatad', 'xcschemes', 'xcschememanagement.plist'), AFTER);
     write(path.join(root, 'ios', 'MyApp.xcworkspace', 'xcshareddata', 'IDEWorkspaceChecks.plist'), AFTER);
     expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toBeUndefined();
