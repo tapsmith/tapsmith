@@ -415,8 +415,9 @@ export function androidEmulatorCaptureLine(avd: string | undefined, avdImages: A
  * infers from `android/`, `ios/`, a root `settings.gradle` or an Xcode
  * project), then the toolchains: Android needs adb, iOS needs
  * Xcode and a simulator. A project with neither gets Android when adb is
- * there, else iOS when it can run. Both narrows to the one platform with a
- * build (`builds`): the other has nothing to test yet.
+ * there, else iOS when it can run. Exactly one platform with a build
+ * (`builds`) is the default, whatever the layout and toolchains say: the
+ * other has nothing to test yet.
  */
 export function platformPrompt(
   env: EnvScan,
@@ -448,7 +449,10 @@ export function platformPrompt(
   } else {
     pick = !androidOk && iosOk ? 'ios' : 'android';
   }
-  if (pick === 'both' && builds.android !== builds.ios) pick = builds.android ? 'android' : 'ios';
+  // The one platform with a build is the one the user is testing: it wins
+  // even over a toolchain warning (adb off PATH is a fixable hint, an
+  // unbuilt platform has nothing to run) (PILOT-1510).
+  if (builds.android !== builds.ios) pick = builds.android ? 'android' : 'ios';
   return { choices, initial: choices.findIndex((c) => c.name === pick) };
 }
 

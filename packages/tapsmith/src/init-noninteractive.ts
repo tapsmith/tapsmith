@@ -230,6 +230,20 @@ export function resolveInitPlan(
         fix: 'Pass --platform android, --platform ios, or --platform android,ios',
       });
     }
+    // Both inferred, but only one has a build: that is the platform the user
+    // is testing. The other would fail for want of an app (PILOT-1510).
+    if (inferred.length === 2 && !args.platforms) {
+      const androidBuilt = !!args.apk || (detect.preferDebugApk ?? detectDefaults.preferDebugApk)(detect.findApkCandidates(cwd)).length > 0;
+      const iosBuilt = !!args.app || (env.isMacOS && (
+        detect.findIosAppCandidates(cwd).length > 0
+        || (detect.findDerivedDataApps ?? detectDefaults.findDerivedDataApps)(cwd, layout.iosProjects, 'iphonesimulator').length > 0));
+      // A bare --package may be an installed Android app or an iOS id: no call to make.
+      if (androidBuilt !== iosBuilt && (androidBuilt || !args.packageName)) {
+        const [kept, left] = androidBuilt ? ['android', 'iOS'] : ['ios', 'Android'];
+        inferred.splice(0, inferred.length, kept as Platform);
+        warnings.push(`${left} left out of the config: only the ${kept === 'ios' ? 'iOS' : 'Android'} build was found. To test ${left} too, build it, then re-run \`npx tapsmith init --force --platform android,ios\`.`);
+      }
+    }
     platforms = inferred;
     // A React Native app usually targets both, so an inferred Android-only
     // setup on a Mac says why iOS is missing and how to add it (PILOT-625).
@@ -375,8 +389,11 @@ export function resolveInitPlan(
             fix: detectDefaults.expoBuildHint(['ios'], expoProject, 'Or pass --app <path>.'),
           });
         }
+        // iOS was inferred from ios/ while an Android build or package was given:
+        // the user may only mean Android (PILOT-1510).
+        const androidOnlyHint = !args.platforms && !args.app && (args.apk || args.packageName) ? ', or pass --platform android to set up Android only' : '';
         throw new InitError('NO_IOS_APP', noIosAppMessage(layout), {
-          fix: `${detectDefaults.nativeBuildHint('ios', layout, reactNative)}, or pass --app <path>`,
+          fix: `${detectDefaults.nativeBuildHint('ios', layout, reactNative)}, or pass --app <path>${androidOnlyHint}`,
         });
       }
       if (candidates.length > 1) {
