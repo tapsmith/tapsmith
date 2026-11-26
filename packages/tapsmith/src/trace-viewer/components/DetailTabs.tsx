@@ -960,15 +960,15 @@ function buildCodeFrame(sources: Map<string, string>, loc: { file: string; line:
 }
 
 /**
- * The test error with the failed steps' own messages taken out, trimmed:
- * whatever the runner added after the failure (a `Note: …`). Undefined when
- * nothing is left.
+ * The note the runner appends to a failed test's error (`\n\nNote: …`, that
+ * the app's source changed after the build it tested), when there is one.
+ * Only that: other text the runner wraps around step errors (a soft
+ * assertion summary, `--- Additionally ---`) is not a note.
  */
-function testErrorRemainder(testError: string, failedEvents: Array<{ error?: string }>): string | undefined {
-  let rest = testError;
-  for (const ev of failedEvents) if (ev.error && rest.includes(ev.error)) rest = rest.replace(ev.error, '');
-  rest = rest.trim();
-  return rest || undefined;
+function testErrorNote(testError: string): string | undefined {
+  const at = testError.lastIndexOf('\n\nNote: ');
+  const note = at >= 0 ? testError.slice(at + 2) : testError.startsWith('Note: ') ? testError : undefined;
+  return note?.trim() || undefined;
 }
 
 function ErrorsTab({ event, events, testError, sources, metadata }: {
@@ -990,10 +990,10 @@ function ErrorsTab({ event, events, testError, sources, metadata }: {
   // shows one error block per failure rather than duplicating at the bottom).
   const showTestError = testError
     && !failedEvents.some((ev) => ev.error && testError.includes(ev.error));
-  // What the test error adds to the failed step's own message when it is
-  // suppressed: a note the runner appended (that the app's source changed
-  // after the build it tested, say). Shown on its own so it is not lost.
-  const testErrorNote = testError && !showTestError ? testErrorRemainder(testError, failedEvents) : undefined;
+  // A note the runner appended to the failed step's message (that the app's
+  // source changed after the build it tested): shown on its own, since the
+  // test error that carries it is suppressed.
+  const note = testError && !showTestError ? testErrorNote(testError) : undefined;
 
   // A step that passed but warned (a tap that may only have closed the
   // keyboard) may be why a later one failed. With no failure it is only on
@@ -1020,10 +1020,10 @@ function ErrorsTab({ event, events, testError, sources, metadata }: {
           <div class="error-message">{testError}</div>
         </div>
       )}
-      {testErrorNote && (
+      {note && (
         <div class="error-entry" data-testid="error-entry">
           <div class="error-title"><AlertTriangle size={14} class="error-title-icon" />Note</div>
-          <div class="error-message">{testErrorNote}</div>
+          <div class="error-message">{note}</div>
         </div>
       )}
       {warnedEvents.map((ev, i) => (

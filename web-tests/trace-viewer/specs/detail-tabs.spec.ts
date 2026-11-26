@@ -368,6 +368,13 @@ test.describe("Detail tabs", () => {
       })
       await detailTabs.select("Errors")
       await expect(detailTabs.errorEntries).toHaveCount(1)
+      // Other text the runner wraps around step errors is not a note.
+      await viewer.open({
+        metadata: { testStatus: "failed", error: `1 soft assertion(s) failed:\n${stepError}` },
+        events: [actionEvent({ actionIndex: 0, action: "tap", success: false, error: stepError })],
+      })
+      await detailTabs.select("Errors")
+      await expect(detailTabs.errorEntries).toHaveCount(1)
     })
 
     test("lists a step that passed with a warning under the test's failure", async ({ viewer, detailTabs, actions }) => {
