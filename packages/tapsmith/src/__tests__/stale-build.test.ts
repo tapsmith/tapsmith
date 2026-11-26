@@ -120,6 +120,31 @@ describe('appSourceRoot', () => {
     expect(appSourceRoot(built, home)).toBeUndefined();
   });
 
+  it("counts a Kotlin Multiplatform app's shared code for its iOS build, and only the sets each build compiles", async () => {
+    const root = project();
+    write(path.join(root, 'settings.gradle.kts'), BEFORE);
+    write(path.join(root, 'shared', 'build.gradle.kts'), BEFORE);
+    fs.mkdirSync(path.join(root, 'iosApp', 'iosApp.xcodeproj'), { recursive: true });
+    const app = path.join(root, 'iosApp', 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'iosApp.app');
+    write(path.join(app, 'iosApp'), BUILT);
+    fs.utimesSync(app, BUILT, BUILT);
+    const apk = write(path.join(root, 'composeApp', 'build', 'outputs', 'apk', 'debug', 'composeApp-debug.apk'), BUILT);
+    expect(appSourceRoot(app)).toBe(root);
+
+    write(path.join(root, 'shared', 'src', 'iosMain', 'kotlin', 'Platform.kt'), AFTER);
+    expect(await findSourceChangedAfterBuild(app, { platform: 'ios', countJs: false })).toMatchObject({ newestRelative: 'shared/src/iosMain/kotlin/Platform.kt' });
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toBeUndefined();
+
+    write(path.join(root, 'shared', 'src', 'commonTest', 'kotlin', 'GreetingTest.kt'), AFTER);
+    write(path.join(root, 'shared', 'src', 'androidMain', 'kotlin', 'Platform.android.kt'), AFTER);
+    expect(await findSourceChangedAfterBuild(app, { platform: 'ios', countJs: false })).toMatchObject({ count: 1 });
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toMatchObject({ newestRelative: 'shared/src/androidMain/kotlin/Platform.android.kt', count: 1 });
+
+    write(path.join(root, 'shared', 'src', 'commonMain', 'kotlin', 'Greeting.kt'), AFTER);
+    expect(await findSourceChangedAfterBuild(app, { platform: 'ios', countJs: false })).toMatchObject({ count: 2 });
+    expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toMatchObject({ count: 2 });
+  });
+
   it('has no answer for a build outside any project', () => {
     const home = project();
     const apk = write(path.join(home, 'Downloads', 'app.apk'), BUILT);

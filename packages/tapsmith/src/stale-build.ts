@@ -69,7 +69,22 @@ const NATIVE_FILE_NAMES = {
 const JS_ASSET_EXTENSIONS = new Set(['.json', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ttf', '.otf', '.mp3', '.mp4', '.lottie']);
 const NON_ASSET_JSON = /^(?:package(?:-lock)?|tsconfig(?:\..*)?|jsconfig|eas|tapsmith|lerna|nx|turbo|biome|components|composer|vercel|netlify|renovate|\.[^.].*)\.json$/;
 /** The other platform's native folder in a React Native or Flutter app: never in this build. */
-const OTHER_PLATFORM_DIR = { android: 'ios', ios: 'android' } as const;
+const OTHER_PLATFORM_DIRS = { android: ['ios', 'iosApp'], ios: ['android', 'androidApp'] } as const;
+
+/**
+ * Kotlin Multiplatform source sets (`src/<set>/kotlin/…`) that an iOS build
+ * compiles: the shared and Apple ones. An Android build compiles every set
+ * but the Apple, native, web and desktop ones. Test sets go into neither.
+ */
+const KOTLIN_IOS_SETS = /^(?:common|ios|apple|native)\w*Main$/;
+const KOTLIN_NOT_ANDROID_SETS = /^(?:ios|apple|native|macos|tvos|watchos|js|wasm|desktop|jvm|linux|mingw)\w*$|Test$/;
+
+/** Whether a `.kt` file in `relDir` is compiled into a build for `platform`. */
+function kotlinCounts(platform: 'android' | 'ios', relDir: string): boolean {
+  const m = /(?:^|\/)src\/([^/]+)(?:\/|$)/.exec(relDir);
+  if (platform === 'ios') return !!m && KOTLIN_IOS_SETS.test(m[1]!);
+  return !m || !KOTLIN_NOT_ANDROID_SETS.test(m[1]!);
+}
 /** Files counted only when the build embeds its JavaScript (a Release React Native build). */
 const JS_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
 /** Expo's app config: read when the native app is built (prebuild), so a change needs a rebuild whatever the build type. */
@@ -131,8 +146,8 @@ function isProjectDir(dir: string): boolean {
  * The app's project folder: the nearest folder above the build that is an
  * app project (`pubspec.yaml`, `settings.gradle(.kts)`, an `.xcodeproj` /
  * `.xcworkspace`, `Package.swift`, or a React Native / Expo `package.json`).
- * A React Native or Flutter app's `android/` or `ios/` folder stands for the
- * app above it. A build in Xcode's DerivedData stands for the workspace or
+ * A React Native or Flutter app's `android/` or `ios/` folder, and a Kotlin
+ * Multiplatform app's `iosApp/`, stands for the app above it. A build in Xcode's DerivedData stands for the workspace or
  * project Xcode recorded it was built from. Undefined for a build outside any
  * app project (a download, also one kept in a separate test project), or
  * when the nearest one is the home folder or the filesystem root.
@@ -156,6 +171,12 @@ export function appSourceRoot(artifact: string, home = process.env.HOME): string
       const name = path.basename(dir);
       if ((name === 'android' || name === 'ios')
         && ['package.json', 'pubspec.yaml'].some((f) => fs.existsSync(path.join(parent, f)))) {
+        return parent;
+      }
+      // A Kotlin Multiplatform app's iOS host project, beside the Gradle build
+      // that compiles its shared code.
+      if ((name === 'iosApp' || name === 'ios')
+        && ['settings.gradle', 'settings.gradle.kts'].some((f) => fs.existsSync(path.join(parent, f)))) {
         return parent;
       }
       return dir;
@@ -262,7 +283,7 @@ export async function findSourceChangedAfterBuild(
   const limits = opts.limits ?? DEFAULT_LIMITS;
   const skip = new Set([
     path.resolve(artifact),
-    path.join(root, OTHER_PLATFORM_DIR[opts.platform]),
+    ...OTHER_PLATFORM_DIRS[opts.platform].map((d) => path.join(root, d)),
     ...(opts.skipDirs ?? []).map((d) => path.resolve(d)),
   ]);
   const native = NATIVE_EXTENSIONS[opts.platform];
@@ -295,7 +316,8 @@ export async function findSourceChangedAfterBuild(
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name);
       const relDir = path.relative(root, dir).split(path.sep).join('/');
-      const counted = native.has(ext) || APP_CONFIG_NAMES.has(entry.name) || NATIVE_FILE_NAMES[opts.platform].has(entry.name)
+      const counted = (ext === '.kt' ? kotlinCounts(opts.platform, relDir) : native.has(ext))
+        || APP_CONFIG_NAMES.has(entry.name) || NATIVE_FILE_NAMES[opts.platform].has(entry.name)
         || isPackagedResource(opts.platform, root, relDir, entry.name)
         || (flutter && (entry.name === 'pubspec.yaml' || relDir === 'assets' || relDir.startsWith('assets/')))
         || (opts.countJs && (JS_EXTENSIONS.has(ext) || (JS_ASSET_EXTENSIONS.has(ext) && !NON_ASSET_JSON.test(entry.name))));

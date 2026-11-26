@@ -137,6 +137,20 @@ describe('runTestFile with a build older than the app source (PILOT-1398)', () =
     expect(next[0].warnings).toBeUndefined();
   });
 
+  it('does not repeat the note as a warning on the tests a failed beforeAll fails', async () => {
+    const file = writeTest('i1.test.mjs', `
+      test.beforeAll(async () => { throw new Error('login failed'); });
+      test('one', async () => {});
+      test('two', async () => {});
+    `);
+    const results = collectResults(await runTestFile(file, makeOpts({ runMode: 'ui' })));
+    expect(results.map((r) => r.status)).toEqual(['failed', 'failed']);
+    for (const r of results) {
+      expect(r.error?.message).toContain(HINT);
+      expect(r.warnings).toBeUndefined();
+    }
+  });
+
   it('says nothing when the build is current', async () => {
     mocks.stale = [];
     const file = writeTest('e.test.mjs', "test('fails', async () => { throw new Error('boom'); });");

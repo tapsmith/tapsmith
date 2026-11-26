@@ -241,6 +241,18 @@ function noteWarningsShown(opts: RunOptions, warnings: readonly string[]): void 
   }
 }
 
+/**
+ * A failure whose error already carries the stale-build note does not repeat
+ * it as a warning right above it (`warnings` is edited in place).
+ */
+function dropWarningsTheErrorCarries(opts: RunOptions, warnings: string[], error: Error | undefined): void {
+  const keys = opts._staleBuildWarningKeys;
+  if (!keys || !error) return;
+  for (let i = warnings.length - 1; i >= 0; i--) {
+    if (keys.has(warnings[i]!) && error.message.includes(warnings[i]!)) warnings.splice(i, 1);
+  }
+}
+
 /** Say on a failed test's error that the build is older than the app's source. */
 function hintStaleBuild(error: Error | undefined, opts: RunOptions): void {
   if (!error) return;
@@ -2873,6 +2885,7 @@ async function runSuiteContext(
       drainPreflightNotices(opts, null);
       const scopeWarnings = [...(opts._preflightWarnings?.splice(0) ?? []), ...takeDeviceActionWarnings(opts)];
       noteWarningsShown(opts, scopeWarnings);
+      dropWarningsTheErrorCarries(opts, scopeWarnings, beforeAllError);
       for (const tr of collectResults(failed)) {
         if (scopeWarnings.length > 0) tr.warnings = [...scopeWarnings];
         result.tests.push(tr);
@@ -4087,13 +4100,7 @@ async function runSuiteContext(
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
     noteWarningsShown(opts, warnings);
-    // A failure whose error already carries the stale-build note does not
-    // repeat it as a warning right above it.
-    if (status === 'failed' && error && opts._staleBuildWarningKeys) {
-      for (let i = warnings.length - 1; i >= 0; i--) {
-        if (opts._staleBuildWarningKeys.has(warnings[i]!) && error.message.includes(warnings[i]!)) warnings.splice(i, 1);
-      }
-    }
+    if (status === 'failed') dropWarningsTheErrorCarries(opts, warnings, error);
     if (reportedOnKeptScreens && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
     warnings.push(...reportedActionWarnings);
     const testResult: TestResult = {
