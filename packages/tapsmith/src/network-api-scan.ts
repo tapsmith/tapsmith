@@ -162,6 +162,25 @@ async function moduleUsesNetworkApis(file: string): Promise<boolean> {
   }
 }
 
+/**
+ * The local modules `files` load (helpers, fixtures, screen objects), the
+ * files themselves included, deduplicated. Package imports are not followed.
+ * A file esbuild cannot build (a syntax error) fails the whole build, so the
+ * files are then built one by one and a file that still fails counts alone.
+ * Throws only on an unexpected esbuild failure.
+ */
+export async function testFileModules(files: readonly string[]): Promise<string[]> {
+  if (files.length === 0) return [];
+  let modules: string[];
+  try {
+    modules = await localModules([...files]);
+  } catch {
+    const perFile = await Promise.all(files.map((f) => localModules([f]).catch(() => [path.resolve(f)])));
+    modules = perFile.flat();
+  }
+  return [...new Set(modules)];
+}
+
 /** What a scan found, and every local module it read. */
 interface NetworkApiScan {
   uses: boolean
@@ -173,17 +192,7 @@ interface NetworkApiScan {
 async function scanNetworkApis(files: readonly string[]): Promise<NetworkApiScan> {
   if (files.length === 0) return { uses: false, modules: [], failed: false };
   try {
-    let modules: string[];
-    try {
-      modules = await localModules([...files]);
-    } catch {
-      // A file esbuild cannot build (a syntax error) fails the whole build:
-      // build the files one by one, so the others still count, and read a
-      // file that still fails on its own.
-      const perFile = await Promise.all(files.map((f) => localModules([f]).catch(() => [path.resolve(f)])));
-      modules = perFile.flat();
-    }
-    const unique = [...new Set(modules)];
+    const unique = await testFileModules(files);
     const results = await Promise.all(unique.map(moduleUsesNetworkApis));
     return { uses: results.some(Boolean), modules: unique, failed: false };
   } catch {
