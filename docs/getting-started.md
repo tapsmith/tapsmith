@@ -370,6 +370,20 @@ What to know before writing tests:
 - **WebViews** from `webview_flutter` need debugging turned on in the app: see [WebView testing](webview.md#prerequisites).
 - **CI.** [Flutter app on Android](ci-setup.md#flutter-app-on-android) and [Flutter app on iOS](ci-setup.md#flutter-app-on-ios) give the workflow steps.
 
+### After you change the app
+
+Tapsmith tests the build your config names (`apk` or `app`), installed on the device, not your source code. A change to the app reaches the tests only after you rebuild it: run the build command for your project again ([native](#native-projects), [React Native and Expo](#react-native-and-expo), [Flutter](#flutter)). The next run installs the new build, and a UI mode, watch or MCP session reinstalls it before its next run.
+
+**Coming from Expo Go?** Expo Go and live reload load your JavaScript from the dev server as you save, so an edit shows up at once. A Release build has your JavaScript bundled inside it: Tapsmith installs that build and launches it, and saving a file changes nothing on the device until you rebuild (for example `npx expo run:android --variant release`). To have JavaScript edits reach the app without a rebuild while you write tests, test a [development build with Metro](#debug-and-dev-client-builds-with-metro) instead. Changes to native code, `app.json` or native modules still need a rebuild then.
+
+When files in the app's project are newer than the build, Tapsmith says so: `tapsmith test` prints a warning before the run, UI mode shows a notice when you save an app file and before each run, watch and MCP runs add a warning to a test result, and a test that fails in that state says so in its error. For example:
+
+```text
+⚠ src/app/todos.tsx changed after app-release.apk was built. Tapsmith tests the installed build, not your source: rebuild the app to test the change.
+```
+
+The check compares modification times: it looks at the app's project folder (the one above the build's `android/` or `ios/` folder, or the native project the build is in), skipping `node_modules`, build output and folders whose names start with a dot, and leaves out Tapsmith's test files and the modules they import. It counts JavaScript and TypeScript only when the build has its JavaScript bundled in (a Release build); native sources and `app.json` always count. It is skipped in CI, where the pipeline builds the app from the same checkout.
+
 ## Quick Setup (Recommended)
 
 The interactive setup wizard detects your environment, walks you through platform configuration, and generates your config file:
