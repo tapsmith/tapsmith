@@ -15,7 +15,7 @@ import { sharedDeviceGroup } from './project.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { assignGroupMemberDevices, deviceGroupSize, resolveDeviceGroup, type DeviceGroupEntry } from './config.js';
 import { TapsmithGrpcClient } from './grpc-client.js';
-import { claimDeviceOrThrow, claimUpTo, currentSession, heldDevicesNote, skippedHeldDeviceMessage, withoutHeldDevices } from './device-claims.js';
+import { claimDeviceOrThrow, claimUpTo, currentSession, devicesHeldElsewhere, heldDevicesNote, skippedHeldDeviceMessage, withoutHeldDevices } from './device-claims.js';
 import { labelledMessage, withDetail } from './error-detail.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonOutputCapture, type DaemonStartFailed } from './daemon-start.js';
 import type { TestResult, SuiteResult } from './runner.js';
@@ -54,6 +54,7 @@ import {
   filterHealthySimulators,
   listAdoptableBootedSimulators,
   listBootedSimulators,
+  adoptedSimulatorsWarning,
   type ClonedSimulator,
 } from './ios-simulator.js';
 import { freeStaleAgentPort } from './port-utils.js';
@@ -1431,6 +1432,8 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       // versions.
       const iosDevices = onlineDevices.filter((d) => d.platform === 'ios');
       const daemonIosUdids = new Set(iosDevices.map((d) => d.serial));
+      // What was booted before this run, for the warning below (PILOT-1517).
+      const bootedBefore = listBootedSimulators();
       const candidateUdids = listAdoptableBootedSimulators(config.simulator, {
         among: iosDevices.map((d) => d.serial),
       }).map((s) => s.udid);
@@ -1479,6 +1482,14 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
           await refreshClient.listDevices();
           refreshClient.close();
         }
+      }
+      // Adopted by name, booted before this run, while other simulators are
+      // booted too: say which ones were taken (PILOT-1517). A UDID in the
+      // config is a choice, not a guess; Tapsmith's clones are its own.
+      const othersBooted = adoptedSimulatorsWarning(config.simulator, deviceSerials, bootedBefore, devicesHeldElsewhere());
+      if (othersBooted) {
+        if (launchProgress) launchProgress.note(othersBooted);
+        else process.stderr.write(`${YELLOW}${othersBooted}${RESET}\n`);
       }
     } else {
       // ─── Android device discovery & provisioning ───

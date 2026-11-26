@@ -140,29 +140,50 @@ export function listAdoptableBootedSimulators(
 }
 
 /**
- * What a run says when it adopts an already-booted simulator by the
- * configured name while other simulators are booted too (PILOT-1517): the
- * booted one of that name may be someone else's, and the developer's own may
- * be another. Names the driven simulator and the others with their UDIDs,
- * and how to pin one. Tapsmith's worker clones, simulators the run expects
- * (`expected`: UDIDs it pins, such as other group members) and non-iOS
- * simulators are not counted. Undefined when no other simulator is booted.
+ * What a run says when it adopts already-booted simulators by the configured
+ * name while other simulators are booted too (PILOT-1517): a booted one of
+ * that name may be someone else's, and the developer's own may be another.
+ * Names the driven simulators and the others with their UDIDs, and how to pin
+ * one. Not counted as others: Tapsmith's worker clones, non-iOS simulators,
+ * and `exclude` — the run's own devices, ones it pins (other group members),
+ * and ones another Tapsmith session holds (unusable, so never the one meant).
+ * Undefined when nothing was adopted or no other simulator is booted.
  */
 export function otherBootedSimulatorsWarning(
-  driven: Pick<SimulatorInfo, 'name' | 'udid'>,
+  driven: ReadonlyArray<Pick<SimulatorInfo, 'name' | 'udid'>>,
   simulators: readonly SimulatorInfo[],
-  expected: readonly string[] = [],
+  exclude: Iterable<string> = [],
 ): string | undefined {
+  if (driven.length === 0) return undefined;
+  const skip = new Set([...exclude, ...driven.map((s) => s.udid)]);
   const others = simulators.filter((s) =>
     s.state === 'Booted'
-    && s.udid !== driven.udid
+    && !skip.has(s.udid)
     && /(^|\.)iOS-/.test(s.runtime)
-    && !/ \(Tapsmith Worker \d+\)$/.test(s.name)
-    && !expected.includes(s.udid));
+    && !/ \(Tapsmith Worker \d+\)$/.test(s.name));
   if (others.length === 0) return undefined;
-  return `Simulator '${driven.name}' (${driven.udid}) was already booted before this run, and the config names it, so the app is installed and tested on it. ` +
-    `Other simulators are booted too: ${others.map((s) => `'${s.name}' (${s.udid})`).join(', ')}. ` +
+  const list = (sims: ReadonlyArray<Pick<SimulatorInfo, 'name' | 'udid'>>) => sims.map((s) => `'${s.name}' (${s.udid})`).join(', ');
+  const one = driven.length === 1;
+  return `${one ? 'Simulator' : 'Simulators'} ${list(driven)} ${one ? 'was' : 'were'} already booted before this run, and the config names ${one ? 'it' : 'them'}, so the app is installed and tested on ${one ? 'it' : 'them'}. ` +
+    `Other simulators are booted too: ${list(others)}. ` +
     'If you meant one of those, set `simulator` in the config to its UDID.';
+}
+
+/**
+ * {@link otherBootedSimulatorsWarning} for a run that took `runUdids`
+ * (a parallel run's workers): the driven ones are those already booted
+ * before the run (`bootedBefore`), other than Tapsmith's clones and a
+ * simulator the config names by UDID, which is a choice, not a guess.
+ */
+export function adoptedSimulatorsWarning(
+  configured: string,
+  runUdids: readonly string[],
+  bootedBefore: readonly SimulatorInfo[],
+  held: Iterable<string> = [],
+): string | undefined {
+  const adopted = bootedBefore.filter((s) =>
+    runUdids.includes(s.udid) && s.udid !== configured && !/ \(Tapsmith Worker \d+\)$/.test(s.name));
+  return otherBootedSimulatorsWarning(adopted, bootedBefore, [...runUdids, ...held]);
 }
 
 /**

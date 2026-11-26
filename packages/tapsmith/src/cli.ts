@@ -34,7 +34,7 @@ import {
   type DeviceSession,
 } from './device-session.js';
 import type { PreparedState, ResetCapabilities } from './app-reset.js';
-import { claimDeviceOrThrow, claimFirstFree, claimUpTo, currentSession, ensureClaimSession, devicesHeldByThisProcess, heldDevicesNote, listDeviceClaims, releaseDeviceClaim, skippedHeldDeviceMessage, withoutHeldDevices } from './device-claims.js';
+import { claimDeviceOrThrow, claimFirstFree, claimUpTo, currentSession, ensureClaimSession, devicesHeldByThisProcess, devicesHeldElsewhere, heldDevicesNote, listDeviceClaims, releaseDeviceClaim, skippedHeldDeviceMessage, withoutHeldDevices } from './device-claims.js';
 import { installActionProgressPrinter } from './action-progress-renderer.js';
 import { discoverTestFiles, noConfigFoundMessage, noTestFilesFoundMessage, relativeTestPath, resolveTestFileArgs } from './test-file-discovery.js';
 import { resolveTsxBin, tsxIpcPathProblem } from './child-scripts.js';
@@ -1181,7 +1181,7 @@ async function ensureSequentialTargetDevice(
       // config is a choice, not a guess: nothing to say then.
       const othersBooted = matching.udid === simulatorName
         ? undefined
-        : otherBootedSimulatorsWarning(matching, booted, pinnedDeviceSerials(config));
+        : otherBootedSimulatorsWarning([matching], booted, [...pinnedDeviceSerials(config), ...devicesHeldElsewhere()]);
       if (othersBooted) {
         if (progress) progress.note(othersBooted);
         else process.stderr.write(`${YELLOW}${othersBooted}${RESET}\n`);
