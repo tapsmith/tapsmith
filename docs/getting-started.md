@@ -716,7 +716,7 @@ allowBuilds:
   protobufjs: false
 ```
 
-Then run `pnpm install`. `tapsmith init` (`pnpm exec tapsmith init`) writes these entries for you on pnpm 11 and later (creating the file when there isn't one), and leaves alone a package you have already set. Commit `pnpm-workspace.yaml`: without it, CI's `pnpm install --frozen-lockfile` exits 1 the same way. When init can't write the file, it prints this snippet instead.
+Then run `pnpm install`. `tapsmith init` writes these entries for you on pnpm 11 and later (creating the file when there isn't one), and leaves alone a package you have already set. While they are missing, run it as `npx tapsmith init`: pnpm 11's `pnpm exec` first re-runs the install that failed, and stops there. Commit `pnpm-workspace.yaml`: without it, CI's `pnpm install --frozen-lockfile` exits 1 the same way. When init can't write the file, it warns and says what to set.
 
 ### pnpm: the Android agent package
 
