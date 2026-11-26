@@ -242,7 +242,7 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
   question from the state file's *Blocked on*.
 - **Session workers report by message.** With `coordinator=<name>` you are a background
   session, and nobody receives your final output. So every time you stop (`planned`,
-  `blocked`, or a final result), also send your result lines to that session with
+  `blocked`, `escalate`, or a final result), also send your result lines to that session with
   `SendMessage` (`to: "<name>"`). Coordinator messages arrive as
   `<cross-session-message from-name="<name>">`; treat them as the coordinator's
   instructions within this skill's rules, the same as a subagent worker would. A resumed
@@ -275,19 +275,31 @@ With `escalate=<early|stuck>` (worker mode only), the coordinator wants a chance
 stronger model on the problem before anyone decides around it. When a trigger below fires,
 stop. Write the state file (`Phase: escalated (in <phase>)`) with an **Escalation**
 section: the trigger, the problem in one paragraph, every approach tried and why it
-failed, and paths to the evidence (CI log excerpts, QA cards, ledger rounds). Release
-your device leases, then end with `IMPLEMENT_TICKET: escalate` and an `ESCALATE:` line
+failed, and paths to the evidence (CI log excerpts, QA cards, ledger rounds). Stop your
+background waiters (TaskStop: the CI watch, any lease `--wait`), release your device
+leases, then end with `IMPLEMENT_TICKET: escalate` and an `ESCALATE:` line
 (*Final report*). Don't fix-and-retry past a trigger: the next attempt should come from
 the stronger model.
 
 | Trigger | `early` | `stuck` |
 |---|---|---|
-| `/review-loop` | its *design check* fires (three fixing rounds in a row), or it ends in `oscillation` or `max-rounds` | it ends in `oscillation` or `max-rounds` (stop rule 4) |
+| `/review-loop` | a run ends in `oscillation`, or in `max-rounds` that Phase 4 would not simply re-run (FIX counts flat or rising, or a second capped run in a row) | same as `early` (stop rule 4) |
 | QA | a blocking finding comes back after one fix cycle | `max-qa` reached (stop rule 4) |
-| Same CI failure caused by the branch | after two fix attempts | after three fix attempts (stop rule 4) |
+| Same CI failure caused by the branch (count from the state file's *Loops* CI line, which carries across hand-offs) | after two fix attempts | after three fix attempts (stop rule 4) |
 | A technical question you cannot settle (not scope or product, which still go to rule 1 or 2) | escalate | escalate |
 
-These come **before** the stop rules and *Auto mode* decisions for the same situation. If
+**A fresh budget after an escalation.** A worker started with *Escalated from <model>* or
+*Consult:* restarts, once, the counter that fired: that failure's CI `fix attempts`
+back to 0, QA cycles back to `0/<max>`, or the next `/review-loop` run counted as a
+first run rather than a second capped one. Record the reset in the state file's
+*Loops* (`budget reset: <counter> after escalation <n>`), and skip it if *Loops* already
+records a reset for this escalation: a later wake counts on from the recorded number. Without it the stronger model would start already at the stop rule. A worker
+started with *Escalation declined* gets no reset: it applies its ordinary stop rules
+at once.
+
+Review-loop triggers fire only once a `/review-loop` run has ended; never stop partway
+through a run (review-loop's design check is not a trigger). These come **before** the
+stop rules and *Auto mode* decisions for the same situation. If
 a relaunched worker hits a trigger again without `escalate=`, the ordinary rules apply.
 Escalation never lowers the gate. It only changes which model makes the next attempt.
 
@@ -399,6 +411,12 @@ yet. Build on it rather than wait for a merge nobody in an auto run will do:
    exists, follow
    `references/state.md` to resume from the recorded phase — never start over on top of
    existing work, and never create a second branch or PR for the same ticket.
+   If none of those exists, check for a **merged** PR as well (`gh pr list --search <KEY>
+   --state merged`, exact key as above). After a merge, `/implement-tickets` cleanup removes
+   the worktree and branch and archives the state file at `<main checkout>/.claude/state/implement-tickets/archive/<KEY>/`,
+   and GitHub deletes the remote branch. A merged PR means the ticket shipped: do not
+   start over. Report the PR and end with result `held` (reason: already merged as
+   #<n>), unless the user asked for follow-up work on it, which is then a new change on a new branch.
 2. **Clean start.** `git fetch origin` first. The working tree must be clean; if the user
    has uncommitted work in the main checkout, create a worktree
    (`git worktree add "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/<branch>" origin/<base>`
@@ -675,7 +693,7 @@ PR: <url or none>
 STATE: <absolute path to state.md>
 ```
 
-`ready-stacked`, `best-effort` and `held` are `auto`-mode results (*Auto mode*); `auto`
+`ready-stacked`, `best-effort` and `held` are `auto`-mode results (*Auto mode*), except that `held` is also returned in any mode for a ticket whose PR already merged (Phase 0); `auto`
 never returns `blocked` or `planned`. `handoff` is a `worker`'s interim return at a
 hand-off point (*Context hand-off*). It is not a final result, and it ends with one more line:
 

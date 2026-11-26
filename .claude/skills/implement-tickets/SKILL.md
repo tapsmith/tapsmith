@@ -60,10 +60,12 @@ tokens. If the budget is tight, pause or defer tickets instead.
   per token, and a worker's context reaches hundreds of thousands of tokens. It is used
   only as a consult (below).
 
-**Re-picking at relaunch.** A fresh worker (Phase 6 on, subagent host) gets its model
-for the job it is woken for:
-- **sonnet**, whatever the ticket's tier, for a mechanical wake: CI green and only the
-  gate to re-run, bot or nit threads, a merge after the gate passed.
+**Re-picking at relaunch** (`model=auto` only; a forced `model=` is used for every
+launch). A fresh worker (Phase 6 on, subagent host) gets its model for the job it is
+woken for:
+- **sonnet** for a mechanical wake, whatever the ticket's starting tier, unless the
+  ticket has escalated (then opus: an escalated ticket never steps back down): CI green
+  and only the gate to re-run, bot or nit threads, a merge after the gate passed.
 - **The ticket's tier** for a wake that needs judgment: a red CI run that is not a
   known flake, a conflict with the base, a human review asking for changes, an answer
   that changes the design, or a QA re-run's findings.
@@ -72,8 +74,9 @@ When unsure, use the ticket's tier. A sonnet relaunch of an opus ticket also get
 `escalate=early`; if it escalates, the next worker goes back on opus. On the `sessions` host, workers are messaged rather
 than relaunched (*Worker hosts*), so only the starting tier and escalation apply.
 
-**Escalation.** Pass `escalate=early` to every sonnet worker. Pass `escalate=stuck` to
-opus workers when `fable` is not `off`. With `escalate`, a worker stops at fixed
+**Escalation.** With `model=auto`, pass `escalate=early` to every sonnet worker. Pass
+`escalate=stuck` to opus workers (tiered or forced) when `fable` is not `off`. A forced
+`model=sonnet` worker never gets `escalate=`: it applies its own stop rules. With `escalate`, a worker stops at fixed
 struggle points with `IMPLEMENT_TICKET: escalate` (implement-ticket *Escalation*). On
 that result:
 
@@ -133,7 +136,7 @@ the session). `<batch-id>` is the start date plus the keys sorted numerically, e
 <lanes and the reason for each>
 
 ## Model use
-- PILOT-19: sonnet (tier: <reason>) → opus at 4-review (escalate: review-loop design check) · review rounds 5 · QA cycles 2 · tokens <from each worker's result, when shown>
+- PILOT-19: sonnet (tier: <reason>) → opus at 4-review (escalate: review-loop max-rounds, FIX counts flat) · review rounds 5 · QA cycles 2 · tokens <from each worker's result, when shown>
 - PILOT-12: opus → fable consult at 6-ci-threads (<trigger>) · plan worked: yes/no, <why>
 
 ## Questions
@@ -171,7 +174,11 @@ If a coordinator state file exists for these keys (match on the keys part of the
 `*-<sorted keys>.md` — the date prefix is the start date, not today's), or any ticket already has a worktree,
 branch or PR, **resume**: rebuild the table from the state file and from reality (each
 ticket's worktree state file at `<worktree>/.claude/state/implement-ticket/<KEY>/state.md`,
-its branch, its PR). Subagent workers from an earlier session are gone, so re-launch any ticket
+or, once *Cleanup* has removed the worktree, its archived copy at
+`<main checkout>/.claude/state/implement-tickets/archive/<KEY>/state.md`; its branch; its
+PR, searched in every state (`gh pr list --search <KEY> --state all`, exact key)). A
+ticket whose PR has **merged** is finished: record it as `merged` and never relaunch it.
+Subagent workers from an earlier session are gone, so re-launch any other ticket
 that is not `ready-to-merge` — `implement-ticket` resumes from its own state, on the model
 its *Model* column now says (*Models*) — except a
 ticket whose last result was `handoff`: re-arm its hand-off watch (Phase 3) from the
@@ -248,8 +255,8 @@ For each ticket that is ready to start, up to `max-parallel` running at once:
    — `plan-review` in interactive mode, so the user approves every plan in one batch;
    `auto` (never `plan-review`) in auto mode, plus `after=<branch>` for a stacked ticket,
    and `no-handoff coordinator=<your session name>` on the `sessions` host (*Worker hosts*).
-   Add `escalate=early` for a sonnet worker, or `escalate=stuck` for an opus one unless
-   `fable=off` (*Models*).
+   Add `escalate=early` for a sonnet worker under `model=auto`, or `escalate=stuck` for an
+   opus one unless `fable=off` (*Models* → *Escalation*).
 3. Record the worker's id/name, and move on. Launch all ready workers in one message so
    they start together. On the `sessions` host, also subscribe to each worker's
    `notify_when_idle` (*Worker hosts*), since its stop does not notify you.
@@ -273,7 +280,8 @@ running in the background — whose prompt is:
 > `<KEY> worker worktree=<path> …`, and follow that skill exactly. You are a worker in a
 > batch coordinated by another agent; never ask the user anything directly. End your
 > final message with the skill's result lines (`IMPLEMENT_TICKET:`, `PR:`, `STATE:`, and
-> `QUESTION:`/`OPTIONS:`/`DEFAULT:` when blocked, `WAITING_ON:` on a hand-off).
+> `QUESTION:`/`OPTIONS:`/`DEFAULT:` when blocked, `WAITING_ON:` on a hand-off,
+> `ESCALATE:` on an escalation).
 
 You are notified when each worker stops. To answer or instruct a stopped worker, send it
 a message with `SendMessage` (its agent id is in the tool result; keep it in the state
@@ -283,7 +291,9 @@ whose context is worth keeping. **From Phase 6 on** (the state file's `Phase:` l
 `blocked (in <phase>)`),
 launch a **fresh worker** instead: a new `Agent` call with the same prompt plus one line
 saying why (*Woken by: …*, *Answer to your QUESTION: …*, *Main moved: …*, *Resume after
-an infra stop*). It resumes from the state file. A late-phase worker's context is
+an infra stop*). It resumes from the state file. *Escalated from …*, *Consult: …* and
+*Escalation declined* are one-shot lines: put them only in the first launch after that
+escalation, never in later relaunches built from that prompt. A late-phase worker's context is
 300–600k tokens, and messaging it re-caches all of that before it does anything
 (implement-ticket *Context hand-off*). Never message a worker that returned `handoff`.
 Its successor is the next fresh worker. Subagent workers can spawn their own
@@ -362,7 +372,7 @@ On every worker stop, read its result lines, update the table, then act:
 | `ready-to-merge` | Record the PR; tell the user it can be merged (with `merge`: say why the worker could not). Start the next queued ticket. |
 | `escalate` | Free the slot and follow *Models* → *Escalation*: relaunch on opus, ask about or run a Fable consult, or relaunch with *Escalation declined*. Record it in *Model use*. The relaunch takes the next free slot ahead of new tickets. |
 | `ready-stacked` / `best-effort` / `held` (auto) | Record it and its reason; free the slot. Start any ticket stacked on it (not on a `held` one). |
-| `handoff` | Not a result: the worker is waiting for something listed in `WAITING_ON`. Record that and the head SHA, free the slot, and start a **hand-off watch** for its PR: implement-ticket's `references/pr-and-ci.md` §*Hand-off watch*, in the background (Bash `timeout` 7200000), one per PR. When it ends (`WAIT_DONE` or `WAIT_TIMEOUT`), launch a fresh worker (*Worker hosts*) with *Woken by: <the watch's last line>*. Relaunches take the next free slot ahead of new tickets, since they are nearest to done. If no slot is free, set the row to `relaunch queued` with that line: its watch has done its job and is not re-armed, and the ticket gets exactly one fresh worker when a slot frees. |
+| `handoff` | Not a result: the worker is waiting for something listed in `WAITING_ON`. Record that and the head SHA, free the slot, and start a **hand-off watch** for its PR: implement-ticket's `references/pr-and-ci.md` §*Hand-off watch*, in the background (Bash `timeout` 7200000), one per PR. When it ends (`WAIT_DONE` or `WAIT_TIMEOUT`), launch a fresh worker (*Worker hosts*) with *Woken by: <the watch's last line>*, unless the PR has merged (`WAIT_DONE: PR is MERGED`, or `gh pr view` says so when a queued relaunch comes up, here or at Phase 0): then the ticket is `merged`, launch no worker, and handle it as a merge (*Merges*). Relaunches take the next free slot ahead of new tickets, since they are nearest to done. If no slot is free, set the row to `relaunch queued` with that line: its watch has done its job and is not re-armed, and the ticket gets exactly one fresh worker when a slot frees. |
 | `stopped-by-user` / error / no result lines | Read its state file; re-launch it once (it resumes; on the `sessions` host, `claude stop` it first if it still has a `pid`); if it fails again, mark it held and tell the user. |
 
 Between events, keep an eye on the batch:
@@ -468,16 +478,41 @@ missing, and list it in the report. Never touch the main checkout, or a worktree
 which check failed.
 
 1. The PR is `MERGED`.
-2. No unpushed work. `git -C <worktree> status --porcelain` is empty (ignored files are
-   fine), and HEAD is the PR's `headRefOid` or an ancestor of it (`git merge-base
-   --is-ancestor`). If the commit is missing locally, `git fetch origin pull/<n>/head`.
+2. No unpushed work. `git -C <worktree> status --porcelain` is empty, and HEAD is the
+   PR's `headRefOid` or an ancestor of it (`git merge-base --is-ancestor`). If the commit
+   is missing locally, `git fetch origin pull/<n>/head`. `git worktree remove` also
+   deletes **ignored** files, so list them (`git -C <worktree> status --porcelain
+   --ignored`). Build and test output that a rebuild recreates is fine:
+   - dependency and build dirs: `node_modules/`, `target/`, `build/`, `dist/`, `.gradle/`,
+     `Pods/`, `.expo/`, `ios-agent/.build*/`, `.swiftpm/`, `*.tsbuildinfo`,
+     `agent/local.properties`;
+   - generated sources: `packages/tapsmith/docs/` (the SDK build bundles it), `test-app/ios/`,
+     `test-app/android/`, `test-app/expo-env.d.ts`, `native-ios-test-app/*.xcodeproj/`,
+     `website/.astro/`, `website/src/content/docs/`;
+   - test reports: `tapsmith-report/`, `tapsmith-results/`, `test-results/`, `blob-report/`;
+   - `.DS_Store`, and `.claude/state/` (git lists it as one directory), whose ticket state
+     *Remove* step 1 archives.
+   Anything else ignored (`.env*`, `docs/superpowers/`, `dogfooding/`, `scratchpad/`,
+   `e2e/qa-tmp/`, QA configs, `probe-*`, scratch notes, other `.claude/` files) keeps the
+   worktree, and those paths go in the report so the user can move or delete them.
 3. Nothing is still using it:
    - no worker, watch or consult for the ticket is running;
-   - on the `sessions` host, its `claude agents --json` row has no `pid`;
+   - on the `sessions` host, its `claude agents --json` row has no `pid`. A worker that
+     has sent a final result (`merged`, or `ready-to-merge` whose PR has since merged)
+     stays idle with its `pid`, so `claude stop <id>` it first, then check;
    - no device lease is held by `<KEY>` or `qa:<branch>:*`;
-   - no process has its working directory or executable inside the worktree
-     (`lsof -d cwd 2>/dev/null | grep -F "<worktree>/"`, `ps -axo pid=,command= | grep
-     -F "<worktree>/"`).
+   - no process has its working directory inside the worktree, or the worktree's path
+     in its command line. Match the path exactly or followed by `/` (a shell sitting in
+     the worktree root has a cwd with no trailing slash), and leave out the probe's own
+     shell and its children, which carry the path in their own command lines:
+
+     ```bash
+     w=<worktree>
+     lsof -d cwd -Fpn 2>/dev/null | awk -v w="$w" -v me=$$ \
+       '/^p/{pid=substr($0,2)} /^n/{d=substr($0,2); if (pid!=me && (d==w || index(d, w"/")==1)) print pid, d}'
+     ps -axo pid=,ppid=,command= | awk -v w="$w" -v me=$$ \
+       '$1!=me && $2!=me { s=$0" "; if (index(s, w"/") || index(s, w" ")) print }'
+     ```
 
    Tapsmith daemons, UI servers, Metro and node/tsx processes started from the worktree
    may be stopped (SIGTERM, then check again after 10 s). Any other process (a shell, an

@@ -27,7 +27,9 @@ push — never only at the end.
 ## Loops
 - review-loop: <n runs> · last outcome <clean|max-rounds|oscillation|skipped: docs only> · clean round at <sha> · FIX counts per round <…> · ledger <path>
 - QA cycles: <n>/<max> · last verdict <…> at <sha> · report <path>
-- CI: last head run <run id> <state> · reruns: <job: count, reason>
+- CI: last head run <run id> <state> · reruns: <job: count, reason> · fix attempts: <failure signature: n>
+  (bump the count each time you push a fix for a branch-caused failure; a fresh worker
+  reads it to apply stop rule 4 and the *Escalation* triggers)
 - Review threads: <open count> · last checked <time>
 - Device leases held: <targets, or none>
 
