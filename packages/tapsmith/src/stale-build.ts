@@ -54,13 +54,14 @@ export interface StaleBuild {
  */
 const NATIVE_EXTENSIONS = {
   android: new Set(['.kt', '.java', '.c', '.cc', '.cpp', '.h', '.dart', '.gradle', '.kts']),
+  // `.gradle` / `.kts`: a Kotlin Multiplatform app's iOS framework is built by Gradle.
   ios: new Set(['.swift', '.m', '.mm', '.h', '.c', '.cc', '.cpp', '.dart', '.storyboard', '.xib', '.plist', '.entitlements', '.pbxproj',
-    '.xcconfig', '.strings', '.xcstrings']),
+    '.xcconfig', '.strings', '.xcstrings', '.gradle', '.kts']),
 };
 /** Build files counted by name, per platform. */
 const NATIVE_FILE_NAMES = {
   android: new Set(['gradle.properties', 'google-services.json']),
-  ios: new Set(['Podfile', 'GoogleService-Info.plist']),
+  ios: new Set(['Podfile', 'GoogleService-Info.plist', 'gradle.properties']),
 };
 /**
  * Assets a JavaScript bundle embeds (`require('./logo.png')`, imported JSON),

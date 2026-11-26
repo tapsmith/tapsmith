@@ -1023,7 +1023,7 @@ function ErrorsTab({ event, events, testError, sources, metadata }: {
       {note && (
         <div class="error-entry" data-testid="error-entry">
           <div class="error-title"><AlertTriangle size={14} class="error-title-icon" />Note</div>
-          <div class="error-message">{note}</div>
+          <div class="error-message">{note.replace(/^Note: /, '')}</div>
         </div>
       )}
       {warnedEvents.map((ev, i) => (

@@ -143,6 +143,10 @@ describe('appSourceRoot', () => {
     write(path.join(root, 'shared', 'src', 'commonMain', 'kotlin', 'Greeting.kt'), AFTER);
     expect(await findSourceChangedAfterBuild(app, { platform: 'ios', countJs: false })).toMatchObject({ count: 2 });
     expect(await findSourceChangedAfterBuild(apk, { platform: 'android', countJs: false })).toMatchObject({ count: 2 });
+
+    // The Gradle build that makes the iOS framework counts for the iOS build too.
+    write(path.join(root, 'shared', 'build.gradle.kts'), AFTER);
+    expect(await findSourceChangedAfterBuild(app, { platform: 'ios', countJs: false })).toMatchObject({ count: 3 });
   });
 
   it('has no answer for a build outside any project', () => {

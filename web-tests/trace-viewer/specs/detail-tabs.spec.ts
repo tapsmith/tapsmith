@@ -360,7 +360,9 @@ test.describe("Detail tabs", () => {
       })
       await detailTabs.select("Errors")
       await expect(detailTabs.errorEntries).toHaveCount(2)
-      await expect(detailTabs.errorEntries.nth(1)).toContainText(note)
+      // Titled "Note", so the text drops its own "Note: ".
+      await expect(detailTabs.errorEntries.nth(1)).toContainText("src/app/todos.tsx changed after app-release.apk was built.")
+      await expect(detailTabs.errorEntries.nth(1)).not.toContainText("Note: ")
       // Without a note, still one entry.
       await viewer.open({
         metadata: { testStatus: "failed", error: stepError },
