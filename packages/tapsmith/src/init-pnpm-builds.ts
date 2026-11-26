@@ -9,7 +9,7 @@ import { isMap, isScalar, parseDocument, type Document } from 'yaml';
  * The dependencies with build scripts that a Tapsmith install brings in:
  * esbuild through tsx (its postinstall only re-checks the binary the
  * package manager already installed) and protobufjs through gRPC (an
- * advisory notice). Tapsmith works with both blocked (PILOT-560). pnpm 11
+ * advisory notice). Tapsmith works with both blocked. pnpm 11
  * and later exit 1 over a build script nobody approved or denied, and only
  * the project can decide (a dependency cannot), so init records "no" for
  * the project, in the pnpm-workspace.yaml beside its lockfile.
