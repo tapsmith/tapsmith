@@ -105,6 +105,21 @@ describe('appSourceRoot', () => {
     expect(appSourceRoot(eas, home)).toBe(managed);
   });
 
+  it("maps a build in Xcode's DerivedData to the project Xcode recorded, or to nothing without that record", () => {
+    const home = project();
+    const app = path.join(home, 'expo-app');
+    write(path.join(app, 'package.json'), BEFORE, JSON.stringify({ dependencies: { expo: '58' } }));
+    fs.mkdirSync(path.join(app, 'ios', 'MyApp.xcworkspace'), { recursive: true });
+    const derived = path.join(home, 'Library', 'Developer', 'Xcode', 'DerivedData', 'MyApp-abc123');
+    write(path.join(derived, 'info.plist'), BEFORE,
+      `<plist><dict><key>WorkspacePath</key><string>${path.join(app, 'ios', 'MyApp.xcworkspace')}</string></dict></plist>`);
+    const built = path.join(derived, 'Build', 'Products', 'Release-iphonesimulator', 'MyApp.app');
+    fs.mkdirSync(built, { recursive: true });
+    expect(appSourceRoot(built, home)).toBe(app);
+    fs.rmSync(path.join(derived, 'info.plist'));
+    expect(appSourceRoot(built, home)).toBeUndefined();
+  });
+
   it('has no answer for a build outside any project', () => {
     const home = project();
     const apk = write(path.join(home, 'Downloads', 'app.apk'), BUILT);

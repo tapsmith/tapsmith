@@ -25,6 +25,7 @@ import { isCI } from 'ci-info';
 import { minimatch } from 'minimatch';
 import { allTestMatchPatterns, type TapsmithConfig } from './config.js';
 import { inspectDevBuild } from './dev-client.js';
+import { derivedDataWorkspace } from './derived-data.js';
 import { forgetStaleBuildWarnings, markStaleBuildWarned, staleBuildWarned } from './stale-build-warnings.js';
 import { discoverTestFiles, matchesTestIgnore } from './test-file-discovery.js';
 
@@ -131,12 +132,22 @@ function isProjectDir(dir: string): boolean {
  * app project (`pubspec.yaml`, `settings.gradle(.kts)`, an `.xcodeproj` /
  * `.xcworkspace`, `Package.swift`, or a React Native / Expo `package.json`).
  * A React Native or Flutter app's `android/` or `ios/` folder stands for the
- * app above it. Undefined for a build outside any app project (a download,
- * also one kept in a separate test project), or when the nearest one is the
- * home folder or the filesystem root.
+ * app above it. A build in Xcode's DerivedData stands for the workspace or
+ * project Xcode recorded it was built from. Undefined for a build outside any
+ * app project (a download, also one kept in a separate test project), or
+ * when the nearest one is the home folder or the filesystem root.
  */
 export function appSourceRoot(artifact: string, home = process.env.HOME): string | undefined {
   let dir = path.dirname(path.resolve(artifact));
+  // A build in Xcode's DerivedData (`…/DerivedData/<Name>-<hash>/Build/…`):
+  // Xcode records which workspace or project it was built from.
+  const segments = dir.split(path.sep);
+  const at = segments.lastIndexOf('DerivedData');
+  if (at >= 0 && segments[at + 2] === 'Build') {
+    const workspace = derivedDataWorkspace(segments.slice(0, at + 2).join(path.sep));
+    if (!workspace) return undefined;
+    dir = path.dirname(workspace);
+  }
   for (;;) {
     if (home && path.resolve(dir) === path.resolve(home)) return undefined;
     const parent = path.dirname(dir);
