@@ -13,7 +13,7 @@ import { globSync, type IgnoreLike } from 'glob';
 import { androidSdkRoots } from './emulator.js';
 import { tryExec } from './env-scan.js';
 import { readIosBundleId } from './ios-app-bundle.js';
-import { decodeXmlEntities } from './xml-entities.js';
+import { derivedDataWorkspace } from './derived-data.js';
 
 // ─── Project layout (PILOT-832) ───
 
@@ -363,18 +363,6 @@ function realpathOr(p: string): string {
   } catch {
     return path.resolve(p);
   }
-}
-
-/** `WorkspacePath` from a DerivedData folder's `info.plist` (an XML plist Xcode writes). */
-function derivedDataWorkspace(dir: string): string | undefined {
-  let xml: string;
-  try {
-    xml = fs.readFileSync(path.join(dir, 'info.plist'), 'utf8');
-  } catch {
-    return undefined;
-  }
-  const match = /<key>WorkspacePath<\/key>\s*<string>([^<]+)<\/string>/.exec(xml);
-  return match ? decodeXmlEntities(match[1]) : undefined;
 }
 
 /**

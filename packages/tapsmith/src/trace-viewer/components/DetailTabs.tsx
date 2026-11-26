@@ -959,6 +959,20 @@ function buildCodeFrame(sources: Map<string, string>, loc: { file: string; line:
   return formatCodeSnippetPlain(snippet);
 }
 
+/**
+ * The note the runner appends to a failed test's error (`\n\nNote: …`, that
+ * the app's source changed after the build it tested), when there is one.
+ * Only that: other text the runner wraps around step errors (a soft
+ * assertion summary, `--- Additionally ---`) is not a note.
+ */
+function testErrorNote(testError: string): string | undefined {
+  // One note per stale build, each appended after a blank line: keep them all.
+  const parts = testError.split('\n\n');
+  let first = parts.length;
+  while (first > 0 && parts[first - 1]!.startsWith('Note: ')) first--;
+  return first < parts.length ? parts.slice(first).join('\n\n').trim() : undefined;
+}
+
 function ErrorsTab({ event, events, testError, sources, metadata }: {
   event: ActionTraceEvent | AssertionTraceEvent | undefined
   events: AnyTraceEvent[]
@@ -978,6 +992,10 @@ function ErrorsTab({ event, events, testError, sources, metadata }: {
   // shows one error block per failure rather than duplicating at the bottom).
   const showTestError = testError
     && !failedEvents.some((ev) => ev.error && testError.includes(ev.error));
+  // A note the runner appended to the failed step's message (that the app's
+  // source changed after the build it tested): shown on its own, since the
+  // test error that carries it is suppressed.
+  const note = testError && !showTestError ? testErrorNote(testError) : undefined;
 
   // A step that passed but warned (a tap that may only have closed the
   // keyboard) may be why a later one failed. With no failure it is only on
@@ -1002,6 +1020,12 @@ function ErrorsTab({ event, events, testError, sources, metadata }: {
         <div class="error-entry" data-testid="error-entry">
           <div class="error-title"><AlertTriangle size={14} class="error-title-icon" />Test Error</div>
           <div class="error-message">{testError}</div>
+        </div>
+      )}
+      {note && (
+        <div class="error-entry" data-testid="error-entry">
+          <div class="error-title"><AlertTriangle size={14} class="error-title-icon" />Note</div>
+          <div class="error-message">{note.replace(/^Note: /, '')}</div>
         </div>
       )}
       {warnedEvents.map((ev, i) => (

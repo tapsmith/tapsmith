@@ -7,7 +7,7 @@
 import * as os from 'node:os';
 import type { TestResult, SuiteResult, RunOptions } from './runner.js';
 import type { GrepFilters } from './test-filter.js';
-import { normalizeGrep, type AppResetMode, type AppResetScope, type TapsmithConfig } from './config.js';
+import { allTestMatchPatterns, normalizeGrep, type AppResetMode, type AppResetScope, type TapsmithConfig } from './config.js';
 
 // ─── Main → Worker messages ───
 
@@ -413,6 +413,12 @@ export interface SerializedConfig {
   timeout: number
   retries: number
   screenshot: 'always' | 'only-on-failure' | 'never'
+  /**
+   * Every test-file pattern of the session (the config's and each project's):
+   * a child never discovers tests, but the stale-build check must tell the
+   * session's test code from the app's.
+   */
+  testMatch?: string[]
   rootDir: string
   outputDir: string
   apk?: string
@@ -454,6 +460,7 @@ export function serializeConfig(config: TapsmithConfig): SerializedConfig {
     timeout: config.timeout,
     retries: config.retries,
     screenshot: config.screenshot,
+    testMatch: allTestMatchPatterns(config),
     rootDir: config.rootDir,
     outputDir: config.outputDir,
     apk: config.apk,
@@ -498,7 +505,7 @@ export function configFromSerialized(s: SerializedConfig, daemonAddress: string)
     timeout: s.timeout,
     retries: s.retries,
     screenshot: s.screenshot,
-    testMatch: [],
+    testMatch: s.testMatch ?? [],
     daemonAddress,
     rootDir: s.rootDir,
     outputDir: s.outputDir,

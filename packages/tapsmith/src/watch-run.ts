@@ -24,6 +24,7 @@ import {
 import { closeDeviceSession, consumePrepared, openDeviceGroup, sessionsForRun } from './device-session.js';
 import { knownInstalledBuilds, rememberInstalledBuilds } from './installed-builds.js';
 import { knownCaptureFailures, rememberCaptureFailures } from './capture-warnings.js';
+import { knownStaleBuildWarnings, rememberStaleBuildWarnings } from './stale-build-warnings.js';
 import { currentSession } from './device-claims.js';
 
 // ─── IPC protocol ───
@@ -132,6 +133,13 @@ export interface WatchRunMessage {
    * that dropped it would reprint the whole failure on every re-run.
    */
   reportedCaptureFailures: string[]
+  /**
+   * The parent's `knownStaleBuildWarnings()`: app edits newer than the build
+   * that an earlier run of the session already warned about. Required, like
+   * `reportedCaptureFailures`: a parent that dropped it would warn under
+   * every file of every run.
+   */
+  reportedStaleBuilds: string[]
 }
 
 export interface WatchRunTestEndMessage {
@@ -159,6 +167,8 @@ export interface WatchRunFileDoneMessage {
   installedBuilds: Record<string, string>
   /** The child's `knownCaptureFailures()`, for the parent's next run. */
   reportedCaptureFailures: string[]
+  /** The child's `knownStaleBuildWarnings()`, for the parent's next run. */
+  reportedStaleBuilds: string[]
 }
 
 export interface WatchRunErrorMessage {
@@ -205,6 +215,7 @@ function sendEmptyFileDone(filePath: string): void {
     suite: serializeSuiteResult(emptySuite, 0),
     installedBuilds: knownInstalledBuilds(),
     reportedCaptureFailures: knownCaptureFailures(),
+    reportedStaleBuilds: knownStaleBuildWarnings(),
   });
 }
 
@@ -215,6 +226,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
   const members = msg.groupMembers ?? [];
   rememberInstalledBuilds(msg.installedBuilds);
   rememberCaptureFailures(msg.reportedCaptureFailures);
+  rememberStaleBuildWarnings(msg.reportedStaleBuilds);
 
   // Every daemon already holds its device with the agent running (the CLI's
   // startup, or a previous run): attach rather than provision. Without a
@@ -324,6 +336,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       ...(sessions[0].device._appBehindProxy === undefined ? {} : { appBehindProxy: sessions[0].device._appBehindProxy }),
       installedBuilds: knownInstalledBuilds(),
       reportedCaptureFailures: knownCaptureFailures(),
+      reportedStaleBuilds: knownStaleBuildWarnings(),
     });
   } finally {
     disposeActionProgressPrinter();

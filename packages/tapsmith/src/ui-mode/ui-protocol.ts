@@ -465,6 +465,15 @@ export interface ErrorMessage {
   stack?: string
 }
 
+/**
+ * Something the user should know that is not an error, shown in the info
+ * banner: e.g. the app's source changed after the build the session tests.
+ */
+export interface NoticeMessage {
+  type: 'notice'
+  message: string
+}
+
 // ─── MCP messages ───
 
 export interface McpStatusMessage {
@@ -552,6 +561,7 @@ export type ServerMessage =
   | SourceMessage
   | NetworkMessage
   | ErrorMessage
+  | NoticeMessage
   | McpStatusMessage
   | McpToolCallMessage
   | RunProgressMessage

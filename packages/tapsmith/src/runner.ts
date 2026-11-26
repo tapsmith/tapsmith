@@ -33,7 +33,7 @@ import { TraceCollector, extractSourceLocation, screenshotFileName, setActiveTra
 import type { AnyTraceEvent, SourceLocation } from './trace/types.js';
 import { getSimulatorScreenScale } from './ios-simulator.js';
 import type { NetworkCaptureRoute, NetworkEntry, TraceDeviceInfo } from './trace/types.js';
-import { TestAbortedError, isAbortError } from './abort.js';
+import { STOPPED_BY_USER, TestAbortedError, isAbortError } from './abort.js';
 import {
   appResetAction,
   appResetPolicyEquals,
@@ -62,6 +62,7 @@ import { TlsRejectWarnings, osServiceTlsRejectNote, tlsRejectWarning } from './t
 import { loopbackCaptureWarning, loopbackUnfiredRouteReason } from './loopback-capture-warning.js';
 import { defineStandIns, notSupportedYet } from './not-supported.js';
 import { captureFailureNotice } from './capture-warnings.js';
+import { addStaleBuildHint, checkStaleBuilds, markStaleBuildWarningShown, pendingStaleBuildWarning, type CheckedConfig, type StaleBuild } from './stale-build.js';
 
 // ─── Trace Device Info ───
 
@@ -201,6 +202,63 @@ function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | nul
       });
     }
   }
+}
+
+/**
+ * Whether the app's source changed after the build the devices run
+ * (PILOT-1398). A failed test then says so in its error. A long-lived run
+ * path (UI mode, watch, MCP) also gets a warning on the next test result,
+ * once per edit, which MCP's `run_tests` lists; `tapsmith test` prints its
+ * own line before the run instead, once, rather than once per worker.
+ */
+async function noteStaleBuilds(opts: RunOptions): Promise<void> {
+  const configs: CheckedConfig[] = [opts.config];
+  for (const d of opts.devices) {
+    const own = d.sessionContext?.config;
+    if (own) configs.push({ ...opts.config, platform: own.platform, apk: own.apk, app: own.app, rootDir: own.rootDir ?? opts.config.rootDir });
+  }
+  // A UI worker outlives its runs, and an app edit outside the folders UI
+  // mode watches does not recycle it: it looks afresh for every file.
+  const stale = await checkStaleBuilds(configs, { fresh: opts.runMode === 'ui' }).catch(() => []);
+  opts._staleBuilds = stale;
+  if (opts.runMode === 'test' || opts.runMode === 'test-parallel') return;
+  for (const s of stale) {
+    const warning = pendingStaleBuildWarning(s);
+    if (!warning) continue;
+    const pending = (opts._preflightWarnings ??= []);
+    if (!pending.includes(warning.message)) pending.push(warning.message);
+    (opts._staleBuildWarningKeys ??= new Map()).set(warning.message, warning.key);
+  }
+}
+
+/** The warnings a result just took: a stale-build one among them has now been shown. */
+function noteWarningsShown(opts: RunOptions, warnings: readonly string[]): void {
+  const keys = opts._staleBuildWarningKeys;
+  if (!keys) return;
+  for (const w of warnings) {
+    const key = keys.get(w);
+    if (key !== undefined) markStaleBuildWarningShown(key);
+  }
+}
+
+/**
+ * A failure whose error already carries the stale-build note does not repeat
+ * it as a warning right above it (`warnings` is edited in place).
+ */
+function dropWarningsTheErrorCarries(opts: RunOptions, warnings: string[], error: Error | undefined): void {
+  const keys = opts._staleBuildWarningKeys;
+  if (!keys || !error) return;
+  for (let i = warnings.length - 1; i >= 0; i--) {
+    if (keys.has(warnings[i]!) && error.message.includes(warnings[i]!)) warnings.splice(i, 1);
+  }
+}
+
+/** Say on a failed test's error that the build is older than the app's source. */
+function hintStaleBuild(error: Error | undefined, opts: RunOptions): void {
+  // A user's stop is not a failure, and UI mode and MCP recognise it by its
+  // exact message.
+  if (!error || isAbortError(error) || error.message === STOPPED_BY_USER) return;
+  for (const s of opts._staleBuilds ?? []) addStaleBuildHint(error, s);
 }
 
 /** Devices whose embedder supplied a session context — the ones the runner can reset. */
@@ -1560,6 +1618,14 @@ export interface RunOptions {
   /** @internal Warnings from preflight notices, waiting for the next test result. */
   _preflightWarnings?: string[];
   /**
+   * @internal The builds this file's devices run that are older than the
+   * app's source, found when the file starts. A failed test's
+   * error then says so.
+   */
+  _staleBuilds?: StaleBuild[];
+  /** @internal The session key of each stale-build warning waiting in `_preflightWarnings`, by its text. */
+  _staleBuildWarningKeys?: Map<string, string>;
+  /**
    * Run only tests whose fullName contains this value (case-insensitive
    * substring match). All other tests are left out of the run, unreported.
    * May match several tests.
@@ -2784,6 +2850,7 @@ async function runSuiteContext(
       // Package whatever the beforeAll collector recorded into a trace ZIP.
       // The trace captures every action that ran before the failure — invaluable
       // for debugging why beforeAll couldn't find an element or timed out.
+      hintStaleBuild(beforeAllError, opts);
       let beforeAllTrace: string | undefined;
       if (beforeAllCollector) {
         try {
@@ -2820,6 +2887,8 @@ async function runSuiteContext(
       // A dialog the scope-entry reset closed may be why the scope failed.
       drainPreflightNotices(opts, null);
       const scopeWarnings = [...(opts._preflightWarnings?.splice(0) ?? []), ...takeDeviceActionWarnings(opts)];
+      noteWarningsShown(opts, scopeWarnings);
+      dropWarningsTheErrorCarries(opts, scopeWarnings, beforeAllError);
       for (const tr of collectResults(failed)) {
         if (scopeWarnings.length > 0) tr.warnings = [...scopeWarnings];
         result.tests.push(tr);
@@ -3799,6 +3868,8 @@ async function runSuiteContext(
         if (networkEntries && opts.onNetworkEntries) {
           opts.onNetworkEntries(networkEntries, traceConfig.network, captureRoute(), httpsPassthrough());
         }
+        // The note goes on the error first, so the packaged trace carries it too.
+        if (status === 'failed') hintStaleBuild(error, opts);
         if (collector) {
           const retain = shouldRetain(traceConfig.mode, status !== 'failed', attempt);
           if (retain) {
@@ -4026,12 +4097,15 @@ async function runSuiteContext(
       videoPath = firstFailure.videoPath ?? videoPath;
     }
 
+    if (status === 'failed') hintStaleBuild(error, opts);
     const setupMs = setupHolder.pendingMs;
     setupHolder.pendingMs = 0;
     // Anything the preflight handled since the last result (the startup
     // launch, a scope-entry reset, this test's own preflight) belongs here.
     drainPreflightNotices(opts, null);
     const warnings = opts._preflightWarnings?.splice(0) ?? [];
+    noteWarningsShown(opts, warnings);
+    if (status === 'failed') dropWarningsTheErrorCarries(opts, warnings, error);
     if (reportedOnKeptScreens && !warnings.includes(KEPT_SCREENS_HINT)) warnings.push(KEPT_SCREENS_HINT);
     warnings.push(...reportedActionWarnings);
     const testResult: TestResult = {
@@ -4293,6 +4367,7 @@ function skipAll(ctx: SuiteContext, prefix: string, opts: RunOptions): SuiteResu
 function failAll(ctx: SuiteContext, prefix: string, error: Error, opts: RunOptions, screenshotPath?: string, tracePath?: string): SuiteResult {
   const project = opts.projectName;
   const result: SuiteResult = { name: prefix, tests: [], suites: [], durationMs: 0 };
+  hintStaleBuild(error, opts);
   for (const t of ctx.tests) {
     const fullName = prefix ? `${prefix} > ${t.name}` : t.name;
     if (!passesTestFilter(fullName, opts)) continue;
@@ -4611,6 +4686,8 @@ async function runTestFileOwned(
   }
   assertDeviceGroupMatches(opts, rootCtx.useOptions?.devices);
   const restoreDeviceNames = applyRunDeviceNames(opts, rootCtx.useOptions?.devices);
+
+  await noteStaleBuilds(opts);
 
   // Before the worker fixtures, which may register routes too (PILOT-775).
   armOnDemandNetworkCapture(opts);

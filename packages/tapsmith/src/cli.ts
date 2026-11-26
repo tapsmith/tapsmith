@@ -2724,6 +2724,16 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // its own (PILOT-330 review).
   telemetry.ensureIdentity(config);
   if (shardMessage) console.log(dim(shardMessage));
+  // App source edited since the build the run installs (PILOT-1398): said
+  // once, here, rather than on a result in every worker. UI and watch say it
+  // per run instead.
+  if (!args.ui && !args.watch) {
+    const { checkStaleBuilds, staleBuildMessage } = await import('./stale-build.js');
+    const used = projects.filter((p) => p.testFiles.length > 0);
+    for (const stale of await checkStaleBuilds(used.map((p) => p.effectiveConfig))) {
+      console.log(yellow(`⚠ ${staleBuildMessage(stale)}`));
+    }
+  }
   const launchProgress = shouldShowLaunchProgress
     ? new UiLaunchProgress(createUiLaunchSteps({
       config: initialEffectiveConfig,

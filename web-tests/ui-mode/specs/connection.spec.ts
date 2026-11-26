@@ -103,4 +103,14 @@ test.describe("Connection", () => {
     // An error is assertive, unlike the polite notices — worth pinning too.
     await expect(runControls.errorBanner).toHaveCount(1)
   })
+
+  // PILOT-1398: the app's source changed after the build the session tests.
+  test("shows a server notice in the polite banner", async ({ app, runControls }) => {
+    const ui = app
+    const message = "src/app/todos.tsx changed after app-release.apk was built. Tapsmith tests the installed build, not your source: rebuild the app to test the change."
+    ui.send({ type: "notice", message })
+
+    await expect(runControls.notification).toHaveText(message)
+    await expect(runControls.errorBanner).toHaveCount(0)
+  })
 })

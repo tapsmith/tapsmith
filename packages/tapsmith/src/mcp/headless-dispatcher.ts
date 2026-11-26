@@ -21,6 +21,7 @@ import type { WatchRunMessage, WatchRunChildMessage } from '../watch-run.js';
 import { RunQueue } from '../watch-queue.js';
 import { knownInstalledBuilds, rememberInstalledBuilds } from '../installed-builds.js';
 import { knownCaptureFailures, rememberCaptureFailures } from '../capture-warnings.js';
+import { knownStaleBuildWarnings, rememberStaleBuildWarnings } from '../stale-build-warnings.js';
 import { foldBackCapabilities } from '../app-reset.js';
 import { telemetry } from '../telemetry.js';
 import { ensurePlatformTarget, platformTargetIsLive, type PlatformTarget } from './connection.js';
@@ -1580,6 +1581,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
             if (response.appBehindProxy !== undefined) this._appBehindProxy.set(target.deviceSerial, response.appBehindProxy);
             rememberInstalledBuilds(response.installedBuilds);
             rememberCaptureFailures(response.reportedCaptureFailures);
+            rememberStaleBuildWarnings(response.reportedStaleBuilds);
             const results = response.results.map(deserializeTestResult);
             const suite = deserializeSuiteResult(response.suite);
             resolveOnce({ results, suite });
@@ -1628,6 +1630,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         resetCapabilities: this._resetCapabilities.get(target.deviceSerial),
         installedBuilds: knownInstalledBuilds(),
         reportedCaptureFailures: knownCaptureFailures(),
+        reportedStaleBuilds: knownStaleBuildWarnings(),
         ...(target.members && target.members.length > 0 ? {
           groupMembers: target.members.map((m) => ({
             name: m.name,
