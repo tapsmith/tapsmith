@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config'
 import starlight from '@astrojs/starlight'
 import starlightLinksValidator from 'starlight-links-validator'
 import starlightImageZoom from 'starlight-image-zoom'
+import starlightLlmsTxt from 'starlight-llms-txt'
 import tailwindcss from '@tailwindcss/vite'
 import emailOff from './integrations/email-off.mjs'
 
@@ -38,7 +39,31 @@ export default defineConfig({
         },
       ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/tapsmith/tapsmith' }],
-      plugins: [starlightLinksValidator(), starlightImageZoom()],
+      plugins: [
+        starlightLinksValidator(),
+        starlightImageZoom(),
+        // /llms.txt, /llms-full.txt and /llms-small.txt. Coding agents read the
+        // site before the installed docs, so llms.txt opens with the setup they
+        // should follow; docs/agents.md has the full loop.
+        starlightLlmsTxt({
+          description:
+            'Tapsmith is a mobile app testing framework for iOS and Android with a Playwright-style TypeScript API: locators, auto-waiting, assertions, network mocking, a trace viewer, UI mode and an MCP server for coding agents.',
+          details: [
+            'Setting Tapsmith up in a project as a coding agent ([full guide](https://tapsmith.dev/guides/agents/)):',
+            '',
+            '1. Install it: `npm install -D tapsmith` (or `pnpm add -D tapsmith`, `yarn add -D tapsmith`). It needs Node.js 22 or newer.',
+            '2. Diagnose the machine: `npx tapsmith doctor --json`. Every failing check has a `fix`.',
+            '3. Have a build of the app for init to point at (an APK, or a simulator `.app`). Use an existing one, else build the app.',
+            '4. Configure: `npx tapsmith init --yes --json`. Do not hand-write `tapsmith.config.ts`: edit the one init writes.',
+            '5. Keep the Tapsmith section init adds to `AGENTS.md`. It goes alongside the content already in the file, so `--no-agents-md` is not needed to keep that.',
+            '6. Prove the loop: `npx tapsmith verify --json`, then `npx tapsmith test`.',
+            "7. Tell the user to install the Tapsmith plugin for their agent (the MCP server and a test-writing skill), which init's `nextSteps` lists: `claude plugin marketplace add tapsmith/tapsmith && claude plugin install tapsmith@tapsmith` (Claude Code), `codex plugin marketplace add tapsmith/tapsmith && codex plugin add tapsmith@tapsmith` (Codex).",
+            '',
+            'The npm package ships the docs for its own version: once it is installed, read `node_modules/tapsmith/docs/agents.md`, which may be newer than this site.',
+          ].join('\n'),
+          promote: ['guides/agents', 'getting-started'],
+        }),
+      ],
       customCss: ['./src/styles/global.css'],
       expressiveCode: {
         themes: ['github-dark', 'github-light'],

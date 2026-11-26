@@ -2,11 +2,11 @@
 
 This guide walks you through installing Tapsmith, writing your first test, and running it against an Android or iOS device/simulator.
 
+> **Setting up with a coding agent?** Once the app is built, run `npx tapsmith init --yes --json` rather than writing `tapsmith.config.ts` by hand: it also adds the Tapsmith section to `AGENTS.md` (alongside what is already there), and its `nextSteps` include the Tapsmith plugin install for the agent (the MCP server and a test-writing skill), which the agent should pass on to the user. [Using Tapsmith with AI coding agents](agents.md) has the whole loop: `doctor --json`, build the app, `init --yes --json`, `verify --json`.
+
 > **Tapsmith requires Node.js 22 or newer.** Check with `node --version` before you install. On older Node, npm can install an old Tapsmith release whose commands don't match this guide (or fail with `No matching version found`).
 
 > **Moving an existing suite?** The migration guides map your current tool onto Tapsmith and port a test side by side: [from Maestro](migrating-from-maestro.md), [from Detox](migrating-from-detox.md) and [from Appium](migrating-from-appium.md).
-
-> **Setting up with an AI coding agent?** See [Using Tapsmith with AI coding agents](agents.md) for the non-interactive setup loop (build the app → `doctor --json` → `init --yes --json` → `verify --json`).
 
 ## Prerequisites
 

@@ -990,8 +990,12 @@ describe('doctor for coding agents (PILOT-1442)', () => {
     fs.writeFileSync(path.join(dir, 'app.json'), '{}');
     fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
     const { json } = await doctorJson();
-    expect(check(json, 'config')).toMatchObject({ status: 'warn', fix: expect.stringMatching(/^Build the app first, then run: pnpm exec tapsmith init --yes --json/) });
+    expect(check(json, 'config')).toMatchObject({ status: 'warn', fix: expect.stringMatching(/^Run, once the app is built: pnpm exec tapsmith init --yes --json\n/) });
     expect(ids(json)).not.toContain('agents-md');
+    // Each line of the fix is indented under the ↳, the init command on the first (PILOT-1523).
+    const { text } = await doctorText();
+    expect(text).toMatch(/\n {4}↳ Run, once the app is built: pnpm exec tapsmith init --yes --json\n {6}It writes the config/);
+    expect(text).toMatch(/\n {6}Build the app first: /);
   });
 
   it('warns when a config exists but no instructions file has the Tapsmith section', async () => {

@@ -56,8 +56,11 @@ Running it again after a Tapsmith upgrade brings the section up to date. `doctor
 warning while the section is missing.
 
 `init`'s `nextSteps` include the [plugin](#the-plugin-recommended) install for the agent running it.
-Give it to the user in the same turn: it changes their agent's settings, and the MCP tools
-load when the agent's session restarts.
+Tell the user about it in your reply, with the command: it changes their agent's settings, so it is
+theirs to run, and the MCP tools load when the agent's session restarts.
+
+The section goes alongside an existing `AGENTS.md` (an Expo template's, say), never over it, so
+there is no need for `--no-agents-md` to keep that file.
 
 React Native Debug or Expo dev-client build only: it loads its JavaScript from Metro, so Metro must be
 running (`npx expo start` or `npx react-native start`) before `verify` or `test`. JavaScript edits then need
