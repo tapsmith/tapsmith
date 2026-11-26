@@ -43,6 +43,8 @@ const detectStubs = {
   detectAndroidPackage: () => 'com.example.app',
   findIosAppCandidates: () => ['ios/build/Build/Products/Debug-iphonesimulator/MyApp.app'],
   detectIosBundleId: () => 'com.example.myapp',
+  // Never a real simctl lookup from a unit test.
+  isAppInstalledOnSimulator: () => false,
 };
 
 /** vitest's toThrow() doesn't support objectContaining — capture and assert. */
@@ -1504,7 +1506,9 @@ describe('simulatorChoices() (PILOT-562)', () => {
     const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), { ...baseEnv, simulators: sims }, detectStubs);
     expect(plan.ios?.simulator).toBe('iPhone 17');
     expect(plan.ios?.simulatorDeviceType).toBeUndefined();
-    expect(plan.warnings).toEqual([]);
+    // Not silently (PILOT-1517): the booted one is named, and how to choose it.
+    expect(plan.warnings).toHaveLength(1);
+    expect(plan.warnings[0]).toContain("'PersonaA iPhone' (PersonaA iPhone-iOS 26.5, iOS 26.5) is booted, but the config names 'iPhone 17'");
   });
 
   it('init --yes marks a custom-named simulator as machine-local when it is all there is, or was asked for (PILOT-721)', () => {
@@ -1547,6 +1551,88 @@ describe('simulatorChoices() (PILOT-562)', () => {
     const env = { ...baseEnv, simulators: [sim('iPhone 17 Pro', 'iOS 26.5'), sim('iPhone 16', 'iOS 18.2', 'Booted')] };
     const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), env, detectStubs);
     expect(plan.ios?.simulator).toBe('iPhone 16');
+    // The one booted simulator is the pick: nothing to warn about, nothing to look up.
+    expect(plan.warnings).toEqual([]);
+  });
+});
+
+// ─── Several booted simulators (PILOT-1517) ───
+
+describe('init --yes with several booted simulators (PILOT-1517)', () => {
+  const stock = (name: string, runtime: string, state: string, udid: string) => ({ name, udid, state, runtime, deviceTypeName: name });
+  const custom = (name: string, runtime: string, state: string, udid: string, deviceTypeName = 'iPhone 16') => ({ name, udid, state, runtime, deviceTypeName });
+  // Persona F: someone else's stock simulator and the developer's renamed one, both booted.
+  const theirs = stock('iPhone 17e', 'iOS 27.2', 'Booted', '378267EB-0000-0000-0000-000000000001');
+  const mine = custom('iPhone Onboard F', 'iOS 18.5', 'Booted', '3B630329-0000-0000-0000-000000000002');
+  const resolve = (simulators: EnvScan['simulators'], installedOn: string[], over: Partial<InitCommandOptions> = {}) => {
+    const lookups: string[] = [];
+    const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios', ...over }), { ...baseEnv, simulators }, {
+      ...detectStubs,
+      isAppInstalledOnSimulator: (udid, bundleId) => {
+        lookups.push(`${udid} ${bundleId}`);
+        return installedOn.includes(udid);
+      },
+    });
+    return { plan, lookups, warning: plan.warnings.find((w) => w.includes('booted')) };
+  };
+
+  it('picks the booted simulator that has the app over a booted stock one that does not, and names both', () => {
+    const { plan, warning } = resolve([theirs, mine], [mine.udid]);
+    expect(plan.ios).toMatchObject({ simulator: 'iPhone Onboard F', simulatorDeviceType: 'iPhone 16' });
+    expect(warning).toContain("2 iOS simulators are booted: 'iPhone 17e' (378267EB-0000-0000-0000-000000000001, iOS 27.2), 'iPhone Onboard F' (3B630329-0000-0000-0000-000000000002, iOS 18.5)");
+    expect(warning).toContain("the config names 'iPhone Onboard F', the one com.example.myapp is installed on");
+    expect(warning).toContain('npx tapsmith init --force --simulator <name or UDID>');
+    // The custom-name note still says how to make it portable.
+    expect(plan.warnings.join('\n')).toContain("Simulator 'iPhone Onboard F' is a custom name on this Mac");
+  });
+
+  it('keeps the stock default when neither booted simulator has the app, and says the other one is booted', () => {
+    const { plan, warning } = resolve([theirs, mine], []);
+    expect(plan.ios?.simulator).toBe('iPhone 17e');
+    expect(warning).toContain("2 iOS simulators are booted: 'iPhone 17e' (378267EB-0000-0000-0000-000000000001, iOS 27.2), 'iPhone Onboard F' (3B630329-0000-0000-0000-000000000002, iOS 18.5)");
+    expect(warning).toContain("the config names 'iPhone 17e'.");
+    expect(warning).toContain('--simulator <name or UDID>');
+  });
+
+  it('keeps the stock default when it has the app too', () => {
+    const { plan, warning } = resolve([theirs, mine], [theirs.udid, mine.udid]);
+    expect(plan.ios?.simulator).toBe('iPhone 17e');
+    expect(warning).toContain("the config names 'iPhone 17e'.");
+  });
+
+  it('says so when the only booted simulator is not the pick, as tests then boot another one', () => {
+    const stockOff = stock('iPhone 17', 'iOS 26.5', 'Shutdown', 'OFF-17');
+    const { plan, warning } = resolve([stockOff, mine], []);
+    expect(plan.ios?.simulator).toBe('iPhone 17');
+    expect(warning).toContain("'iPhone Onboard F' (3B630329-0000-0000-0000-000000000002, iOS 18.5) is booted, but the config names 'iPhone 17', which is not: tests boot it instead");
+    expect(warning).toContain('--simulator <name or UDID>');
+    // With the app on the booted one, that one is the pick.
+    const withApp = resolve([stockOff, mine], [mine.udid]);
+    expect(withApp.plan.ios?.simulator).toBe('iPhone Onboard F');
+    expect(withApp.warning).toBeUndefined();
+  });
+
+  it('neither warns nor looks anything up when --simulator chose one', () => {
+    const { plan, lookups, warning } = resolve([theirs, mine], [mine.udid], { simulator: 'iPhone 17e' });
+    expect(plan.ios?.simulator).toBe('iPhone 17e');
+    expect(warning).toBeUndefined();
+    expect(lookups).toEqual([]);
+  });
+
+  it('looks up only booted simulators, and none at all when the pick is the only one booted', () => {
+    const off = stock('iPhone 16 Pro', 'iOS 26.5', 'Shutdown', 'OFF-16P');
+    const one = resolve([theirs, off, custom('Old', 'iOS 18.5', 'Shutdown', 'OFF-OLD')], [theirs.udid]);
+    expect(one.plan.ios?.simulator).toBe('iPhone 17e');
+    expect(one.lookups).toEqual([]);
+    expect(one.warning).toBeUndefined();
+    const two = resolve([theirs, off, mine], []);
+    expect(two.lookups).toEqual([`${theirs.udid} com.example.myapp`, `${mine.udid} com.example.myapp`]);
+  });
+
+  it('leaves Tapsmith worker clones out of the booted list', () => {
+    const clone = stock('iPhone 17e (Tapsmith Worker 1)', 'iOS 27.2', 'Booted', 'CLONE-1');
+    const { warning } = resolve([theirs, clone], []);
+    expect(warning).toBeUndefined();
   });
 });
 

@@ -6,7 +6,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { runningAvds, simulatorChoices, type EnvScan } from './env-scan.js';
+import { bootedSimulatorsNote, preferredSimulator, runningAvds, simulatorChoices, type EnvScan } from './env-scan.js';
+import { isAppInstalled } from './ios-simulator.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, connectedDeviceTarget, playwrightNeighbourNote, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { installedDocsDir, updateAgentsMd, writeAgentsMd } from './agents-md.js';
@@ -91,6 +92,8 @@ export interface DetectFns {
   detectExpoProject?: (cwd: string, readConfig?: (cwd: string) => unknown) => detectDefaults.ExpoProject | undefined;
   /** This project's builds in Xcode's DerivedData; optional like detectExpoProject. */
   findDerivedDataApps?: (cwd: string, xcodeProjects: string[], sdk: 'iphonesimulator' | 'iphoneos') => string[];
+  /** Whether the app is installed on a simulator (simctl); optional like detectExpoProject. */
+  isAppInstalledOnSimulator?: (udid: string, bundleId: string) => boolean;
 }
 
 // ─── Flag validation ───
@@ -437,7 +440,20 @@ export function resolveInitPlan(
 
     let simulator = args.simulator;
     if (!simulator) {
-      simulator = simulatorChoices(env.simulators)[0]?.name;
+      // The default, unless a booted simulator has the app and it does not:
+      // that one is the developer's (PILOT-1517). Any other booted simulator
+      // is named, as the runner adopts a booted one of the configured name.
+      const choices = simulatorChoices(env.simulators);
+      const appInstalled = detect.isAppInstalledOnSimulator ?? (env.isMacOS ? isAppInstalled : () => false);
+      const picked = preferredSimulator(choices, (s) => appInstalled(s.udid, bundleId));
+      simulator = picked?.name;
+      if (picked) {
+        const note = bootedSimulatorsNote(choices, picked, {
+          ...(picked !== choices[0] ? { appInstalled: bundleId } : {}),
+          rerun: 'npx tapsmith init --force --simulator <name or UDID>',
+        });
+        if (note) warnings.push(note);
+      }
       if (!simulator) {
         simulator = 'iPhone 17';
         warnings.push('No iOS simulators found — install one via Xcode; defaulting to "iPhone 17"');

@@ -4,7 +4,8 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Enquirer from 'enquirer';
 import figlet from 'figlet';
-import { isCustomSimulatorName, runningAvds, scanEnvironment, simulatorChoices, simulatorPickerChoices, type ConnectedAndroidDevice, type EnvScan } from './env-scan.js';
+import { isCustomSimulatorName, preferredSimulator, runningAvds, scanEnvironment, simulatorChoices, simulatorPickerChoices, type ConnectedAndroidDevice, type EnvScan } from './env-scan.js';
+import { isAppInstalled } from './ios-simulator.js';
 import type { SeStatus } from './setup-ios.js';
 import {
   detectAndroidPackage,
@@ -600,6 +601,13 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
     // Every simulator, stock names first, then a booted one, the first
     // selected (PILOT-562, PILOT-721); a booted custom-named one near the top.
     const choices = simulatorPickerChoices(env.simulators);
+    // Selected: a booted simulator with the app on it when the default lacks
+    // it — the one the developer is using (PILOT-1517).
+    const appBundleId = simBundleId;
+    const preferred = appBundleId && env.isMacOS
+      ? preferredSimulator(choices, (s) => isAppInstalled(s.udid, appBundleId))
+      : choices[0];
+    const initial = preferred ? choices.indexOf(preferred) : 0;
     if (choices.length > 0) {
       simulator = await ask<string>({
         type: 'select',
@@ -609,9 +617,9 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
         choices: choices.map((s) => ({
           name: s.name,
           message: s.name,
-          hint: [s.runtime, ...(s.state === 'Booted' ? ['booted'] : []), ...(isCustomSimulatorName(s) ? ['custom name: this Mac only'] : [])].join(', '),
+          hint: [s.runtime, ...(s.state === 'Booted' ? ['booted'] : []), ...(initial > 0 && s === preferred ? ['app installed'] : []), ...(isCustomSimulatorName(s) ? ['custom name: this Mac only'] : [])].join(', '),
         })),
-        initial: 0,
+        initial,
         limit: SIMULATOR_PICKER_ROWS,
       });
       simulatorDeviceType = customSimulatorDeviceType(simulator, env);
