@@ -1330,6 +1330,9 @@ function App() {
         console.error('[Tapsmith UI]', msg.message);
         showError(msg.message);
         break;
+      case 'notice':
+        showInfo(msg.message);
+        break;
 
       case 'mcp-status':
         setMcpUrl(msg.mcpUrl);

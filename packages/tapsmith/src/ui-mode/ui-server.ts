@@ -885,6 +885,8 @@ export async function startUIServer(
   const READINESS_INTERACTION_HOLD_WINDOW_MS = 3_000;
   /** Workers whose Node process should be recycled before the next run (source changed). */
   let recycleTimer: NodeJS.Timeout | null = null;
+  /** Stale-build edits already printed to the terminal ({@link announceStaleBuilds}). */
+  const announcedStaleBuilds = new Set<string>();
   const launchProgress = options.launchProgress;
   const uiWorkers: UIWorkerHandle[] = [];
   let workersInitialized = false;
@@ -3736,6 +3738,32 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }
   }
 
+  /**
+   * Say when the app's source is newer than the build the session tests
+   * (PILOT-1398): an edit to the app does not reach the device until the app
+   * is rebuilt, whatever the worker recycle below does. A banner each time
+   * (a source change, a run), a terminal line once per edit. Never throws.
+   */
+  async function announceStaleBuilds(): Promise<void> {
+    try {
+      const { checkStaleBuilds, staleBuildMessage } = await import('../stale-build.js');
+      const configs = ctx.projects?.length
+        ? ctx.projects.map((p) => ({ ...p.effectiveConfig, testMatch: p.testMatch, testIgnore: p.testIgnore }))
+        : [ctx.config];
+      for (const stale of await checkStaleBuilds(configs, { fresh: true })) {
+        const message = staleBuildMessage(stale);
+        const key = `${stale.artifact}\0${stale.buildMtimeMs}\0${stale.newest}\0${stale.newestMtimeMs}`;
+        if (!announcedStaleBuilds.has(key)) {
+          announcedStaleBuilds.add(key);
+          console.log(`${YELLOW}⚠ ${message}${RESET}`);
+        }
+        broadcast({ type: 'notice', message });
+      }
+    } catch {
+      // Advice only.
+    }
+  }
+
   /** Mark every live worker's code stale; recycle now if idle, else after the run. */
   function markWorkersCodeStale(changedPath: string): void {
     if (!workersInitialized) return;
@@ -3743,6 +3771,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     if (recycleTimer) clearTimeout(recycleTimer);
     recycleTimer = setTimeout(() => {
       recycleTimer = null;
+      // After the save burst settles, like the recycle: was it the app's code?
+      void announceStaleBuilds();
       if (isRunning) return; // ensureWorkersReady recycles before the next run
       void recycleStaleWorkers(`${path.basename(changedPath)} changed`);
     }, 750);
@@ -3764,6 +3794,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
   /** Respawn retired workers and recycle stale ones before starting a new run. */
   async function ensureWorkersReady(): Promise<void> {
+    void announceStaleBuilds();
     if (!workersEnabled) return;
 
     const work: Promise<void>[] = [];
