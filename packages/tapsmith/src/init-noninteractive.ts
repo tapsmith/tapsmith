@@ -11,7 +11,7 @@ import { isAppInstalled } from './ios-simulator.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, connectedDeviceTarget, playwrightNeighbourNote, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { installedDocsDir, updateAgentsMd, writeAgentsMd } from './agents-md.js';
-import { findAgentsSection, pluginInstallSteps, type CodingAgent } from './agent-plugins.js';
+import { findAgentsSection, pluginNextSteps, type CodingAgent } from './agent-plugins.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
@@ -687,21 +687,13 @@ export interface AgentSteps {
   agentRunning: boolean;
 }
 
-/** The plugin install, or with no agent found the manual registration of the server the plugin uses (docs/mcp-server.md). */
-function pluginSteps(cwd: string, { codingAgents, agentRunning }: AgentSteps): string[] {
-  if (codingAgents.length === 0) {
-    return ['Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui'];
-  }
-  const what = `the Tapsmith MCP server and a test-writing skill${agentRunning ? '; give this to the user to run, then start a new session to use it' : ''}`;
-  return pluginInstallSteps(codingAgents, installedDocsDir(cwd)).map(([label, how]) => `Install the ${label} (${what}): ${how}`);
-}
-
 /** The steps for an agent: its plugin, and what to read instead of Tapsmith's compiled source. */
 function agentSteps(cwd: string, opts: AgentSteps): string[] {
   const read = opts.json || opts.agentRunning
     ? [`Read ${installedDocsDir(cwd)}/agents.md before writing tests (how to find locators, run and debug tests; the API docs are beside it)`]
     : [];
-  return opts.agentRunning ? [...pluginSteps(cwd, opts), ...read] : [...read, ...pluginSteps(cwd, opts)];
+  const plugin = pluginNextSteps(opts.codingAgents, opts.agentRunning, installedDocsDir(cwd));
+  return opts.agentRunning ? [...plugin, ...read] : [...read, ...plugin];
 }
 
 /** The temp file the config is written to before it is renamed into place. */
@@ -846,7 +838,11 @@ export function executeInitPlan(
   else if (typeof tsconfig === 'object') warnings.push(tsconfig.warning);
 
   if (!args.agentsMd && !findAgentsSection(cwd)) {
-    warnings.push('AGENTS.md section skipped: coding agents in this project won\'t get Tapsmith\'s locator/MCP instructions. Add it later with npx tapsmith init --agents-md-only');
+    // The flag is not needed to keep a template's own AGENTS.md (PILOT-1523).
+    const kept = fs.existsSync(path.join(cwd, 'AGENTS.md'))
+      ? ' The section is added alongside the content already in AGENTS.md, not over it.'
+      : '';
+    warnings.push(`AGENTS.md section skipped: coding agents in this project won't get Tapsmith's locator/MCP instructions.${kept} Add it later with npx tapsmith init --agents-md-only`);
   }
 
   if (missingTapsmith) {

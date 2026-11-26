@@ -146,15 +146,20 @@ function warn(report: Reporter, id: string, label: string, fix?: string, detail?
   record(report, { status: 'warn', id, label, detail, fix });
   if (report.print) {
     console.log(`  ${yellow('⚠')} ${checkLine(label, detail)}`);
-    if (fix) console.log(dim(`    ↳ ${fix}`));
+    if (fix) console.log(dim(fixLine(fix)));
   }
+}
+
+/** A fix under its check, each of its lines indented under the arrow. */
+function fixLine(fix: string): string {
+  return `    ↳ ${fix.replace(/\n/g, '\n      ')}`;
 }
 
 function fail(report: Reporter, id: string, label: string, fix?: string, detail?: string): void {
   record(report, { status: 'fail', id, label, detail, fix });
   if (report.print) {
     console.log(`  ${red('✗')} ${checkLine(label, detail)}`);
-    if (fix) console.log(dim(`    ↳ ${fix}`));
+    if (fix) console.log(dim(fixLine(fix)));
   }
 }
 

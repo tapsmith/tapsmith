@@ -133,3 +133,20 @@ export function pluginInstallSteps(agents: readonly CodingAgent[], docsDir: stri
     }
   });
 }
+
+/**
+ * The Next step for the plugin: its install for each agent, or with no agent
+ * found the manual registration of the server the plugin uses
+ * (docs/mcp-server.md). Run by an agent (`agentRunning`), the step asks it to
+ * tell the user: the install changes the user's agent settings, and the MCP
+ * tools load in a new session (PILOT-1523).
+ */
+export function pluginNextSteps(agents: readonly CodingAgent[], agentRunning: boolean, docsDir: string = DEFAULT_DOCS_DIR): string[] {
+  if (agents.length === 0) {
+    return ['Register the MCP server for richer agent tooling (it works in UI mode when that runs, headless otherwise): claude mcp add tapsmith -- npx tapsmith mcp-server --prefer-ui'];
+  }
+  const what = 'the Tapsmith MCP server and a test-writing skill';
+  return pluginInstallSteps(agents, docsDir).map(([label, how]) => agentRunning
+    ? `Tell the user, in your reply, to install the ${label} (${what}), then start a new session to use it: ${how}`
+    : `Install the ${label} (${what}): ${how}`);
+}

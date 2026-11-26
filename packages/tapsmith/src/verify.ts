@@ -226,7 +226,7 @@ function emitError(json: boolean, code: string, message: string, fix?: string): 
     process.stdout.write(formatJson(jsonError(code, message, { fix })));
   } else {
     console.error(`✗ ${message}`);
-    if (fix) console.error(`→ ${fix}`);
+    if (fix) console.error(`→ ${fix.replace(/\n/g, '\n  ')}`);
   }
   process.exitCode = 1;
 }

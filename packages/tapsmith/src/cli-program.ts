@@ -518,7 +518,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .addOption(jsonOption())
     .option('--agents-md-only', 'Add or update only the AGENTS.md section, in a project already set up: writes no config or test', false)
     .option('--no-example-test', 'Skip the example test, tests/example.tapsmith.ts (default: written)')
-    .option('--no-agents-md', 'Skip the AGENTS.md section, which tells coding agents how to find locators, run and debug tests (default: written)')
+    .option('--no-agents-md', 'Skip the AGENTS.md section, which tells coding agents how to find locators, run and debug tests (default: written). An existing AGENTS.md keeps its content: the section is added alongside it, not over it')
     .addHelpText('after', INIT_EXAMPLES)
     .action((opts: InitCommandOptions) => act('init', handlers.init)({ ...opts }));
 

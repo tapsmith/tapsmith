@@ -1933,11 +1933,31 @@ describe('init for coding agents (PILOT-1442)', () => {
     expect(run({ agentsMd: false, force: true }).warnings).not.toContain(SKIPPED);
   });
 
+  // Codex passed --no-agents-md to keep the Expo template's own AGENTS.md (PILOT-1523).
+  it('says the section goes alongside an existing AGENTS.md, which keeps its content', () => {
+    fs.writeFileSync(path.join(tmp, 'AGENTS.md'), '# Expo\n\nMine.\n');
+    const skipped = run({ agentsMd: false }).warnings.find((w) => w.startsWith('AGENTS.md section skipped'));
+    expect(skipped).toMatch(/added alongside the content already in AGENTS\.md, not over it/);
+    expect(skipped).toContain('npx tapsmith init --agents-md-only');
+    expect(fs.readFileSync(path.join(tmp, 'AGENTS.md'), 'utf8')).toBe('# Expo\n\nMine.\n');
+    expect(run({ force: true }).warnings.join('\n')).not.toContain('AGENTS.md section skipped');
+    expect(fs.readFileSync(path.join(tmp, 'AGENTS.md'), 'utf8')).toMatch(/^# Expo\n\nMine\.\n\n<!-- tapsmith:begin -->/);
+  });
+
   it('puts the running agent\'s plugin and the docs to read first', () => {
     const { nextSteps } = run({}, true);
-    expect(nextSteps[0]).toMatch(/^Install the Codex plugin \(.*give this to the user to run.*\): codex plugin marketplace add/);
+    expect(nextSteps[0]).toMatch(/^Tell the user, in your reply, to install the Codex plugin \(the Tapsmith MCP server and a test-writing skill\), then start a new session to use it: codex plugin marketplace add/);
+    expect(nextSteps.join('\n')).not.toContain('give this to the user');
     expect(nextSteps[1]).toMatch(/^Read node_modules\/tapsmith\/docs\/agents\.md/);
     expect(nextSteps[2]).toContain('tapsmith verify --json');
+  });
+
+  it('lists the plugin right after installing Tapsmith, which the plugin\'s server runs from', () => {
+    const args = initArgs({ yes: true, json: true, platform: 'android', exampleTest: false });
+    const install = { display: 'pnpm add -D tapsmith', command: 'pnpm', args: ['add', '-D', 'tapsmith'] };
+    const { nextSteps } = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), args, tmp, install, 'npx tapsmith', ['claude'], true);
+    expect(nextSteps[0]).toBe('Install Tapsmith in this project: pnpm add -D tapsmith');
+    expect(nextSteps[1]).toMatch(/^Tell the user, in your reply, to install the Claude Code plugin/);
   });
 
   it('keeps verify first for a person, and names the docs to read only under --json', () => {
