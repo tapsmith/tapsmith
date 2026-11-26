@@ -444,12 +444,20 @@ export function resolveInitPlan(
       // that one is the developer's (PILOT-1517). Any other booted simulator
       // is named, as the runner adopts a booted one of the configured name.
       const choices = simulatorChoices(env.simulators);
-      const appInstalled = detect.isAppInstalledOnSimulator ?? (env.isMacOS ? isAppInstalled : () => false);
-      const picked = preferredSimulator(choices, (s) => appInstalled(s.udid, bundleId));
+      const lookup = detect.isAppInstalledOnSimulator ?? (env.isMacOS ? isAppInstalled : () => false);
+      const known = new Map<string, boolean>();
+      const hasApp = (s: { udid: string }): boolean => {
+        if (!known.has(s.udid)) known.set(s.udid, lookup(s.udid, bundleId));
+        return known.get(s.udid) === true;
+      };
+      const picked = preferredSimulator(choices, hasApp);
       simulator = picked?.name;
       if (picked) {
+        // Chosen for the app: say on which booted simulators it is, in case
+        // it is on more than the pick.
+        const appOn = picked !== choices[0] ? choices.filter((s) => s.state === 'Booted' && hasApp(s)) : [];
         const note = bootedSimulatorsNote(choices, picked, {
-          ...(picked !== choices[0] ? { appInstalled: bundleId } : {}),
+          ...(appOn.length > 0 ? { appInstalled: { bundleId, on: appOn } } : {}),
           rerun: 'npx tapsmith init --force --simulator <name or UDID>',
         });
         if (note) warnings.push(note);

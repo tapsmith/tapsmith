@@ -252,7 +252,8 @@ export function preferredSimulator(
 export function bootedSimulatorsNote(
   choices: SimulatorInfo[],
   picked: SimulatorInfo,
-  opts: { appInstalled?: string; rerun: string },
+  /** `appInstalled`: why the pick was made — the app and the booted simulators it is on. */
+  opts: { appInstalled?: { bundleId: string; on: SimulatorInfo[] }; rerun: string },
 ): string | undefined {
   const booted = choices.filter((s) => s.state === 'Booted');
   if (booted.every((s) => s === picked)) return undefined;
@@ -261,7 +262,10 @@ export function bootedSimulatorsNote(
   if (picked.state !== 'Booted') {
     return `${list} ${booted.length === 1 ? 'is' : 'are'} booted, but the config names '${picked.name}', which is not: tests boot it instead. ${how}`;
   }
-  const why = opts.appInstalled ? `, the one ${opts.appInstalled} is installed on` : '';
+  const app = opts.appInstalled;
+  const why = !app ? ''
+    : app.on.length > 1 ? `, the first in the list of booted simulators ${app.bundleId} is installed on (${app.on.map((s) => `'${s.name}'`).join(', ')})`
+    : `, the one ${app.bundleId} is installed on`;
   return `${booted.length} iOS simulators are booted: ${list}; the config names '${picked.name}'${why}. ${how}`;
 }
 

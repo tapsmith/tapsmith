@@ -1594,6 +1594,14 @@ describe('init --yes with several booted simulators (PILOT-1517)', () => {
     expect(warning).toContain('--simulator <name or UDID>');
   });
 
+  it('names every booted simulator the app is on when several have it, and takes the first in the ranking', () => {
+    const qaStock = stock('iPhone 16e', 'iOS 27.2', 'Booted', 'QA-STOCK');
+    const { plan, warning } = resolve([qaStock, theirs, mine], [theirs.udid, mine.udid]);
+    expect(plan.ios?.simulator).toBe('iPhone 17e');
+    expect(warning).toContain("the config names 'iPhone 17e', the first in the list of booted simulators com.example.myapp is installed on ('iPhone 17e', 'iPhone Onboard F')");
+    expect(warning).not.toContain('the one com.example.myapp is installed on');
+  });
+
   it('keeps the stock default when it has the app too', () => {
     const { plan, warning } = resolve([theirs, mine], [theirs.udid, mine.udid]);
     expect(plan.ios?.simulator).toBe('iPhone 17e');
