@@ -9,12 +9,13 @@ import { pathToFileURL } from 'node:url';
 // long-lived run path (UI mode, watch, MCP) warns on a test result once per
 // edit, so MCP's run_tests lists it even when everything passes.
 
-const mocks = vi.hoisted(() => ({ stale: [] as Array<import('../stale-build.js').StaleBuild>, configs: [] as unknown[] }));
+const mocks = vi.hoisted(() => ({ stale: [] as Array<import('../stale-build.js').StaleBuild>, configs: [] as unknown[], fresh: [] as Array<boolean | undefined> }));
 
 vi.mock('../stale-build.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../stale-build.js')>()),
-  checkStaleBuilds: vi.fn(async (configs: unknown[]) => {
+  checkStaleBuilds: vi.fn(async (configs: unknown[], opts?: { fresh?: boolean }) => {
     mocks.configs.push(configs);
+    mocks.fresh.push(opts?.fresh);
     return mocks.stale;
   }),
 }));
@@ -58,6 +59,7 @@ beforeEach(() => {
   tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-stale-build-runner-')));
   mocks.stale = [STALE];
   mocks.configs = [];
+  mocks.fresh = [];
   resetStaleBuildChecks();
 });
 afterEach(() => fs.rmSync(tempDir, { recursive: true, force: true }));
@@ -102,6 +104,8 @@ describe('runTestFile with a build older than the app source (PILOT-1398)', () =
     expect(again[0].warnings).toBeUndefined();
     // Another edit: said again.
     mocks.stale = [{ ...STALE, newestMtimeMs: 3000 }];
+    // A UI worker outlives its runs: it never reuses an earlier answer.
+    expect(mocks.fresh).toEqual([false, true]);
     const edited = collectResults(await runTestFile(writeTest('d3.test.mjs', "test('passes', async () => {});"), makeOpts({ runMode: 'watch' })));
     expect(edited[0].warnings).toEqual([expect.stringContaining(HINT)]);
   });

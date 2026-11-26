@@ -2730,7 +2730,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   if (!args.ui && !args.watch) {
     const { checkStaleBuilds, staleBuildMessage } = await import('./stale-build.js');
     const used = projects.filter((p) => p.testFiles.length > 0);
-    for (const stale of await checkStaleBuilds(used.map((p) => ({ ...p.effectiveConfig, testMatch: p.testMatch, testIgnore: p.testIgnore })))) {
+    for (const stale of await checkStaleBuilds(used.map((p) => p.effectiveConfig))) {
       console.log(yellow(`⚠ ${staleBuildMessage(stale)}`));
     }
   }

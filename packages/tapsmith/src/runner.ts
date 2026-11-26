@@ -217,7 +217,9 @@ async function noteStaleBuilds(opts: RunOptions): Promise<void> {
     const own = d.sessionContext?.config;
     if (own) configs.push({ ...opts.config, platform: own.platform, apk: own.apk, app: own.app, rootDir: own.rootDir ?? opts.config.rootDir });
   }
-  const stale = await checkStaleBuilds(configs).catch(() => []);
+  // A UI worker outlives its runs, and an app edit outside the folders UI
+  // mode watches does not recycle it: it looks afresh for every file.
+  const stale = await checkStaleBuilds(configs, { fresh: opts.runMode === 'ui' }).catch(() => []);
   opts._staleBuilds = stale;
   if (opts.runMode === 'test' || opts.runMode === 'test-parallel') return;
   for (const s of stale) {

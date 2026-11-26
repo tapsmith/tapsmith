@@ -275,7 +275,8 @@ describe('worker-protocol serialization', () => {
       expect(back).toMatchObject({
         ...config,
         daemonAddress: 'localhost:2',
-        testMatch: [],
+        // Kept for the stale-build check (PILOT-1398); a child never discovers tests.
+        testMatch: ['**/*.test.ts'],
         workers: 1,
         launchEmulators: false,
         grep: [/smoke/i],

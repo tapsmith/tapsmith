@@ -376,7 +376,7 @@ Tapsmith tests the build your config names (`apk` or `app`), installed on the de
 
 **Coming from Expo Go?** Expo Go and live reload load your JavaScript from the dev server as you save, so an edit shows up at once. A Release build has your JavaScript bundled inside it: Tapsmith installs that build and launches it, and saving a file changes nothing on the device until you rebuild (for example `npx expo run:android --variant release`). To have JavaScript edits reach the app without a rebuild while you write tests, test a [development build with Metro](#debug-and-dev-client-builds-with-metro) instead. Changes to native code, `app.json` or native modules still need a rebuild then.
 
-When files in the app's project are newer than the build, Tapsmith says so: `tapsmith test` prints a warning before the run, UI mode shows a notice when you save an app file and before each run, watch and MCP runs add a warning to a test result, and a test that fails in that state says so in its error. For example:
+When files in the app's project are newer than the build, Tapsmith says so: `tapsmith test` prints a warning before the run, UI mode shows a notice before each run, watch and MCP runs add a warning to a test result, and a test that fails in that state says so in its error. For example:
 
 ```text
 ⚠ src/app/todos.tsx changed after app-release.apk was built. Tapsmith tests the installed build, not your source: rebuild the app to test the change.

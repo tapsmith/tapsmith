@@ -3748,7 +3748,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     try {
       const { checkStaleBuilds, staleBuildMessage } = await import('../stale-build.js');
       const configs = ctx.projects?.length
-        ? ctx.projects.map((p) => ({ ...p.effectiveConfig, testMatch: p.testMatch, testIgnore: p.testIgnore }))
+        ? ctx.projects.map((p) => p.effectiveConfig)
         : [ctx.config];
       for (const stale of await checkStaleBuilds(configs, { fresh: true })) {
         const message = staleBuildMessage(stale);

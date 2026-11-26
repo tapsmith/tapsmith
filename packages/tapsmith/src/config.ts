@@ -1331,6 +1331,14 @@ function withConfigFile(err: unknown, configPath: string): unknown {
 }
 
 /**
+ * Every test-file pattern a config can select with: its own `testMatch` and
+ * each project's, deduplicated. For code that must recognise any of the
+ * session's test files whatever project it runs.
+ */
+export function allTestMatchPatterns(config: Pick<TapsmithConfig, 'testMatch' | 'projects'>): string[] {
+  return [...new Set([...(config.testMatch ?? []), ...(config.projects ?? []).flatMap((p) => p.testMatch ?? [])])];
+}
+/**
  * Normalize a `grep` / `grepInvert` value (RegExp, RegExp[], or undefined)
  * into a plain RegExp[]. Returns an empty array when undefined.
  */

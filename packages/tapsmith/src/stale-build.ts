@@ -16,11 +16,12 @@
  * pipeline and checked-out files carry checkout times.
  */
 
+import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isCI } from 'ci-info';
 import { minimatch } from 'minimatch';
-import type { TapsmithConfig } from './config.js';
+import { allTestMatchPatterns, type TapsmithConfig } from './config.js';
 import { inspectDevBuild } from './dev-client.js';
 import { discoverTestFiles, matchesTestIgnore } from './test-file-discovery.js';
 
@@ -55,9 +56,17 @@ const APP_CONFIG_NAMES = new Set(['app.json']);
 /** Folders never holding app source, on top of the discovery ignore list. */
 const SKIPPED_DIRS = new Set(['node_modules', 'Pods', 'DerivedData', 'build', 'dist', 'coverage', '__tests__', '__mocks__', 'tapsmith-results', 'tapsmith-report']);
 
+/**
+ * Test sources of native and Flutter projects, never in the app's build:
+ * Gradle's test source sets (`src/test`, `src/testDebug`, `src/androidTest`,
+ * `src/sharedTest`, `testFixtures`), Flutter's `test/`, `integration_test/`
+ * and `test_driver/`, and Xcode test targets (`MyAppTests/`, `MyAppUITests/`).
+ */
+const TEST_DIR = /^(?:test|androidTest|sharedTest|testFixtures)(?:[A-Z]\w*)?$|^(?:integration_test|test_driver)$|Tests$/;
+
 /** Unit tests, type declarations and tooling configs: never in the app's build. */
 const NON_APP_FILE_PATTERNS = [
-  '*.test.*', '*.spec.*', '*.d.ts', 'tapsmith.config.*',
+  '*.test.*', '*.spec.*', '*_test.dart', '*.d.ts', 'tapsmith.config.*',
   'eslint.config.*', 'prettier.config.*', 'jest.config.*', 'vitest.config.*', 'jest.setup.*',
 ];
 
@@ -181,7 +190,7 @@ export async function findSourceChangedAfterBuild(
       const abs = path.join(dir, entry.name);
       if (skip.has(abs)) continue;
       if (entry.isDirectory()) {
-        if (entry.name.startsWith('.') || SKIPPED_DIRS.has(entry.name)) continue;
+        if (entry.name.startsWith('.') || SKIPPED_DIRS.has(entry.name) || TEST_DIR.test(entry.name)) continue;
         const rel = path.relative(root, abs).split(path.sep).join('/');
         if (matchesTestIgnore(rel)) continue;
         pending.push(abs);
@@ -202,6 +211,12 @@ export async function findSourceChangedAfterBuild(
     }
   }
   if (candidates.length === 0) return undefined;
+  // A file whose content is what it was when the app was built only looks
+  // newer (a branch round trip, a stash): a rebuild would find nothing to do
+  // (Gradle compares content), so the warning could never be cleared.
+  const unchanged = await unchangedSinceBuild(root, candidates.map((c) => c.file), built);
+  if (unchanged.size > 0) candidates.splice(0, candidates.length, ...candidates.filter((c) => !unchanged.has(c.file)));
+  if (candidates.length === 0) return undefined;
   const tests = opts.isTestCode ? await opts.isTestCode(candidates.map((c) => c.file)) : new Set<string>();
   const changed = candidates.filter((c) => !tests.has(path.resolve(c.file)));
   if (changed.length === 0) return undefined;
@@ -215,6 +230,79 @@ export async function findSourceChangedAfterBuild(
     newestMtimeMs: newest.mtimeMs,
     buildMtimeMs: built,
   };
+}
+
+function git(cwd: string, args: string[]): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, encoding: 'utf8', timeout: 5_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => resolve(err ? undefined : String(stdout)));
+  });
+}
+
+/** Most candidates compared with git; a bigger set is left as found. */
+const MAX_GIT_COMPARED = 500;
+
+/**
+ * The files among `files` whose content is exactly what the commit checked
+ * out when the build was made holds: the commit HEAD pointed to at `builtMs`,
+ * from HEAD's reflog. Their modification time moved since (a checkout of
+ * another branch and back, a stash and pop, a formatter that changed
+ * nothing), not their content. Empty outside a git repository, when the
+ * reflog does not reach back to the build, or on any git failure: then
+ * modification times decide alone.
+ */
+export async function unchangedSinceBuild(root: string, files: string[], builtMs: number): Promise<Set<string>> {
+  const unchanged = new Set<string>();
+  if (files.length === 0 || files.length > MAX_GIT_COMPARED) return unchanged;
+  const top = (await git(root, ['rev-parse', '--show-toplevel']))?.trim();
+  if (!top) return unchanged;
+  const reflog = await git(top, ['reflog', 'show', '--format=%H %gd', '--date=unix', 'HEAD']);
+  if (!reflog) return unchanged;
+  const builtSec = Math.floor(builtMs / 1000);
+  let commit: string | undefined;
+  for (const line of reflog.split('\n')) {
+    const m = /^([0-9a-f]{40,64}) \S*@\{(\d+)\}$/.exec(line.trim());
+    if (m && Number(m[2]) <= builtSec) {
+      commit = m[1];
+      break;
+    }
+  }
+  if (!commit) return unchanged;
+  let realTop: string;
+  try {
+    realTop = fs.realpathSync(top);
+  } catch {
+    return unchanged;
+  }
+  const rels = new Map<string, string>();
+  for (const file of files) {
+    let real: string;
+    try {
+      real = fs.realpathSync(file);
+    } catch {
+      continue;
+    }
+    const rel = path.relative(realTop, real);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+    rels.set(rel.split(path.sep).join('/'), file);
+  }
+  if (rels.size === 0) return unchanged;
+  const paths = [...rels.keys()];
+  const [tree, hashes] = await Promise.all([
+    git(top, ['ls-tree', '-z', commit, '--', ...paths]),
+    git(top, ['hash-object', '--', ...paths]),
+  ]);
+  if (tree === undefined || hashes === undefined) return unchanged;
+  const committed = new Map<string, string>();
+  for (const entry of tree.split('\0')) {
+    const m = /^\d+ blob ([0-9a-f]+)\t(.+)$/s.exec(entry);
+    if (m) committed.set(m[2]!, m[1]!);
+  }
+  const current = hashes.trim().split('\n');
+  if (current.length !== paths.length) return unchanged;
+  paths.forEach((rel, i) => {
+    if (committed.get(rel) === current[i]) unchanged.add(rels.get(rel)!);
+  });
+  return unchanged;
 }
 
 /** Where the docs explain it. */
@@ -233,7 +321,7 @@ export function staleBuildMessage(stale: StaleBuild): string {
 
 // ─── The check for a run ───
 
-export type CheckedConfig = Pick<TapsmithConfig, 'platform' | 'apk' | 'app' | 'rootDir' | 'outputDir' | 'testMatch'> & { testIgnore?: string[] };
+export type CheckedConfig = Pick<TapsmithConfig, 'platform' | 'apk' | 'app' | 'rootDir' | 'outputDir' | 'testMatch'> & Partial<Pick<TapsmithConfig, 'projects'>>;
 
 /** The configured build, resolved; undefined when the config names none. Never throws. */
 export function configuredArtifact(config: Pick<TapsmithConfig, 'platform' | 'apk' | 'app' | 'rootDir'>): string | undefined {
@@ -270,7 +358,7 @@ export async function checkStaleBuild(
   const built = buildTime(artifact);
   if (built === undefined) return undefined;
   const now = deps.now ?? Date.now;
-  const key = `${artifact}\0${built}\0${config.rootDir}\0${(config.testMatch ?? []).join('\0')}`;
+  const key = `${artifact}\0${built}\0${config.rootDir}\0${allTestMatchPatterns(config).join('\0')}`;
   const memo = checks.get(key);
   if (memo && !deps.fresh && now() - memo.at < CHECK_TTL_MS) return memo.result;
   const result = runCheck(config, artifact).catch(() => undefined);
@@ -293,7 +381,9 @@ async function runCheck(config: CheckedConfig, artifact: string): Promise<StaleB
     countJs: info?.embedsJs === true,
     skipDirs,
     isTestCode: async () => {
-      const files = await discoverTestFiles(config.testMatch ?? [], rootDir, config.testIgnore);
+      // Every project's tests, not only the ones this run selects: any of
+      // them may import the file.
+      const files = await discoverTestFiles(allTestMatchPatterns(config), rootDir);
       const { testFileModules } = await import('./network-api-scan.js');
       const modules = await testFileModules(files).catch(() => files);
       return new Set([...files, ...modules].map((f) => path.resolve(f)));
