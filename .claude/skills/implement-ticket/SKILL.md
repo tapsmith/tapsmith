@@ -537,7 +537,10 @@ every later turn. Its contract is already a report file plus two result lines, s
 loses nothing by running in a fresh context, and QA that has not seen your reasoning is
 also a more independent check. While it runs, leave the branch alone: no edits, commits,
 pushes or builds in the worktree. Your CI watch carries on in the background. If you
-cannot spawn the subagent, invoke the skill inline and note it in the state file.
+cannot spawn the subagent, invoke the skill inline and note it in the state file, but
+only if you are running on Opus: QA never runs on a weaker model. On any other model,
+return `escalate` (`ESCALATE: QA subagent unavailable`) when you have `escalate=`;
+otherwise stop as `blocked` (`best-effort` with `auto`), saying why.
 
 If the reply has no `QA_VERDICT:` line (the subagent failed), use the report file if
 it was written; otherwise run the QA cycle again, once, before treating it as

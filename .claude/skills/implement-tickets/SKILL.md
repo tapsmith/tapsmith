@@ -541,8 +541,12 @@ unmerged PR.
 - **Remote branches left from before GitHub's auto-delete setting** are deleted when
   their PR merged and the remote tip equals the PR's `headRefOid`. Never delete one with
   no PR, an open or unmerged-closed PR, or commits after the merge. Show the list with a
-  count and confirm once before `git push origin --delete`, even with `auto`: this
-  changes the shared repository, not just this machine.
+  count and confirm once, even with `auto`: this changes the shared repository, not just
+  this machine. Delete each one pinned to the tip you listed, so a push that lands after
+  the listing is never deleted:
+  `git push --force-with-lease=<branch>:<headRefOid> origin --delete <branch>`. Report
+  any branch git refuses (its tip moved) separately with its new tip, and don't count it
+  as deleted.
 
 Save durable lessons about running batches (capacity, a collision pattern) to memory —
 not the batch's status, which lives in the PRs.
