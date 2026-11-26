@@ -403,8 +403,13 @@ describe('platformPrompt() (PILOT-721)', () => {
     expect(selected(platformPrompt(env(), both, { android: false, ios: false }))).toBe('both');
   });
 
-  it('a build never overrides a missing toolchain', () => {
-    expect(selected(platformPrompt(env({ adbVersion: undefined }), { hasAndroidProject: true, hasIosProject: true }, { android: true, ios: false }))).toBe('ios');
+  it('defaults to the platform with the only build even when its toolchain warns (PILOT-1510)', () => {
+    const both = { hasAndroidProject: true, hasIosProject: true };
+    // Bare React Native, only a Release APK, adb off PATH, Xcode fine.
+    const p = platformPrompt(env({ adbVersion: undefined, adbOffPath: '/sdk/platform-tools' }), both, { android: true, ios: false });
+    expect(selected(p)).toBe('android');
+    expect(p.choices.find((c) => c.name === 'android')?.hint).toBe('adb not on PATH');
+    expect(selected(platformPrompt(env({ xcodeVersion: undefined }), both, { android: false, ios: true }))).toBe('ios');
   });
 
   it('defaults to the usable one of a two-platform project', () => {

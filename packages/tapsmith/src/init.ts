@@ -32,7 +32,8 @@ import { adbMissingFix } from './toolchain.js';
 import type { InitCommandOptions } from './cli-program.js';
 import { formatJson, jsonError } from './cli-json.js';
 import { avdCaptureSupport, avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd, type AvdImageInfo } from './avd-images.js';
-import { isTapsmithResolvableFrom, tapsmithExecCommand, tapsmithInstallCommand, type InstallCommand } from './config.js';
+import { isTapsmithResolvableFrom, projectPackageManager, tapsmithExecCommand, tapsmithInstallCommand, type InstallCommand } from './config.js';
+import { pnpmAllowBuildsMessage, pnpmMajorVersion, pnpmUndecidedBuilds, writePnpmAllowBuilds } from './init-pnpm-builds.js';
 import { androidAgentInstalledFor, missingAndroidAgentAdvice } from './agent-resolve.js';
 import { globSync } from 'glob';
 import { minimatch } from 'minimatch';
@@ -415,8 +416,9 @@ export function androidEmulatorCaptureLine(avd: string | undefined, avdImages: A
  * infers from `android/`, `ios/`, a root `settings.gradle` or an Xcode
  * project), then the toolchains: Android needs adb, iOS needs
  * Xcode and a simulator. A project with neither gets Android when adb is
- * there, else iOS when it can run. Both narrows to the one platform with a
- * build (`builds`): the other has nothing to test yet.
+ * there, else iOS when it can run. Exactly one platform with a build
+ * (`builds`) is the default, whatever the layout and toolchains say: the
+ * other has nothing to test yet.
  */
 export function platformPrompt(
   env: EnvScan,
@@ -448,7 +450,10 @@ export function platformPrompt(
   } else {
     pick = !androidOk && iosOk ? 'ios' : 'android';
   }
-  if (pick === 'both' && builds.android !== builds.ios) pick = builds.android ? 'android' : 'ios';
+  // The one platform with a build is the one the user is testing: it wins
+  // even over a toolchain warning (adb off PATH is a fixable hint, an
+  // unbuilt platform has nothing to run) (PILOT-1510).
+  if (builds.android !== builds.ios) pick = builds.android ? 'android' : 'ios';
   return { choices, initial: choices.findIndex((c) => c.name === pick) };
 }
 
@@ -925,7 +930,8 @@ export async function offerTapsmithInstall(
     return install.display;
   }
   console.log(`  ${green('✓')} Tapsmith installed ${dim(`(${result})`)}`);
-  if (install.command === 'pnpm') console.log(dim(PNPM_IGNORED_BUILDS_HINT));
+  // Init denied the builds before the install where it could (PILOT-930).
+  if (install.command === 'pnpm' && pnpmUndecidedBuilds(cwd).length > 0) console.log(dim(PNPM_IGNORED_BUILDS_HINT));
   return undefined;
 }
 
@@ -1467,8 +1473,15 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
       const cwd = process.cwd();
       const missingTapsmith = isTapsmithResolvableFrom(cwd) ? undefined : await tapsmithInstallCommand(cwd);
       const result = executeInitPlan(plan, parsed, cwd, missingTapsmith, await tapsmithExecCommand(cwd), detectCodingAgents(cwd), agentRunning);
+      // So the install the next steps ask for, and CI's, exit 0 on pnpm 11+ (PILOT-930).
+      const pnpmBuilds = writePnpmAllowBuilds(cwd, { agent: await projectPackageManager(cwd), pnpmMajor: () => pnpmMajorVersion(cwd) });
+      const fileNotes = new Map<string, string>();
+      if (pnpmBuilds.status === 'written') {
+        result.filesCreated.push(pnpmBuilds.file);
+        fileNotes.set(pnpmBuilds.file, pnpmAllowBuildsMessage(pnpmBuilds));
+      } else if (pnpmBuilds.status === 'failed') result.warnings.push(pnpmBuilds.warning);
 
-      printInitResult(result, parsed.json);
+      printInitResult(result, parsed.json, fileNotes);
       return;
     } catch (err) {
       const initErr = err instanceof InitError
@@ -1501,12 +1514,13 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
   }
 }
 
-function printInitResult(result: InitResult, json: boolean): void {
+/** `fileNotes` replaces a written file's bare name in the text output with what was written to it. */
+function printInitResult(result: InitResult, json: boolean, fileNotes: ReadonlyMap<string, string> = new Map()): void {
   if (json) {
     process.stdout.write(formatJson(result));
     return;
   }
-  for (const f of result.filesCreated) console.log(`  ${green('✓')} ${f}`);
+  for (const f of result.filesCreated) console.log(`  ${green('✓')} ${fileNotes.get(f) ?? f}`);
   // A warning may span lines (a build failure's excerpt and log path).
   for (const w of result.warnings) console.log(`  ${YELLOW}⚠${RESET} ${w.replace(/\n/g, '\n    ')}`);
   console.log();
@@ -1676,6 +1690,11 @@ async function runInitInner(): Promise<void> {
   const tsconfig = writeTsconfigOrWarn(process.cwd());
   if (tsconfig === 'created') console.log(`  ${green('✓')} tsconfig.json created (so editors and typescript-eslint type-check your tests)`);
   else if (typeof tsconfig === 'object') console.log(`  ${YELLOW}⚠${RESET} ${tsconfig.warning}`);
+
+  // Before the install, which pnpm 11+ would otherwise fail (PILOT-930).
+  const pnpmBuilds = writePnpmAllowBuilds(process.cwd(), { agent: await projectPackageManager(process.cwd()), pnpmMajor: () => pnpmMajorVersion(process.cwd()) });
+  if (pnpmBuilds.status === 'written') console.log(`  ${green('✓')} ${pnpmAllowBuildsMessage(pnpmBuilds)}`);
+  else if (pnpmBuilds.status === 'failed') console.log(`  ${YELLOW}⚠${RESET} ${pnpmBuilds.warning}`);
 
   // Step 8.6: Tapsmith itself, which the config and test import (PILOT-551)
   const installStep = await offerTapsmithInstall(process.cwd());

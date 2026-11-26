@@ -212,6 +212,63 @@ describe('resolveInitPlan()', () => {
     }
   });
 
+  it('infers the one platform with a build from a project with android/ and ios/ (PILOT-1510)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'android'));
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const noDerived = { findDerivedDataApps: () => [] };
+      // Only an APK: Android.
+      const apkOnly = resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noDerived, findIosAppCandidates: () => [] }, tmp);
+      expect(apkOnly.platforms).toEqual(['android']);
+      expect(apkOnly.warnings.join('\n')).toContain('iOS left out');
+      // Only a simulator .app: iOS.
+      const appOnly = resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noDerived, findApkCandidates: () => [] }, tmp);
+      expect(appOnly.platforms).toEqual(['ios']);
+      // Both built: both. Neither built: both, and iOS names how to go Android only.
+      expect(resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noDerived }, tmp).platforms).toEqual(['android', 'ios']);
+      const none = { ...detectStubs, ...noDerived, findApkCandidates: () => [], findIosAppCandidates: () => [] };
+      const err = expectInitError(() => resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, none, tmp), 'NO_IOS_APP');
+      expect(err.fix).toContain('--platform android');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('narrows without the false "no ios/ directory" note, and leaves flags that name a platform alone (PILOT-1510)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
+    try {
+      fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ dependencies: { 'react-native': '0.79.0' } }));
+      fs.mkdirSync(path.join(tmp, 'android'));
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const apkOnly = { ...detectStubs, findIosAppCandidates: () => [], findDerivedDataApps: () => [] };
+      const plan = resolveInitPlan(initArgs({ yes: true }), baseEnv, apkOnly, tmp);
+      expect(plan.platforms).toEqual(['android']);
+      expect(plan.warnings.filter((w) => w.includes('iOS left out'))).toHaveLength(1);
+      expect(plan.warnings.join('\n')).not.toContain('no ios/ directory');
+      // An explicit --apk with no .app narrows the same way.
+      const withApk = resolveInitPlan(initArgs({ yes: true, apk: 'dist/my app.apk', package: 'com.x' }), baseEnv, apkOnly, tmp);
+      expect(withApk.platforms).toEqual(['android']);
+      // The printed re-run repeats the given build, or the re-run would not find it.
+      expect(withApk.warnings.join('\n')).toContain(`init --force --platform android,ios --apk 'dist/my app.apk'\``);
+      // A flag naming the platform that would be dropped keeps it (and its error).
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true, bundleId: 'com.x.ios' }), baseEnv, apkOnly, tmp), 'NO_IOS_APP');
+      // Flags naming the platform that would be dropped keep it.
+      const iosOnlyBuilt = { ...detectStubs, findApkCandidates: () => [], findDerivedDataApps: () => [] };
+      expect(resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, iosOnlyBuilt, tmp).platforms).toEqual(['android', 'ios']);
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true, avd: 'Pixel_7' }), baseEnv, iosOnlyBuilt, tmp), 'NO_APK');
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true, simulator: 'iPhone 17' }), baseEnv, apkOnly, tmp), 'NO_IOS_APP');
+      const iosOnly = resolveInitPlan(initArgs({ yes: true }), baseEnv, iosOnlyBuilt, tmp);
+      expect(iosOnly.platforms).toEqual(['ios']);
+      expect(iosOnly.warnings.join('\n')).toContain('Android left out');
+      // An iOS build only, found in DerivedData.
+      const derived = { ...detectStubs, findApkCandidates: () => [], findIosAppCandidates: () => [], findDerivedDataApps: () => ['/dd/MyApp.app'] };
+      expect(resolveInitPlan(initArgs({ yes: true }), baseEnv, derived, tmp).platforms).toEqual(['ios']);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('does not add Android for a --package meant as an iOS bundle id, and says so (PILOT-721)', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
     try {

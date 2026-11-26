@@ -153,7 +153,10 @@ exist on the runner under the configured name (see
   starting the emulator. Your test command runs in the `script` parameter after the emulator boots.
 - The `if: always()` on the upload step ensures screenshots are uploaded even when tests fail.
 - The workflow uses npm. With Yarn or pnpm, change the `cache` input and the install command (for
-  example `yarn install --frozen-lockfile`).
+  example `yarn install --frozen-lockfile`). With pnpm 11 or later, `pnpm install --frozen-lockfile`
+  exits 1 (`ERR_PNPM_IGNORED_BUILDS`) unless the committed `pnpm-workspace.yaml` sets `esbuild` and
+  `protobufjs` to `false` under `allowBuilds`. `tapsmith init` writes them; see
+  [Package manager notes](getting-started.md#pnpm-err_pnpm_ignored_builds).
 - **What a release build turns off.** `__DEV__` is false in a release build, so anything your app
   enables only in development is off in CI. Two things Tapsmith uses:
   - the [`@tapsmith/react-native` reset hooks](warm-reset.md#release-builds-for-e2e). In an Expo
