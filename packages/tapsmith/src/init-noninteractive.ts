@@ -389,7 +389,7 @@ export function resolveInitPlan(
         fromDerivedData = candidates.length > 0;
       }
       if (candidates.length === 0) {
-        const androidOnly = !args.platforms && args.packageName ? ' Or pass --platform android to set up Android only.' : '';
+        const androidOnly = !args.platforms && args.packageName && !args.bundleId && platforms.includes('android') ? ' Or pass --platform android to set up Android only.' : '';
         const expoProject = expo();
         if (expoProject) {
           throw new InitError('NO_IOS_APP', noIosAppMessage(layout), {

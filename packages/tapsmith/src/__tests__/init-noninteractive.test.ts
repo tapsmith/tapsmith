@@ -218,8 +218,8 @@ describe('resolveInitPlan()', () => {
       fs.mkdirSync(path.join(tmp, 'android'));
       fs.mkdirSync(path.join(tmp, 'ios'));
       const noDerived = { findDerivedDataApps: () => [] };
-      // Only an APK (adb off PATH changes nothing here): Android.
-      const apkOnly = resolveInitPlan(initArgs({ yes: true }), { ...baseEnv, adbVersion: undefined }, { ...detectStubs, ...noDerived, findIosAppCandidates: () => [] }, tmp);
+      // Only an APK: Android.
+      const apkOnly = resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noDerived, findIosAppCandidates: () => [] }, tmp);
       expect(apkOnly.platforms).toEqual(['android']);
       expect(apkOnly.warnings.join('\n')).toContain('iOS left out');
       // Only a simulator .app: iOS.
@@ -250,6 +250,14 @@ describe('resolveInitPlan()', () => {
       expect(resolveInitPlan(initArgs({ yes: true, apk: 'a.apk', package: 'com.x' }), baseEnv, apkOnly, tmp).platforms).toEqual(['android']);
       // A flag naming the platform that would be dropped keeps it (and its error).
       expectInitError(() => resolveInitPlan(initArgs({ yes: true, bundleId: 'com.x.ios' }), baseEnv, apkOnly, tmp), 'NO_IOS_APP');
+      // Flags naming the platform that would be dropped keep it.
+      const iosOnlyBuilt = { ...detectStubs, findApkCandidates: () => [], findDerivedDataApps: () => [] };
+      expect(resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, iosOnlyBuilt, tmp).platforms).toEqual(['android', 'ios']);
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true, avd: 'Pixel_7' }), baseEnv, iosOnlyBuilt, tmp), 'NO_APK');
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true, simulator: 'iPhone 17' }), baseEnv, apkOnly, tmp), 'NO_IOS_APP');
+      const iosOnly = resolveInitPlan(initArgs({ yes: true }), baseEnv, iosOnlyBuilt, tmp);
+      expect(iosOnly.platforms).toEqual(['ios']);
+      expect(iosOnly.warnings.join('\n')).toContain('Android left out');
       // An iOS build only, found in DerivedData.
       const derived = { ...detectStubs, findApkCandidates: () => [], findIosAppCandidates: () => [], findDerivedDataApps: () => ['/dd/MyApp.app'] };
       expect(resolveInitPlan(initArgs({ yes: true }), baseEnv, derived, tmp).platforms).toEqual(['ios']);
