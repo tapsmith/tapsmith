@@ -93,22 +93,17 @@ describe('writePnpmAllowBuilds()', () => {
     expect(read()).toBe(text);
   });
 
-  it.each([
-    ['onlyBuiltDependencies:\n  - esbuild\n', ['protobufjs']],
-    ['ignoredBuiltDependencies: [protobufjs]\n', ['esbuild']],
-    ['neverBuiltDependencies:\n  - esbuild\n  - protobufjs\n', []],
-    ['dangerouslyAllowAllBuilds: true\n', []],
-  ])('leaves a package pnpm 10 settings already decide: %s', (settings, names) => {
-    fs.writeFileSync(ws(), settings);
-    const outcome = writePnpmAllowBuilds(dir, pnpm(12));
-    if (names.length === 0) expect(outcome).toEqual({ status: 'present' });
-    else expect(outcome).toMatchObject({ status: 'written', names });
+  it('writes nothing when the project allows every build', () => {
+    fs.writeFileSync(ws(), 'dangerouslyAllowAllBuilds: true\n');
+    expect(writePnpmAllowBuilds(dir, pnpm(12))).toEqual({ status: 'present' });
   });
 
-  it("counts the decisions in package.json's pnpm field", () => {
-    fs.writeFileSync(path.join(dir, 'package.json'), '{ "pnpm": { "onlyBuiltDependencies": ["esbuild", "protobufjs"] } }\n');
-    expect(writePnpmAllowBuilds(dir, pnpm(12))).toEqual({ status: 'present' });
-    expect(fs.existsSync(ws())).toBe(false);
+  // pnpm 11+ reads build decisions only from allowBuilds (and
+  // dangerouslyAllowAllBuilds) in pnpm-workspace.yaml.
+  it("does not count pnpm 10's build lists or package.json's pnpm field as decisions", () => {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{ "pnpm": { "onlyBuiltDependencies": ["esbuild"], "dangerouslyAllowAllBuilds": true } }\n');
+    fs.writeFileSync(ws(), 'onlyBuiltDependencies:\n  - esbuild\nignoredBuiltDependencies: [protobufjs]\n');
+    expect(writePnpmAllowBuilds(dir, pnpm(12))).toMatchObject({ status: 'written', names: ['esbuild', 'protobufjs'] });
   });
 
   it.each([
@@ -143,6 +138,27 @@ describe('writePnpmAllowBuilds()', () => {
     fs.mkdirSync(sub);
     expect(pnpmRoot(sub)).toBe(dir);
     expect(writePnpmAllowBuilds(sub, pnpm(12))).toMatchObject({ status: 'written', file: path.join('..', 'pnpm-workspace.yaml'), created: true });
+  });
+
+  // pnpm roots a project at its nearest package.json unless a
+  // pnpm-workspace.yaml above makes it a workspace package.
+  it("writes beside the project's own package.json, not beside another project's lockfile above it", () => {
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+    const app = path.join(dir, 'app');
+    fs.mkdirSync(app);
+    fs.writeFileSync(path.join(app, 'package.json'), '{}\n');
+    expect(pnpmRoot(app)).toBe(app);
+    expect(writePnpmAllowBuilds(app, pnpm(12))).toEqual({ status: 'written', file: 'pnpm-workspace.yaml', created: true, names: ['esbuild', 'protobufjs'] });
+    expect(fs.existsSync(ws())).toBe(false);
+  });
+
+  it("uses the workspace root's file from a package that keeps its own lockfile", () => {
+    fs.writeFileSync(ws(), 'packages:\n  - app\n');
+    const app = path.join(dir, 'app');
+    fs.mkdirSync(app);
+    fs.writeFileSync(path.join(app, 'package.json'), '{}\n');
+    fs.writeFileSync(path.join(app, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+    expect(pnpmRoot(app)).toBe(dir);
   });
 
   it('does nothing without a project', () => {

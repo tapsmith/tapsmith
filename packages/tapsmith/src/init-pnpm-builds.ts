@@ -18,14 +18,6 @@ export const PNPM_DENIED_BUILDS = ['esbuild', 'protobufjs'] as const;
 
 const WORKSPACE_FILE = 'pnpm-workspace.yaml';
 
-/**
- * The pnpm settings that already decide a package's build script, besides
- * `allowBuilds`. pnpm 10 read these, from pnpm-workspace.yaml or the
- * `pnpm` field of package.json; a package listed in any of them was decided
- * by the project, so init leaves it alone.
- */
-const LEGACY_BUILD_LISTS = ['onlyBuiltDependencies', 'ignoredBuiltDependencies', 'neverBuiltDependencies'] as const;
-
 export type PnpmBuildsOutcome =
   /** Not a pnpm project, or no project to write to. */
   | { status: 'not-pnpm' }
@@ -38,33 +30,22 @@ export type PnpmBuildsOutcome =
   | { status: 'failed'; warning: string };
 
 /**
- * The directory whose pnpm-workspace.yaml pnpm reads for this project: the
- * nearest one up from `cwd` with a pnpm-workspace.yaml or pnpm-lock.yaml
- * (a workspace package's settings live at the workspace root), else `cwd`
- * itself when it has a package.json. Undefined when there is neither.
+ * The directory whose pnpm-workspace.yaml pnpm reads for this project, as
+ * pnpm finds it: the nearest one up from `cwd` that has a
+ * pnpm-workspace.yaml (a workspace package's settings live at the
+ * workspace root), else the nearest one with a package.json. A
+ * pnpm-lock.yaml alone does not make a root: one in a parent directory
+ * belongs to another project. Undefined when there is no package.json.
  */
 export function pnpmRoot(cwd: string): string | undefined {
-  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
-    if (fs.existsSync(path.join(dir, WORKSPACE_FILE)) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))) return dir;
-    if (path.dirname(dir) === dir) break;
-  }
-  return fs.existsSync(path.join(cwd, 'package.json')) ? path.resolve(cwd) : undefined;
+  return nearestUp(cwd, WORKSPACE_FILE) ?? nearestUp(cwd, 'package.json');
 }
 
-function readJson(file: string): unknown {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return undefined;
+function nearestUp(from: string, name: string): string | undefined {
+  for (let dir = path.resolve(from); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, name))) return dir;
+    if (path.dirname(dir) === dir) return undefined;
   }
-}
-
-/** Whether `settings` (a plain object of pnpm settings) already decides `name`. */
-function decidedIn(settings: unknown, name: string): boolean {
-  if (!settings || typeof settings !== 'object') return false;
-  const s = settings as Record<string, unknown>;
-  if (s.dangerouslyAllowAllBuilds === true) return true;
-  return LEGACY_BUILD_LISTS.some((key) => Array.isArray(s[key]) && (s[key] as unknown[]).includes(name));
 }
 
 /**
@@ -83,17 +64,19 @@ function unusable(doc: Document): string | undefined {
 }
 
 /**
- * The packages in PNPM_DENIED_BUILDS that the project at `root` has not
- * decided: no boolean under `allowBuilds` for the name (pnpm's own
- * "set this to true or false" placeholder does not count) or a
- * `name@version` key, and not listed in a legacy setting.
+ * The packages in PNPM_DENIED_BUILDS that the project has not decided in
+ * `doc`, its pnpm-workspace.yaml: no boolean under `allowBuilds` for the
+ * name (pnpm's own "set this to true or false" placeholder does not
+ * count) or a `name@version` key, and no `dangerouslyAllowAllBuilds: true`.
+ * pnpm 11 and later read build decisions from nowhere else: the pnpm 10
+ * lists (`onlyBuiltDependencies` and the like) and package.json's `pnpm`
+ * field no longer count, and pnpm 10 needs no decision at all.
  */
-function undecided(root: string, doc: Document | undefined): string[] {
-  const pkgSettings = (readJson(path.join(root, 'package.json')) as { pnpm?: unknown } | undefined)?.pnpm;
-  const workspaceSettings = doc && !unusable(doc) ? doc.toJS() as unknown : undefined;
-  const allowBuilds = doc && !unusable(doc) ? doc.get('allowBuilds', true) : undefined;
+function undecided(doc: Document | undefined): string[] {
+  if (!doc || unusable(doc)) return [...PNPM_DENIED_BUILDS];
+  if (doc.get('dangerouslyAllowAllBuilds') === true) return [];
+  const allowBuilds = doc.get('allowBuilds', true);
   return PNPM_DENIED_BUILDS.filter((name) => {
-    if (decidedIn(workspaceSettings, name) || decidedIn(pkgSettings, name)) return false;
     if (!isMap(allowBuilds)) return true;
     return !allowBuilds.items.some((pair) => {
       const key = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
@@ -121,7 +104,7 @@ export function pnpmUndecidedBuilds(cwd: string): string[] {
   try {
     const existing = readWorkspace(root);
     if (existing && unusable(existing.doc)) return [...PNPM_DENIED_BUILDS];
-    return undecided(root, existing?.doc);
+    return undecided(existing?.doc);
   } catch {
     return [...PNPM_DENIED_BUILDS];
   }
@@ -179,7 +162,7 @@ export function writePnpmAllowBuilds(
       return { status: 'failed', warning: `Left ${relative} unchanged: ${reason}. ${manualAdvice(PNPM_DENIED_BUILDS)}` };
     }
   }
-  const names = undecided(root, existing?.doc);
+  const names = undecided(existing?.doc);
   if (names.length === 0) return { status: 'present' };
   if (!existing) {
     const major = opts.pnpmMajor();
