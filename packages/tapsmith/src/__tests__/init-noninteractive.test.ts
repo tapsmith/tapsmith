@@ -1937,7 +1937,7 @@ describe('init for coding agents (PILOT-1442)', () => {
   it('says the section goes alongside an existing AGENTS.md, which keeps its content', () => {
     fs.writeFileSync(path.join(tmp, 'AGENTS.md'), '# Expo\n\nMine.\n');
     const skipped = run({ agentsMd: false }).warnings.find((w) => w.startsWith('AGENTS.md section skipped'));
-    expect(skipped).toMatch(/added alongside the content already in AGENTS\.md, not over it/);
+    expect(skipped).toMatch(/Without --no-agents-md, init adds the section alongside the content already in AGENTS\.md, not over it\./);
     expect(skipped).toContain('npx tapsmith init --agents-md-only');
     expect(fs.readFileSync(path.join(tmp, 'AGENTS.md'), 'utf8')).toBe('# Expo\n\nMine.\n');
     expect(run({ force: true }).warnings.join('\n')).not.toContain('AGENTS.md section skipped');

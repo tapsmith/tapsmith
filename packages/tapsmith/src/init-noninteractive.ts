@@ -840,7 +840,7 @@ export function executeInitPlan(
   if (!args.agentsMd && !findAgentsSection(cwd)) {
     // The flag is not needed to keep a template's own AGENTS.md (PILOT-1523).
     const kept = fs.existsSync(path.join(cwd, 'AGENTS.md'))
-      ? ' The section is added alongside the content already in AGENTS.md, not over it.'
+      ? ' Without --no-agents-md, init adds the section alongside the content already in AGENTS.md, not over it.'
       : '';
     warnings.push(`AGENTS.md section skipped: coding agents in this project won't get Tapsmith's locator/MCP instructions.${kept} Add it later with npx tapsmith init --agents-md-only`);
   }
