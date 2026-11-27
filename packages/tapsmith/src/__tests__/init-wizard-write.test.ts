@@ -222,7 +222,7 @@ describe('init wizard with a build skipped (PILOT-778)', () => {
     expect(exit).toBeUndefined();
     expect(output).not.toContain('Happy testing!');
     expect(output.trimEnd().split('\n').at(-1)?.trim()).toBe("You don't have a build yet: build your app (https://tapsmith.dev/getting-started/#build-the-app-under-test), "
-      + 'then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).');
+      + 'then set `apk` in tapsmith.config.ts to the build, or run `npx tapsmith init --force`, which finds it.');
   });
 
   it('a package-only config for an app the emulator has closes as usual', async () => {

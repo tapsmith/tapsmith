@@ -1457,7 +1457,7 @@ const WARM_RESET_POINTER = 'For sub-second resets between tests, add @tapsmith/r
 export function wizardClosing(missing: readonly MissingBuild[], rootDir: string, cli: string, expo: ExpoProject | undefined): string[] {
   if (missing.length === 0) return [...(expo && !expo.usesTapsmithHooks ? [WARM_RESET_POINTER] : []), 'Happy testing!'];
   return missing.map(({ platform, known }) => {
-    const step = buildFirstStep(platform, rootDir, cli, () => expo);
+    const step = buildFirstStep(platform, { rootDir, cli, detect: () => expo });
     if (missing.length === 1) return known ? step.sentence : `If you don't have a build yet, ${step.action}`;
     const name = platform === 'android' ? 'Android' : 'iOS';
     return `${name}: ${known ? "you don't have a build yet, so" : "if you don't have a build yet,"} ${step.action}`;

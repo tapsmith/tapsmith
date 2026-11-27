@@ -87,14 +87,14 @@ describe('wizardClosing()', () => {
 
   it('closes with the one build step instead of "Happy testing!" when the app is on no device', () => {
     expect(wizardClosing([{ platform: 'android', known: true }], '/proj', 'npx tapsmith', expo())).toEqual([
-      "You don't have a build yet: run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
+      "You don't have a build yet: run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then set `apk` in tapsmith.config.ts to the build (android/app/build/outputs/apk/release/app-release.apk), or run `npx tapsmith init --force`, which finds it.",
     ]);
   });
 
   it('hedges when it could not check, and names each platform when both lack a build', () => {
     expect(wizardClosing([{ platform: 'android', known: false }, { platform: 'ios', known: true }], '/proj', 'npx tapsmith', expo())).toEqual([
-      "Android: if you don't have a build yet, run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
-      "iOS: you don't have a build yet, so run `npx expo prebuild -p ios && (cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build)`, then `npx tapsmith init` again (or set `app` in tapsmith.config.ts).",
+      "Android: if you don't have a build yet, run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then set `apk` in tapsmith.config.ts to the build (android/app/build/outputs/apk/release/app-release.apk), or run `npx tapsmith init --force`, which finds it.",
+      "iOS: you don't have a build yet, so run `npx expo prebuild -p ios && (cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build)`, then set `app` in tapsmith.config.ts to the build (the .app under ios/build/Build/Products/Release-iphonesimulator/), or run `npx tapsmith init --force`, which finds it.",
     ]);
   });
 

@@ -45,32 +45,46 @@ export function appPresence(platform: AppPlatform, pkg: string, targets: readonl
 /** The one build step for a project with no build: the command (Expo only), the step, and the sentence that gives it. */
 export interface BuildFirstStep {
   command?: string;
-  /** "run `…`, then … init again (or set …)." */
+  /** "run `…`, then set `apk` in … (or run … init --force)." */
   action: string;
   /** "You don't have a build yet: " and the action. */
   sentence: string;
 }
 
+/** Where {@link buildFirstStep} is said: the project, and how to name its CLI and config. */
+export interface BuildFirstStepOptions {
+  rootDir: string;
+  /** The project's own way to run Tapsmith. */
+  cli?: string;
+  /** The config's file name, as the user sees it. */
+  configFile?: string;
+  detect?: (dir: string) => ExpoProject | undefined;
+}
+
+/** Where the Expo release build of each platform lands. */
+const EXPO_RELEASE_BUILD = {
+  android: 'android/app/build/outputs/apk/release/app-release.apk',
+  ios: 'the .app under ios/build/Build/Products/Release-iphonesimulator/',
+} as const;
+
 /**
  * The one recommended way to get a first build, as a single sentence: for
  * an Expo project the release build getting-started documents (it runs
- * without Metro), otherwise the build docs. Then init again, which finds
- * the build, or the config key to set by hand.
+ * without Metro), otherwise the build docs. Then the config key to point at
+ * the build, or `init --force`, which finds it: the config exists by then,
+ * so a plain `init` would refuse (`--yes`) or keep it (the wizard's default).
  */
-export function buildFirstStep(
-  platform: AppPlatform,
-  rootDir: string,
-  cli = 'npx tapsmith',
-  detect: (dir: string) => ExpoProject | undefined = detectExpoProject,
-): BuildFirstStep {
+export function buildFirstStep(platform: AppPlatform, options: BuildFirstStepOptions): BuildFirstStep {
+  const { rootDir, cli = 'npx tapsmith', configFile = 'tapsmith.config.ts', detect = detectExpoProject } = options;
   const key = platform === 'android' ? 'apk' : 'app';
-  const then = `then \`${cli} init\` again (or set \`${key}\` in tapsmith.config.ts).`;
   let expo: ExpoProject | undefined;
   try {
     expo = detect(rootDir);
   } catch {
     expo = undefined;
   }
+  const where = expo ? ` (${EXPO_RELEASE_BUILD[platform]})` : '';
+  const then = `then set \`${key}\` in ${configFile} to the build${where}, or run \`${cli} init --force\`, which finds it.`;
   const lead = "You don't have a build yet: ";
   if (!expo) {
     const action = `build your app (${BUILD_DOCS}), ${then}`;

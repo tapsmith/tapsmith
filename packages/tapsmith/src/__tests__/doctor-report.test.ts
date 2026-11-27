@@ -193,7 +193,7 @@ describe('doctor app-build: a package-only config whose app is on no device (PIL
       id: 'app-build',
       status: 'fail',
       label: "No app build configured — the config has no apk, and com.lqh.alexshop isn't installed on emulator-5554, emulator-5558",
-      fix: "You don't have a build yet: run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
+      fix: "You don't have a build yet: run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then set `apk` in tapsmith.config.mjs to the build (android/app/build/outputs/apk/release/app-release.apk), or run `npx tapsmith init --force`, which finds it.",
     });
     expect(code).toBe(1);
   });

@@ -440,7 +440,7 @@ function checkAppApk(report: Reporter, config: TapsmithConfig | undefined, requi
  * none that could answer: a warning with the same fix, since doctor cannot
  * tell.
  */
-function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], cli: string): void {
+function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], cli: string, configFile?: string): void {
   const packageOnly = scopes.filter((scope) => scopePlatform(scope) === 'android' && scope.package && !scope.apk);
   if (packageOnly.length === 0) return;
   try {
@@ -463,7 +463,7 @@ function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], cli:
       if (seen.has(key)) continue;
       seen.add(key);
       const presence = appPresence('android', pkg, targets);
-      const fix = buildFirstStep('android', scope.rootDir ?? process.cwd(), cli).sentence;
+      const fix = buildFirstStep('android', { rootDir: scope.rootDir ?? process.cwd(), cli, configFile }).sentence;
       if (presence.installedOn.length > 0) {
         rows.push({ status: 'pass', label: `${pkg} installed on ${presence.installedOn.join(', ')}` });
       } else if (targets.length === 0) {
@@ -1630,7 +1630,10 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
       await checkAgentApks(report, config?.rootDir ?? process.cwd());
       // With adb here, Android runs on this machine, so its APK must exist.
       checkAppApk(report, config, androidPlan.required || (adbOk && !!targets));
-      if (adbOk) checkAppBuild(report, scopes, await tapsmithExecCommand(process.cwd()));
+      if (adbOk) {
+        const configPath = config ? configPathOf(config) : undefined;
+        checkAppBuild(report, scopes, await tapsmithExecCommand(process.cwd()), configPath ? path.basename(configPath) : undefined);
+      }
       checkEmulatorBinary(report, avdLaunches, androidPlan.required || adbOk);
     }
   }
