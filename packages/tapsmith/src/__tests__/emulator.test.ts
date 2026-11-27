@@ -2514,7 +2514,11 @@ describe('packageInstallState (PILOT-1498)', () => {
 
   it('is false only for pm\'s own silent exit 1', () => {
     expect(packageInstallState('emulator-5554', 'com.example.app', exits({ status: 1 }))).toBe(false);
-    expect(packageInstallState('emulator-5554', 'com.example.app', vi.fn(() => '') as unknown as Exec)).toBe(false);
+  });
+
+  it('is undefined for an exit 0 without a package line, as the daemon\'s classify_pm_path reads it', () => {
+    expect(packageInstallState('emulator-5554', 'com.example.app', vi.fn(() => '') as unknown as Exec)).toBeUndefined();
+    expect(packageInstallState('emulator-5554', 'com.example.app', vi.fn(() => 'Error: Could not access the Package Manager.  Is the system running?\n') as unknown as Exec)).toBeUndefined();
   });
 
   it('is undefined when adb itself failed or the call timed out', () => {

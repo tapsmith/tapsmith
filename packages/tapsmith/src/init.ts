@@ -1442,7 +1442,8 @@ export function missingBuilds(
     // As the generated config runs: on the pinned device, else (avd-only,
     // the default with an `avd`) on emulators of that AVD, else on any it
     // can claim: a device another session holds is not one, while a pinned
-    // one is what the run waits for.
+    // one is the run's only target (which it refuses while held), so its
+    // answer is still the one that counts.
     const targets = env.androidDevices
       .filter((d) => (android.device ? d.serial === android.device : !d.held && (android.avd ? d.avd === android.avd : true)))
       .map((d) => d.serial);
