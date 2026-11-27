@@ -8542,23 +8542,23 @@ mod tests {
     #[test]
     fn terminal_adb_reverse_error_matches_unavailable_devices() {
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): adb: device offline"
+            "adb command failed (exit status: 1): adb: device offline"
         ));
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): error: device 'emulator-5554' not found"
+            "adb command failed (exit status: 1): error: device 'emulator-5554' not found"
         ));
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): error: no devices/emulators found"
+            "adb command failed (exit status: 1): error: no devices/emulators found"
         ));
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): error: more than one device/emulator"
+            "adb command failed (exit status: 1): error: more than one device/emulator"
         ));
     }
 
     #[test]
     fn terminal_adb_reverse_error_ignores_port_specific_failures() {
         assert!(!is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): cannot bind listener: Address already in use"
+            "adb command failed (exit status: 1): cannot bind listener: Address already in use"
         ));
     }
 

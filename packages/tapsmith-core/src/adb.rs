@@ -135,7 +135,8 @@ async fn run_with_input(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
-            "{program} command failed (exit {}): {stderr}",
+            // ExitStatus displays as "exit status: 1" (or "signal: 9 …").
+            "{program} command failed ({}): {stderr}",
             output.status
         );
     }
@@ -2134,8 +2135,9 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
+        // Said once: "exit status: 3", never "exit exit status: 3" (PILOT-1533).
         assert!(
-            err.contains("sh command failed") && err.contains("nope"),
+            err.starts_with("sh command failed (exit status: 3): nope"),
             "{err}"
         );
     }
@@ -2455,31 +2457,31 @@ mod tests {
     #[test]
     fn retryable_adb_transport_error_matches_offline_device() {
         assert!(is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): adb: device offline"
+            "adb command failed (exit status: 1): adb: device offline"
         ));
     }
 
     #[test]
     fn retryable_adb_transport_error_matches_missing_device() {
         assert!(is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): error: no devices/emulators found"
+            "adb command failed (exit status: 1): error: no devices/emulators found"
         ));
         assert!(is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): error: device 'emulator-5554' not found"
+            "adb command failed (exit status: 1): error: device 'emulator-5554' not found"
         ));
     }
 
     #[test]
     fn retryable_adb_transport_error_rejects_install_semantic_failure() {
         assert!(!is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): Failure [INSTALL_FAILED_VERSION_DOWNGRADE]"
+            "adb command failed (exit status: 1): Failure [INSTALL_FAILED_VERSION_DOWNGRADE]"
         ));
     }
 
     #[test]
     fn retryable_adb_transport_error_rejects_unauthorized_device() {
         assert!(!is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): error: device unauthorized"
+            "adb command failed (exit status: 1): error: device unauthorized"
         ));
     }
 
@@ -2488,7 +2490,7 @@ mod tests {
     #[test]
     fn parse_incompatible_package_modern_adb_inline_format() {
         // Modern (streamed-install) adb embeds the failure mid-line in stderr.
-        let msg = "adb command failed (exit exit status: 1): \
+        let msg = "adb command failed (exit status: 1): \
             adb: failed to install /tmp/agent.apk: \
             Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package \
             dev.tapsmith.agent signatures do not match newer version; ignoring!]";
@@ -2497,7 +2499,7 @@ mod tests {
 
     #[test]
     fn parse_incompatible_package_legacy_line_start_format() {
-        let msg = "adb command failed (exit exit status: 1): \nPerforming Push Install\n\
+        let msg = "adb command failed (exit status: 1): \nPerforming Push Install\n\
             Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: \
             Package dev.tapsmith.agent.test signatures do not match previously installed version]";
         assert_eq!(

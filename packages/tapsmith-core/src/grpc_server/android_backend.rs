@@ -674,8 +674,18 @@ impl DeviceBackend for AndroidBackend<'_> {
         request_id: String,
         req: &proto::ClearAppDataRequest,
     ) -> ActionResult {
-        let cmd = format!("pm clear {}", req.package_name);
-        self.svc.adb_action(request_id, &cmd).await
+        let serial = self.svc.active_serial().await?;
+        let pkg = &req.package_name;
+        let mut response = self
+            .svc
+            .adb_action_on(request_id, &serial, &format!("pm clear {pkg}"))
+            .await?;
+        // `pm clear` answers an unknown package with a bare "Failed".
+        let failed = !response.get_ref().success;
+        if failed && !android_package_installed(&serial, pkg).await {
+            response.get_mut().error_message = clear_app_data_not_installed_message(pkg, &serial);
+        }
+        Ok(response)
     }
 
     async fn supports_cold_deep_link(&self) -> bool {
@@ -2089,10 +2099,27 @@ fn unhandled_link_message(uri: &str, target: &str, handler: &LinkHandler) -> Str
     )
 }
 
+/// clearAppData's error for a package that is not on the device, worded as
+/// saveAppState's (`android_app_state::run_as_refusal_message`).
+fn clear_app_data_not_installed_message(pkg: &str, serial: &str) -> String {
+    format!(
+        "clearAppData can't clear {pkg}: it is not installed on {serial}. Install the app first."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn clear_app_data_names_a_package_that_is_not_installed() {
+        assert_eq!(
+            clear_app_data_not_installed_message("com.example.gone", "emulator-5554"),
+            "clearAppData can't clear com.example.gone: it is not installed on emulator-5554. \
+             Install the app first."
+        );
+    }
 
     #[test]
     fn deep_links_go_to_the_target_package_when_there_is_one() {
