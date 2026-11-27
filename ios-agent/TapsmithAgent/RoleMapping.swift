@@ -17,17 +17,19 @@ enum AccessibilityTrait {
     /// UIAccessibilityTraitBackButton (private): UIKit gives it to a
     /// navigation stack's system back button, in UIKit, SwiftUI and React
     /// Navigation native stacks alike, and to no other bar button (a root
-    /// screen's leading Edit or Close has the button trait only). Recorded
+    /// screen's leading Edit or Close, a bottom toolbar's Back and an iPad
+    /// sidebar toggle have the button trait only). Recorded
     /// on iOS 18.5 and 27.2 iPhone simulators (PILOT-1261, PILOT-1532).
     static let backButton: UInt64 = 1 << 27
 
     /// The identifier UIKit gives the system back button on iOS 26 and
-    /// later. iOS 17 and 18 drop it once a push settles (PILOT-1532).
+    /// later. iOS 18 drops it once a push settles (recorded on 18.5; 17 is
+    /// unrecorded and assumed alike, PILOT-1532).
     static let backButtonIdentifier = "BackButton"
 
     /// Whether an element is a navigation stack's system back button: a
     /// button identified as `BackButton`, or one carrying the back-button
-    /// trait — the only mark it keeps on iOS 17 and 18, whose back button
+    /// trait — the only mark it keeps on iOS 18, whose back button
     /// is labelled with the previous screen's title and has no identifier.
     /// Traits that couldn't be read (nil) never mark it.
     static func isSystemBackButton(elementType: XCUIElement.ElementType, identifier: String, traits: UInt64?) -> Bool {

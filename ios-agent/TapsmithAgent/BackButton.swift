@@ -8,9 +8,10 @@ import XCTest
 /// The system back button (its label is the previous screen's title) is
 /// recognised by `AccessibilityTrait.isSystemBackButton`: on iOS 26 and later
 /// UIKit identifies it as `BackButton`, in UIKit and SwiftUI stacks alike;
-/// iOS 17 and 18 drop that identifier once a push settles, and it keeps only
-/// the private back-button trait (PILOT-1532). It is a child of the
-/// navigation bar up to iOS 26, and on iOS 26/27 iPhones;
+/// iOS 18 drops that identifier once a push settles (recorded on 18.5; 17 is
+/// unrecorded and assumed alike), and it keeps only the private back-button
+/// trait (PILOT-1532). It is a child of the navigation bar up to iOS 26, and
+/// on iOS 26/27 iPhones;
 /// iOS 27 can instead lay it out in the window's floating `Toolbar` host
 /// (seen on the iPhone Duo, trailing rather than leading), outside the
 /// navigation bar. A bar button labelled as a back button counts too
