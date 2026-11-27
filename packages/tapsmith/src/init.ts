@@ -1399,17 +1399,24 @@ export function wizardNextSteps(
 
 // ─── A config with no build (PILOT-1533) ───
 
-/** A platform init leaves without a build: `known` when every device asked definitely lacks the app. */
+/**
+ * A platform init leaves without a build: `known` when every device asked
+ * definitely lacks the app; `iosDevice` for an iOS config on physical
+ * devices alone, whose build is a device-signed (iphoneos) one.
+ */
 export interface MissingBuild {
   platform: Platform;
   known: boolean;
+  iosDevice?: true;
 }
 
 /**
  * The selected platforms whose config installs nothing (no `apk`; no
  * simulator or device `app`) and whose app no device here has: the
  * connected Android devices the run could use (the pinned one, else the
- * emulators running the chosen AVD), the booted configured simulator. A platform with no device to ask, or one
+ * emulators running the chosen AVD; never a device another session holds),
+ * the booted configured simulator (a physical-only iOS config has none to
+ * ask: init cannot look inside a phone). A platform with no device to ask, or one
  * that could not say, is named too, with `known` false, so the wizard
  * hedges; one whose app a device has is fine as it is (a package-only
  * config for an app installed by hand).
@@ -1422,26 +1429,31 @@ export function missingBuilds(
   deps: AppPresenceDeps = {},
 ): MissingBuild[] {
   const missing: MissingBuild[] = [];
-  const check = (platform: Platform, pkg: string | undefined, targets: string[]): void => {
+  const check = (platform: Platform, pkg: string | undefined, targets: string[], extra: Partial<MissingBuild> = {}): void => {
     if (!pkg) {
-      missing.push({ platform, known: true });
+      missing.push({ platform, known: true, ...extra });
       return;
     }
     const presence = appPresence(platform, pkg, targets, deps);
     if (presence.installedOn.length > 0) return;
-    missing.push({ platform, known: presence.absentFrom.length > 0 && presence.unknown.length === 0 });
+    missing.push({ platform, known: presence.absentFrom.length > 0 && presence.unknown.length === 0, ...extra });
   };
   if (selected.includes('android') && android && !android.apkPath) {
     // As the generated config runs: on the pinned device, else (avd-only,
-    // the default with an `avd`) on emulators of that AVD, else on any.
+    // the default with an `avd`) on emulators of that AVD, else on any it
+    // can claim: a device another session holds is not one, while a pinned
+    // one is what the run waits for.
     const targets = env.androidDevices
-      .filter((d) => (android.device ? d.serial === android.device : android.avd ? d.avd === android.avd : true))
+      .filter((d) => (android.device ? d.serial === android.device : !d.held && (android.avd ? d.avd === android.avd : true)))
       .map((d) => d.serial);
     check('android', android.packageName, targets);
   }
   if (selected.includes('ios') && ios && !ios.appPath && !ios.deviceAppPath) {
-    const booted = env.simulators.filter((s) => s.state === 'Booted' && (!ios.simulator || s.name === ios.simulator || s.udid === ios.simulator));
-    check('ios', ios.bundleId, booted.map((s) => s.udid));
+    // A simulator target is one with a `simulator` (iosTargets()); without
+    // one the config is for physical devices alone, which init cannot ask.
+    const sim = ios.simulator;
+    const booted = sim ? env.simulators.filter((s) => s.state === 'Booted' && (s.name === sim || s.udid === sim)) : [];
+    check('ios', ios.bundleId, booted.map((s) => s.udid), sim ? {} : { iosDevice: true });
   }
   return missing;
 }
@@ -1456,8 +1468,8 @@ const WARM_RESET_POINTER = 'For sub-second resets between tests, add @tapsmith/r
  */
 export function wizardClosing(missing: readonly MissingBuild[], rootDir: string, cli: string, expo: ExpoProject | undefined): string[] {
   if (missing.length === 0) return [...(expo && !expo.usesTapsmithHooks ? [WARM_RESET_POINTER] : []), 'Happy testing!'];
-  return missing.map(({ platform, known }) => {
-    const step = buildFirstStep(platform, { rootDir, cli, detect: () => expo });
+  return missing.map(({ platform, known, iosDevice }) => {
+    const step = buildFirstStep(platform, { rootDir, cli, detect: () => expo, ...(iosDevice ? { iosDevice } : {}) });
     if (missing.length === 1) return known ? step.sentence : `If you don't have a build yet, ${step.action}`;
     const name = platform === 'android' ? 'Android' : 'iOS';
     return `${name}: ${known ? "you don't have a build yet, so" : "if you don't have a build yet,"} ${step.action}`;

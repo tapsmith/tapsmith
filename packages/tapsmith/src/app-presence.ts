@@ -59,6 +59,8 @@ export interface BuildFirstStepOptions {
   /** The config's file name, as the user sees it. */
   configFile?: string;
   detect?: (dir: string) => ExpoProject | undefined;
+  /** iOS on physical devices: a device-signed (iphoneos) build instead of a simulator one. */
+  iosDevice?: boolean;
 }
 
 /** Where the Expo release build of each platform lands. */
@@ -66,6 +68,7 @@ const EXPO_RELEASE_BUILD = {
   android: 'android/app/build/outputs/apk/release/app-release.apk',
   ios: 'the .app under ios/build/Build/Products/Release-iphonesimulator/',
 } as const;
+const EXPO_RELEASE_DEVICE_BUILD = 'the device-signed .app under ios/build/Build/Products/Release-iphoneos/';
 
 /**
  * The one recommended way to get a first build, as a single sentence: for
@@ -75,7 +78,7 @@ const EXPO_RELEASE_BUILD = {
  * so a plain `init` would refuse (`--yes`) or keep it (the wizard's default).
  */
 export function buildFirstStep(platform: AppPlatform, options: BuildFirstStepOptions): BuildFirstStep {
-  const { rootDir, cli = 'npx tapsmith', configFile = 'tapsmith.config.ts', detect = detectExpoProject } = options;
+  const { rootDir, cli = 'npx tapsmith', configFile = 'tapsmith.config.ts', detect = detectExpoProject, iosDevice = false } = options;
   const key = platform === 'android' ? 'apk' : 'app';
   let expo: ExpoProject | undefined;
   try {
@@ -83,7 +86,8 @@ export function buildFirstStep(platform: AppPlatform, options: BuildFirstStepOpt
   } catch {
     expo = undefined;
   }
-  const where = expo ? ` (${EXPO_RELEASE_BUILD[platform]})` : '';
+  const device = platform === 'ios' && iosDevice;
+  const where = expo ? ` (${device ? EXPO_RELEASE_DEVICE_BUILD : EXPO_RELEASE_BUILD[platform]})` : '';
   const then = `then set \`${key}\` in ${configFile} to the build${where}, or run \`${cli} init --force\`, which finds it.`;
   const lead = "You don't have a build yet: ";
   if (!expo) {
@@ -96,7 +100,7 @@ export function buildFirstStep(platform: AppPlatform, options: BuildFirstStepOpt
   const command = platform === 'android'
     ? `${expo.hasAndroidDir ? '' : 'npx expo prebuild -p android && '}(cd android && ${env}./gradlew assembleRelease)`
     : `${expo.hasIosDir ? '' : 'npx expo prebuild -p ios && '}(cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
-      + '-configuration Release -sdk iphonesimulator -derivedDataPath build build)';
+      + `-configuration Release -sdk ${device ? 'iphoneos' : 'iphonesimulator'} -derivedDataPath build build)`;
   const action = `run \`${command}\`, ${then}`;
   return { command, action, sentence: `${lead}${action}` };
 }

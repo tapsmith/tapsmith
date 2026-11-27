@@ -62,8 +62,11 @@ impl std::fmt::Display for AdbTimeout {
 
 impl std::error::Error for AdbTimeout {}
 
-/// Run `cmd` to completion within `timeout`.
+/// Run `cmd` to completion within `timeout`. A timeout drops the pending
+/// output future, and `kill_on_drop` makes that kill the adb child too
+/// rather than leave it running on the host.
 async fn output_within(cmd: &mut Command, timeout: Duration) -> Result<std::process::Output> {
+    cmd.kill_on_drop(true);
     tokio::time::timeout(timeout, cmd.output())
         .await
         .map_err(|_| anyhow::Error::new(AdbTimeout(timeout)))?

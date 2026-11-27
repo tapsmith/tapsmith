@@ -51,6 +51,15 @@ describe('missingBuilds()', () => {
     expect(asked).toEqual(['SIM-1']);
   });
 
+  it('leaves out a device another session holds: the run cannot use it, so its copy of the app proves nothing', () => {
+    const asked: string[] = [];
+    const missing = missingBuilds(['android'], { ...androidPackageOnly, device: undefined }, undefined, env([{ serial: 'emulator-5554', held: true }, emulator('emulator-5558')]), {
+      android: (serial) => { asked.push(serial); return serial === 'emulator-5554'; },
+    });
+    expect(asked).toEqual(['emulator-5558']);
+    expect(missing).toEqual([{ platform: 'android', known: true }]);
+  });
+
   it('names nothing when the config has an apk, or a device has the app', () => {
     expect(missingBuilds(['android'], { ...androidPackageOnly, apkPath: 'app.apk' }, undefined, env([emulator('emulator-5554')]), { android: () => false })).toEqual([]);
     expect(missingBuilds(['android'], androidPackageOnly, undefined, env([emulator('emulator-5554')]), { android: () => true })).toEqual([]);
@@ -75,6 +84,16 @@ describe('missingBuilds()', () => {
     expect(missingBuilds(['ios'], undefined, { ...ios, usePhysicalDevice: true, deviceAppPath: 'App.ipa' }, env([], [booted('SIM-1')]), { ios: () => false })).toEqual([]);
   });
 
+  it('never answers a physical-only iOS config from a booted simulator, and marks its build a device one', () => {
+    const ios: IosConfig = { bundleId: 'com.lqh.alexshop', usePhysicalDevice: true };
+    const asked: string[] = [];
+    const missing = missingBuilds(['ios'], undefined, ios, env([], [booted('SIM-1')]), {
+      ios: (udid) => { asked.push(udid); return true; },
+    });
+    expect(asked).toEqual([]);
+    expect(missing).toEqual([{ platform: 'ios', known: false, iosDevice: true }]);
+  });
+
   it('ignores a platform that was not selected', () => {
     expect(missingBuilds(['ios'], androidPackageOnly, { bundleId: 'x', appPath: 'A.app', usePhysicalDevice: false }, env([emulator('emulator-5554')]), { android: () => false })).toEqual([]);
   });
@@ -95,6 +114,12 @@ describe('wizardClosing()', () => {
     expect(wizardClosing([{ platform: 'android', known: false }, { platform: 'ios', known: true }], '/proj', 'npx tapsmith', expo())).toEqual([
       "Android: if you don't have a build yet, run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then set `apk` in tapsmith.config.ts to the build (android/app/build/outputs/apk/release/app-release.apk), or run `npx tapsmith init --force`, which finds it.",
       "iOS: you don't have a build yet, so run `npx expo prebuild -p ios && (cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build)`, then set `app` in tapsmith.config.ts to the build (the .app under ios/build/Build/Products/Release-iphonesimulator/), or run `npx tapsmith init --force`, which finds it.",
+    ]);
+  });
+
+  it('gives a physical-only iOS config a device (iphoneos) build step', () => {
+    expect(wizardClosing([{ platform: 'ios', known: false, iosDevice: true }], '/proj', 'npx tapsmith', expo({ hasIosDir: true }))).toEqual([
+      "If you don't have a build yet, run `(cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphoneos -derivedDataPath build build)`, then set `app` in tapsmith.config.ts to the build (the device-signed .app under ios/build/Build/Products/Release-iphoneos/), or run `npx tapsmith init --force`, which finds it.",
     ]);
   });
 
