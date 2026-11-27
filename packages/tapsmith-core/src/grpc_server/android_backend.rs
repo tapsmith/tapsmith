@@ -379,17 +379,18 @@ impl DeviceBackend for AndroidBackend<'_> {
     }
 
     async fn wipe_app_data(&self, serial: &str, package_name: &str) -> Result<(), String> {
-        let output = adb::shell(serial, &format!("pm clear {}", package_name))
-            .await
-            .map_err(|e| format!("pm clear failed: {e}"))?;
-        if output.trim().starts_with("Success") {
-            Ok(())
-        } else {
-            Err(format!(
-                "pm clear did not report success: {}",
-                output.trim()
-            ))
+        let result = match adb::shell(serial, &format!("pm clear {}", package_name)).await {
+            Ok(output) if output.trim().starts_with("Success") => return Ok(()),
+            Ok(output) => format!("pm clear did not report success: {}", output.trim()),
+            Err(e) => format!("pm clear failed: {e}"),
+        };
+        // `pm clear` answers an unknown package with a bare "Failed": a test
+        // run's reset of a package-only config's absent app (the MCP server's
+        // runs reach it, having no install step that refuses).
+        if !android_package_installed(serial, package_name).await {
+            return Err(reset_not_installed_message(package_name, serial));
         }
+        Err(result)
     }
 
     async fn deliver_deep_link(
@@ -2107,10 +2108,30 @@ fn clear_app_data_not_installed_message(pkg: &str, serial: &str) -> String {
     )
 }
 
+/// The reset's error for the app under test when the device does not have
+/// it, worded as the session's own refusal for a package-only config.
+fn reset_not_installed_message(pkg: &str, serial: &str) -> String {
+    format!(
+        "{pkg} is not installed on {serial}, so it can't be reset. Install it first: set `apk` \
+         in your Tapsmith config to the built APK so Tapsmith installs it, or install it \
+         yourself (adb -s {serial} install <path/to/app.apk>)."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_reset_names_an_app_under_test_that_is_not_installed() {
+        assert_eq!(
+            reset_not_installed_message("com.qa.absent", "emulator-5570"),
+            "com.qa.absent is not installed on emulator-5570, so it can't be reset. Install it \
+             first: set `apk` in your Tapsmith config to the built APK so Tapsmith installs it, \
+             or install it yourself (adb -s emulator-5570 install <path/to/app.apk>)."
+        );
+    }
 
     #[test]
     fn clear_app_data_names_a_package_that_is_not_installed() {
