@@ -341,6 +341,156 @@ duoNodes[3].traits = leavingBackTraits
 check("iOS 27 floating toolbar: a back button without the button trait is still tapped",
       tapPoint(BackButton.resolve(in: OcclusionAnalyzer(nodes: duoNodes, screen: duo))), CGPoint(x: 418, y: 198))
 
+// iOS 18.5 (recorded on an iPhone 15 Pro simulator, Xcode 27.2): once a push
+// settles, the system back button has no `BackButton` identifier, in React
+// Navigation's native stack, a SwiftUI NavigationStack and a UIKit
+// UINavigationController alike. It keeps the private back-button trait
+// (bit 27) in every sample from 0.05 to 3 s after the push; a root screen's
+// leading Edit (SwiftUI) or Close (UIKit `leftBarButtonItem`) has the button
+// trait only (PILOT-1532).
+let iPhone15Pro = R(0, 0, 393, 852)
+let backTraits18: UInt64 = 0x2_0800_0001
+let plainButtonTraits18: UInt64 = 0x2_0000_0001
+
+/// `rows` on the iPhone 15 Pro, with `traits` set on the nodes at the given
+/// indices.
+func resolve18(_ rows: [Row], traits: [Int: UInt64]) -> BackButton.Resolution {
+    var nodes = tree(rows)
+    for (i, value) in traits { nodes[i].traits = value }
+    return BackButton.resolve(in: OcclusionAnalyzer(nodes: nodes, screen: iPhone15Pro))
+}
+
+// expo-router's native stack, a todo pushed from the list (the trace's
+// action-008 hierarchy): the back button is labelled with the list's title.
+let rnPushed18: [Row] = [
+    (0, .application, "LQG Shop", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .other, "", "", iPhone15Pro),
+    (3, .navigationBar, "", "Todo", R(0, 53, 393, 44)),
+    (4, .button, "Todos", "", R(0, 53, 77, 44)),
+    (4, .staticText, "Todo", "", R(177, 65, 39, 20)),
+    (3, .other, "", "", R(0, 97, 393, 755)),
+    (4, .staticText, "Todo #3", "detail-id", R(24, 121, 345, 27)),
+]
+check("iOS 18 React Navigation pushed screen: taps the back button found by its trait",
+      tapPoint(resolve18(rnPushed18, traits: [4: backTraits18])), CGPoint(x: 38.5, y: 75))
+check("iOS 18 React Navigation pushed screen: a back button whose traits can't be read is no back button",
+      resolve18(rnPushed18, traits: [:]), .none)
+check("iOS 18: a bar button with the button trait only is no back button",
+      resolve18(rnPushed18, traits: [4: plainButtonTraits18]), .none)
+
+// A SwiftUI NavigationStack in a TabView (persona D's dump): a large title,
+// the tab bar after the stack.
+let swiftUIPushed18: [Row] = [
+    (0, .application, "BrewLog", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .other, "", "", iPhone15Pro),
+    (3, .navigationBar, "", "Guinness", R(0, 53, 393, 96)),
+    (4, .button, "Beers", "", R(0, 53, 74, 44)),
+    (4, .staticText, "Guinness", "", R(16, 101, 148, 40)),
+    (3, .other, "", "", iPhone15Pro),
+    (2, .tabBar, "Tab Bar", "", R(0, 769, 393, 83)),
+    (3, .button, "Beers", "list.bullet", R(2, 770, 127, 48)),
+]
+check("iOS 18 SwiftUI NavigationStack pushed screen: taps the back button found by its trait",
+      tapPoint(resolve18(swiftUIPushed18, traits: [4: backTraits18, 8: plainButtonTraits18])), CGPoint(x: 37, y: 75))
+
+// A UIKit UINavigationController's pushed screen.
+let uiKitPushed18: [Row] = [
+    (0, .application, "BrewLog", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .navigationBar, "", "KitDetail1", R(0, 59, 393, 44)),
+    (3, .button, "KitRoot", "", R(0, 59, 86, 44)),
+    (3, .staticText, "KitDetail1", "", R(158, 70, 75, 20)),
+]
+check("iOS 18 UIKit UINavigationController pushed screen: taps the back button found by its trait",
+      tapPoint(resolve18(uiKitPushed18, traits: [3: backTraits18])), CGPoint(x: 43, y: 81))
+
+// The roots: SwiftUI's leading Edit (a button holding a button, the inner one
+// with the button trait) and trailing Add; UIKit's leading Close. Neither is a
+// back button, though each sits where one would.
+let swiftUIRoot18: [Row] = [
+    (0, .application, "BrewLog", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .navigationBar, "", "Beers", R(0, 53, 393, 96)),
+    (3, .button, "Edit", "", R(16, 61, 37, 28)),
+    (4, .button, "", "", R(16, 61, 37, 28)),
+    (5, .button, "Edit", "", R(16, 61, 37, 28)),
+    (3, .button, "Add", "addBeerButton", R(338, 61, 38, 28)),
+    (3, .staticText, "Beers", "", R(16, 101, 91, 40)),
+]
+check("iOS 18 SwiftUI root with a leading Edit: no back button",
+      resolve18(swiftUIRoot18, traits: [3: 0x2_0000_0000, 4: 0x2_0000_0000, 5: plainButtonTraits18, 6: 0x2_0000_0000]),
+      .none)
+let uiKitRoot18: [Row] = [
+    (0, .application, "BrewLog", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .navigationBar, "", "KitRoot", R(0, 59, 393, 44)),
+    (3, .button, "Close", "", R(8, 59, 54, 44)),
+    (3, .staticText, "KitRoot", "", R(167, 70, 59, 20)),
+]
+check("iOS 18 UIKit root with a leading Close: no back button",
+      resolve18(uiKitRoot18, traits: [3: plainButtonTraits18]), .none)
+
+// The back-button trait on something that is no button, or on a button
+// outside any bar, is no back button.
+var traitOnText = rnPushed18
+traitOnText[4] = (4, .staticText, "Todos", "", R(0, 53, 77, 44))
+check("iOS 18: the back-button trait on a static text is no back button",
+      resolve18(traitOnText, traits: [4: backTraits18]), .none)
+var traitInContent = rnPushed18
+traitInContent.remove(at: 4)
+traitInContent.append((4, .button, "Todos", "", R(0, 200, 77, 44)))
+check("iOS 18: a button with the back-button trait outside a bar is no back button",
+      resolve18(traitInContent, traits: [traitInContent.count - 1: backTraits18]), .none)
+
+// A popped back button found by its trait alone, left in the bar of the
+// screen popped to without the button trait (the shape iOS 27 leaves,
+// PILOT-1261): still no back button.
+check("a trait-only back button that has lost the button trait is no back button",
+      resolve18(rnPushed18, traits: [4: leavingBackTraits]), .none)
+
+// A pop on iOS 18.5 (recorded with the same three stacks, sampled every
+// ~30 ms from the moment the pop settled for 1.5 s): unlike iOS 27, the
+// popped back button leaves the tree with the pop. The screen popped to
+// holds only its own bar buttons: the RN list its own back button (Home),
+// the SwiftUI and UIKit roots their Edit, Add and Close.
+let rnListAfterPop18: [Row] = [
+    (0, .application, "LQG Shop", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .navigationBar, "", "Todos", R(0, 53, 393, 44)),
+    (3, .button, "Home", "", R(0, 53, 76, 44)),
+    (3, .staticText, "Todos", "", R(172, 65, 48, 20)),
+]
+check("iOS 18 just after a pop to the RN list: taps the list's own back button",
+      tapPoint(resolve18(rnListAfterPop18, traits: [3: backTraits18])), CGPoint(x: 38, y: 75))
+check("iOS 18 just after a pop to the SwiftUI root: no back button",
+      resolve18(swiftUIRoot18, traits: [5: plainButtonTraits18]), .none)
+
+// Mid-push with both screens' back buttons found by their trait: the one on
+// screen.
+let midPush18: [Row] = [
+    (0, .application, "App", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .navigationBar, "", "Level 2", R(0, 53, 393, 44)),
+    (3, .button, "Level 0", "", R(-200, 53, 77, 44)),
+    (3, .button, "Level 1", "", R(0, 53, 77, 44)),
+]
+check("iOS 18 mid-push: the on-screen trait-only back button",
+      tapPoint(resolve18(midPush18, traits: [3: backTraits18, 4: backTraits18])), CGPoint(x: 38.5, y: 75))
+
+// The shared rule.
+check("isSystemBackButton: the BackButton identifier",
+      AccessibilityTrait.isSystemBackButton(elementType: .button, identifier: "BackButton", traits: nil), true)
+check("isSystemBackButton: the back-button trait",
+      AccessibilityTrait.isSystemBackButton(elementType: .button, identifier: "", traits: backTraits18), true)
+check("isSystemBackButton: neither",
+      AccessibilityTrait.isSystemBackButton(elementType: .button, identifier: "", traits: plainButtonTraits18), false)
+check("isSystemBackButton: unread traits",
+      AccessibilityTrait.isSystemBackButton(elementType: .button, identifier: "", traits: nil), false)
+check("isSystemBackButton: not a button",
+      AccessibilityTrait.isSystemBackButton(elementType: .other, identifier: "", traits: backTraits18), false)
+
 // Reading again before refusing: for a second, and never past the
 // daemon's deadline.
 let t0 = Date(timeIntervalSinceReferenceDate: 0)

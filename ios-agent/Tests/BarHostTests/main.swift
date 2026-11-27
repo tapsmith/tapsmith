@@ -234,6 +234,24 @@ let duoPushedWithItem = marked(node(.application, duo, label: "Tapsmith Native",
     ])]),
 ]))
 check("iPhone Duo: a host holding the back button and a toolbar item is the toolbar", tagged(duoHost(duoPushedWithItem)), false)
+// The system back button found by its private trait rather than its
+// identifier (iOS 18 leaves the identifier empty, PILOT-1532): still only
+// navigation. A button with the button trait alone is an item.
+func duoPushed(backTraits: UInt64) -> [String: Any] {
+    var back = node(.button, R(399, 179, 38, 38))
+    back["traits"] = backTraits
+    return marked(node(.application, duo, label: "Tapsmith Native", [
+        node(.window, duo, [node(.other, duo, [
+            host(duo, [node(.other, duo, [node(.other, R(394, 174, 48, 48), [back])])]),
+            node(.navigationBar, R(0, 24, 466, 58), identifier: "Toggles"),
+            node(.other, duo),
+        ])]),
+    ]))
+}
+check("a host holding only a back button found by its trait is tagged empty",
+      tagged(duoHost(duoPushed(backTraits: 0x2_0800_0000))), true)
+check("a host holding an unlabelled button with the button trait only is not empty",
+      tagged(duoHost(duoPushed(backTraits: 0x2_0000_0001))), false)
 let backInContent = marked(window(host(screen, [node(.button, R(16, 62, 44, 44), label: "Back", identifier: "Back")])))
 check("a host holding an app's own button (not the system BackButton) is not empty", tagged(hostIn(backInContent)), false)
 // TabView: the tab's host is alone in a same-size wrapper after the content,
