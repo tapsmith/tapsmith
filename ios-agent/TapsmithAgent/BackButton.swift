@@ -72,7 +72,9 @@ enum BackButton {
     /// UIKit and SwiftUI stacks). The rule is kept to navigation bars: the
     /// iPhone Duo's floating back button, in iOS 27's toolbar host, never has
     /// the button trait. A button whose traits can't be read counts as on
-    /// screen.
+    /// screen. iOS 18.5 leaves no popped back button behind: it is gone from
+    /// the tree from the first read after the pop settles (React Native,
+    /// SwiftUI and UIKit stacks, PILOT-1532).
     static func isLeaving(_ i: Int, in analyzer: OcclusionAnalyzer, bar: Int) -> Bool {
         guard analyzer.nodes[bar].elementType == .navigationBar,
               let traits = analyzer.nodes[i].traits, traits != 0 else { return false }

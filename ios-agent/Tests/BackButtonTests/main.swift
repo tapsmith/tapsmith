@@ -450,6 +450,23 @@ check("iOS 18: a button with the back-button trait outside a bar is no back butt
 check("a trait-only back button that has lost the button trait is no back button",
       resolve18(rnPushed18, traits: [4: leavingBackTraits]), .none)
 
+// A pop on iOS 18.5 (recorded with the same three stacks, sampled every
+// ~30 ms from the moment the pop settled for 1.5 s): unlike iOS 27, the
+// popped back button leaves the tree with the pop. The screen popped to
+// holds only its own bar buttons: the RN list its own back button (Home),
+// the SwiftUI and UIKit roots their Edit, Add and Close.
+let rnListAfterPop18: [Row] = [
+    (0, .application, "LQG Shop", "", iPhone15Pro),
+    (1, .window, "", "", iPhone15Pro),
+    (2, .navigationBar, "", "Todos", R(0, 53, 393, 44)),
+    (3, .button, "Home", "", R(0, 53, 76, 44)),
+    (3, .staticText, "Todos", "", R(172, 65, 48, 20)),
+]
+check("iOS 18 just after a pop to the RN list: taps the list's own back button",
+      tapPoint(resolve18(rnListAfterPop18, traits: [3: backTraits18])), CGPoint(x: 38, y: 75))
+check("iOS 18 just after a pop to the SwiftUI root: no back button",
+      resolve18(swiftUIRoot18, traits: [5: plainButtonTraits18]), .none)
+
 // Mid-push with both screens' back buttons found by their trait: the one on
 // screen.
 let midPush18: [Row] = [
