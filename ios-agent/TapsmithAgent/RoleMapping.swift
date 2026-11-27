@@ -19,7 +19,8 @@ enum AccessibilityTrait {
     /// Navigation native stacks alike, and to no other bar button (a root
     /// screen's leading Edit or Close, a bottom toolbar's Back and an iPad
     /// sidebar toggle have the button trait only). Recorded
-    /// on iOS 18.5 and 27.2 iPhone simulators (PILOT-1261, PILOT-1532).
+    /// on iOS 18.5 and 27.2 iPhone simulators and an iPadOS 18.5 iPad
+    /// simulator (PILOT-1261, PILOT-1532).
     static let backButton: UInt64 = 1 << 27
 
     /// The identifier UIKit gives the system back button on iOS 26 and
