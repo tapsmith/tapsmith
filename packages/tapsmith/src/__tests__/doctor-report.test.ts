@@ -14,6 +14,8 @@ const exec = vi.hoisted(() => ({
   table: new Map<string, string>(),
   calls: [] as string[],
   timeouts: new Map<string, number | undefined>(),
+  /** Commands that run and exit non-zero, as a child process does: pm path for an app the device lacks. */
+  exits: new Map<string, { status: number; stderr?: string }>(),
 }));
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -24,6 +26,8 @@ vi.mock('node:child_process', async (importOriginal) => {
       const key = [cmd, ...args].join(' ');
       exec.calls.push(key);
       exec.timeouts.set(key, opts?.timeout);
+      const exit = exec.exits.get(key);
+      if (exit) throw Object.assign(new Error(`Command failed: ${key}`), { status: exit.status, signal: null, stdout: '', stderr: exit.stderr ?? '' });
       const out = exec.table.get(key);
       if (out === undefined) {
         const err = new Error(`spawn ${cmd} ENOENT`) as NodeJS.ErrnoException;
@@ -150,6 +154,7 @@ beforeEach(() => {
   exec.table.clear();
   exec.calls.length = 0;
   exec.timeouts.clear();
+  exec.exits.clear();
   xctestrun.found = '/h/.tapsmith/ios-simulator-agent/x_iphonesimulator26.0.xctestrun';
   xctestrun.cache = undefined;
   rosetta.on = false;
@@ -164,6 +169,75 @@ afterEach(() => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
   fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+});
+
+// ─── App build (PILOT-1533) ───
+
+describe('doctor app-build: a package-only config whose app is on no device (PILOT-1533)', () => {
+  const pmPath = (serial: string) => `adb -s ${serial} shell pm path com.lqh.alexshop`;
+  const absent = (serial: string) => exec.exits.set(pmPath(serial), { status: 1 });
+  const installed = (serial: string) => exec.table.set(pmPath(serial), 'package:/data/app/base.apk\n');
+
+  beforeEach(() => {
+    writeConfig("export default { package: 'com.lqh.alexshop' }\n");
+  });
+
+  it('fails when no connected device has the app, with the one build step for an Expo project', async () => {
+    withAdb('List of devices attached\nemulator-5554\tdevice\nemulator-5558\tdevice\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { expo: '~58.0.0' } }));
+    fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify({ expo: { name: 'alexshop' } }));
+    absent('emulator-5554');
+    absent('emulator-5558');
+    const { code, json } = await doctorJson();
+    expect(check(json, 'app-build')).toEqual({
+      id: 'app-build',
+      status: 'fail',
+      label: "No app build configured — the config has no apk, and com.lqh.alexshop isn't installed on emulator-5554, emulator-5558",
+      fix: "You don't have a build yet: run `npx expo prebuild -p android && cd android && ./gradlew assembleRelease`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
+    });
+    expect(code).toBe(1);
+  });
+
+  it('passes when one connected device has the app: a package-only config is fine then', async () => {
+    withAdb('List of devices attached\nemulator-5554\tdevice\nemulator-5558\tdevice\n');
+    absent('emulator-5554');
+    installed('emulator-5558');
+    const { code, json } = await doctorJson();
+    expect(check(json, 'app-build')).toMatchObject({ status: 'pass', label: 'com.lqh.alexshop installed on emulator-5558' });
+    expect(code).toBe(0);
+  });
+
+  it('asks only the pinned device when it is connected', async () => {
+    writeConfig("export default { package: 'com.lqh.alexshop', device: 'emulator-5554' }\n");
+    withAdb('List of devices attached\nemulator-5554\tdevice\nemulator-5558\tdevice\n');
+    absent('emulator-5554');
+    installed('emulator-5558');
+    const { json } = await doctorJson();
+    expect(check(json, 'app-build')).toMatchObject({ status: 'fail', label: expect.stringContaining("isn't installed on emulator-5554") });
+  });
+
+  it('warns, never fails, when no device can be asked or none can answer', async () => {
+    withAdb('List of devices attached\n');
+    let { code, json } = await doctorJson();
+    expect(check(json, 'app-build')).toMatchObject({ status: 'warn', label: expect.stringContaining('no Android device is connected to check for com.lqh.alexshop') });
+    expect(check(json, 'app-build')?.fix).toMatch(/^You don't have a build yet: build your app \(https:\/\/tapsmith\.dev\/getting-started\/#build-the-app-under-test\)/);
+    expect(code).toBe(0);
+
+    withAdb();
+    exec.exits.set(pmPath('emulator-5554'), { status: 1, stderr: 'adb: device offline\n' });
+    ({ code, json } = await doctorJson());
+    expect(check(json, 'app-build')).toMatchObject({ status: 'warn', label: expect.stringContaining('could not tell whether com.lqh.alexshop is installed on emulator-5554') });
+    expect(code).toBe(0);
+  });
+
+  it('has no row for a config that sets apk, or no package', async () => {
+    withAdb();
+    writeConfig("export default { package: 'com.lqh.alexshop', apk: 'app.apk' }\n");
+    fs.writeFileSync(path.join(dir, 'app.apk'), '');
+    expect(ids((await doctorJson()).json)).not.toContain('app-build');
+    writeConfig('export default {}\n');
+    expect(ids((await doctorJson()).json)).not.toContain('app-build');
+  });
 });
 
 // ─── Item 6: platform gating ───

@@ -330,22 +330,36 @@ export async function installAppAsync(udid: string, appPath: string): Promise<vo
 }
 
 /**
- * Check whether an app bundle is already installed on a simulator.
+ * Check whether an app bundle is already installed on a simulator. False
+ * when it cannot tell, too: {@link simulatorAppInstallState} tells the two apart.
  */
 export function isAppInstalled(udid: string, bundleId: string): boolean {
-  try {
-    execFileSync('xcrun', ['simctl', 'get_app_container', udid, bundleId, 'app'], {
-      timeout: 10_000,
-      stdio: 'ignore',
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  return simulatorAppInstallState(udid, bundleId) === true;
 }
 
 /** `simctl get_app_container`'s exit status for an app that is not installed (ENOENT). */
 const SIMCTL_APP_NOT_INSTALLED_EXIT = 2;
+
+/**
+ * Whether an app is installed on a simulator: undefined when simctl could
+ * not say (a timeout, a simulator that is not booted, any exit but ENOENT's).
+ */
+export function simulatorAppInstallState(
+  udid: string,
+  bundleId: string,
+  exec: typeof execFileSync = execFileSync,
+): boolean | undefined {
+  try {
+    exec('xcrun', ['simctl', 'get_app_container', udid, bundleId, 'app'], {
+      timeout: 10_000,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch (err) {
+    const { signal, status } = err as { signal?: string | null; status?: number | null };
+    return !signal && status === SIMCTL_APP_NOT_INSTALLED_EXIT ? false : undefined;
+  }
+}
 
 /**
  * Install the app on a simulator that does not have it, straight after the

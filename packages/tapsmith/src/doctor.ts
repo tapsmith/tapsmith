@@ -29,6 +29,7 @@ import { readIosAppInfo, type IosAppInfo } from './ios-app-bundle.js';
 import { isSimulatorUdid } from './ios-devicectl.js';
 import { isYarnPnp, YARN_PNP_FIX } from './yarn-pnp.js';
 import { appIdProblem } from './app-id.js';
+import { appPresence, buildFirstStep } from './app-presence.js';
 import { missingConfigFix } from './missing-config.js';
 import { findAgentsSection } from './agent-plugins.js';
 
@@ -424,6 +425,55 @@ function checkAppApk(report: Reporter, config: TapsmithConfig | undefined, requi
     }
   } catch {
     warn(report, 'app-apk', 'Could not check app APK path');
+  }
+}
+
+// ─── App build (PILOT-1533) ───
+
+/**
+ * One `app-build` row for the Android scopes that name a `package` but no
+ * `apk`: Tapsmith installs nothing for them, so their app must already be on
+ * the device. Installed on a connected device: a pass (a package-only config
+ * is legitimate). On none of the connected devices: an error (a warning in a
+ * mixed config whose iOS projects can run here, as for `app-apk`), whose fix
+ * is the one build step. No device to ask, or none that could answer: a
+ * warning with the same fix, since doctor cannot tell.
+ */
+function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], required: boolean, cli: string): void {
+  const packageOnly = scopes.filter((scope) => scopePlatform(scope) === 'android' && scope.package && !scope.apk);
+  if (packageOnly.length === 0) return;
+  try {
+    const output = run(report, 'adb', ['devices']);
+    const connected = output === undefined ? [] : parseAdbDevicesOutput(output).filter((d) => d.state === 'device').map((d) => d.serial);
+    const rows: Array<{ status: 'pass' | 'warn' | 'fail'; label: string; fix?: string }> = [];
+    const seen = new Set<string>();
+    for (const scope of packageOnly) {
+      const pkg = scope.package as string;
+      // The pinned device alone when it is connected: that is where the run goes.
+      const pin = primaryDevicePin(scope);
+      const targets = pin && connected.includes(pin) ? [pin] : connected;
+      const key = `${pkg}\0${targets.join(',')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const presence = appPresence('android', pkg, targets);
+      const fix = buildFirstStep('android', scope.rootDir ?? process.cwd(), cli).sentence;
+      if (presence.installedOn.length > 0) {
+        rows.push({ status: 'pass', label: `${pkg} installed on ${presence.installedOn.join(', ')}` });
+      } else if (targets.length === 0) {
+        rows.push({ status: 'warn', label: `No app build configured — the config has no apk, and no Android device is connected to check for ${pkg}`, fix });
+      } else if (presence.unknown.length === 0) {
+        rows.push({ status: required ? 'fail' : 'warn', label: `No app build configured — the config has no apk, and ${pkg} isn't installed on ${presence.absentFrom.join(', ')}`, fix });
+      } else {
+        rows.push({ status: 'warn', label: `No app build configured — the config has no apk, and Tapsmith could not tell whether ${pkg} is installed on ${presence.unknown.join(', ')}`, fix });
+      }
+    }
+    const label = rows.map((r) => r.label).join('; ');
+    const fix = [...new Set(rows.flatMap((r) => (r.fix ? [r.fix] : [])))].join(' ');
+    if (rows.some((r) => r.status === 'fail')) fail(report, 'app-build', label, fix);
+    else if (rows.some((r) => r.status === 'warn')) warn(report, 'app-build', label, fix);
+    else pass(report, 'app-build', label, 'no apk set: Tapsmith launches the build already there');
+  } catch {
+    warn(report, 'app-build', 'Could not check whether the app is installed');
   }
 }
 
@@ -1571,6 +1621,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
       await checkAgentApks(report, config?.rootDir ?? process.cwd());
       // With adb here, Android runs on this machine, so its APK must exist.
       checkAppApk(report, config, androidPlan.required || (adbOk && !!targets));
+      if (adbOk) checkAppBuild(report, scopes, androidPlan.required || !!targets, await tapsmithExecCommand(process.cwd()));
       checkEmulatorBinary(report, avdLaunches, androidPlan.required || adbOk);
     }
   }
