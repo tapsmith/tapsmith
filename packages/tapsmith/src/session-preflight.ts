@@ -430,8 +430,8 @@ const expoGoNoticed = new WeakSet<object>();
  * Once per session, when the config's app is Expo Go: a notice saying it
  * opens its own home screen, not the project, so locators for the user's
  * screens find nothing until the test opens the project, and that a build of
- * the app is the thing to test (PILOT-1533). Not a refusal: a test that
- * opens its project with an `exp://` link is a working setup (PILOT-1439).
+ * the app is the thing to test. Not a refusal: a test that opens its
+ * project with an `exp://` link is a working setup.
  */
 export function checkExpoGo(ctx: Pick<SessionPreflightContext, 'config' | 'notices' | 'capabilities'>): void {
   const pkg = ctx.config.package;

@@ -425,8 +425,8 @@ interface InstallOutcome {
 }
 
 /**
- * The error for a package-only Android config whose app the device lacks
- * (PILOT-1498), worded as the iOS agent's for a simulator without the app.
+ * The error for a package-only Android config whose app the device lacks,
+ * worded as the iOS agent's for a simulator without the app.
  */
 export function absentAndroidAppMessage(pkg: string, serial: string): string {
   return `${pkg} is not installed on ${serial}, and the config has no \`apk\`, so Tapsmith has nothing to install. `

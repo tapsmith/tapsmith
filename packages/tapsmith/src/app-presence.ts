@@ -1,6 +1,6 @@
 /**
  * Whether the app under test is on any of the devices that can be asked,
- * and the one step to take when there is no build at all (PILOT-1533).
+ * and the one step to take when there is no build at all.
  *
  * `tapsmith init` and `tapsmith doctor` ask the same question of a config
  * with a `package` but no `apk`/`app`: is that app installed anywhere it
