@@ -42,9 +42,12 @@ export function appPresence(platform: AppPlatform, pkg: string, targets: readonl
   return presence;
 }
 
-/** The one build step for a project with no build: the command (Expo only) and the sentence that gives it. */
+/** The one build step for a project with no build: the command (Expo only), the step, and the sentence that gives it. */
 export interface BuildFirstStep {
   command?: string;
+  /** "run `…`, then … init again (or set …)." */
+  action: string;
+  /** "You don't have a build yet: " and the action. */
   sentence: string;
 }
 
@@ -68,11 +71,16 @@ export function buildFirstStep(
   } catch {
     expo = undefined;
   }
-  if (!expo) return { sentence: `You don't have a build yet: build your app (${BUILD_DOCS}), ${then}` };
+  const lead = "You don't have a build yet: ";
+  if (!expo) {
+    const action = `build your app (${BUILD_DOCS}), ${then}`;
+    return { action, sentence: `${lead}${action}` };
+  }
   const env = expo.usesTapsmithHooks ? 'EXPO_PUBLIC_TAPSMITH_HOOKS=1 ' : '';
   const command = platform === 'android'
     ? `${expo.hasAndroidDir ? '' : 'npx expo prebuild -p android && '}cd android && ${env}./gradlew assembleRelease`
     : `${expo.hasIosDir ? '' : 'npx expo prebuild -p ios && '}cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
       + '-configuration Release -sdk iphonesimulator -derivedDataPath build build';
-  return { command, sentence: `You don't have a build yet: run \`${command}\`, ${then}` };
+  const action = `run \`${command}\`, ${then}`;
+  return { command, action, sentence: `${lead}${action}` };
 }

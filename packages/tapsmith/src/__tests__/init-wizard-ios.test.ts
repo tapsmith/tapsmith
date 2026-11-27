@@ -412,15 +412,25 @@ describe('configureIos() on an Expo project (PILOT-557)', () => {
     vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logged.push(args.join(' ')); });
   });
 
-  it('with no simulator build found, gives the Expo prebuild + xcodebuild path and the hooks flag', async () => {
+  it('with no simulator build found, gives the Expo prebuild + xcodebuild path alone (PILOT-1533)', async () => {
     script('simulators', [[/bundle identifier/, 'com.acme.expo']]);
 
     await configureIos(env, expo);
 
     const out = logged.join('\n');
     expect(out).toContain('npx expo prebuild --platform ios');
-    expect(out).toContain('-derivedDataPath build');
-    expect(out).toContain('EXPO_PUBLIC_TAPSMITH_HOOKS=1');
+    expect(out).toContain('-derivedDataPath build build`. Or enter its path.');
+    // The alternative and the warm-reset advice are not for this moment.
+    expect(out).not.toContain('expo run:ios');
+    expect(out).not.toContain('TapsmithTestHooks');
+  });
+
+  it('with no simulator build found, keeps the hooks flag in the build command of a project that uses the hooks', async () => {
+    script('simulators', [[/bundle identifier/, 'com.acme.expo']]);
+
+    await configureIos(env, { ...expo, usesTapsmithHooks: true });
+
+    expect(logged.join('\n')).toContain('cd ios && EXPO_PUBLIC_TAPSMITH_HOOKS=1 xcodebuild');
   });
 
   it('physical devices on a managed project: says to generate ios/ before the iphoneos build', async () => {

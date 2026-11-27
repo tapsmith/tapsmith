@@ -20,7 +20,7 @@ vi.mock('enquirer', () => ({
     prompt(question: Question): Promise<Record<string, unknown>> {
       questions.push(question.message);
       for (const [pattern, answer] of answers) {
-        if (pattern.test(question.message)) return Promise.resolve({ _: answer });
+        if (pattern.test(question.message)) return Promise.resolve({ _: typeof answer === 'function' ? (answer as (q: Question) => unknown)(question) : answer });
       }
       return Promise.reject(new Error(`unexpected prompt: ${question.message}`));
     }
@@ -77,6 +77,13 @@ vi.mock('node:child_process', async (importOriginal) => {
     }) as typeof actual.spawnSync,
   };
 });
+
+// Whether a connected device has the app (PILOT-1533); undefined: it could not say.
+let deviceHasApp: boolean | undefined = false;
+vi.mock('../emulator.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../emulator.js')>(),
+  packageInstallState: () => deviceHasApp,
+}));
 
 const { runInit } = await import('../init.js');
 
@@ -201,7 +208,32 @@ describe('init wizard with a build skipped (PILOT-778)', () => {
   };
 
   afterEach(() => {
-    Object.assign(env, { isMacOS: false, xcodeVersion: undefined, simulators: [] });
+    Object.assign(env, { isMacOS: false, xcodeVersion: undefined, simulators: [], androidDevices: [] });
+    deviceHasApp = false;
+  });
+
+  // PILOT-1533: it closed with "Happy testing!" though nothing could run.
+  it('a package-only config for an app the running emulator lacks closes with the build step, not "Happy testing!"', async () => {
+    Object.assign(env, { androidDevices: [{ serial: 'emulator-5554', avd: 'Pixel_API_36', held: false }] });
+    answer(/Where is your Android APK/, 'Skip for now');
+    answer(/package name/, 'com.lqh.alexshop');
+    answer(/How will you run Android tests/, (q: Question) => q.choices?.[0]?.name);
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    expect(output).not.toContain('Happy testing!');
+    expect(output.trimEnd().split('\n').at(-1)?.trim()).toBe("You don't have a build yet: build your app (https://tapsmith.dev/getting-started/#build-the-app-under-test), "
+      + 'then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).');
+  });
+
+  it('a package-only config for an app the emulator has closes as usual', async () => {
+    Object.assign(env, { androidDevices: [{ serial: 'emulator-5554', avd: 'Pixel_API_36', held: false }] });
+    deviceHasApp = true;
+    answer(/Where is your Android APK/, 'Skip for now');
+    answer(/package name/, 'com.lqh.alexshop');
+    answer(/How will you run Android tests/, (q: Question) => q.choices?.[0]?.name);
+    const { output } = await wizard();
+    expect(output).toContain('Happy testing!');
+    expect(output).not.toContain("don't have a build");
   });
 
   it('a lone platform with nothing set up still gets a config, with placeholders and a next step to fill them', async () => {

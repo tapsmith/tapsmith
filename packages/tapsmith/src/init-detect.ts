@@ -729,24 +729,30 @@ function expoHooksNote(expo: ExpoProject): string {
     : `For sub-second resets between tests, wrap your root navigator in @tapsmith/react-native's <TapsmithTestHooks> with \`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}\` and build test builds with ${HOOKS_FLAG} (https://tapsmith.dev/guides/warm-reset/).`;
 }
 
-/** The build step for one platform, as a sentence; `apkOutput` says where the Android one writes. */
+/**
+ * The build step for one platform, as a sentence; `apkOutput` says where the
+ * Android one writes. `brief` leaves out the `expo run:*` alternative.
+ */
 function expoBuildStep(
   platform: 'android' | 'ios',
   expo: ExpoProject,
   apkOutput = 'which writes android/app/build/outputs/apk/release/app-release.apk',
+  brief = false,
 ): string {
   const env = expo.usesTapsmithHooks ? `${HOOKS_FLAG} ` : '';
   if (platform === 'android') {
     // `expo run:android` resolves a device before it builds, so it fails with
     // no emulator or device; prebuild + gradle builds headless (as CI does).
     const generate = expo.hasAndroidDir ? '' : '`npx expo prebuild --platform android` (this Expo project has no android/ yet), then ';
-    return `Build a release APK with ${generate}\`cd android && ${env}./gradlew assembleRelease\`, ${apkOutput} `
-      + '(`npx expo run:android --variant release` builds and installs in one step, but needs a running emulator or device to install on).';
+    const step = `Build a release APK with ${generate}\`cd android && ${env}./gradlew assembleRelease\`, ${apkOutput}`;
+    return brief ? `${step}.`
+      : `${step} (\`npx expo run:android --variant release\` builds and installs in one step, but needs a running emulator or device to install on).`;
   }
   const generate = expo.hasIosDir ? '' : '`npx expo prebuild --platform ios` (this Expo project has no ios/ yet), then ';
-  return `Build a simulator app with ${generate}\`cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
-    + '-configuration Release -sdk iphonesimulator -derivedDataPath build build`; '
-    + '`npx expo run:ios --configuration Release` builds into Xcode\'s DerivedData instead, where init looks only when the project holds no simulator build (that path exists on this Mac alone).';
+  const step = `Build a simulator app with ${generate}\`cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
+    + '-configuration Release -sdk iphonesimulator -derivedDataPath build build`';
+  return brief ? `${step}.`
+    : `${step}; \`npx expo run:ios --configuration Release\` builds into Xcode's DerivedData instead, where init looks only when the project holds no simulator build (that path exists on this Mac alone).`;
 }
 
 /** The Debug build an `expo-dev-client` project is developed with, for one platform. */
@@ -769,18 +775,26 @@ function expoDevClientStep(platform: 'android' | 'ios', expo: ExpoProject): stri
  * each platform, with the hooks flag folded in when the app uses them, then
  * `alternative` (the flag that skips the build), the hooks note and the docs.
  * With `expo-dev-client` it offers both: Debug (with Metro) for local work,
- * Release for CI or runs without Metro.
+ * Release for CI or runs without Metro. `brief` (init's wizard, mid-prompt)
+ * gives the recommended build alone: no `expo run:*` alternative and no
+ * hooks note, which init gives at the end instead.
  */
-export function expoBuildHint(platforms: Array<'android' | 'ios'>, expo: ExpoProject, alternative?: string): string {
-  const steps = (step: typeof expoBuildStep | typeof expoDevClientStep): string[] => platforms.map((p) =>
+export function expoBuildHint(
+  platforms: Array<'android' | 'ios'>,
+  expo: ExpoProject,
+  alternative?: string,
+  options: { brief?: boolean } = {},
+): string {
+  const release = (p: 'android' | 'ios', e: ExpoProject): string => expoBuildStep(p, e, undefined, options.brief);
+  const steps = (step: typeof release | typeof expoDevClientStep): string[] => platforms.map((p) =>
     platforms.length > 1 ? `${p === 'android' ? 'Android' : 'iOS'}: ${step(p, expo)}` : step(p, expo));
   const alternatives = alternative ? [alternative] : [];
   const builds = expo.usesDevClient
     ? [
         `This project has expo-dev-client, so choose one. For local work, the Debug build, with Metro running (\`npx expo start\`) before \`verify\` or \`test\` (${METRO_DOCS}).`,
         ...steps(expoDevClientStep),
-        'For CI, or runs without Metro, a Release build.', ...steps(expoBuildStep), ...alternatives,
+        'For CI, or runs without Metro, a Release build.', ...steps(release), ...alternatives,
       ]
-    : [...steps(expoBuildStep), ...alternatives];
-  return [...builds, expoHooksNote(expo), `See ${EXPO_BUILD_DOCS}`].join(' ');
+    : [...steps(release), ...alternatives];
+  return [...builds, ...(options.brief ? [] : [expoHooksNote(expo)]), `See ${EXPO_BUILD_DOCS}`].join(' ');
 }

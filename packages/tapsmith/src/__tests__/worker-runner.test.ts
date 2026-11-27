@@ -55,6 +55,7 @@ vi.mock('../device.js', () => ({
 
 vi.mock('../emulator.js', () => ({
   isPackageInstalled: vi.fn(() => true),
+  packageInstallState: vi.fn(() => true),
   // The installed build matches: only `forceInstall` can make a worker reinstall.
   installedApkMatches: vi.fn(() => true),
   waitForPackageIndexed: vi.fn(async () => {}),
