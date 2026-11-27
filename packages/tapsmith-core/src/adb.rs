@@ -114,7 +114,9 @@ async fn run_with_input(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // A timeout drops `run`, and with it the child: kill it then.
+        .kill_on_drop(true);
 
     let run = async {
         let mut child = cmd
@@ -2207,10 +2209,41 @@ mod tests {
         assert!(err.downcast_ref::<super::AdbTimeout>().is_some(), "{err}");
     }
 
+    /// A shell that touches `marker` after a pause: if the timeout did not
+    /// kill it, the marker appears once the pause is over.
+    fn touch_after_pause(marker: &std::path::Path) -> String {
+        format!("sleep 0.4; touch '{}'", marker.display())
+    }
+
+    #[tokio::test]
+    async fn run_with_input_kills_the_child_it_timed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("survived");
+        let script = touch_after_pause(&marker);
+        super::run_with_input("sh", &["-c", &script], None, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        assert!(!marker.exists(), "the timed-out child kept running");
+    }
+
+    #[tokio::test]
+    async fn output_within_kills_the_child_it_timed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("survived");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(touch_after_pause(&marker));
+        output_within(&mut cmd, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        assert!(!marker.exists(), "the timed-out child kept running");
+    }
+
     #[tokio::test]
     async fn a_timed_out_command_is_a_typed_timeout() {
         let mut cmd = Command::new("/bin/sleep");
-        cmd.arg("30").kill_on_drop(true);
+        cmd.arg("30");
 
         let err = output_within(&mut cmd, Duration::from_millis(50))
             .await
