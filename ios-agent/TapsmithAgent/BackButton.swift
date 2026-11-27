@@ -5,9 +5,12 @@ import XCTest
 /// screen without one (a stack's root, a sheet) refuses rather than tapping
 /// whatever else is in its bar (an Edit or Close button).
 ///
-/// UIKit gives the system back button the identifier `BackButton`, in UIKit
-/// and SwiftUI stacks alike (its label is the previous screen's title). It is
-/// a child of the navigation bar up to iOS 26, and on iOS 26/27 iPhones;
+/// The system back button (its label is the previous screen's title) is
+/// recognised by `AccessibilityTrait.isSystemBackButton`: on iOS 26 and later
+/// UIKit identifies it as `BackButton`, in UIKit and SwiftUI stacks alike;
+/// iOS 17 and 18 drop that identifier once a push settles, and it keeps only
+/// the private back-button trait (PILOT-1532). It is a child of the
+/// navigation bar up to iOS 26, and on iOS 26/27 iPhones;
 /// iOS 27 can instead lay it out in the window's floating `Toolbar` host
 /// (seen on the iPhone Duo, trailing rather than leading), outside the
 /// navigation bar. A bar button labelled as a back button counts too
@@ -15,7 +18,6 @@ import XCTest
 /// own back button (React Navigation's custom header one) — not an in-app
 /// browser's Back in a bottom toolbar beside the stack's real one.
 enum BackButton {
-    static let identifier = "BackButton"
     static let label = "Back"
 
     /// The bars a back button is drawn in: the navigation bar, and iOS 27's
@@ -47,8 +49,8 @@ enum BackButton {
     }
 
     /// How node `i` is a back button, if it is one: a button inside a
-    /// navigation bar or a toolbar, identified as the system one (`.system`)
-    /// or only labelled as one (`.labelled`).
+    /// navigation bar or a toolbar, the system one (`.system`, by its
+    /// identifier or its trait) or only labelled as one (`.labelled`).
     enum Match { case system, labelled }
 
     /// Whether a bar button's label says it goes back: "Back", or React
@@ -81,7 +83,9 @@ enum BackButton {
         let node = analyzer.nodes[i]
         guard node.elementType == .button else { return nil }
         let match: Match
-        if node.identifier == identifier {
+        if AccessibilityTrait.isSystemBackButton(
+            elementType: node.elementType, identifier: node.identifier, traits: node.traits
+        ) {
             match = .system
         } else if isBackLabel(node.label) {
             match = .labelled

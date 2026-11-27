@@ -14,6 +14,26 @@ enum AccessibilityTrait {
     /// TextEditor, React Native's multi-line TextInput — and not to a
     /// read-only one, which carries the static-text trait instead (PILOT-697).
     static let textEntry: UInt64 = 1 << 18
+    /// UIAccessibilityTraitBackButton (private): UIKit gives it to a
+    /// navigation stack's system back button, in UIKit, SwiftUI and React
+    /// Navigation native stacks alike, and to no other bar button (a root
+    /// screen's leading Edit or Close has the button trait only). Recorded
+    /// on iOS 18.5 and 27.2 iPhone simulators (PILOT-1261, PILOT-1532).
+    static let backButton: UInt64 = 1 << 27
+
+    /// The identifier UIKit gives the system back button on iOS 26 and
+    /// later. iOS 17 and 18 drop it once a push settles (PILOT-1532).
+    static let backButtonIdentifier = "BackButton"
+
+    /// Whether an element is a navigation stack's system back button: a
+    /// button identified as `BackButton`, or one carrying the back-button
+    /// trait — the only mark it keeps on iOS 17 and 18, whose back button
+    /// is labelled with the previous screen's title and has no identifier.
+    /// Traits that couldn't be read (nil) never mark it.
+    static func isSystemBackButton(elementType: XCUIElement.ElementType, identifier: String, traits: UInt64?) -> Bool {
+        guard elementType == .button else { return false }
+        return identifier == backButtonIdentifier || (traits ?? 0) & backButton != 0
+    }
 
     /// A snapshot node's traits, read through XCTest's private `traits`
     /// property, or nil when that property is missing (a future Xcode may
@@ -206,7 +226,7 @@ enum RoleMapping {
     /// The traits `SnapshotElementFinder.annotateTraits` spliced into a
     /// snapshot dictionary (0 when none were read), as its `extractTraits`
     /// reads them.
-    private static func traitBits(of dict: [String: Any]) -> UInt64 {
+    static func traitBits(of dict: [String: Any]) -> UInt64 {
         switch dict["traits"] {
         case let v as UInt64: return v
         case let v as UInt: return UInt64(v)

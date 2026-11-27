@@ -156,10 +156,15 @@ enum BarHost {
         dict["children"] = children
     }
 
-    /// Whether `dict` is the system back button (`BackButton`, in UIKit and
-    /// SwiftUI stacks alike).
+    /// Whether `dict` is the system back button
+    /// (`AccessibilityTrait.isSystemBackButton`), by the traits
+    /// `SnapshotElementFinder.annotateTraits` spliced in.
     private static func isSystemBackButton(_ dict: [String: Any]) -> Bool {
-        CellFrames.elementType(of: dict) == .button && dict["identifier"] as? String == "BackButton"
+        AccessibilityTrait.isSystemBackButton(
+            elementType: CellFrames.elementType(of: dict),
+            identifier: dict["identifier"] as? String ?? "",
+            traits: RoleMapping.traitBits(of: dict)
+        )
     }
 
     /// Whether `markHosts` marked `dict` as an empty host.
