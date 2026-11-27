@@ -77,10 +77,12 @@ export function buildFirstStep(
     return { action, sentence: `${lead}${action}` };
   }
   const env = expo.usesTapsmithHooks ? 'EXPO_PUBLIC_TAPSMITH_HOOKS=1 ' : '';
+  // The build in a subshell, so the shell stays in the project root for the
+  // init that follows, as getting-started writes it.
   const command = platform === 'android'
-    ? `${expo.hasAndroidDir ? '' : 'npx expo prebuild -p android && '}cd android && ${env}./gradlew assembleRelease`
-    : `${expo.hasIosDir ? '' : 'npx expo prebuild -p ios && '}cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
-      + '-configuration Release -sdk iphonesimulator -derivedDataPath build build';
+    ? `${expo.hasAndroidDir ? '' : 'npx expo prebuild -p android && '}(cd android && ${env}./gradlew assembleRelease)`
+    : `${expo.hasIosDir ? '' : 'npx expo prebuild -p ios && '}(cd ios && ${env}xcodebuild -workspace <App>.xcworkspace -scheme <App> `
+      + '-configuration Release -sdk iphonesimulator -derivedDataPath build build)';
   const action = `run \`${command}\`, ${then}`;
   return { command, action, sentence: `${lead}${action}` };
 }

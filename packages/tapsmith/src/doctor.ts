@@ -433,13 +433,14 @@ function checkAppApk(report: Reporter, config: TapsmithConfig | undefined, requi
 /**
  * One `app-build` row for the Android scopes that name a `package` but no
  * `apk`: Tapsmith installs nothing for them, so their app must already be on
- * the device. Installed on a connected device: a pass (a package-only config
- * is legitimate). On none of the connected devices: an error (a warning in a
- * mixed config whose iOS projects can run here, as for `app-apk`), whose fix
- * is the one build step. No device to ask, or none that could answer: a
- * warning with the same fix, since doctor cannot tell.
+ * the device. Installed on a device the run could use: a pass (a
+ * package-only config is legitimate). On none of them: an error, since the
+ * run stops at its install step there (it runs only with adb, as `app-apk`
+ * fails then too), whose fix is the one build step. No device to ask, or
+ * none that could answer: a warning with the same fix, since doctor cannot
+ * tell.
  */
-function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], required: boolean, cli: string): void {
+function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], cli: string): void {
   const packageOnly = scopes.filter((scope) => scopePlatform(scope) === 'android' && scope.package && !scope.apk);
   if (packageOnly.length === 0) return;
   try {
@@ -470,7 +471,7 @@ function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], requ
           : avdOnly ? `no emulator running AVD ${scope.avd} is connected` : 'no Android device is connected';
         rows.push({ status: 'warn', label: `No app build configured — the config has no apk, and ${none} to check for ${pkg}`, fix });
       } else if (presence.unknown.length === 0) {
-        rows.push({ status: required ? 'fail' : 'warn', label: `No app build configured — the config has no apk, and ${pkg} isn't installed on ${presence.absentFrom.join(', ')}`, fix });
+        rows.push({ status: 'fail', label: `No app build configured — the config has no apk, and ${pkg} isn't installed on ${presence.absentFrom.join(', ')}`, fix });
       } else {
         rows.push({ status: 'warn', label: `No app build configured — the config has no apk, and Tapsmith could not tell whether ${pkg} is installed on ${presence.unknown.join(', ')}`, fix });
       }
@@ -1629,7 +1630,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
       await checkAgentApks(report, config?.rootDir ?? process.cwd());
       // With adb here, Android runs on this machine, so its APK must exist.
       checkAppApk(report, config, androidPlan.required || (adbOk && !!targets));
-      if (adbOk) checkAppBuild(report, scopes, androidPlan.required || !!targets, await tapsmithExecCommand(process.cwd()));
+      if (adbOk) checkAppBuild(report, scopes, await tapsmithExecCommand(process.cwd()));
       checkEmulatorBinary(report, avdLaunches, androidPlan.required || adbOk);
     }
   }

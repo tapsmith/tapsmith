@@ -87,14 +87,14 @@ describe('wizardClosing()', () => {
 
   it('closes with the one build step instead of "Happy testing!" when the app is on no device', () => {
     expect(wizardClosing([{ platform: 'android', known: true }], '/proj', 'npx tapsmith', expo())).toEqual([
-      "You don't have a build yet: run `npx expo prebuild -p android && cd android && ./gradlew assembleRelease`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
+      "You don't have a build yet: run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
     ]);
   });
 
   it('hedges when it could not check, and names each platform when both lack a build', () => {
     expect(wizardClosing([{ platform: 'android', known: false }, { platform: 'ios', known: true }], '/proj', 'npx tapsmith', expo())).toEqual([
-      "Android: if you don't have a build yet, run `npx expo prebuild -p android && cd android && ./gradlew assembleRelease`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
-      "iOS: you don't have a build yet, so run `npx expo prebuild -p ios && cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build`, then `npx tapsmith init` again (or set `app` in tapsmith.config.ts).",
+      "Android: if you don't have a build yet, run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).",
+      "iOS: you don't have a build yet, so run `npx expo prebuild -p ios && (cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -sdk iphonesimulator -derivedDataPath build build)`, then `npx tapsmith init` again (or set `app` in tapsmith.config.ts).",
     ]);
   });
 

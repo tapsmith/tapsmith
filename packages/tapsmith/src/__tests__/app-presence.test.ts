@@ -31,20 +31,20 @@ describe('buildFirstStep', () => {
 
   it('gives an Expo project without android/ the prebuild and the release build, then init again', () => {
     const step = buildFirstStep('android', '/proj', 'npx tapsmith', () => expo());
-    expect(step.command).toBe('npx expo prebuild -p android && cd android && ./gradlew assembleRelease');
-    expect(step.sentence).toBe("You don't have a build yet: run `npx expo prebuild -p android && cd android && ./gradlew assembleRelease`, "
+    expect(step.command).toBe('npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)');
+    expect(step.sentence).toBe("You don't have a build yet: run `npx expo prebuild -p android && (cd android && ./gradlew assembleRelease)`, "
       + 'then `npx tapsmith init` again (or set `apk` in tapsmith.config.ts).');
   });
 
   it('skips the prebuild once android/ exists, and keeps the hooks flag on for a project that uses them', () => {
     expect(buildFirstStep('android', '/proj', 'npx tapsmith', () => expo({ hasAndroidDir: true, usesTapsmithHooks: true })).command)
-      .toBe('cd android && EXPO_PUBLIC_TAPSMITH_HOOKS=1 ./gradlew assembleRelease');
+      .toBe('(cd android && EXPO_PUBLIC_TAPSMITH_HOOKS=1 ./gradlew assembleRelease)');
   });
 
   it('gives an Expo iOS project the simulator release build and names `app`', () => {
     const step = buildFirstStep('ios', '/proj', 'npx tapsmith', () => expo());
-    expect(step.command).toBe('npx expo prebuild -p ios && cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> '
-      + '-configuration Release -sdk iphonesimulator -derivedDataPath build build');
+    expect(step.command).toBe('npx expo prebuild -p ios && (cd ios && xcodebuild -workspace <App>.xcworkspace -scheme <App> '
+      + '-configuration Release -sdk iphonesimulator -derivedDataPath build build)');
     expect(step.sentence).toMatch(/\(or set `app` in tapsmith\.config\.ts\)\.$/);
   });
 
