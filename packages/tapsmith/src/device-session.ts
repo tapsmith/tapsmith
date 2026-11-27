@@ -34,6 +34,8 @@ import {
   startAndroidLaunchEarly,
   type EarlyLaunch,
   checkMissingResetHooks,
+  checkExpoGo,
+  isExpoGo,
   probeResetCapabilities,
   type SessionPreflightContext,
 } from './session-preflight.js';
@@ -1008,6 +1010,7 @@ export async function openDeviceSession(
       // first one satisfied by the parent's launch), and the parent's own
       // notice has no runner to show it: check here too.
       await checkMissingResetHooks(session.context);
+      checkExpoGo(session.context);
       session.prepared = opts.adoptPrepared
         ? { policy: { mode: 'clear', scope: 'file' }, preparedAt: Date.now(), durationMs: 0, source: 'startup launch' }
         : undefined;
@@ -1129,7 +1132,10 @@ export async function openDeviceSession(
         throw new Error(`Failed to launch app: ${err instanceof Error ? err.message : String(err)}`);
       }
       progress('app launched');
-      phase('launch', 'complete', `launched ${config.package}`);
+      // Said before any test waits on a locator (PILOT-1533); the notice gives the rest.
+      phase('launch', 'complete', isExpoGo(config.package)
+        ? `launched ${config.package} (Expo Go, which opens its own home screen, not your project)`
+        : `launched ${config.package}`);
     } else {
       progress('validating session readiness');
       await ensureSessionReady(session.context, `${opts.label} initialization`);

@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
     launchConfiguredApp: vi.fn(async () => ({ policy: { mode: 'clear', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'startup launch' })),
     probeResetCapabilities: vi.fn(async (ctx: { capabilities?: Record<string, unknown> }) => { (ctx.capabilities ??= {}).hooksDetected = true; return ctx.capabilities; }),
     checkMissingResetHooks: vi.fn(async () => {}),
+    checkExpoGo: vi.fn(),
+    isExpoGo: (pkg: string | undefined) => /^host\.exp\.exponent$/i.test(pkg ?? ''),
     connectDevClient: vi.fn(async (_ctx: unknown) => false),
     LINK_SETTLE_MS: 0,
     startAndroidLaunchEarly: vi.fn(async (): Promise<{ launched: Promise<boolean> } | undefined> => ({ launched: Promise.resolve(true) })),
@@ -425,6 +427,8 @@ describe('openDeviceSession', () => {
     expect(session.capabilities).toEqual({ hooksDetected: true });
     // A child that adopts runs the missing-hooks check itself (PILOT-774).
     expect(mocks.preflight.checkMissingResetHooks).toHaveBeenCalledWith(session.context);
+    // The Expo Go notice too: the parent's has no runner to show it (PILOT-1533).
+    expect(mocks.preflight.checkExpoGo).toHaveBeenCalledWith(session.context);
     // Recovery still knows the agent artifacts.
     expect(session.context.agentApkPath).toBe('/agents/agent.apk');
   });
@@ -585,6 +589,16 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
       expect(seen[0]).toEqual(['install', 'skip', 'no Android APK configured']);
       expect(seen.at(-1)).toEqual(['launch', 'complete', 'launched com.example.app']);
     }
+  });
+
+  it('says at the launch step that an Expo Go package is Expo Go, before any test runs (PILOT-1533)', async () => {
+    const seen = phases();
+    await openDeviceSession(
+      { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' },
+      makeConfig({ apk: undefined, package: 'host.exp.exponent' }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
+    );
+    expect(seen.at(-1)).toEqual(['launch', 'complete', 'launched host.exp.exponent (Expo Go, which opens its own home screen, not your project)']);
   });
 
   it('reports the failing phase and wraps the error as the CLI did', async () => {

@@ -77,8 +77,10 @@ export interface PreflightNotice {
    *  `hooks-missing`: `@tapsmith/react-native` is installed but its hooks
    *  never showed up (its test gets a warning; no trace row).
    *  `app-reinstalled`: a long-lived session reinstalled a rebuilt app before
-   *  the run (its test gets a warning; the reset row shows the relaunch). */
-  kind: 'app-dialog' | 'foreign-dialog' | 'hooks-missing' | 'app-reinstalled'
+   *  the run (its test gets a warning; the reset row shows the relaunch).
+   *  `expo-go`: the config's app is Expo Go, which opens its own home screen,
+   *  not the user's project (its test gets a warning; no trace row). */
+  kind: 'app-dialog' | 'foreign-dialog' | 'hooks-missing' | 'app-reinstalled' | 'expo-go'
   /** The dialog's title, e.g. `Pixel Launcher isn't responding`. */
   title: string
   /** Owning process, when dumpsys named exactly one (or it is the app's). */
@@ -412,6 +414,40 @@ async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabi
       + 'EXPO_PUBLIC_* inside node_modules: `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}`, built with '
       + 'EXPO_PUBLIC_TAPSMITH_HOOKS=1 (bare React Native: your own flag). No hooks intended? Set `appReset: \'clear\'`. '
       + 'https://tapsmith.dev/guides/warm-reset/',
+    timestamp: Date.now(),
+  });
+}
+
+/** Expo Go's app id: `host.exp.exponent` on Android, `host.exp.Exponent` on iOS. */
+export function isExpoGo(pkg: string | undefined): boolean {
+  return /^host\.exp\.exponent$/i.test(pkg ?? '');
+}
+
+/** Sessions already told their app is Expo Go, keyed as {@link missingHooksChecked} is. */
+const expoGoNoticed = new WeakSet<object>();
+
+/**
+ * Once per session, when the config's app is Expo Go: a notice saying it
+ * opens its own home screen, not the project, so locators for the user's
+ * screens find nothing until the test opens the project, and that a build of
+ * the app is the thing to test (PILOT-1533). Not a refusal: a test that
+ * opens its project with an `exp://` link is a working setup (PILOT-1439).
+ */
+export function checkExpoGo(ctx: Pick<SessionPreflightContext, 'config' | 'notices' | 'capabilities'>): void {
+  const pkg = ctx.config.package;
+  if (!isExpoGo(pkg)) return;
+  const key: object = ctx.capabilities ?? ctx.notices;
+  if (expoGoNoticed.has(key)) return;
+  expoGoNoticed.add(key);
+  const build = ctx.config.platform === 'ios' ? '`app` set to it and `package` to its bundle identifier' : '`apk` set to it and `package` to its applicationId';
+  ctx.notices.push({
+    kind: 'expo-go',
+    title: 'The app under test is Expo Go',
+    // Kept under 500 characters: MCP clips each warning line there.
+    message: `${pkg} is Expo Go, which opens its own home screen, not your project: it runs your JavaScript inside Expo's app, `
+      + 'so locators for your screens find nothing until the test opens the project with '
+      + 'device.openDeepLink(\'exp://<your computer\'s LAN IP>:8081\'). '
+      + `Recommended: test a build of your app instead, with ${build}. https://tapsmith.dev/getting-started/#react-native-and-expo`,
     timestamp: Date.now(),
   });
 }
@@ -775,6 +811,7 @@ export async function launchConfiguredApp(
     await checkReactNativeDevServer(ctx);
     await probeResetCapabilities(ctx, probe);
     await checkMissingResetHooks(ctx, probe.pollMs);
+    checkExpoGo(ctx);
     return prepared();
   }
 
@@ -784,6 +821,7 @@ export async function launchConfiguredApp(
   await checkReactNativeDevServer(ctx);
   await probeResetCapabilities(ctx, probe);
   await checkMissingResetHooks(ctx, probe.pollMs);
+  checkExpoGo(ctx);
   return prepared();
 }
 
@@ -1730,7 +1768,7 @@ function configuredBuildPath(config: SessionPreflightContext['config']): string 
  */
 function devBuildKind(ctx: Pick<DevClientContext, 'config' | 'capabilities'>): { kind: 'dev-client' | 'metro' | 'unknown' | 'none'; scheme?: string } {
   // Expo Go is its own app, with a home screen of its own: the test opens the project.
-  if (/^host\.exp\.exponent$/i.test(ctx.config.package ?? '')) return { kind: 'none' };
+  if (isExpoGo(ctx.config.package)) return { kind: 'none' };
   const build = inspectDevBuild(configuredBuildPath(ctx.config));
   if (build?.devClient) return { kind: 'dev-client', ...(build.scheme ? { scheme: build.scheme } : {}) };
   if (build?.embedsJs) return { kind: 'none' };
