@@ -207,6 +207,31 @@ describe('doctor app-build: a package-only config whose app is on no device (PIL
     expect(code).toBe(0);
   });
 
+  it('asks only the emulators running the config\'s AVD, and warns when none is running', async () => {
+    writeConfig("export default { package: 'com.lqh.alexshop', avd: 'Pixel_8' }\n");
+    withAdb('List of devices attached\nemulator-5554\tdevice\nR5CR1234\tdevice\n');
+    exec.table.set('adb -s emulator-5554 emu avd name', 'Other_AVD\nOK\n');
+    absent('emulator-5554');
+    absent('R5CR1234');
+    // (doctor exits 1 here anyway: this machine has no emulator binary to boot Pixel_8.)
+    let { json } = await doctorJson();
+    expect(check(json, 'app-build')).toMatchObject({ status: 'warn', label: expect.stringContaining('no emulator running AVD Pixel_8 is connected to check for com.lqh.alexshop') });
+
+    exec.table.set('adb -s emulator-5554 emu avd name', 'Pixel_8\nOK\n');
+    ({ json } = await doctorJson());
+    expect(check(json, 'app-build')).toMatchObject({ status: 'fail', label: expect.stringContaining("isn't installed on emulator-5554") });
+    expect(check(json, 'app-build')?.label).not.toContain('R5CR1234');
+  });
+
+  it('warns, rather than asking other devices, when the pinned device is not connected', async () => {
+    writeConfig("export default { package: 'com.lqh.alexshop', device: 'emulator-5556' }\n");
+    withAdb('List of devices attached\nemulator-5554\tdevice\n');
+    absent('emulator-5554');
+    const { code, json } = await doctorJson();
+    expect(check(json, 'app-build')).toMatchObject({ status: 'warn', label: expect.stringContaining('emulator-5556, the config\'s device, is not connected to check for com.lqh.alexshop') });
+    expect(code).toBe(0);
+  });
+
   it('asks only the pinned device when it is connected', async () => {
     writeConfig("export default { package: 'com.lqh.alexshop', device: 'emulator-5554' }\n");
     withAdb('List of devices attached\nemulator-5554\tdevice\nemulator-5558\tdevice\n');

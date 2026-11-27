@@ -29,6 +29,28 @@ describe('missingBuilds()', () => {
     expect(asked).toEqual(['emulator-5554']);
   });
 
+  it('asks only the emulators running the chosen AVD, which is all the generated config runs on', () => {
+    const asked: string[] = [];
+    const android: AndroidConfig = { packageName: 'com.lqh.alexshop', useEmulators: true, usePhysicalDevices: true, avd: 'Pixel_8' };
+    const missing = missingBuilds(['android'], android, undefined, env([{ serial: 'emulator-5554', avd: 'Pixel_8', held: false }, { serial: 'R5CR1234', held: false }]), {
+      android: (serial) => { asked.push(serial); return false; },
+    });
+    expect(asked).toEqual(['emulator-5554']);
+    expect(missing).toEqual([{ platform: 'android', known: true }]);
+    // Not running: nothing to ask, so the closing hedges.
+    expect(missingBuilds(['android'], android, undefined, env([{ serial: 'R5CR1234', held: false }]), { android: () => false }))
+      .toEqual([{ platform: 'android', known: false }]);
+  });
+
+  it('asks only the configured simulator when it is booted', () => {
+    const asked: string[] = [];
+    const ios: IosConfig = { bundleId: 'com.lqh.alexshop', simulator: 'iPhone 17', usePhysicalDevice: false };
+    missingBuilds(['ios'], undefined, ios, env([], [{ ...booted('SIM-1'), name: 'iPhone 17' }, { ...booted('SIM-2'), name: 'iPad Air' }]), {
+      ios: (udid) => { asked.push(udid); return false; },
+    });
+    expect(asked).toEqual(['SIM-1']);
+  });
+
   it('names nothing when the config has an apk, or a device has the app', () => {
     expect(missingBuilds(['android'], { ...androidPackageOnly, apkPath: 'app.apk' }, undefined, env([emulator('emulator-5554')]), { android: () => false })).toEqual([]);
     expect(missingBuilds(['android'], androidPackageOnly, undefined, env([emulator('emulator-5554')]), { android: () => true })).toEqual([]);
@@ -44,7 +66,7 @@ describe('missingBuilds()', () => {
   it('checks an iOS simulator config with no app against the booted simulators only', () => {
     const ios: IosConfig = { bundleId: 'com.lqh.alexshop', simulator: 'iPhone 17', usePhysicalDevice: false };
     const asked: string[] = [];
-    const missing = missingBuilds(['ios'], undefined, ios, env([], [booted('SIM-1'), { ...booted('SIM-2'), state: 'Shutdown' }]), {
+    const missing = missingBuilds(['ios'], undefined, ios, env([], [{ ...booted('SIM-1'), name: 'iPhone 17' }, { ...booted('SIM-2'), name: 'iPhone 17', state: 'Shutdown' }]), {
       ios: (udid) => { asked.push(udid); return false; },
     });
     expect(missing).toEqual([{ platform: 'ios', known: true }]);

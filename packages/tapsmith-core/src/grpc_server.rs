@@ -7398,14 +7398,12 @@ fn android_hierarchy_has_rendered_content(xml: &str, package_name: &str) -> bool
 }
 
 /// Whether `package_name` is installed, as `pm path` reports it. Unknown
-/// (adb failed) counts as installed, so the error does not claim otherwise.
+/// (adb failed, the device went offline or away) counts as installed, so the
+/// error does not claim otherwise.
 async fn android_package_installed(serial: &str, package_name: &str) -> bool {
-    match adb::shell_lenient(serial, &format!("pm path {package_name}")).await {
-        Ok(out) => out
-            .lines()
-            .any(|line| line.trim_start().starts_with("package:")),
-        Err(_) => true,
-    }
+    adb::package_install_state(serial, package_name)
+        .await
+        .unwrap_or(true)
 }
 
 /// The intent arguments of a launcher tap, for `cmd package` queries.

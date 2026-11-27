@@ -1689,6 +1689,45 @@ pub async fn shell_lenient_with_timeout(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Whether `package` is installed on `serial`, as `pm path` answers:
+/// `None` when it could not answer (adb failed, the device is gone or
+/// offline, a timeout). See [`classify_pm_path`].
+pub async fn package_install_state(serial: &str, package: &str) -> Option<bool> {
+    let mut cmd = Command::new("adb");
+    cmd.arg("-s")
+        .arg(serial)
+        .arg("shell")
+        .arg(format!("pm path {package}"));
+    let output = output_within(&mut cmd, DEFAULT_TIMEOUT).await.ok()?;
+    classify_pm_path(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+/// What `adb shell pm path <pkg>` said: installed when it lists a
+/// `package:` line; not installed only for pm's own answer for an unknown
+/// package (a non-zero exit with nothing on stdout or stderr); `None` for
+/// anything else, such as adb's "device offline" or "not found" on stderr.
+pub fn classify_pm_path(success: bool, stdout: &str, stderr: &str) -> Option<bool> {
+    if stdout
+        .lines()
+        .any(|line| line.trim_start().starts_with("package:"))
+    {
+        return Some(true);
+    }
+    if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
+        return None;
+    }
+    // A silent exit 0 without a package line is not pm's answer either.
+    if success {
+        None
+    } else {
+        Some(false)
+    }
+}
+
 /// Parsed WebView debug socket entry from /proc/net/unix.
 #[derive(Debug, Clone)]
 pub struct WebViewSocket {
@@ -2450,6 +2489,28 @@ mod tests {
         assert!(!parse_has_default_route(
             "fec0::/64 dev eth0 proto kernel metric 256"
         ));
+    }
+
+    // ─── pm path classification (PILOT-1533) ───
+
+    #[test]
+    fn pm_path_is_not_installed_only_for_pms_silent_failure() {
+        assert_eq!(
+            classify_pm_path(true, "package:/data/app/base.apk\n", ""),
+            Some(true)
+        );
+        assert_eq!(classify_pm_path(false, "", ""), Some(false));
+        // A device that went away mid-run: adb's error, not pm's answer.
+        assert_eq!(
+            classify_pm_path(false, "", "adb: device 'emulator-5554' not found\n"),
+            None
+        );
+        assert_eq!(classify_pm_path(false, "", "error: device offline\n"), None);
+        assert_eq!(
+            classify_pm_path(true, "Error: Could not access the Package Manager\n", ""),
+            None
+        );
+        assert_eq!(classify_pm_path(true, "", ""), None);
     }
 
     // ─── Retryable ADB transport errors ───

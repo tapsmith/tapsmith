@@ -1408,8 +1408,8 @@ export interface MissingBuild {
 /**
  * The selected platforms whose config installs nothing (no `apk`; no
  * simulator or device `app`) and whose app no device here has: the
- * connected Android devices (the pinned one alone when the config pins
- * one), the booted simulators. A platform with no device to ask, or one
+ * connected Android devices the run could use (the pinned one, else the
+ * emulators running the chosen AVD), the booted configured simulator. A platform with no device to ask, or one
  * that could not say, is named too, with `known` false, so the wizard
  * hedges; one whose app a device has is fine as it is (a package-only
  * config for an app installed by hand).
@@ -1432,11 +1432,16 @@ export function missingBuilds(
     missing.push({ platform, known: presence.absentFrom.length > 0 && presence.unknown.length === 0 });
   };
   if (selected.includes('android') && android && !android.apkPath) {
-    const serials = env.androidDevices.map((d) => d.serial);
-    check('android', android.packageName, android.device ? serials.filter((s) => s === android.device) : serials);
+    // As the generated config runs: on the pinned device, else (avd-only,
+    // the default with an `avd`) on emulators of that AVD, else on any.
+    const targets = env.androidDevices
+      .filter((d) => (android.device ? d.serial === android.device : android.avd ? d.avd === android.avd : true))
+      .map((d) => d.serial);
+    check('android', android.packageName, targets);
   }
   if (selected.includes('ios') && ios && !ios.appPath && !ios.deviceAppPath) {
-    check('ios', ios.bundleId, env.simulators.filter((s) => s.state === 'Booted').map((s) => s.udid));
+    const booted = env.simulators.filter((s) => s.state === 'Booted' && (!ios.simulator || s.name === ios.simulator || s.udid === ios.simulator));
+    check('ios', ios.bundleId, booted.map((s) => s.udid));
   }
   return missing;
 }
