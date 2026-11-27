@@ -57,6 +57,7 @@ import {
   waitForBoot,
   waitForSystemSettle,
   listAdbDevices,
+  packageInstallState,
   queryAdbDevices,
   reserveEmulatorPort,
   emulatorsBootingThisProcess,
@@ -2502,6 +2503,27 @@ describe('boot waits stop when aborted', () => {
 
 // PILOT-457: the test-run paths split each line on whitespace and kept the
 // second word, so `no permissions (…)` read as "no" and got no advice.
+describe('packageInstallState (PILOT-1498)', () => {
+  type Exec = typeof import('node:child_process').execFileSync;
+  const exits = (fields: { status?: number | null; signal?: string | null; stdout?: string; stderr?: string }) =>
+    vi.fn(() => { throw Object.assign(new Error('Command failed'), { status: null, signal: null, stdout: '', stderr: '', ...fields }); }) as unknown as Exec;
+
+  it('is true when pm path lists the package', () => {
+    expect(packageInstallState('emulator-5554', 'com.example.app', vi.fn(() => 'package:/data/app/base.apk\n') as unknown as Exec)).toBe(true);
+  });
+
+  it('is false only for pm\'s own silent exit 1', () => {
+    expect(packageInstallState('emulator-5554', 'com.example.app', exits({ status: 1 }))).toBe(false);
+    expect(packageInstallState('emulator-5554', 'com.example.app', vi.fn(() => '') as unknown as Exec)).toBe(false);
+  });
+
+  it('is undefined when adb itself failed or the call timed out', () => {
+    expect(packageInstallState('emulator-5554', 'com.example.app', exits({ status: 1, stderr: "adb: device 'emulator-5554' not found\n" }))).toBeUndefined();
+    expect(packageInstallState('emulator-5554', 'com.example.app', exits({ signal: 'SIGTERM' }))).toBeUndefined();
+    expect(packageInstallState('emulator-5554', 'com.example.app', vi.fn(() => { throw new Error('spawn adb ENOENT'); }) as unknown as Exec)).toBeUndefined();
+  });
+});
+
 describe('listAdbDevices', () => {
   const adb = (stdout: string) => vi.fn(() => stdout) as unknown as typeof import('node:child_process').execFileSync;
 

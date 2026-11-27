@@ -17,7 +17,7 @@ import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
 import { deviceGroupSize, type TapsmithConfig } from './config.js';
 import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts, resolveTraceConfig } from './trace/types.js';
-import { installedApkMatches, isPackageInstalled, waitForPackageIndexed } from './emulator.js';
+import { installedApkMatches, isPackageInstalled, packageInstallState, waitForPackageIndexed } from './emulator.js';
 import { installApp, installAppAsync, installedAppMatches, isAppInstalled, probeSimulatorHealth, rebootSimulator } from './ios-simulator.js';
 import { findAgentApk, findAgentTestApk, missingAndroidAgentError } from './agent-resolve.js';
 import {
@@ -423,6 +423,16 @@ interface InstallOutcome {
 }
 
 /**
+ * The error for a package-only Android config whose app the device lacks
+ * (PILOT-1498), worded as the iOS agent's for a simulator without the app.
+ */
+export function absentAndroidAppMessage(pkg: string, serial: string): string {
+  return `${pkg} is not installed on ${serial}, and the config has no \`apk\`, so Tapsmith has nothing to install. `
+    + 'Set `apk` in your Tapsmith config to the built APK so Tapsmith installs it, or install it yourself '
+    + `(adb -s ${serial} install <path/to/app.apk>), and check that \`package\` is the app's applicationId.`;
+}
+
+/**
  * Install the app under test unless the device already holds this exact
  * build. Progress lines keep the wording the parallel workers always emitted
  * (the dispatcher's launch-phase tracker parses them); `onPhase` carries the
@@ -433,6 +443,13 @@ async function installAppUnderTest(
   device: Device,
   serial: string,
   opts: {
+    /**
+     * An Android app with no `apk` to install that the device definitely
+     * lacks: `refuse` stops here, naming the device (a test session, whose
+     * launch would only fail with pm's bare "Failed"); `allow` goes on (the
+     * MCP server's agent start, which has uses without the app).
+     */
+    absentApp: 'refuse' | 'allow'
     freshDevice?: boolean
     forceInstall?: boolean
     appInstalledFresh?: boolean
@@ -470,6 +487,14 @@ async function installAppUnderTest(
 
   if (config.platform !== 'ios') {
     if (!artifact) {
+      // Only a definite "not installed": a device that cannot say goes on,
+      // and the launch reports whatever is wrong.
+      if (opts.absentApp === 'refuse' && config.package && packageInstallState(serial, config.package) === false) {
+        const message = absentAndroidAppMessage(config.package, serial);
+        phase('install', 'start', `checking whether ${config.package} is installed`);
+        phase('install', 'fail', message);
+        throw new Error(message);
+      }
       progress('app install skipped');
       phase('install', 'skip', 'no Android APK configured');
       return { installed: false, freshInstall: false };
@@ -603,7 +628,7 @@ export async function installConfiguredApp(
   opts: { onProgress?: (m: string) => void } = {},
 ): Promise<void> {
   const device = new Device(client, config);
-  const install = await checkInstallAndRemember(config, device, serial, { onProgress: opts.onProgress });
+  const install = await checkInstallAndRemember(config, device, serial, { absentApp: 'allow', onProgress: opts.onProgress });
   if (install.pending) await install.pending;
 }
 
@@ -738,7 +763,7 @@ export async function reinstallChangedBuild(
 
   verifiedBuilds.delete(serial);
   const started = Date.now();
-  const install = await installAppUnderTest(config, session.device, serial, { onProgress: opts.onProgress });
+  const install = await installAppUnderTest(config, session.device, serial, { absentApp: 'allow', onProgress: opts.onProgress });
   if (install.pending) await install.pending;
   // Only a match is recorded, with the stamps taken before the comparison:
   // a copy stamped after an install might be another tool's install that
@@ -991,6 +1016,7 @@ export async function openDeviceSession(
 
     const checkStarted = Date.now();
     const install = await checkInstallAndRemember(config, device, spec.serial, {
+      absentApp: 'refuse',
       freshDevice: opts.freshDevice,
       forceInstall: opts.forceInstall,
       appInstalledFresh: opts.appInstalledFresh,

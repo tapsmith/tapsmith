@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   clients: [] as Array<{ waitForReady: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }>,
   clientReady: true,
   installed: true,
+  /** `packageInstallState`: whether the device has the app (undefined: could not tell). */
+  installState: true as boolean | undefined,
   preflight: {
     ensureSessionReady: vi.fn(async () => {}),
     launchConfiguredApp: vi.fn(async () => ({ policy: { mode: 'clear', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'startup launch' })),
@@ -109,6 +111,7 @@ vi.mock('../device.js', () => ({
 
 vi.mock('../emulator.js', () => ({
   isPackageInstalled: vi.fn(() => mocks.installed),
+  packageInstallState: vi.fn(() => mocks.installState),
   installedApkMatches: vi.fn(() => true),
   waitForPackageIndexed: vi.fn(async () => {}),
 }));
@@ -211,6 +214,7 @@ beforeEach(() => {
   mocks.clients.length = 0;
   mocks.clientReady = true;
   mocks.installed = true;
+  mocks.installState = true;
   mocks.agentFailures = 0;
   mocks.agentErrors = [];
   mocks.failAgentFor.clear();
@@ -551,6 +555,36 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
       { claimSession: SESSION, startNetworkProxy: false, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
     );
     expect(seen[1]).toEqual(['install', 'complete', 'installed app.apk']);
+  });
+
+  // PILOT-1498: a package-only config on a device without the app stopped
+  // at the launch with pm clear's bare "Failed".
+  it('stops at the install step, naming the device, when a package-only config\'s app is not on it', async () => {
+    const seen = phases();
+    mocks.installState = false;
+    await expect(openDeviceSession(
+      { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' },
+      makeConfig({ apk: undefined }),
+      { claimSession: SESSION, startNetworkProxy: false, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
+    )).rejects.toThrow(/^Device \(emulator-5554\): com\.example\.app is not installed on emulator-5554, and the config has no `apk`, so Tapsmith has nothing to install\. Set `apk` in your Tapsmith config to the built APK so Tapsmith installs it, or install it yourself \(adb -s emulator-5554 install <path\/to\/app\.apk>\), and check that `package` is the app's applicationId\./);
+    expect(seen.map(([p, s]) => [p, s])).toEqual([['install', 'start'], ['install', 'fail']]);
+    expect(seen[1][2]).toMatch(/^com\.example\.app is not installed on emulator-5554, and the config has no `apk`/);
+    expect(mocks.devices[0]._startAgent).not.toHaveBeenCalled();
+    expect(mocks.preflight.startAndroidLaunchEarly).not.toHaveBeenCalled();
+  });
+
+  it('goes on with a package-only config when the app is installed, or when the device cannot say', async () => {
+    for (const state of [true, undefined]) {
+      const seen = phases();
+      mocks.installState = state;
+      await openDeviceSession(
+        { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' },
+        makeConfig({ apk: undefined }),
+        { claimSession: SESSION, startNetworkProxy: false, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
+      );
+      expect(seen[0]).toEqual(['install', 'skip', 'no Android APK configured']);
+      expect(seen.at(-1)).toEqual(['launch', 'complete', 'launched com.example.app']);
+    }
   });
 
   it('reports the failing phase and wraps the error as the CLI did', async () => {
