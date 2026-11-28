@@ -23,6 +23,8 @@ const sessionPreflightMocks = vi.hoisted(() => ({
   launchConfiguredApp: vi.fn(async () => {}),
   // No early launch: the startup launch runs its usual sequence after the agent.
   startAndroidLaunchEarly: vi.fn(async () => undefined),
+  checkExpoGo: vi.fn(),
+  isExpoGo: () => false,
 }));
 
 vi.mock('../runner.js', () => ({
@@ -55,6 +57,7 @@ vi.mock('../device.js', () => ({
 
 vi.mock('../emulator.js', () => ({
   isPackageInstalled: vi.fn(() => true),
+  packageInstallState: vi.fn(() => true),
   // The installed build matches: only `forceInstall` can make a worker reinstall.
   installedApkMatches: vi.fn(() => true),
   waitForPackageIndexed: vi.fn(async () => {}),

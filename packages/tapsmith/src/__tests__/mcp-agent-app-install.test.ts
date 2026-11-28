@@ -88,6 +88,7 @@ let apkInstalled: boolean;
 vi.mock('../emulator.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../emulator.js')>()),
   isPackageInstalled: () => apkInstalled,
+  packageInstallState: () => apkInstalled,
   installedApkMatches: () => true,
   waitForPackageIndexed: async () => {},
 }));
@@ -213,6 +214,14 @@ describe('the app under test, on a headless session\'s device', () => {
     devices = [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }];
     await target({ ...iosConfig, platform: 'android', app: undefined, apk: 'build/app.apk', package: 'com.x' });
     expect(calls).toEqual(['installApk app.apk', 'startAgent', 'getUiHierarchy']);
+  });
+
+  // A test session refuses this (PILOT-1498); the MCP server's agent has uses without the app.
+  it('still starts the agent on Android for a package-only config whose app is not on the device', async () => {
+    devices = [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }];
+    apkInstalled = false;
+    await target({ ...iosConfig, platform: 'android', app: undefined, package: 'com.x' });
+    expect(calls[0]).toBe('startAgent');
   });
 
   it("starts the agent with the config's Android `activity`, so every launch of the app uses it (PILOT-1402)", async () => {

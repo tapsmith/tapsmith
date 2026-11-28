@@ -552,17 +552,33 @@ export function installedApkMatches(serial: string, packageName: string, apkPath
 }
 
 /**
- * Check whether a package is installed on a device via ADB.
+ * Check whether a package is installed on a device via ADB. False when it
+ * cannot tell, too: {@link packageInstallState} tells the two apart.
  */
 export function isPackageInstalled(serial: string, packageName: string): boolean {
+  return packageInstallState(serial, packageName) === true;
+}
+
+/**
+ * Whether a package is installed on a device, as `pm path` answers:
+ * undefined when it could not answer (adb failed, the device is gone, the
+ * call timed out, or an exit 0 without a package line, which is not pm's
+ * answer). `pm path` exits 1 with no output for a package the device does
+ * not have; adb's own failures say why on stderr. The daemon's
+ * `classify_pm_path` reads it the same way.
+ */
+export function packageInstallState(serial: string, packageName: string, exec: ExecFileSyncLike = execFileSync): boolean | undefined {
   try {
-    const output = execFileSync(
+    const output = exec(
       'adb', ['-s', serial, 'shell', 'pm', 'path', packageName],
       { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] },
     );
-    return output.includes('package:');
-  } catch {
-    return false;
+    return output.includes('package:') ? true : undefined;
+  } catch (err) {
+    const { status, signal, stdout, stderr } = err as { status?: number | null; signal?: string | null; stdout?: unknown; stderr?: unknown };
+    if (signal || typeof status !== 'number') return undefined;
+    if (String(stdout ?? '').includes('package:')) return true;
+    return String(stdout ?? '').trim() === '' && String(stderr ?? '').trim() === '' ? false : undefined;
   }
 }
 

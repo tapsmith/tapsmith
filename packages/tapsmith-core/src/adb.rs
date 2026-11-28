@@ -62,8 +62,11 @@ impl std::fmt::Display for AdbTimeout {
 
 impl std::error::Error for AdbTimeout {}
 
-/// Run `cmd` to completion within `timeout`.
+/// Run `cmd` to completion within `timeout`. A timeout drops the pending
+/// output future, and `kill_on_drop` makes that kill the adb child too
+/// rather than leave it running on the host.
 async fn output_within(cmd: &mut Command, timeout: Duration) -> Result<std::process::Output> {
+    cmd.kill_on_drop(true);
     tokio::time::timeout(timeout, cmd.output())
         .await
         .map_err(|_| anyhow::Error::new(AdbTimeout(timeout)))?
@@ -111,7 +114,9 @@ async fn run_with_input(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // A timeout drops `run`, and with it the child: kill it then.
+        .kill_on_drop(true);
 
     let run = async {
         let mut child = cmd
@@ -135,7 +140,8 @@ async fn run_with_input(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
-            "{program} command failed (exit {}): {stderr}",
+            // ExitStatus displays as "exit status: 1" (or "signal: 9 …").
+            "{program} command failed ({}): {stderr}",
             output.status
         );
     }
@@ -1688,6 +1694,45 @@ pub async fn shell_lenient_with_timeout(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Whether `package` is installed on `serial`, as `pm path` answers:
+/// `None` when it could not answer (adb failed, the device is gone or
+/// offline, a timeout). See [`classify_pm_path`].
+pub async fn package_install_state(serial: &str, package: &str) -> Option<bool> {
+    let mut cmd = Command::new("adb");
+    cmd.arg("-s")
+        .arg(serial)
+        .arg("shell")
+        .arg(format!("pm path {package}"));
+    let output = output_within(&mut cmd, DEFAULT_TIMEOUT).await.ok()?;
+    classify_pm_path(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+/// What `adb shell pm path <pkg>` said: installed when it lists a
+/// `package:` line; not installed only for pm's own answer for an unknown
+/// package (a non-zero exit with nothing on stdout or stderr); `None` for
+/// anything else, such as adb's "device offline" or "not found" on stderr.
+pub fn classify_pm_path(success: bool, stdout: &str, stderr: &str) -> Option<bool> {
+    if stdout
+        .lines()
+        .any(|line| line.trim_start().starts_with("package:"))
+    {
+        return Some(true);
+    }
+    if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
+        return None;
+    }
+    // A silent exit 0 without a package line is not pm's answer either.
+    if success {
+        None
+    } else {
+        Some(false)
+    }
+}
+
 /// Parsed WebView debug socket entry from /proc/net/unix.
 #[derive(Debug, Clone)]
 pub struct WebViewSocket {
@@ -2134,8 +2179,9 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
+        // Said once: "exit status: 3", never "exit exit status: 3" (PILOT-1533).
         assert!(
-            err.contains("sh command failed") && err.contains("nope"),
+            err.starts_with("sh command failed (exit status: 3): nope"),
             "{err}"
         );
     }
@@ -2163,10 +2209,41 @@ mod tests {
         assert!(err.downcast_ref::<super::AdbTimeout>().is_some(), "{err}");
     }
 
+    /// A shell that touches `marker` after a pause: if the timeout did not
+    /// kill it, the marker appears once the pause is over.
+    fn touch_after_pause(marker: &std::path::Path) -> String {
+        format!("sleep 0.4; touch '{}'", marker.display())
+    }
+
+    #[tokio::test]
+    async fn run_with_input_kills_the_child_it_timed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("survived");
+        let script = touch_after_pause(&marker);
+        super::run_with_input("sh", &["-c", &script], None, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        assert!(!marker.exists(), "the timed-out child kept running");
+    }
+
+    #[tokio::test]
+    async fn output_within_kills_the_child_it_timed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("survived");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(touch_after_pause(&marker));
+        output_within(&mut cmd, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        assert!(!marker.exists(), "the timed-out child kept running");
+    }
+
     #[tokio::test]
     async fn a_timed_out_command_is_a_typed_timeout() {
         let mut cmd = Command::new("/bin/sleep");
-        cmd.arg("30").kill_on_drop(true);
+        cmd.arg("30");
 
         let err = output_within(&mut cmd, Duration::from_millis(50))
             .await
@@ -2450,36 +2527,58 @@ mod tests {
         ));
     }
 
+    // ─── pm path classification (PILOT-1533) ───
+
+    #[test]
+    fn pm_path_is_not_installed_only_for_pms_silent_failure() {
+        assert_eq!(
+            classify_pm_path(true, "package:/data/app/base.apk\n", ""),
+            Some(true)
+        );
+        assert_eq!(classify_pm_path(false, "", ""), Some(false));
+        // A device that went away mid-run: adb's error, not pm's answer.
+        assert_eq!(
+            classify_pm_path(false, "", "adb: device 'emulator-5554' not found\n"),
+            None
+        );
+        assert_eq!(classify_pm_path(false, "", "error: device offline\n"), None);
+        assert_eq!(
+            classify_pm_path(true, "Error: Could not access the Package Manager\n", ""),
+            None
+        );
+        assert_eq!(classify_pm_path(true, "", ""), None);
+    }
+
     // ─── Retryable ADB transport errors ───
 
     #[test]
     fn retryable_adb_transport_error_matches_offline_device() {
         assert!(is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): adb: device offline"
+            "adb command failed (exit status: 1): adb: device offline"
         ));
     }
 
     #[test]
     fn retryable_adb_transport_error_matches_missing_device() {
         assert!(is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): error: no devices/emulators found"
+            "adb command failed (exit status: 1): error: no devices/emulators found"
         ));
         assert!(is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): error: device 'emulator-5554' not found"
+            "adb command failed (exit status: 1): error: device 'emulator-5554' not found"
         ));
     }
 
     #[test]
     fn retryable_adb_transport_error_rejects_install_semantic_failure() {
         assert!(!is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): Failure [INSTALL_FAILED_VERSION_DOWNGRADE]"
+            "adb command failed (exit status: 1): Failure [INSTALL_FAILED_VERSION_DOWNGRADE]"
         ));
     }
 
     #[test]
     fn retryable_adb_transport_error_rejects_unauthorized_device() {
         assert!(!is_retryable_adb_transport_error(
-            "adb command failed (exit exit status: 1): error: device unauthorized"
+            "adb command failed (exit status: 1): error: device unauthorized"
         ));
     }
 
@@ -2488,7 +2587,7 @@ mod tests {
     #[test]
     fn parse_incompatible_package_modern_adb_inline_format() {
         // Modern (streamed-install) adb embeds the failure mid-line in stderr.
-        let msg = "adb command failed (exit exit status: 1): \
+        let msg = "adb command failed (exit status: 1): \
             adb: failed to install /tmp/agent.apk: \
             Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package \
             dev.tapsmith.agent signatures do not match newer version; ignoring!]";
@@ -2497,7 +2596,7 @@ mod tests {
 
     #[test]
     fn parse_incompatible_package_legacy_line_start_format() {
-        let msg = "adb command failed (exit exit status: 1): \nPerforming Push Install\n\
+        let msg = "adb command failed (exit status: 1): \nPerforming Push Install\n\
             Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: \
             Package dev.tapsmith.agent.test signatures do not match previously installed version]";
         assert_eq!(

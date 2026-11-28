@@ -1968,6 +1968,37 @@ describe('runner app reset (declared isolation)', () => {
       }
     });
 
+    it('warns the first test, failed or not, that the app is Expo Go, with no dialog row (PILOT-1533)', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-expo-go-'));
+      try {
+        const d = makeDevice();
+        pushContext();
+        tapsmithTest('one', async () => { throw new Error('not visible'); });
+        tapsmithTest('two', async () => {});
+        const ctx = popContext();
+        const opts = makeOpts(d, makeConfig({
+          rootDir: tempRoot,
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        }));
+        opts.devices[0].sessionContext!.notices.push({
+          kind: 'expo-go', title: 'The app under test is Expo Go', message: 'host.exp.exponent is Expo Go', timestamp: Date.now(),
+        });
+
+        const result = await runSuiteContext(ctx, '', [], [], opts);
+
+        const [one, two] = collectResults(result);
+        expect(one.status).toBe('failed');
+        expect(one.warnings).toEqual(['host.exp.exponent is Expo Go']);
+        expect(two.warnings).toBeUndefined();
+        const zip = unzipSync(fs.readFileSync(one.tracePath!));
+        const rows = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+          .filter((e) => e.type === 'action' && e.action === 'systemDialog');
+        expect(rows).toEqual([]);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
     describe('a failure after a warm reset that kept the app\'s screens (PILOT-922)', () => {
       function warmHooks(d: ReturnType<typeof makeDevice>, opts: RunOptions, caps: { hooksRemount?: boolean } = {}) {
         opts.devices[0].sessionContext!.capabilities = { hooksDetected: true, ...caps };

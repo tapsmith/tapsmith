@@ -48,6 +48,7 @@ import type { InitResult } from './init-noninteractive.js';
 import { detectCodingAgents, pluginInstallSteps, runningCodingAgents, type CodingAgent } from './agent-plugins.js';
 import { installedDocsDir, refreshAgentsMdDocsDir } from './agents-md.js';
 import { appIdProblem, appIdWarning, type AppIdPlatform } from './app-id.js';
+import { appPresence, buildFirstStep, type AppPresenceDeps } from './app-presence.js';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -476,7 +477,7 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
     message: 'Where is your Android APK?',
     candidates: orderApkCandidates(findApkCandidates(cwd)),
     noneFound: expo
-      ? `No APK found in the project's build outputs (${apkSearchedIn(layout)}). ${expoBuildHint(['android'], expo, 'Or enter its path.')}`
+      ? `No APK found in the project's build outputs (${apkSearchedIn(layout)}). ${expoBuildHint(['android'], expo, 'Or enter its path.', { brief: true })}`
       : `No APK found in the project's build outputs (${apkSearchedIn(layout)}). ${nativeBuildHint('android', layout, isReactNativeProject(cwd))}, or enter its path.`,
     typeMessage: 'Path to your Android APK:',
   });
@@ -586,7 +587,7 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
       message: 'Where is your iOS .app bundle? (simulator build)',
       ...builds,
       noneFound: expo
-        ? `No simulator build (.app) found in the project or Xcode's DerivedData. ${expoBuildHint(['ios'], expo, 'Or enter its path.')}`
+        ? `No simulator build (.app) found in the project or Xcode's DerivedData. ${expoBuildHint(['ios'], expo, 'Or enter its path.', { brief: true })}`
         : `No simulator build (.app) found in the project or Xcode's DerivedData. ${nativeBuildHint('ios', detectProjectLayout(cwd), isReactNativeProject(cwd))}, or enter its path.`,
       typeMessage: 'Path to your simulator build (.app):',
     });
@@ -1396,6 +1397,86 @@ export function wizardNextSteps(
   ];
 }
 
+// ─── A config with no build (PILOT-1533) ───
+
+/**
+ * A platform init leaves without a build: `known` when every device asked
+ * definitely lacks the app; `iosDevice` for an iOS config on physical
+ * devices alone, whose build is a device-signed (iphoneos) one.
+ */
+export interface MissingBuild {
+  platform: Platform;
+  known: boolean;
+  iosDevice?: true;
+}
+
+/**
+ * The selected platforms whose config installs nothing (no `apk`; no
+ * simulator or device `app`) and whose app no device here has: the
+ * connected Android devices the run could use (the pinned one, else the
+ * emulators running the chosen AVD; never a device another session holds),
+ * the booted configured simulator (a physical-only iOS config has none to
+ * ask: init cannot look inside a phone). A platform with no device to ask, or one
+ * that could not say, is named too, with `known` false, so the wizard
+ * hedges; one whose app a device has is fine as it is (a package-only
+ * config for an app installed by hand).
+ */
+export function missingBuilds(
+  selected: readonly Platform[],
+  android: AndroidConfig | undefined,
+  ios: IosConfig | undefined,
+  env: Pick<EnvScan, 'androidDevices' | 'simulators'>,
+  deps: AppPresenceDeps = {},
+): MissingBuild[] {
+  const missing: MissingBuild[] = [];
+  const check = (platform: Platform, pkg: string | undefined, targets: string[], extra: Partial<MissingBuild> = {}): void => {
+    if (!pkg) {
+      missing.push({ platform, known: true, ...extra });
+      return;
+    }
+    const presence = appPresence(platform, pkg, targets, deps);
+    if (presence.installedOn.length > 0) return;
+    missing.push({ platform, known: presence.absentFrom.length > 0 && presence.unknown.length === 0, ...extra });
+  };
+  if (selected.includes('android') && android && !android.apkPath) {
+    // As the generated config runs: on the pinned device, else (avd-only,
+    // the default with an `avd`) on emulators of that AVD, else on any it
+    // can claim: a device another session holds is not one, while a pinned
+    // one is the run's only target (which it refuses while held), so its
+    // answer is still the one that counts.
+    const targets = env.androidDevices
+      .filter((d) => (android.device ? d.serial === android.device : !d.held && (android.avd ? d.avd === android.avd : true)))
+      .map((d) => d.serial);
+    check('android', android.packageName, targets);
+  }
+  if (selected.includes('ios') && ios && !ios.appPath && !ios.deviceAppPath) {
+    // A simulator target is one with a `simulator` (iosTargets()); without
+    // one the config is for physical devices alone, which init cannot ask.
+    const sim = ios.simulator;
+    const booted = sim ? env.simulators.filter((s) => s.state === 'Booted' && (s.name === sim || s.udid === sim)) : [];
+    check('ios', ios.bundleId, booted.map((s) => s.udid), sim ? {} : { iosDevice: true });
+  }
+  return missing;
+}
+
+const WARM_RESET_POINTER = 'For sub-second resets between tests, add @tapsmith/react-native\'s <TapsmithTestHooks>: https://tapsmith.dev/guides/warm-reset/';
+
+/**
+ * The wizard's last lines: with a build missing, the one build step (hedged
+ * when no device could be checked) instead of "Happy testing!". With a
+ * build, an Expo project without the warm-reset hooks gets the pointer to
+ * them here, once it has something to test, rather than mid-wizard.
+ */
+export function wizardClosing(missing: readonly MissingBuild[], rootDir: string, cli: string, expo: ExpoProject | undefined): string[] {
+  if (missing.length === 0) return [...(expo && !expo.usesTapsmithHooks ? [WARM_RESET_POINTER] : []), 'Happy testing!'];
+  return missing.map(({ platform, known, iosDevice }) => {
+    const step = buildFirstStep(platform, { rootDir, cli, detect: () => expo, ...(iosDevice ? { iosDevice } : {}) });
+    if (missing.length === 1) return known ? step.sentence : `If you don't have a build yet, ${step.action}`;
+    const name = platform === 'android' ? 'Android' : 'iOS';
+    return `${name}: ${known ? "you don't have a build yet, so" : "if you don't have a build yet,"} ${step.action}`;
+  });
+}
+
 /**
  * `text` with each `npx tapsmith` made `cli`, the project's own way to run
  * Tapsmith (`tapsmithExecCommand`), for messages built elsewhere.
@@ -1733,6 +1814,9 @@ async function runInitInner(): Promise<void> {
   }
 
   console.log();
-  console.log(dim('  Happy testing!'));
+  const missing = missingBuilds(selectedPlatforms, androidConfig, iosConfig, env);
+  for (const line of wizardClosing(missing, process.cwd(), cli, expo)) {
+    console.log(missing.length > 0 ? `  ${YELLOW}${line}${RESET}` : dim(`  ${line}`));
+  }
   console.log();
 }

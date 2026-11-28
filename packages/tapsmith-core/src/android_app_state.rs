@@ -195,7 +195,7 @@ mod tests {
     fn run_as_refusals_are_classified_from_their_output() {
         assert_eq!(
             classify_run_as_refusal(
-                "adb command failed (exit exit status: 1): run-as: package not debuggable: com.example.app"
+                "adb command failed (exit status: 1): run-as: package not debuggable: com.example.app"
             ),
             RunAsRefusal::NotDebuggable
         );
