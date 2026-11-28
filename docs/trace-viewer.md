@@ -143,7 +143,7 @@ trace: {
 
 ### How it works
 
-When a trace records network, the Rust daemon starts a local MITM proxy at the beginning of each test and routes the device's traffic through it. Each request and response is recorded with method, URL, headers, status code, timing, and body data. HTTPS is decrypted with a CA certificate Tapsmith generates and installs on the device.
+When a trace records network, each test starts capture at its beginning, on a local MITM proxy the Rust daemon starts once and keeps up for the session, with the device's traffic routed through it ([how capture works](network.md#how-capture-works)). Each request and response is recorded with method, URL, headers, status code, timing, and body data. HTTPS is decrypted with a CA certificate Tapsmith generates and installs on the device.
 
 How traffic reaches the proxy depends on the platform: an `iptables` redirect on rootable Android emulators (the global HTTP proxy setting elsewhere), the macOS Network Extension on iOS simulators, and a Wi-Fi proxy profile on physical iOS devices. On Android and physical iOS the capture is device-wide, so other apps' traffic shows up too. See [How capture works](network.md#how-capture-works) for the details and [iOS network capture](./ios-network-capture.md) for the iOS setup (a one-time System Extension approval on simulators).
 

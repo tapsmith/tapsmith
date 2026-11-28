@@ -202,7 +202,7 @@ interface TraceConfig {
 }
 ```
 
-When a trace records network (`network: true`, the default, with tracing on), the Rust daemon starts an HTTP proxy at the beginning of each test and routes the device's traffic through it. HTTPS traffic is decrypted using an auto-generated CA certificate installed on the device. `network: false` only keeps traffic out of the trace: `device.route()` and the network waits still work, because the proxy also starts for them without a trace (see [Network prerequisites](network.md#prerequisites)).
+When a trace records network (`network: true`, the default, with tracing on), each test starts capture at its beginning, on an HTTP proxy the Rust daemon starts once and keeps up for the session, with the device's traffic routed through it. HTTPS traffic is decrypted using an auto-generated CA certificate installed on the device. `network: false` only keeps traffic out of the trace: `device.route()` and the network waits still work, because the proxy also starts for them without a trace (see [Network prerequisites](network.md#prerequisites)).
 
 ### Scrubbing system noise from traces
 

@@ -2652,7 +2652,7 @@ interface RunStartInfo {
 }
 
 interface TestStartInfo {
-  workerIndex?: number; // the worker running the test, with --workers
+  workerIndex?: number; // the worker running the test, set in parallel mode
   project?: string; // the test's project, when the config has projects
 }
 ```

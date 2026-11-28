@@ -41,7 +41,7 @@ export interface RunStartInfo {
 
 /** The third argument of {@link TapsmithReporter.onTestStart}. */
 export interface TestStartInfo {
-  /** The index of the worker running the test, in a run with several workers. */
+  /** The index of the worker running the test, set in parallel mode. */
   workerIndex?: number
   /** The test's project, when the config has projects. */
   project?: string
