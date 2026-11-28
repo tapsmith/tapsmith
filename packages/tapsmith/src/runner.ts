@@ -163,7 +163,7 @@ async function forEachDeviceBestEffort(opts: RunOptions, fn: (device: Device) =>
  * Take the notices the preflight left on each device's session context: for
  * system dialogs a trace row for every one (when a trace is recording), and a
  * warning — held for the next test result — for the app under test's own; for
- * a missing-hooks notice, the warning alone.
+ * a missing-hooks, reinstall or Expo Go notice, the warning alone.
  */
 function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | null): void {
   const devices = resettableDevices(opts);
@@ -180,7 +180,7 @@ function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | nul
       }
       // Not a dialog: the reset row already shows the clear (or the
       // relaunch of the reinstalled app) it caused.
-      if (notice.kind === 'hooks-missing' || notice.kind === 'app-reinstalled') continue;
+      if (notice.kind === 'hooks-missing' || notice.kind === 'app-reinstalled' || notice.kind === 'expo-go') continue;
       // Stamped now, not when the dialog was handled (possibly before this
       // trace began): rows keep their order on the timeline. The handling
       // time goes in the log.

@@ -340,6 +340,24 @@ describe('configureAndroid() on an Expo project (PILOT-557)', () => {
     expect(out).not.toContain('assembleDebug');
   });
 
+  // PILOT-1533: the paragraph mixed four builds and the warm-reset hooks mid-wizard.
+  it('with no APK found, gives the one recommended build, without the alternatives or the warm-reset advice', async () => {
+    script([
+      [/Where is your Android APK/, './built/app.apk'],
+      [/package name/, 'com.acme.expo'],
+    ]);
+
+    await configureAndroid(env, { ...expo, usesTapsmithHooks: false });
+
+    const out = logged.join('\n');
+    expect(out).toContain("No APK found in the project's build outputs (**/build/outputs/apk/). Build a release APK with "
+      + '`npx expo prebuild --platform android` (this Expo project has no android/ yet), then `cd android && ./gradlew assembleRelease`, '
+      + 'which writes android/app/build/outputs/apk/release/app-release.apk. Or enter its path. See https://tapsmith.dev/getting-started/#react-native-and-expo');
+    expect(out).not.toContain('expo run:android');
+    expect(out).not.toContain('TapsmithTestHooks');
+    expect(out).not.toContain('EXPO_PUBLIC_TAPSMITH_HOOKS');
+  });
+
   it('prefills the package prompt from the app config when the APK cannot be read', async () => {
     apkCandidates = [RELEASE_APK];
     script([

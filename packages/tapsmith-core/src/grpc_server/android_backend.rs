@@ -379,17 +379,18 @@ impl DeviceBackend for AndroidBackend<'_> {
     }
 
     async fn wipe_app_data(&self, serial: &str, package_name: &str) -> Result<(), String> {
-        let output = adb::shell(serial, &format!("pm clear {}", package_name))
-            .await
-            .map_err(|e| format!("pm clear failed: {e}"))?;
-        if output.trim().starts_with("Success") {
-            Ok(())
-        } else {
-            Err(format!(
-                "pm clear did not report success: {}",
-                output.trim()
-            ))
+        let result = match adb::shell(serial, &format!("pm clear {}", package_name)).await {
+            Ok(output) if output.trim().starts_with("Success") => return Ok(()),
+            Ok(output) => format!("pm clear did not report success: {}", output.trim()),
+            Err(e) => format!("pm clear failed: {e}"),
+        };
+        // `pm clear` answers an unknown package with a bare "Failed": a test
+        // run's reset of a package-only config's absent app (the MCP server's
+        // runs reach it, having no install step that refuses).
+        if !android_package_installed(serial, package_name).await {
+            return Err(reset_not_installed_message(package_name, serial));
         }
+        Err(result)
     }
 
     async fn deliver_deep_link(
@@ -674,8 +675,18 @@ impl DeviceBackend for AndroidBackend<'_> {
         request_id: String,
         req: &proto::ClearAppDataRequest,
     ) -> ActionResult {
-        let cmd = format!("pm clear {}", req.package_name);
-        self.svc.adb_action(request_id, &cmd).await
+        let serial = self.svc.active_serial().await?;
+        let pkg = &req.package_name;
+        let mut response = self
+            .svc
+            .adb_action_on(request_id, &serial, &format!("pm clear {pkg}"))
+            .await?;
+        // `pm clear` answers an unknown package with a bare "Failed".
+        let failed = !response.get_ref().success;
+        if failed && !android_package_installed(&serial, pkg).await {
+            response.get_mut().error_message = clear_app_data_not_installed_message(pkg, &serial);
+        }
+        Ok(response)
     }
 
     async fn supports_cold_deep_link(&self) -> bool {
@@ -2089,10 +2100,47 @@ fn unhandled_link_message(uri: &str, target: &str, handler: &LinkHandler) -> Str
     )
 }
 
+/// clearAppData's error for a package that is not on the device, worded as
+/// saveAppState's (`android_app_state::run_as_refusal_message`).
+fn clear_app_data_not_installed_message(pkg: &str, serial: &str) -> String {
+    format!(
+        "clearAppData can't clear {pkg}: it is not installed on {serial}. Install the app first."
+    )
+}
+
+/// The reset's error for the app under test when the device does not have
+/// it, worded as the session's own refusal for a package-only config.
+fn reset_not_installed_message(pkg: &str, serial: &str) -> String {
+    format!(
+        "{pkg} is not installed on {serial}, so it can't be reset. Install it first: set `apk` \
+         in your Tapsmith config to the built APK so Tapsmith installs it, or install it \
+         yourself (adb -s {serial} install <path/to/app.apk>)."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_reset_names_an_app_under_test_that_is_not_installed() {
+        assert_eq!(
+            reset_not_installed_message("com.qa.absent", "emulator-5570"),
+            "com.qa.absent is not installed on emulator-5570, so it can't be reset. Install it \
+             first: set `apk` in your Tapsmith config to the built APK so Tapsmith installs it, \
+             or install it yourself (adb -s emulator-5570 install <path/to/app.apk>)."
+        );
+    }
+
+    #[test]
+    fn clear_app_data_names_a_package_that_is_not_installed() {
+        assert_eq!(
+            clear_app_data_not_installed_message("com.example.gone", "emulator-5554"),
+            "clearAppData can't clear com.example.gone: it is not installed on emulator-5554. \
+             Install the app first."
+        );
+    }
 
     #[test]
     fn deep_links_go_to_the_target_package_when_there_is_one() {

@@ -7398,14 +7398,12 @@ fn android_hierarchy_has_rendered_content(xml: &str, package_name: &str) -> bool
 }
 
 /// Whether `package_name` is installed, as `pm path` reports it. Unknown
-/// (adb failed) counts as installed, so the error does not claim otherwise.
+/// (adb failed, the device went offline or away) counts as installed, so the
+/// error does not claim otherwise.
 async fn android_package_installed(serial: &str, package_name: &str) -> bool {
-    match adb::shell_lenient(serial, &format!("pm path {package_name}")).await {
-        Ok(out) => out
-            .lines()
-            .any(|line| line.trim_start().starts_with("package:")),
-        Err(_) => true,
-    }
+    adb::package_install_state(serial, package_name)
+        .await
+        .unwrap_or(true)
 }
 
 /// The intent arguments of a launcher tap, for `cmd package` queries.
@@ -8542,23 +8540,23 @@ mod tests {
     #[test]
     fn terminal_adb_reverse_error_matches_unavailable_devices() {
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): adb: device offline"
+            "adb command failed (exit status: 1): adb: device offline"
         ));
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): error: device 'emulator-5554' not found"
+            "adb command failed (exit status: 1): error: device 'emulator-5554' not found"
         ));
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): error: no devices/emulators found"
+            "adb command failed (exit status: 1): error: no devices/emulators found"
         ));
         assert!(is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): error: more than one device/emulator"
+            "adb command failed (exit status: 1): error: more than one device/emulator"
         ));
     }
 
     #[test]
     fn terminal_adb_reverse_error_ignores_port_specific_failures() {
         assert!(!is_terminal_adb_reverse_error(
-            "adb command failed (exit exit status: 1): cannot bind listener: Address already in use"
+            "adb command failed (exit status: 1): cannot bind listener: Address already in use"
         ));
     }
 

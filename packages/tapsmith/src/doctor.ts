@@ -19,9 +19,9 @@ import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js'
 import { PLAY_IMAGE_CAPTURE_EFFECT, avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { parseSimctlDevicesJson, runningAvds, scanAndroidDevices, simulatorChoices, tryExec } from './env-scan.js';
 import { androidUnusableDeviceFix, parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
-import { isTapsmithNotInstalledError, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from './config.js';
+import { isTapsmithNotInstalledError, primaryDevicePin, resolveDeviceGroup, resolveDeviceStrategy, type TapsmithConfig } from './config.js';
 import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
-import { emulatorNotFoundMessage, resolveEmulatorBinary, type EmulatorBinary } from './emulator.js';
+import { emulatorNotFoundMessage, getRunningAvdName, resolveEmulatorBinary, type EmulatorBinary } from './emulator.js';
 import { hostArch, nodeUnderRosetta, ROSETTA_NODE_FIX } from './host-arch.js';
 import { adbMissingFix, androidHomeUnsetFix, XCODE_FIX } from './toolchain.js';
 import { mitmproxyRedirectorSource } from './setup-ios.js';
@@ -29,6 +29,7 @@ import { readIosAppInfo, type IosAppInfo } from './ios-app-bundle.js';
 import { isSimulatorUdid } from './ios-devicectl.js';
 import { isYarnPnp, YARN_PNP_FIX } from './yarn-pnp.js';
 import { appIdProblem } from './app-id.js';
+import { appPresence, buildFirstStep } from './app-presence.js';
 import { missingConfigFix } from './missing-config.js';
 import { findAgentsSection } from './agent-plugins.js';
 
@@ -424,6 +425,64 @@ function checkAppApk(report: Reporter, config: TapsmithConfig | undefined, requi
     }
   } catch {
     warn(report, 'app-apk', 'Could not check app APK path');
+  }
+}
+
+// ─── App build (PILOT-1533) ───
+
+/**
+ * One `app-build` row for the Android scopes that name a `package` but no
+ * `apk`: Tapsmith installs nothing for them, so their app must already be on
+ * the device. Installed on a device the run could use: a pass (a
+ * package-only config is legitimate). On none of them: an error, since the
+ * run stops at its install step there (it runs only with adb, as `app-apk`
+ * fails then too), whose fix is the one build step. No device to ask, or
+ * none that could answer: a warning with the same fix, since doctor cannot
+ * tell.
+ */
+function checkAppBuild(report: Reporter, scopes: readonly TapsmithConfig[], cli: string, configFile?: string): void {
+  const packageOnly = scopes.filter((scope) => scopePlatform(scope) === 'android' && scope.package && !scope.apk);
+  if (packageOnly.length === 0) return;
+  try {
+    const output = run(report, 'adb', ['devices']);
+    // With the AVD each emulator runs: an avd-only scope runs on its AVD alone.
+    const connected = output === undefined ? [] : scanAndroidDevices(output, getRunningAvdName, () => []);
+    const rows: Array<{ status: 'pass' | 'warn' | 'fail'; label: string; fix?: string }> = [];
+    const seen = new Set<string>();
+    for (const scope of packageOnly) {
+      const pkg = scope.package as string;
+      // Only the devices the run could use, as it picks them: the pinned
+      // device, else the emulators running the scope's AVD under avd-only,
+      // else any connected device.
+      const pin = primaryDevicePin(scope);
+      const avdOnly = !pin && !!scope.avd && resolveDeviceStrategy(scope) === 'avd-only';
+      const targets = connected
+        .filter((d) => (pin ? d.serial === pin : avdOnly ? d.avd === scope.avd : true))
+        .map((d) => d.serial);
+      const key = `${pkg}\0${targets.join(',')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const presence = appPresence('android', pkg, targets);
+      const fix = buildFirstStep('android', { rootDir: scope.rootDir ?? process.cwd(), cli, configFile }).sentence;
+      if (presence.installedOn.length > 0) {
+        rows.push({ status: 'pass', label: `${pkg} installed on ${presence.installedOn.join(', ')}` });
+      } else if (targets.length === 0) {
+        const none = pin ? `${pin}, the config's device, is not connected`
+          : avdOnly ? `no emulator running AVD ${scope.avd} is connected` : 'no Android device is connected';
+        rows.push({ status: 'warn', label: `No app build configured — the config has no apk, and ${none} to check for ${pkg}`, fix });
+      } else if (presence.unknown.length === 0) {
+        rows.push({ status: 'fail', label: `No app build configured — the config has no apk, and ${pkg} isn't installed on ${presence.absentFrom.join(', ')}`, fix });
+      } else {
+        rows.push({ status: 'warn', label: `No app build configured — the config has no apk, and Tapsmith could not tell whether ${pkg} is installed on ${presence.unknown.join(', ')}`, fix });
+      }
+    }
+    const label = rows.map((r) => r.label).join('; ');
+    const fix = [...new Set(rows.flatMap((r) => (r.fix ? [r.fix] : [])))].join(' ');
+    if (rows.some((r) => r.status === 'fail')) fail(report, 'app-build', label, fix);
+    else if (rows.some((r) => r.status === 'warn')) warn(report, 'app-build', label, fix);
+    else pass(report, 'app-build', label, 'no apk set: Tapsmith launches the build already there');
+  } catch {
+    warn(report, 'app-build', 'Could not check whether the app is installed');
   }
 }
 
@@ -1571,6 +1630,10 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
       await checkAgentApks(report, config?.rootDir ?? process.cwd());
       // With adb here, Android runs on this machine, so its APK must exist.
       checkAppApk(report, config, androidPlan.required || (adbOk && !!targets));
+      if (adbOk) {
+        const configPath = config ? configPathOf(config) : undefined;
+        checkAppBuild(report, scopes, await tapsmithExecCommand(process.cwd()), configPath ? path.basename(configPath) : undefined);
+      }
       checkEmulatorBinary(report, avdLaunches, androidPlan.required || adbOk);
     }
   }
