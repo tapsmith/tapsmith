@@ -1,6 +1,6 @@
 # Trace Viewer
 
-Tapsmith's trace viewer records screenshots, view hierarchy snapshots, console output, and logcat at each test step, then lets you scrub through a timeline to debug failures. It's the mobile-native equivalent of Playwright's Trace Viewer.
+Tapsmith's trace viewer records screenshots, view hierarchy snapshots, console output, device logs and network traffic at each test step, then lets you scrub through a timeline to debug failures. It's the mobile-native equivalent of Playwright's Trace Viewer.
 
 ![Trace viewer showing a failed login test: timeline of screenshots, action log with the failed assertion, the app's error state, and the error with a source snippet](images/trace-viewer.png)
 
@@ -30,7 +30,7 @@ npx tapsmith test --trace retain-on-failure
 
 ### Via programmatic API
 
-Control tracing within your tests:
+Control tracing within your tests. Use this or a recording `trace` mode, not both: while the runner is already tracing the test (`--trace on`, a `trace` mode that records the attempt, such as `retain-on-failure`, and every run in [UI mode](ui-mode.md), which always traces), `device.tracing.start()` throws ([`device.tracing.start`](api-reference.md#devicetracingstartoptions)).
 
 ```typescript
 import { test } from "tapsmith";
@@ -107,9 +107,9 @@ On a device with more than one display, such as a foldable, the screenshots show
 ### Detail Tabs (right)
 
 - **Call** — Action type, locator, bounds, wall time, raw action/assertion time, wait time, retry count
-- **Console** — Test code `console.log/warn/error` and device logcat output, color-coded by level. Each entry is timestamped — toggle between the offset from test start (`+1.234s`) and absolute wall-clock time with the `relative` / `absolute` pills; hovering shows the other format. Click a column header (Time, Level, Source, Message) to sort by it; click again to reverse. Timestamps are the time Tapsmith received the line, so device logcat entries — which arrive in batches — share a timestamp with the rest of their batch. In [UI mode](ui-mode.md) the live session isn't told when the test began, so offsets there are relative to the first console entry rather than to the test start
+- **Console** — Test code `console.log/warn/error` and device logs (Android logcat, iOS simulator syslog), color-coded by level. Each entry is timestamped — toggle between the offset from test start (`+1.234s`) and absolute wall-clock time with the `relative` / `absolute` pills; hovering shows the other format. Click a column header (Time, Level, Source, Message) to sort by it; click again to reverse. Timestamps are the time Tapsmith received the line, so device log entries — which arrive in batches — share a timestamp with the rest of their batch. In [UI mode](ui-mode.md) the live session isn't told when the test began, so offsets there are relative to the first console entry rather than to the test start
 - **Source** — The actual source file for the selected step — test, helper, page object, or fixture — with the relevant line highlighted. When a step has a multi-frame call stack, a clickable call-stack pane lets you walk up the stack and view each frame's file. Files are captured at run time, so the code shown matches what actually ran even if you edit afterwards.
-- **Hierarchy** — Android view hierarchy XML with searchable tree view
+- **Hierarchy** — The view hierarchy (Android XML or iOS accessibility tree) with a searchable tree view
 - **Network** — HTTP requests captured during the test (see [Network Capture](#network-capture) below)
 - **Errors** — Error message, stack trace, and assertion expected/actual values
 
@@ -143,15 +143,11 @@ trace: {
 
 ### How it works
 
-When network capture is enabled, the Rust daemon starts a local MITM proxy and routes the device's traffic through it. Each request and response is recorded with method, URL, headers, status code, timing, and body data.
+When a trace records network, each test starts capture at its beginning, on a local MITM proxy the Rust daemon starts once and keeps up for the session, with the device's traffic routed through it ([how capture works](network.md#how-capture-works)). Each request and response is recorded with method, URL, headers, status code, timing, and body data. HTTPS is decrypted with a CA certificate Tapsmith generates and installs on the device.
 
-**Android** — the daemon uses `adb reverse` to forward the proxy port to the device and configures the device's HTTP proxy setting via `adb shell settings put global http_proxy`.
+How traffic reaches the proxy depends on the platform: an `iptables` redirect on rootable Android emulators (the global HTTP proxy setting elsewhere), the macOS Network Extension on iOS simulators, and a Wi-Fi proxy profile on physical iOS devices. On Android and physical iOS the capture is device-wide, so other apps' traffic shows up too. See [How capture works](network.md#how-capture-works) for the details and [iOS network capture](./ios-network-capture.md) for the iOS setup (a one-time System Extension approval on simulators).
 
-**iOS simulator** — the daemon spawns the `Mitmproxy Redirector.app` launcher (from a local `brew install mitmproxy`), which triggers the macOS Network Extension that ships with mitmproxy. The NE intercepts TCP flows from the simulator's process tree on a per-PID basis and redirects them into Tapsmith's MITM proxy over a per-worker Unix socket. Parallel iOS workers each get their own isolated session. See [iOS network capture](./ios-network-capture.md) for first-run setup (one-time System Extension approval) and troubleshooting.
-
-**iOS physical device** — not yet supported; follow-up work.
-
-**HTTPS support:** The proxy auto-generates a CA certificate and installs it on the device so it can decrypt TLS traffic. For simulators this happens transparently via `xcrun simctl keychain add-root-cert`; for Android it is pushed via `adb`. The client's TLS ClientHello SNI is extracted at MITM time so the upstream TLS handshake uses the real hostname (critical for CDN-hosted endpoints).
+`network: false` only keeps traffic out of the trace. `device.route()` and the network waits work without a trace, because the proxy also starts for them (see [Network prerequisites](network.md#prerequisites)).
 
 ### Network tab in the trace viewer
 
@@ -211,7 +207,7 @@ trace.zip/
 Download the trace artifact from your CI run and open it locally:
 
 ```bash
-npx tapsmith show-trace tapsmith-results/traces/trace-login_test.zip
+npx tapsmith show-trace tapsmith-results/traces/trace-login_test-1710345600000.zip
 ```
 
 Or open [trace.tapsmith.dev](https://trace.tapsmith.dev) and drop the downloaded `.zip` file onto the page.
@@ -221,6 +217,6 @@ Or open [trace.tapsmith.dev](https://trace.tapsmith.dev) and drop the downloaded
 The trace viewer supports URL parameters for sharing specific views:
 
 - `?trace=https://example.com/trace.zip` — load a trace from a URL
-- `?action=5` — jump to the 5th action
+- `?action=5` — select the step at position 5 in the actions list, counting from 0 (the viewer keeps this parameter up to date as you select steps, so copying the address bar shares the current step)
 
 For example: `https://trace.tapsmith.dev?trace=https%3A%2F%2Fexample.com%2Fartifacts%2Ftrace.zip&action=5`

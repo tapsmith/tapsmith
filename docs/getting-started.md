@@ -10,6 +10,8 @@ This guide walks you through installing Tapsmith, writing your first test, and r
 
 ## Prerequisites
 
+Tapsmith runs on macOS and Linux. Android testing works on either; iOS testing needs a Mac. There is no Windows build.
+
 Before you begin, make sure you have the following installed:
 
 ### Android
@@ -115,7 +117,8 @@ A React Native project keeps its native projects in `android/` and `ios/`, and n
 
 ### React Native and Expo
 
-Tapsmith tests either kind of React Native build:
+Tapsmith tests either kind of React Native build ([React Native and Expo](react-native.md) covers
+supported versions, build variants, Hermes, over-the-air updates and Expo Go):
 
 - A **Debug** build (including an Expo development build with `expo-dev-client`) does not
   contain your JavaScript: it loads it from the Metro dev server, so Metro must be running
@@ -374,7 +377,7 @@ What to know before writing tests:
 
 Tapsmith tests the build your config names (`apk` or `app`), installed on the device, not your source code. A change to the app reaches the tests only after you rebuild it: run the build command for your project again ([native](#native-projects), [React Native and Expo](#react-native-and-expo), [Flutter](#flutter)). The next run installs the new build, and a UI mode, watch or MCP session reinstalls it before its next run.
 
-**Coming from Expo Go?** Tapsmith tests a build of your app, not Expo Go: Expo Go (`host.exp.exponent`) is Expo's own app, which runs your JavaScript inside it and opens on its own home screen, so with `package` set to it a test sees Expo Go, not your project, and Tapsmith warns that it is Expo Go. Build your app as above and point `apk` or `app` at that build. Expo Go and live reload load your JavaScript from the dev server as you save, so an edit shows up at once. A Release build has your JavaScript bundled inside it: Tapsmith installs that build and launches it, and saving a file changes nothing on the device until you rebuild (for example `npx expo run:android --variant release`). To have JavaScript edits reach the app without a rebuild while you write tests, test a [development build with Metro](#debug-and-dev-client-builds-with-metro) instead. Changes to native code, `app.json` or native modules still need a rebuild then.
+**Coming from Expo Go?** Tapsmith tests a build of your app, not Expo Go: Expo Go (`host.exp.exponent` on Android, `host.exp.Exponent` on iOS) is Expo's own app, which runs your JavaScript inside it and opens on its own home screen, so with `package` set to it a test sees Expo Go, not your project, and Tapsmith warns that it is Expo Go. Build your app as above and point `apk` or `app` at that build. Expo Go and live reload load your JavaScript from the dev server as you save, so an edit shows up at once. A Release build has your JavaScript bundled inside it: Tapsmith installs that build and launches it, and saving a file changes nothing on the device until you rebuild (for example `npx expo run:android --variant release`). To have JavaScript edits reach the app without a rebuild while you write tests, test a [development build with Metro](#debug-and-dev-client-builds-with-metro) instead. Changes to native code, `app.json` or native modules still need a rebuild then.
 
 When files in the app's project are newer than the build, Tapsmith says so: `tapsmith test` prints a warning before the run, UI mode shows a notice before each run, watch and MCP runs add a warning to a test result, and a test that fails in that state says so in its error. For example:
 
@@ -654,25 +657,30 @@ For normal parallel runs, prefer `workers + launchEmulators + avd` in config.
 Tapsmith prints results to the terminal with pass/fail status and timing for each test:
 
 ```
-Found 2 test file(s)
+Running tests from 1 file(s)
 
-  tests/smoke.tapsmith.ts
+  ✓ [1] › tests/smoke.tapsmith.ts › app launches and shows welcome screen (3.4s, incl. 2.2s setup)
+  ✓ [2] › tests/smoke.tapsmith.ts › can navigate to settings (2.8s)
 
-Results:
-
-  PASS  app launches and shows welcome screen (1204ms)
-  PASS  can navigate to settings (2841ms)
-
-Summary: 2 passed | 4.05s
+Summary: 2 passed | 6.5s
 ```
 
-When a test fails, Tapsmith prints the error message, a partial stack trace, and the path to a screenshot captured at the moment of failure:
+The first test of a file counts the file's setup (the app reset and any `beforeAll` hooks) in its time, and says how much of it that was.
+
+When a test fails, Tapsmith prints the error message, the lines of your test around the failing call, a few stack frames, and the path to a screenshot captured at the moment of failure:
 
 ```
-  FAIL  can navigate to settings (30012ms)
-        Expected element {"text":"Settings"} to be visible, but it was not
-        Screenshot: tapsmith-results/screenshots/can_navigate_to_settings-1710345600000.png
+  ✗ [2] › tests/smoke.tapsmith.ts › can navigate to settings (30.4s)
+        Expected element getByText("Settings") to be visible, but it was not
+
+          …
+        > 13 |   await expect(device.getByText("Settings")).toBeVisible();
+          …
+
+        Screenshot: /path/to/project/tapsmith-results/screenshots/can_navigate_to_settings-1710345600000.png
 ```
+
+The failures are listed again under `Failures:` before the summary line.
 
 ## Organizing Tests
 

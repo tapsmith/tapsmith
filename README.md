@@ -174,7 +174,7 @@ The full docs live at **[tapsmith.dev](https://tapsmith.dev)**. The same pages a
 
 **Start here.** [Getting started](docs/getting-started.md) · [Writing tests](docs/writing-tests.md) · [Locators](docs/locators.md) · [Debugging](docs/debugging.md)
 
-**Guides.** [Network interception](docs/network.md) · [Trace viewer](docs/trace-viewer.md) · [UI mode](docs/ui-mode.md) · [Watch mode](docs/watch-mode.md) · [WebViews](docs/webview.md) · [Parallel runs and sharding](docs/parallel-and-sharding.md) · [Multi-device tests](docs/multi-device.md) · [Warm app reset](docs/warm-reset.md) · [AI coding agents](docs/agents.md)
+**Guides.** [Network interception](docs/network.md) · [Trace viewer](docs/trace-viewer.md) · [UI mode](docs/ui-mode.md) · [Watch mode](docs/watch-mode.md) · [WebViews](docs/webview.md) · [React Native and Expo](docs/react-native.md) · [Parallel runs and sharding](docs/parallel-and-sharding.md) · [Multi-device tests](docs/multi-device.md) · [Warm app reset](docs/warm-reset.md) · [AI coding agents](docs/agents.md)
 
 **Moving from another framework.** [Maestro](docs/migrating-from-maestro.md) · [Detox](docs/migrating-from-detox.md) · [Appium](docs/migrating-from-appium.md)
 

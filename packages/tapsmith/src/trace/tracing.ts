@@ -34,7 +34,7 @@ export interface TracingStartOptions {
 
 /** Options for `device.tracing.stop()`. */
 export interface TracingStopOptions {
-  /** Path to write the trace zip. If not specified, uses default output dir. */
+  /** Path to write the trace zip. Without it, the recording is discarded and nothing is written. */
   path?: string
 }
 
@@ -157,8 +157,10 @@ export class Tracing {
   }
 
   /**
-   * Start a new trace chunk. The previous chunk is finalized and a new
-   * recording begins.
+   * Start a new trace chunk, with the same options as {@link start}. End each
+   * chunk with `stopChunk({ path })` first: called while a chunk or the
+   * runner's own trace of the test is recording (as in every UI-mode run),
+   * it throws, and that recording is lost.
    */
   async startChunk(options?: TracingStartOptions): Promise<void> {
     if (this._collector) {
@@ -171,7 +173,8 @@ export class Tracing {
   }
 
   /**
-   * Stop the current chunk and write it to disk.
+   * Stop the current chunk and write it to `path`; without a `path` the chunk
+   * is discarded and nothing is written.
    */
   async stopChunk(options?: TracingStopOptions): Promise<string | undefined> {
     return this.stop(options);

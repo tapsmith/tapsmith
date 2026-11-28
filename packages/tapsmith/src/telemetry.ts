@@ -199,8 +199,8 @@ function envDisables(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * Whether telemetry is on for this process and config. The env var wins
- * over the config key in both directions so a CI job can switch it off
+ * Whether telemetry is on for this process and config. An env var that
+ * disables it wins over the config key, so a CI job can switch it off
  * without touching a shared config, and a machine-wide `DO_NOT_TRACK` is
  * respected as the wider tooling ecosystem does.
  */

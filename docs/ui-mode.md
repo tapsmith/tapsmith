@@ -70,7 +70,7 @@ While a test runs on the mirrored device, the picker and the Live source leave t
 
 ## MCP integration
 
-The UI server exposes a [Streamable HTTP](https://modelcontextprotocol.io/) MCP endpoint that AI coding agents (Claude Code, Cursor, Codex, etc.) can connect to. This gives agents 16 tools for test discovery, execution, result browsing, device interaction, and watch mode control -- all sharing the same session as the UI.
+The UI server exposes a [Streamable HTTP](https://modelcontextprotocol.io/) MCP endpoint that AI coding agents (Claude Code, Cursor, Codex, etc.) can connect to. This gives agents the same tools as [`tapsmith mcp-server`](mcp-server.md) for test discovery, execution, result browsing, device interaction, and watch mode control -- all sharing the same session as the UI.
 
 With the [Tapsmith plugin](mcp-server.md#install-the-plugin) installed in the agent, there is nothing to connect: its server finds this project's UI session and works in it, including one started after the agent. With no UI session running, it works headless on a device of its own.
 
@@ -102,6 +102,7 @@ export default defineConfig({
         platform: "android",
         avd: "Pixel_6_API_34",
         apk: "./android/app-debug.apk",
+        package: "com.example.myapp",
         launchEmulators: true,
       },
     },
@@ -111,6 +112,7 @@ export default defineConfig({
         platform: "ios",
         simulator: "iPhone 16",
         app: "./ios/MyApp.app",
+        package: "com.example.myapp",
       },
     },
   ],
@@ -153,4 +155,4 @@ Before each test file runs, its worker checks that the device still holds the ap
 
 ## Mutual exclusion
 
-Only one test run can be active at a time, whether triggered from the UI or from an MCP agent. If you click "Run" in the UI while an MCP agent is already running tests, the run is queued. Both sides see the same results.
+Only one test run can be active at a time, whether triggered from the UI or from an MCP agent. While a run is in progress, the UI's run buttons are disabled, and an agent's `tapsmith_run_tests` returns an error saying a run is already in progress (the agent can wait, or stop it with `tapsmith_stop_tests`). Both sides see the same results.

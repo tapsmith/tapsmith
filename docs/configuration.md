@@ -41,17 +41,17 @@ launches and resets: without `package`, the app is installed but never launched 
 reset between test files. For iOS, set `platform: "ios"`, `app`, `package` and
 `simulator` (see [Minimal (iOS)](#minimal-ios)). `activity` is optional and mainly
 useful as a stability hint when you want Tapsmith to launch a specific activity.
-For emulator-managed runs, the recommended path is `launchEmulators + avd`.
+For emulator-managed runs, the recommended path is to set `avd`, which turns `launchEmulators` on.
 
 ## All Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `platform` | `"android" \| "ios"` | `"android"` | Target platform. **Required for iOS**: it is not inferred from `app`, and a config (or project `use`) that sets `app`, `simulator` or `iosXctestrun` without `platform` is treated as Android: the run looks for an Android device (and fails there when there is none), and is refused when tests start (`tapsmith doctor` flags it as `config-platform`). |
-| `apk` | `string` | `undefined` | Path to the APK under test (Android), relative to `rootDir`. Installed unless the device already holds this exact build. A path to nothing fails the run before any test, rather than testing whatever build is installed. |
-| `app` | `string` | `undefined` | Path to the .app bundle under test (iOS), relative to `rootDir`. A path to nothing fails the run before any test. For simulators, build a simulator-slice `.app`. For physical devices, the `.app` must be code-signed with a profile matching the device — see [iOS physical devices](./ios-physical-devices.md). |
-| `package` | `string` | `undefined` | Package name (Android) or bundle identifier (iOS) of the app under test. An Android package name may contain letters, digits, dots and underscores; an iOS bundle identifier letters, digits, dots, hyphens and underscores. Tapsmith launches the app before tests and resets it between test files only when this is set; without it, tests start on whatever is on screen. |
-| `activity` | `string` | `undefined` | Activity to launch the app with (Android only), as `.MainActivity` or a full class name. Used on every launch: the first one, app resets, `restartApp()` and recovery relaunches. Usually not needed: without it Tapsmith starts the app's launcher activity, preferring the app's own over a debug tool's such as LeakCanary's. |
+| `apk` | `string` | none | Path to the APK under test (Android), relative to `rootDir`. Installed unless the device already holds this exact build. A path to nothing fails the run before any test, rather than testing whatever build is installed. |
+| `app` | `string` | none | Path to the .app bundle under test (iOS), relative to `rootDir`. A path to nothing fails the run before any test. For simulators, build a simulator-slice `.app`. For physical devices, the `.app` must be code-signed with a profile matching the device — see [iOS physical devices](./ios-physical-devices.md). |
+| `package` | `string` | none | Package name (Android) or bundle identifier (iOS) of the app under test. An Android package name may contain letters, digits, dots and underscores; an iOS bundle identifier letters, digits, dots, hyphens and underscores. Tapsmith launches the app before tests and resets it between test files only when this is set; without it, tests start on whatever is on screen. |
+| `activity` | `string` | none | Activity to launch the app with (Android only), as `.MainActivity` or a full class name. Used on every launch: the first one, app resets, `restartApp()` and recovery relaunches. Usually not needed: without it Tapsmith starts the app's launcher activity, preferring the app's own over a debug tool's such as LeakCanary's. |
 | `timeout` | `number` | `30000` | Default timeout in milliseconds for actions and assertions. Each test body also gets a safety timeout of 3× this value; that budget counts only time spent in test code — time inside slow device operations (app launches, deep links, state saves), which carry their own bounded deadlines and may run long while Tapsmith recovers a struggling device, is excluded, backstopped by a hard wall-clock cap of 5× the test timeout. Each `beforeAll`/`beforeEach`/`afterEach`/`afterAll` hook gets a budget of its own of the same length ([hook timeouts](api-reference.md#hook-timeouts)). |
 | `typingDelay` | `number` | `0` | Delay in milliseconds between keystrokes when typing text. Helps prevent dropped characters on slow CI simulators/emulators. Can be overridden per-call via `type("text", { delay: 50 })`. On iOS it also changes how typing is checked: see [`typingDelay` on iOS](#typingdelay-on-ios). |
 | `retries` | `number` | `0` | Number of times to retry a failed test. A retry starts from a freshly reset app, with the enclosing `beforeAll` hooks run again (see [Retries start from a fresh app](writing-tests.md#retries-start-from-a-fresh-app)). The [`--retries`](api-reference.md#tapsmith-test---retries-n) CLI flag overrides it. [UI mode](ui-mode.md#each-test-runs-once) never retries. |
@@ -59,38 +59,39 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `screenshot` | `ScreenshotMode` | `"only-on-failure"` | When to capture screenshots: `"always"`, `"only-on-failure"`, or `"never"`. |
 | `testMatch` | `string[]` | `["**/*.test.ts", "**/*.spec.ts", "**/*.tapsmith.ts"]` | Glob patterns for discovering test files. `tapsmith init` sets `["**/*.tapsmith.ts"]`, a suffix Jest and Vitest don't run ([why](getting-started.md#tapsmith-tests-and-your-unit-tests)). To exclude files, use a project's `testIgnore` ([Projects](writing-tests.md#filtering-with-testmatch-and-testignore)); there is no root-level `testIgnore`. Test discovery skips `node_modules`, `dist` and a native app's generated directories (`Pods`, `ios/build`, `DerivedData`, `build` under `android/`, `.cxx`, `.gradle`, `.expo`, `vendor/bundle`, `.yarn`, and the output Gradle and `xcodebuild -derivedDataPath build` write inside any other `build` directory: Gradle's `intermediates`, `tmp`, `generated`, `kotlin`, `outputs`, `bin`, `classes`, `reports`, `kspCaches` and `xcode-frameworks`, and xcodebuild's `Build`, `SourcePackages`, `Logs`, `SDKExplicitPrecompiledModules` and `*.noindex`), and inside `rootDir`, UI and watch mode don't watch them, `.git` or the `outputDir` for new test files. Discovery matches these names case-sensitively. |
 | `daemonAddress` | `string` | `"localhost:50051"` | Address of the Tapsmith daemon (host:port). If another process holds that port (another live Tapsmith session's daemon, one still starting, or anything else), this session starts its own daemon on a free port instead of taking it over or stopping it. |
-| `daemonBin` | `string` | `undefined` | Path to the `tapsmith-core` binary. If unset, Tapsmith auto-resolves it from several common locations (including npm packages and monorepo build outputs) before falling back to `PATH`. |
-| `device` | `string` | `undefined` | Explicit single-device override. Useful for debugging or forcing one specific physical device/emulator/simulator. |
-| `devices` | `number \| { name: string; device?: string }[]` | `undefined` | Drive several devices from one test — `devices: 2`, or named members optionally pinned to a serial (at most 10). Project-level only. Tests receive them as the `devices` fixture. See [Multi-device tests](./multi-device.md). |
+| `daemonBin` | `string` | auto-resolved | Path to the `tapsmith-core` binary. If unset, Tapsmith auto-resolves it from several common locations (including npm packages and monorepo build outputs) before falling back to `PATH`. |
+| `device` | `string` | none (Tapsmith picks a device) | Explicit single-device override. Useful for debugging or forcing one specific physical device/emulator/simulator. |
+| `devices` | `number \| { name: string; device?: string }[]` | none (one device) | Drive several devices from one test — `devices: 2`, or named members optionally pinned to a serial (at most 10). Project-level only. Tests receive them as the `devices` fixture. See [Multi-device tests](./multi-device.md). |
 | `deviceStrategy` | `"prefer-connected" \| "avd-only"` | contextual | Optional override for device selection (Android). Defaults to `"avd-only"` when `avd` is set, otherwise `"prefer-connected"`. On CI, a default `"avd-only"` whose AVD is not on the machine uses the connected devices instead, with a note ([CI Setup](ci-setup.md#the-avd-in-a-config-from-tapsmith-init)); an explicit `"avd-only"` turns that off. |
 | `rootDir` | `string` | the directory the config is loaded from | Root for test discovery, and the base for relative paths elsewhere in the config (`app`, `apk`, agent artifacts). A relative `rootDir` resolves against the directory the config is loaded from — the working directory for `tapsmith test`, including `tapsmith test -c ../other/tapsmith.config.mjs`, and the config file's own directory for an MCP server that found a config elsewhere. Unset, it *is* that directory. |
 | `outputDir` | `string` | `"tapsmith-results"` | Directory for traces, screenshots and videos. Each run [removes what earlier runs wrote there](#output-of-earlier-runs). |
 | `agentApk` | `string` | auto-resolved | Path to the Tapsmith agent APK (Android). When installed via npm, the APK from `@tapsmith/agent-android` is used automatically. Only set this to override with a custom build. |
 | `agentTestApk` | `string` | auto-resolved | Path to the Tapsmith agent test APK (Android). When installed via npm, the APK from `@tapsmith/agent-android` is used automatically. Only set this to override with a custom build. |
-| `iosXctestrun` | `string` | `undefined` | Path to the iOS agent `.xctestrun` file. **Simulator and device builds are NOT interchangeable** — build one with `xcodebuild -destination 'platform=iOS Simulator,…'` for simulators, or `tapsmith ios build-agent` for physical devices. Use one project per target with its own `iosXctestrun`. When omitted, Tapsmith finds the agent build itself (for physical devices, see [iOS physical devices](./ios-physical-devices.md)). |
-| `simulator` | `string` | `undefined` | iOS simulator name or UDID. Run `xcrun simctl list devices` to see available simulators. There is no default: an iOS config with neither `simulator` nor `device` uses the single paired physical device if there is one, and otherwise the run fails before any test starts, saying it found neither. For physical iOS devices, use `device` with the UDID instead — see [iOS physical devices](./ios-physical-devices.md). |
+| `iosXctestrun` | `string` | auto-resolved | Path to the iOS agent `.xctestrun` file. **Simulator and device builds are NOT interchangeable** — build one with `xcodebuild -destination 'platform=iOS Simulator,…'` for simulators, or `tapsmith ios build-agent` for physical devices. Use one project per target with its own `iosXctestrun`. When omitted, Tapsmith uses the `TAPSMITH_IOS_XCTESTRUN` [environment variable](environment-variables.md) if it is set, and otherwise finds the agent build itself (for physical devices, see [iOS physical devices](./ios-physical-devices.md)). |
+| `simulator` | `string` | none | iOS simulator name or UDID. Run `xcrun simctl list devices` to see available simulators. There is no default: an iOS config with neither `simulator` nor `device` uses the single paired physical device if there is one, and otherwise the run fails before any test starts, saying it found neither. For physical iOS devices, use `device` with the UDID instead — see [iOS physical devices](./ios-physical-devices.md). |
 | `reporter` | `ReporterConfig` | `list` | Reporter output configuration. Defaults to `list` everywhere, including CI. |
 | `workers` | `number` | `1` | Number of parallel workers. Each worker needs its own device/emulator/simulator. |
-| `shard` | `{ current: number; total: number }` | `undefined` | Shard specification for splitting a run across multiple machines. Usually set via `--shard=x/y`. |
+| `shard` | `{ current: number; total: number }` | none | Shard specification for splitting a run across multiple machines. Usually set via `--shard=x/y`. |
+| `projects` | `ProjectConfig[]` | none | Named groups of test files, each with its own `testMatch`, `testIgnore`, `dependencies`, `workers`, `grep`/`grepInvert` and `use` overrides. Mirrors Playwright's `projects`. See [Projects with Per-Device Targeting](#projects-with-per-device-targeting). |
 | `launchEmulators` | `boolean` | `true` when `avd` is set, else `false` | Automatically launch Android emulators of `avd` when the run needs devices that aren't running, up to the requested worker count. Set it to `false` to keep an `avd` config from launching any. |
-| `avd` | `string` | `undefined` | AVD name for the emulators Tapsmith launches (Android). When set, Tapsmith launches repeated instances of this AVD, and `launchEmulators` defaults to `true`. |
+| `avd` | `string` | none | AVD name for the emulators Tapsmith launches (Android). When set, Tapsmith launches repeated instances of this AVD, and `launchEmulators` defaults to `true`. |
 | `emulatorLaunchOptions` | `{ headless?: boolean; args?: string[] }` | window locally, headless in CI | How Tapsmith launches the emulators it boots (Android). Locally the emulator opens a window and quick-boots from the AVD's snapshot; `headless: true` runs it without a window (a slower cold boot). CI, SSH and Linux without a display are always headless. `args` are extra `emulator` arguments. Root config only. See [How Tapsmith launches emulators](#how-tapsmith-launches-emulators). |
 | `trace` | `TraceMode \| Partial<TraceConfig>` | `"off"` | Trace recording mode. See [TraceMode](#tracemode) below. |
 | `video` | `VideoMode \| Partial<VideoConfig>` | `"off"` | Continuous video recording of the device screen. See [VideoMode](#videomode) below. |
-| `grep` | `RegExp \| RegExp[]` | `undefined` | Run only tests whose fullName (`describe > test`) matches at least one of these regular expressions; the rest are left out of the run (not listed or counted as skipped). Mirrors Playwright's `grep` and the `--grep` / `-g` CLI flag. |
-| `grepInvert` | `RegExp \| RegExp[]` | `undefined` | Leave out the tests whose fullName matches any of these regular expressions (they are not run, listed or counted as skipped). Mirrors Playwright's `grepInvert` and the `--grep-invert` CLI flag. |
-| `baseURL` | `string` | `undefined` | Base URL for the `request` fixture. Relative paths in `request.get("/path")` are resolved against this. |
-| `extraHTTPHeaders` | `Record<string, string>` | `undefined` | Default headers sent with every `request` fixture call (e.g., `Authorization`). Per-request headers override these when names collide. |
+| `grep` | `RegExp \| RegExp[]` | none | Run only tests whose fullName (`describe > test`) matches at least one of these regular expressions; the rest are left out of the run (not listed or counted as skipped). Mirrors Playwright's `grep` and the `--grep` / `-g` CLI flag. |
+| `grepInvert` | `RegExp \| RegExp[]` | none | Leave out the tests whose fullName matches any of these regular expressions (they are not run, listed or counted as skipped). Mirrors Playwright's `grepInvert` and the `--grep-invert` CLI flag. |
+| `baseURL` | `string` | none | Base URL for the `request` fixture. Relative paths in `request.get("/path")` are resolved against this. |
+| `extraHTTPHeaders` | `Record<string, string>` | none | Default headers sent with every `request` fixture call (e.g., `Authorization`). Per-request headers override these when names collide. |
 | `doubleTapInterval` | `number` | `100` | Default interval in milliseconds between the two taps in `doubleTap()`. Can be overridden per-call via `doubleTap({ intervalMs: 150 })`. Ignored on iOS simulators, which send the two taps about 120 ms apart. |
 | `appReset` | `'auto' \| 'clear' \| 'restart' \| 'warm' \| 'none'` | `'auto'` | How the app is reset to a known state before tests (see [Test isolation](writing-tests.md#test-isolation)). `auto` = `warm` when the app's in-app reset hooks are detected ([`@tapsmith/react-native`](warm-reset.md)) or `resetAppDeepLink` is set, otherwise `clear`. Overridable per project and per `test.use()` scope. A scope with `appState` restores the archive instead, cold, unless the app's hooks report that nothing was written since the last restore ([Keeping restored app state between tests](warm-reset.md#keeping-restored-app-state-between-tests)). |
 | `appResetScope` | `'auto' \| 'file' \| 'test'` | `'auto'` | Reset once per test file, or before every test. `auto` = `file` — one reset at file/scope entry. Set `'test'` on scopes that need a reset before every test (still warm when the app mounts `@tapsmith/react-native`). |
-| `appResetRoute` | `string` | `undefined` | Where the declared reset leaves the app: a path (`'/settings'`), resolved against the URL prefix `@tapsmith/react-native` publishes, or a full deep link (`'myapp:///settings'`). A warm reset lands on it in the same delivery; after any other reset the runner opens it as a deep link. Unset: the app's launch route. No effect with `appReset: 'none'`. Most useful per scope with `test.use()`; see [Starting on a screen](writing-tests.md#starting-on-a-screen). |
+| `appResetRoute` | `string` | none | Where the declared reset leaves the app: a path (`'/settings'`), resolved against the URL prefix `@tapsmith/react-native` publishes, or a full deep link (`'myapp:///settings'`). A warm reset lands on it in the same delivery; after any other reset the runner opens it as a deep link. Unset: the app's launch route. No effect with `appReset: 'none'`. Most useful per scope with `test.use()`; see [Starting on a screen](writing-tests.md#starting-on-a-screen). |
 | `appResetColdEvery` | `number` | `10` | With `appReset: 'warm'`, deliver every Nth reset cold (terminate + relaunch) so long all-warm iOS simulator sessions can't drift from a fresh launch. `0` disables. |
 | `ui.prepareBetweenRuns` | `boolean` | `true` | [UI mode](ui-mode.md): prepare the device (run the declared app reset) in the background between runs. Set `false` when resets have side effects the team must control (backend calls in `onReset`, rate limits) or on personal physical devices. A person's explicit toggle in the device chip menu still wins for them. |
 | `ui.prepareDelayMs` | `number` | `0` | [UI mode](ui-mode.md): quiet time in milliseconds after a run before background preparation starts. |
 | `reducedMotion` | `'reduce' \| 'no-preference'` | `'no-preference'` | `'reduce'` turns the device's animations off for the run, like Playwright's `reducedMotion`. On Android, Tapsmith sets the window, transition and animator duration scales to 0 when it selects the device, so screen transitions finish at once, and puts the device's own values back when the session ends. If a run is killed before it can, the next Tapsmith session on that device restores them. A scale you change during the run is left as you set it. Apps see this as the system's "Remove animations" setting, so an app that reads it (or relies on animator callbacks) can behave differently; that is why it is opt-in. On an iOS simulator, it makes UIKit animations run ten times faster (UIKit's `UIAnimationDragCoefficient`) in every app launched from then on, and puts the simulator back the same way; apps do not see it as Reduce Motion. Not applied on physical iOS devices. `'no-preference'` leaves the device's settings alone. Root config only. See [Turning animations off](ci-setup.md#turning-animations-off). |
 | `telemetry` | `boolean` | `true` | Anonymous usage telemetry — one event per test-file run with the run mode, platform, pass/fail counts, and SDK/Node/OS versions, under a random per-machine id. Never test names, locators, app identifiers, or paths. Set `false` to opt out; `TAPSMITH_TELEMETRY=0` does the same per shell. See [Telemetry](telemetry.md). |
-| `resetAppDeepLink` | `string` | `undefined` | Deep link the app handles by clearing its own state and navigating to the start screen. Setting it makes `appReset: 'auto'` resolve to `warm`. Do not expose this route in production builds. |
+| `resetAppDeepLink` | `string` | none | Deep link the app handles by clearing its own state and navigating to the start screen. Setting it makes `appReset: 'auto'` resolve to `warm`. Do not expose this route in production builds. |
 | `resetAppWaitMs` | `number` | `750` | Time in milliseconds to wait after navigating the `resetAppDeepLink` before continuing. Gives the app time to finish resetting. |
 
 ### `typingDelay` on iOS
@@ -171,14 +172,16 @@ interface TraceConfig {
   screenshots: boolean;          // Capture before/after screenshots (default: true)
   snapshots: boolean;            // Capture view hierarchy XML (default: true)
   sources: boolean;              // Include test source files (default: true)
-  attachments: boolean;          // Include user attachments (default: true)
-  network: boolean;              // Capture HTTP/HTTPS traffic via proxy (default: true)
+  attachments: boolean;          // Reserved: accepted, but nothing is recorded
+                                 // under it yet (default: true)
+  network: boolean;              // Record HTTP/HTTPS traffic in the trace (default: true)
   deviceLogs: boolean;           // Stream device logs — Android logcat / iOS
                                  // simulator syslog — into the trace (default: true)
   daemonLogs: boolean;           // Stream the tapsmith-core daemon's own logs
                                  // (gRPC, ADB/simctl, device events) into the
                                  // trace, shown under the `daemon` source
-                                 // (default: false; --verbose for debug detail)
+                                 // (default: false; RUST_LOG=tapsmith_core=debug
+                                 // for debug detail)
   networkHttpPorts?: number[];   // Android: additional cleartext HTTP/1.1 or HTTP/2 ports.
                                  // Defaults still include HTTP 80 and HTTPS 443.
                                  // Firebase emulators: [8080, 9099, 5001, 9199].
@@ -199,11 +202,11 @@ interface TraceConfig {
 }
 ```
 
-When `network` is enabled, the Rust daemon starts an HTTP proxy and configures the device to route traffic through it. HTTPS traffic is decrypted using an auto-generated CA certificate installed on the device.
+When a trace records network (`network: true`, the default, with tracing on), each test starts capture at its beginning, on an HTTP proxy the Rust daemon starts once and keeps up for the session, with the device's traffic routed through it. HTTPS traffic is decrypted using an auto-generated CA certificate installed on the device. `network: false` only keeps traffic out of the trace: `device.route()` and the network waits still work, because the proxy also starts for them without a trace (see [Network prerequisites](network.md#prerequisites)).
 
 ### Scrubbing system noise from traces
 
-On **Android emulators** the HTTP proxy is set globally (`settings put global http_proxy`), so every app and system process on the emulator routes through it — including Google Play Services, connectivity checks, push, ad attribution, etc. On **physical iOS** a system-wide Wi-Fi proxy has the same characteristic. (iOS simulators are the exception: the macOS Network Extension redirector filters per-PID.)
+On **Android emulators** capture is device-wide (an `iptables` redirect on rootable images, otherwise the global HTTP proxy setting), so every app and system process on the emulator routes through it — including Google Play Services, connectivity checks, push, ad attribution, etc. On **physical iOS** a system-wide Wi-Fi proxy has the same characteristic. (iOS simulators are the exception: the macOS Network Extension redirector filters per-PID.)
 
 Two patterns, pick whichever fits:
 
@@ -586,7 +589,7 @@ A pinned device hosts one worker, so `device` (or `--device`) caps its run to
 a single worker in every mode, and `--device` with a `--workers N` the run
 cannot use (any N > 1 when every project runs on that device's platform and
 there is more than one file to spread) is refused. In a config spanning Android and iOS, the pin applies only to the
-projects of its own platform. For multi-worker runs, use `launchEmulators + avd` instead of `device`.
+projects of its own platform. For multi-worker runs, set `avd` (with `launchEmulators`, which it turns on) instead of `device`.
 
 ### Custom Daemon Address
 
@@ -656,7 +659,6 @@ export default defineConfig({
         platform: "ios",
         simulator: "iPhone 16",
         app: "./ios/MyApp.app",
-        iosXctestrun: "./ios-agent/TapsmithAgent.xctestrun",
       },
     },
   ],
@@ -667,7 +669,8 @@ Each project provisions its own device, daemon, and agent. There are two ways
 to control parallelism:
 
 **Global budget** (Playwright-style): the top-level `workers` field is split
-across projects proportionally to file count, with at least 1 per project.
+across projects proportionally to file count, with at least 1 per device target
+(projects with the same device settings share their workers).
 
 ```typescript
 export default defineConfig({
@@ -680,9 +683,11 @@ export default defineConfig({
 ```
 
 **Explicit per-project workers** (recommended for multi-device configs):
-each project sets its own `workers` count. These are **additive** — they do
-not consume from the global budget — so you can mix explicit and unset
-projects in the same config.
+each project sets its own `workers` count. While the global `workers` is
+unset, these are **additive** — they do not consume from a global budget —
+so you can mix explicit and unset projects in the same config. When the
+global `workers` is set (in the config or with `--workers`), the total is
+fitted to it, though every device target with tests keeps at least one worker.
 
 ```typescript
 export default defineConfig({
@@ -696,10 +701,11 @@ export default defineConfig({
 With `tapsmith test`, the Android project runs on 2 devices and the iOS project
 runs on 1 — concurrently. The total worker count (3) is computed automatically.
 
-If the total comes out to 1 (e.g. global `workers: 1` and no per-project
-overrides), Tapsmith runs the projects sequentially, tearing down and
-re-provisioning the device between each — useful when you only have one
-machine and want to exercise both platforms in CI.
+Every device target with tests gets at least one worker, whatever the
+budget, so an Android project and an iOS project run on two workers at once
+even with `workers: 1`. To run one platform at a time, select its project
+with `--project`. [Parallel Execution and Sharding](parallel-and-sharding.md#per-project-workers)
+has the full allocation rules.
 
 The same configuration also works with `--ui` and `--watch`. UI mode shows
 each project's tests grouped under its name, and routes file execution to
@@ -762,7 +768,7 @@ npx tapsmith test --shard=1/4
 
 ### Warm App Reset
 
-The fastest reset is one the app performs itself. React Native / Expo apps get it by wrapping their root navigator in `@tapsmith/react-native`'s `<TapsmithTestHooks>` once — Tapsmith detects the hooks automatically and `appReset: 'auto'` becomes `warm · per file` — the same isolation as before, at a fraction of the cost (a warm reset takes ~1 s where clear + relaunch takes 5-10 s). Scopes that need per-test isolation opt in with `appResetScope: 'test'`; see the [Warm app reset guide](warm-reset.md).
+The fastest reset is one the app performs itself. React Native / Expo apps get it by wrapping their root navigator in `@tapsmith/react-native`'s `<TapsmithTestHooks>` once — Tapsmith detects the hooks automatically and `appReset: 'auto'` becomes `warm · per file` — the same isolation as before, at a fraction of the cost (a warm reset takes under a second, where clear + relaunch takes 7–13 s on an iOS simulator and 1–3 s on an Android emulator; see [Test isolation](writing-tests.md#test-isolation)). Scopes that need per-test isolation opt in with `appResetScope: 'test'`; see the [Warm app reset guide](warm-reset.md).
 
 Apps without the module can expose a deep link that resets state (much faster than a full clear + relaunch). `appReset: 'auto'` then resolves to `warm · per file`:
 

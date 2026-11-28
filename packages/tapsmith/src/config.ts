@@ -108,7 +108,7 @@ export interface TapsmithConfig {
   /** Address of the Tapsmith daemon. */
   daemonAddress: string;
 
-  /** Path to the tapsmith-core binary. Defaults to 'tapsmith-core' (must be on PATH). */
+  /** Path to the tapsmith-core binary. When unset, Tapsmith resolves the one installed with it, falling back to `tapsmith-core` on PATH. */
   daemonBin?: string;
 
   /**
@@ -298,7 +298,8 @@ export interface TapsmithConfig {
    *
    * Can be a reporter name ('list', 'dot', 'line', 'json', 'junit', 'html',
    * 'github', 'blob'), a tuple with options (['json', { outputFile: 'r.json' }]),
-   * an array of these, or undefined for auto-detection (list locally, dot in CI).
+   * an array of these, or undefined for `list`. Whatever it says, `github` is added in GitHub
+   * Actions and `blob` with `--shard`.
    */
   reporter?: ReporterConfig;
 
@@ -499,8 +500,9 @@ export interface ProjectConfig {
   /**
    * Number of parallel workers (devices) for this project. When unset,
    * the global `workers` budget is split proportionally across projects
-   * that don't specify a count. Explicit values are additive — they don't
-   * consume from the global budget.
+   * that don't specify a count. While the global `workers` is unset,
+   * explicit values are additive; when it is set, the total is fitted to it,
+   * though every device target with tests keeps at least one worker.
    *
    * @example
    * projects: [

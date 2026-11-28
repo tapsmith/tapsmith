@@ -1,8 +1,8 @@
 # Warm App Reset
 
-Tapsmith resets your app to a known state before tests (see [Test isolation](writing-tests.md#test-isolation)). By default that means wiping app data and cold-launching — fully hermetic, but 7–13 seconds per file on an iOS simulator and a couple of seconds on Android. A **warm reset** asks the running app to reset *itself*, in-process, and acknowledges completion — well under a second. It also makes isolating **every test** instead of every file affordable: the default is still one reset per file, and a scope opts in with `appResetScope: "test"`.
+Tapsmith resets your app to a known state before tests (see [Test isolation](writing-tests.md#test-isolation)). By default that means wiping app data and cold-launching — fully hermetic, but 7–13 seconds per file on an iOS simulator and 1–3 seconds on an Android emulator. A **warm reset** asks the running app to reset *itself*, in-process, and acknowledges completion — well under a second. It also makes isolating **every test** instead of every file affordable: the default is still one reset per file, and a scope opts in with `appResetScope: "test"`.
 
-A warm reset matters most for a React Native Debug build, such as an Expo development build: every relaunch reloads its JavaScript from Metro, and a warm reset keeps the running app and skips that reload. See [Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro).
+A warm reset matters most for a React Native Debug build, such as an Expo development build: every relaunch reloads its JavaScript from Metro, and a warm reset keeps the running app and skips that reload. See [Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro), and [React Native and Expo](react-native.md) for the rest of what is specific to React Native apps.
 
 ## Add the in-app hooks
 
@@ -48,19 +48,46 @@ import AsyncStorage from "@react-native-async-storage/async-storage"
 </TapsmithTestHooks>
 ```
 
-Together, wrapping the navigator and passing `clear` give each test what a fresh launch would: cleared stores, and every screen mounted anew. **No Tapsmith config changes**: `appReset: 'auto'` detects the hooks in the app's accessibility tree and the file-entry reset switches from clear + relaunch (5-10 s) to a warm in-app reset (~1 s). Scopes whose tests need a fresh app before *every* test opt in with `test.use({ appResetScope: 'test' })` — each of those resets is warm too. Your existing `beforeEach` resets keep working (the lint rule `tapsmith/prefer-app-reset-option` will point out the ones that are now redundant).
+Together, wrapping the navigator and passing `clear` give each test what a fresh launch would: cleared stores, and every screen mounted anew. **No Tapsmith config changes**: `appReset: 'auto'` detects the hooks in the app's accessibility tree and the file-entry reset switches from clear + relaunch (7–13 s on an iOS simulator, 1–3 s on an Android emulator) to a warm in-app reset (under a second). Scopes whose tests need a fresh app before *every* test opt in with `test.use({ appResetScope: 'test' })` — each of those resets is warm too. Your existing `beforeEach` resets keep working (the lint rule `tapsmith/prefer-app-reset-option` will point out the ones that are now redundant).
 
 | Prop | Purpose |
 |---|---|
 | `children` | Your root navigator (inside the navigation container, never the container itself). Remounted after every reset, so no screen keeps React state from the previous test, on fresh navigation state: the route the reset opened, with every other screen gone. Rendered as-is when the hooks are disabled. |
 | `clear` | Stores to wipe on every reset — anything with `clear()` or `clearAll()`: AsyncStorage, MMKV, … |
 | `onReset` | Your own reset: sign out, drop in-memory caches. It runs after the hooks have [reset navigation](#navigation), so it rarely needs to navigate. Receives `{ target, nonce }`; if it navigates, navigate to `target` — that is the route the reset (and an `appResetRoute`) asked for, and Tapsmith cannot see where the app ends up. `target` is the route's path without its query: a query in `appResetRoute` (`'/settings?tab=2'`) reaches your app only with the reset link itself, so a handler that navigates again drops it. |
-| `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
+| `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`, a URL scheme the app registers (see below). |
 | `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders only its children and registers nothing. |
 | `onReload` | Resets the app while *keeping* its stored data: drop in-memory state (caches) and read it back from storage, as a fresh launch would, refreshing the signed-in session in place rather than signing out. Tapsmith runs it, instead of `clear`, `onReset` and `registerTapsmithReset` handlers, between tests that restore the same saved app state; see [Keeping restored app state between tests](#keeping-restored-app-state-between-tests). Needs `track`. |
 | `track` | The key-value stores your app keeps data in, e.g. `[AsyncStorage]` or an MMKV instance. The hooks count every write to them, so Tapsmith can tell whether a test changed restored data. A SQLite database or a file system cannot be tracked this way (a call to `execute` may or may not write): passing one turns the count off. Report those writes with `markTapsmithWrite()` instead. |
 
 `registerTapsmithReset(fn)` registers a handler from non-React code.
+
+Tapsmith delivers each reset by opening a deep link, `myapp://…`, so the scheme must open your app. An Expo app registers the `scheme` in its app config when it is built. A bare React Native app registers it itself, with an intent filter on its main activity in `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<intent-filter>
+  <action android:name="android.intent.action.VIEW" />
+  <category android:name="android.intent.category.DEFAULT" />
+  <category android:name="android.intent.category.BROWSABLE" />
+  <data android:scheme="myapp" />
+</intent-filter>
+```
+
+and a URL type in `ios/<App>/Info.plist`:
+
+```xml
+<key>CFBundleURLTypes</key>
+<array>
+  <dict>
+    <key>CFBundleURLSchemes</key>
+    <array>
+      <string>myapp</string>
+    </array>
+  </dict>
+</array>
+```
+
+On iOS the app delegate must also pass incoming links to React Native's `Linking`, as React Native's [deep linking guide](https://reactnative.dev/docs/linking#enabling-deep-links) shows; without that the hooks never see the link.
 
 ### Release builds for e2e
 
@@ -189,7 +216,11 @@ The reset link already carries a route, so a scope whose tests all start on one 
 
 ## Without the module
 
-Everything still works: `appReset: 'auto'` resolves to `clear · per file`. The legacy `resetAppDeepLink` option (a route your app handles by resetting itself) also still gives you `warm · per file`, without acknowledgement — Tapsmith waits `resetAppWaitMs` after opening it.
+`@tapsmith/react-native` is for React Native apps (Expo or bare). Any other app — native Android or iOS, Flutter, Capacitor or Ionic, a web app in a WebView — and a React Native app that does not mount it, gets no warm reset: `appReset: 'auto'` resolves to `clear · per file`, so each reset wipes the app's data and cold-launches it. Everything still works, at the cold cost.
+
+The default scope is what keeps that affordable: with `appResetScope` left at `'auto'` (that is, `'file'`), the clear and cold launch run once at the start of each test file, and the file's tests share the app after it. Setting `appResetScope: 'test'` makes every test pay it, so keep that for the scopes that need it, and group tests that can share a starting state into one file. See [Test isolation](writing-tests.md#test-isolation).
+
+An app that can reset itself when it opens a link can still skip the cold launch: the legacy `resetAppDeepLink` option (a route your app handles by resetting itself) gives you `warm · per file`, without acknowledgement — Tapsmith waits `resetAppWaitMs` after opening it ([configuration](configuration.md)).
 
 ## Calling it yourself
 

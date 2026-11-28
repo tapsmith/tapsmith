@@ -95,7 +95,7 @@ That is the complete list. The payload is a closed set of fields, and Tapsmith's
 
 ## The first-run notice
 
-The first time Tapsmith runs tests on a machine it prints a short notice to stderr saying that telemetry is on and how to opt out, then records that the notice was shown (in the same state file as the anonymous id) so it never prints again on that machine. Nobody should learn about this from a firewall log.
+The first time Tapsmith runs tests on a machine it prints a short notice to stderr saying that telemetry is on and how to opt out, then records that the notice was shown (in the same state file as the anonymous id) so it never prints again on that machine. It is recorded only when stderr is a terminal or the run is on CI, so a notice that went to an MCP host's log file is printed again on the next interactive run. Nobody should learn about this from a firewall log.
 
 ## How it is sent
 
