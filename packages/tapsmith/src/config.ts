@@ -298,8 +298,8 @@ export interface TapsmithConfig {
    *
    * Can be a reporter name ('list', 'dot', 'line', 'json', 'junit', 'html',
    * 'github', 'blob'), a tuple with options (['json', { outputFile: 'r.json' }]),
-   * an array of these, or undefined for `list` (with `github` added in GitHub Actions and `blob`
-   * with `--shard`).
+   * an array of these, or undefined for `list`. Whatever it says, `github` is added in GitHub
+   * Actions and `blob` with `--shard`.
    */
   reporter?: ReporterConfig;
 

@@ -372,7 +372,7 @@ export interface TraceConfig {
   snapshots: boolean
   /** Whether to include test source files. */
   sources: boolean
-  /** Whether to include user-added attachments. */
+  /** Reserved: accepted, but nothing is recorded under it yet. */
   attachments: boolean
   /**
    * Whether a traced test records the app's network traffic in its trace

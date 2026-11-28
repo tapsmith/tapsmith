@@ -2467,7 +2467,7 @@ device.tracing.groupEnd();
 
 ### `device.tracing.startChunk(options?)` / `device.tracing.stopChunk(options?)`
 
-Start a new trace chunk. Useful for splitting long test runs into multiple trace files. `startChunk()` takes the same options as `start()`; called while a chunk is still recording, it discards that chunk, so save each one with `stopChunk({ path })` first.
+Start a new trace chunk. Useful for splitting long test runs into multiple trace files. `startChunk()` takes the same options as `start()`. End each chunk with `stopChunk({ path })` before starting the next: called while a chunk, or the runner's own trace of the test, is still recording, `startChunk()` throws, and that recording is lost.
 
 ```typescript
 await device.tracing.startChunk();
@@ -3606,7 +3606,7 @@ const webview = await device.webview()
 const webview = await device.webview("com.example.otherapp")
 ```
 
-`packageName` picks the app, not one of several WebViews inside it. While a connection from an earlier `device.webview()` call in the file is still open, the call reuses it, whatever `packageName` says; close it first with `webview.close()` to switch apps.
+`packageName` picks the app, not one of several WebViews inside it. On iOS, when no inspectable page of that app is found, Tapsmith connects to the newest app that has one (Mobile Safari, say), so make sure the app's own WebView is inspectable and loaded. While a connection from an earlier `device.webview()` call in the file is still open, the call reuses it, whatever `packageName` says; close it first with `webview.close()` to switch apps.
 
 Auto-waits for the WebView to appear up to the device timeout. Throws if no WebView is found.
 

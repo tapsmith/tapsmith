@@ -78,7 +78,7 @@ export default defineConfig({
 });
 ```
 
-Tapsmith first uses booted simulators that match `simulator`, then boots matching ones that are shut down, and clones the simulator for each worker still without one. The clones (named `Tapsmith Worker N`) are managed automatically: they stay booted after the run so the next run can reuse them, and Tapsmith deletes a clone that is no longer healthy, and its clones when a run is interrupted (Ctrl-C) or crashes.
+Tapsmith first uses booted simulators that match `simulator`, then boots matching ones that are shut down, and clones the simulator for each worker still without one. The clones (named `<simulator> (Tapsmith Worker N)`, such as `iPhone 17 (Tapsmith Worker 1)`) are managed automatically: they stay booted after the run so the next run can reuse them, and Tapsmith deletes a clone that is no longer healthy, and its clones when a run is interrupted (Ctrl-C) or crashes.
 
 Workers use only simulators that match `simulator` (by name or UDID) and Tapsmith's own clones of it. A booted simulator with any other name is left alone, even when it runs the same iOS version.
 

@@ -119,7 +119,7 @@ const webview = await device.webview()
 
 This auto-waits for a WebView to appear on screen. If no debuggable WebView is found within the action timeout (the config's `timeout`, 30 s by default, or a `test.use({ timeout })` around the test), it throws an error.
 
-By default Tapsmith looks for a WebView of the app your config's `package` names. To connect to a WebView of another app, pass its package name (Android) or bundle identifier (iOS):
+By default Tapsmith looks for a WebView of the app your config's `package` names. On iOS, when no inspectable page of that app is found, Tapsmith connects to the newest app that has one (Mobile Safari, say), so make sure the app's own WebView is inspectable and loaded. To connect to a WebView of another app, pass its package name (Android) or bundle identifier (iOS):
 
 ```typescript
 const webview = await device.webview("com.example.myapp")
@@ -447,7 +447,7 @@ describe("checkout", () => {
 
 `test.use({ timeout })` raises every action and assertion timeout in its scope. To raise only the wait for the screen, wait for the native screen that hosts the WebView first, with an assertion that takes its own timeout, then connect: `await expect(device.getByText("Checkout")).toBeVisible({ timeout: 60_000 })`.
 
-**Debugging must be enabled in the app.** On Android, `WebView.setWebContentsDebuggingEnabled(true)` must be called before the WebView is created. On iOS (16.4+), the `WKWebView` must have `isInspectable = true`. Without these, Tapsmith cannot connect and `device.webview()` will time out. The timeout error lists the WebViews (Android) or apps with inspectable pages (iOS) it did find, so a WebView that is debuggable but belongs to another app shows up there.
+**Debugging must be enabled in the app.** On Android, `WebView.setWebContentsDebuggingEnabled(true)` must be called before the WebView is created. On iOS (16.4+), the `WKWebView` must have `isInspectable = true`. Without these, Tapsmith cannot connect and `device.webview()` will time out. On Android, the timeout error lists the WebViews it did find, so a WebView that is debuggable but belongs to another app shows up there. On iOS, Tapsmith connects to another app's inspectable page instead, when one is open (see above).
 
 **One WebView connection at a time.** Calling `device.webview()` connects to a single WebView, and later calls return that same connection while it is alive (in later tests of the file too, until the app is relaunched), whatever package they name.
 
