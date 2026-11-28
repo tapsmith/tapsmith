@@ -1740,7 +1740,7 @@ await expect(device.getByText("Error", { exact: true })).toHaveCount(0);
 
 #### `.toHaveAttribute(name: string, value: unknown, options?): Promise<void>`
 
-Assert that the element has a specific property/attribute value. `name` is a field of the [`ElementInfo`](#elementhandlefindoptions-promiseelementinfo) the element resolves to, such as `className`, `resourceId`, `contentDescription`, `enabled`, `clickable`, `focusable`, `scrollable` or `selected`.
+Assert that the element has a specific property/attribute value. `name` is a field of the [`ElementInfo`](api-reference.md#elementhandlefindoptions-promiseelementinfo) the element resolves to, such as `className`, `resourceId`, `contentDescription`, `enabled`, `clickable`, `focusable`, `scrollable` or `selected`.
 
 ```typescript
 await expect(device.getByText("Item", { exact: true })).toHaveAttribute("selected", true);
