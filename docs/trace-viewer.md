@@ -30,7 +30,7 @@ npx tapsmith test --trace retain-on-failure
 
 ### Via programmatic API
 
-Control tracing within your tests:
+Control tracing within your tests. Use this or a recording `trace` mode, not both: while the runner is already tracing the test (`--trace on`, or a `trace` mode that records the attempt, such as `retain-on-failure`), `device.tracing.start()` throws ([`device.tracing.start`](api-reference.md#devicetracingstartoptions)).
 
 ```typescript
 import { test } from "tapsmith";

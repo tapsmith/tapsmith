@@ -85,7 +85,7 @@ Appium has clients in many languages. The examples here use [WebdriverIO](https:
 | `mobile: backgroundApp` | [`device.sendToBackground()`](api-reference.md#devicesendtobackground-promisevoid) |
 | `mobile: deepLink` / `driver.url()` | [`device.openDeepLink(url)`](api-reference.md#deviceopendeeplinkuri-string-options-opendeeplinkoptions-promisevoid) |
 | `driver.setOrientation()` | [`device.setOrientation()`](api-reference.md#devicesetorientationorientation-orientation-promisevoid) |
-| `mobile: setClipboard` / `mobile: getClipboard` | [`device.setClipboard()`](api-reference.md#devicesetclipboardtext-string-promisevoid) / [`device.getClipboard()`](api-reference.md#devicegetclipboard-promisestring) (on a physical iPhone, see the limits in [iOS physical devices](ios-physical-devices.md)) |
+| `mobile: setClipboard` / `mobile: getClipboard` | [`device.setClipboard()`](api-reference.md#devicesetclipboardtext-string-promisevoid) / [`device.getClipboard()`](api-reference.md#devicegetclipboard-promisestring) |
 | `mobile: changePermissions` | [`device.grantPermission()`](api-reference.md#devicegrantpermissionpackagename-string-permission-string-promisevoid) / `revokePermission()` (Android, and iOS simulators) |
 | `driver.takeScreenshot()` | [`device.takeScreenshot()`](api-reference.md#devicetakescreenshot-promisescreenshotresponse); failures are captured automatically |
 | `driver.startRecordingScreen()` | The [`video`](api-reference.md#video-recording) option, or a [trace](trace-viewer.md) |

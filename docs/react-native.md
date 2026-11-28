@@ -36,7 +36,7 @@ Tapsmith knows nothing about over-the-air updates: the tests drive whatever Java
 
 ## Warm reset
 
-Between test files, Tapsmith resets the app by clearing its data and relaunching it. With [`@tapsmith/react-native`](warm-reset.md) mounted in your app, it resets the app in-process instead, in well under a second. A bare React Native app must register the URL scheme the reset links use; [Warm App Reset](warm-reset.md#add-the-in-app-hooks) shows how.
+Between test files, Tapsmith resets the app by clearing its data and relaunching it. With [`@tapsmith/react-native`](warm-reset.md) mounted in your app, it resets the app in-process instead, in well under a second (a Release build keeps the hooks only when built with the flag described in [Release builds for e2e](warm-reset.md#release-builds-for-e2e)). A bare React Native app must register the URL scheme the reset links use; [Warm App Reset](warm-reset.md#add-the-in-app-hooks) shows how.
 
 ## Monorepos
 
