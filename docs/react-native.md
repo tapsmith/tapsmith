@@ -18,7 +18,7 @@ Tapsmith tests the build your config names (`apk` for Android, `app` for iOS), n
 
 ### Expo Go
 
-Tapsmith tests a build of your app, not Expo Go. Expo Go is Expo's own app: it loads your JavaScript inside itself, so a test that launches it sees Expo Go, not your project. Make a build instead (`npx expo run:android`, `npx expo run:ios`, or an EAS build) and point `apk` or `app` at it. A [development build](getting-started.md#debug-and-dev-client-builds-with-metro) keeps the edit-and-reload loop you had in Expo Go.
+Tapsmith tests a build of your app, not Expo Go. Expo Go is Expo's own app: it loads your JavaScript inside itself, so a test that launches it sees Expo Go, not your project, and with `package` set to Expo Go Tapsmith warns that it is. Make a build instead (`npx expo run:android`, `npx expo run:ios`, or an EAS build) and point `apk` or `app` at it. A [development build](getting-started.md#debug-and-dev-client-builds-with-metro) keeps the edit-and-reload loop you had in Expo Go.
 
 ### Build variants and flavors
 
