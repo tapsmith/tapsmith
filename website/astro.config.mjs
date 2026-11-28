@@ -81,6 +81,7 @@ export default defineConfig({
           items: [
             { label: 'Locators', slug: 'guides/locators' },
             { label: 'Network Interception', slug: 'guides/network' },
+            { label: 'React Native & Expo', slug: 'guides/react-native' },
             { label: 'WebView Testing', slug: 'guides/webview' },
             { label: 'Trace Viewer', slug: 'guides/trace-viewer' },
             { label: 'Watch Mode', slug: 'guides/watch-mode' },

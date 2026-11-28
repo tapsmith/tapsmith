@@ -54,6 +54,12 @@ const FILES = [
     desc: 'Mock, modify, and inspect HTTP requests with Playwright-style route handlers.',
   },
   {
+    src: 'react-native.md',
+    dest: 'guides/react-native.md',
+    title: 'React Native and Expo',
+    desc: 'Supported versions, build variants, Hermes, over-the-air updates and Expo Go when testing React Native apps.',
+  },
+  {
     src: 'webview.md',
     dest: 'guides/webview.md',
     title: 'WebView Testing',
@@ -273,6 +279,7 @@ const API_SPLITS = [
 const LINK_MAP = {
   'locators.md': '/guides/locators/',
   'network.md': '/guides/network/',
+  'react-native.md': '/guides/react-native/',
   'webview.md': '/guides/webview/',
   'trace-viewer.md': '/guides/trace-viewer/',
   'watch-mode.md': '/guides/watch-mode/',

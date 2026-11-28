@@ -2,7 +2,7 @@
 
 Tapsmith resets your app to a known state before tests (see [Test isolation](writing-tests.md#test-isolation)). By default that means wiping app data and cold-launching — fully hermetic, but 7–13 seconds per file on an iOS simulator and 1–3 seconds on an Android emulator. A **warm reset** asks the running app to reset *itself*, in-process, and acknowledges completion — well under a second. It also makes isolating **every test** instead of every file affordable: the default is still one reset per file, and a scope opts in with `appResetScope: "test"`.
 
-A warm reset matters most for a React Native Debug build, such as an Expo development build: every relaunch reloads its JavaScript from Metro, and a warm reset keeps the running app and skips that reload. See [Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro).
+A warm reset matters most for a React Native Debug build, such as an Expo development build: every relaunch reloads its JavaScript from Metro, and a warm reset keeps the running app and skips that reload. See [Debug and dev-client builds with Metro](getting-started.md#debug-and-dev-client-builds-with-metro), and [React Native and Expo](react-native.md) for the rest of what is specific to React Native apps.
 
 ## Add the in-app hooks
 

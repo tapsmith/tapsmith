@@ -117,7 +117,8 @@ A React Native project keeps its native projects in `android/` and `ios/`, and n
 
 ### React Native and Expo
 
-Tapsmith tests either kind of React Native build:
+Tapsmith tests either kind of React Native build ([React Native and Expo](react-native.md) covers
+supported versions, build variants, Hermes, over-the-air updates and Expo Go):
 
 - A **Debug** build (including an Expo development build with `expo-dev-client`) does not
   contain your JavaScript: it loads it from the Metro dev server, so Metro must be running
