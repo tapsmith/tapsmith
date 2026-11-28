@@ -687,7 +687,7 @@ each project sets its own `workers` count. While the global `workers` is
 unset, these are **additive** — they do not consume from a global budget —
 so you can mix explicit and unset projects in the same config. When the
 global `workers` is set (in the config or with `--workers`), the total is
-fitted to it.
+fitted to it, though every device target with tests keeps at least one worker.
 
 ```typescript
 export default defineConfig({

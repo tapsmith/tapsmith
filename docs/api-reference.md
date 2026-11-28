@@ -730,7 +730,7 @@ const scheme = await device.getColorScheme(); // "dark" | "light"
 
 ### `device.close(): Promise<void>`
 
-Close this device's connection to the daemon, stopping the network capture and the WebView connection it started. The test runner does this for you.
+Close this device's connection to the daemon, stopping the network capture and the active WebView connection. A connection that `device.native()` already switched away from is not closed here: close it with `webview.close()` before `device.native()`, or leave it to the runner, which closes it at the end of the test file. The test runner calls `device.close()` for you.
 
 ---
 
@@ -2403,7 +2403,7 @@ correct device.
 | `testIgnore` | `string[]` | Glob patterns to exclude from test discovery |
 | `dependencies` | `string[]` | Projects that must complete first |
 | `use` | `UseOptions` | Per-project option overrides (applied under file-level `test.use()`). Includes the device-shaping fields documented above. |
-| `workers` | `number` | Number of parallel workers (devices) for this project. When the global `workers` is unset, it is additive and does not consume from a global budget; when the global `workers` is set (in the config or with `--workers`), the total is fitted to it. When unset, the project shares the global budget proportionally to file count. |
+| `workers` | `number` | Number of parallel workers (devices) for this project. When the global `workers` is unset, it is additive and does not consume from a global budget; when the global `workers` is set (in the config or with `--workers`), the total is fitted to it, though every device target with tests keeps at least one worker. When unset, the project shares the global budget proportionally to file count. |
 | `grep` | `RegExp \| RegExp[]` | Per-project grep filter, intersected with the root `grep`. A test must match at least one pattern in this set AND at least one pattern in the root set (when either is configured). |
 | `grepInvert` | `RegExp \| RegExp[]` | Per-project grep-invert filter, unioned with the root `grepInvert`. A test that matches any pattern in either set is left out of the run. |
 
@@ -3603,7 +3603,7 @@ Switch to a WebView context. Discovers available WebViews on the device and conn
 ```typescript
 const webview = await device.webview()
 // or the WebView of another app than the config's `package`
-const webview = await device.webview("com.example.otherapp")
+// const webview = await device.webview("com.example.otherapp")
 ```
 
 `packageName` picks the app, not one of several WebViews inside it. On iOS, when no inspectable page of that app is found, Tapsmith connects to the newest app that has one (Mobile Safari, say), so make sure the app's own WebView is inspectable and loaded. While a connection from an earlier `device.webview()` call in the file is still open, the call reuses it, whatever `packageName` says; close it first with `webview.close()` to switch apps.

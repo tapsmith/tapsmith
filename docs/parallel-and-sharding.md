@@ -86,7 +86,7 @@ No additional setup is required beyond having Xcode installed with the target si
 
 ### Worker Output
 
-When running with multiple workers, console reporters tag each result with the index of the worker that ran it:
+When running with multiple workers, the `list` and `line` reporters tag each result with the index of the worker that ran it (the `dot` reporter tags only failure and flaky details). Example `list` output:
 
 ```
   ✓ [1] [worker 0] › login.tapsmith.ts › login flow > successful login (2.1s)
@@ -180,7 +180,7 @@ export default defineConfig({
 
 This runs the Android project on 2 devices and the iOS project on 1 device, concurrently. Total parallelism is 3 workers.
 
-When per-project `workers` are not set, the global `workers` budget is split proportionally across projects based on their test file count. When the global `workers` is set (in the config or with `--workers`), the total is fitted to it, per-project counts included.
+When per-project `workers` are not set, the global `workers` budget is split proportionally across projects based on their test file count. When the global `workers` is set (in the config or with `--workers`), the total is fitted to it, per-project counts included, though every device target with tests still keeps at least one worker.
 
 Workers are allocated per device target rather than per project: projects with the same device settings share their workers and devices. Every device target with tests gets at least one worker, whatever the budget, so a config with an Android project and an iOS project runs on two workers, one per platform, even with the default `workers: 1`. When an explicit `workers` is lower than that, the run prints a note (`config asks for 1 worker; running 2 because 2 device targets need one each`). To run one platform at a time, select it with `--project`.
 
@@ -549,7 +549,7 @@ When running in parallel or with sharding, keep these reporter behaviors in mind
 - **Worker index.** Every `TestResult` includes `workerIndex`, available in JSON, JUnit, and custom reporters. Use it to correlate failures with specific devices.
 - **Blob reporter.** Automatically added when `--shard` is used. Writes machine-readable results to `blob-report/` for later merging.
 - **HTML reporter.** Works well with both parallel and sharded runs. After merging, the HTML report shows all results in a single view.
-- **Console reporters.** In parallel mode, each result is tagged `[worker N]` to show which worker produced it.
+- **Console reporters.** In parallel mode, the `list` and `line` reporters tag each result with `[worker N]` to show which worker produced it.
 
 For CI pipelines with sharding, a typical reporter setup is:
 

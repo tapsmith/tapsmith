@@ -501,7 +501,8 @@ export interface ProjectConfig {
    * Number of parallel workers (devices) for this project. When unset,
    * the global `workers` budget is split proportionally across projects
    * that don't specify a count. While the global `workers` is unset,
-   * explicit values are additive; when it is set, the total is fitted to it.
+   * explicit values are additive; when it is set, the total is fitted to it,
+   * though every device target with tests keeps at least one worker.
    *
    * @example
    * projects: [
