@@ -885,7 +885,7 @@ As in Playwright, where `page.route()` and the request events never see WebSocke
 Open a trace archive:
 
 ```bash
-npx tapsmith show-trace tapsmith-results/traces/trace-my_test.zip
+npx tapsmith show-trace tapsmith-results/traces/trace-my_test-1767225600000.zip
 ```
 
 The Network tab shows a sortable table with columns for method, URL, status code, content type, duration, and response size. Click a row to expand request/response headers and bodies. JSON bodies are pretty-printed automatically, and gRPC/protobuf bodies are decoded into their messages and fields (see [HTTP/2, gRPC, and passthrough connections](#http2-grpc-and-passthrough-connections)) with a **Raw** toggle for the original bytes.

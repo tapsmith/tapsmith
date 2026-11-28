@@ -34,7 +34,7 @@ export interface TracingStartOptions {
 
 /** Options for `device.tracing.stop()`. */
 export interface TracingStopOptions {
-  /** Path to write the trace zip. If not specified, uses default output dir. */
+  /** Path to write the trace zip. Without it, the recording is discarded and nothing is written. */
   path?: string
 }
 

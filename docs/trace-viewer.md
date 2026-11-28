@@ -207,7 +207,7 @@ trace.zip/
 Download the trace artifact from your CI run and open it locally:
 
 ```bash
-npx tapsmith show-trace tapsmith-results/traces/trace-login_test.zip
+npx tapsmith show-trace tapsmith-results/traces/trace-login_test-1710345600000.zip
 ```
 
 Or open [trace.tapsmith.dev](https://trace.tapsmith.dev) and drop the downloaded `.zip` file onto the page.
