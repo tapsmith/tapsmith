@@ -82,9 +82,12 @@ export default defineConfig({
   app: './build/MyApp-Device.app',
   package: 'com.example.myapp',
   device: '00008140-00096C9014F3001C',
-  iosXctestrun: 'ios-agent/.build-device/Build/Products/TapsmithAgentUITests_TapsmithAgentUITests_iphoneos26.4-arm64.xctestrun',
+  // e.g. a runner built with `tapsmith ios build-agent --derived-data-path /path/to/agent-build`
+  iosXctestrun: '/path/to/agent-build/Build/Products/TapsmithAgentUITests_TapsmithAgentUITests_iphoneos26.4-arm64.xctestrun',
 });
 ```
+
+Pin `iosXctestrun` only for a runner Tapsmith does not find on its own, such as one built with `--derived-data-path`. Don't pin the npm build under `~/.tapsmith/ios-agent/`: upgrading Tapsmith removes it, and a pinned path then stops the run, where auto-detection asks you to rebuild.
 
 ### Running simulator and device together
 
@@ -129,7 +132,7 @@ tapsmith test --project ios-phys # just the physical device
 
 ## Want network capture too?
 
-If you need HTTPS request/response bodies in your traces, set up [iOS physical device network capture](./ios-physical-device-network-tracing.md). It's a separate one-time step per device involving a mobileconfig profile and MITM CA trust. Clients that reject that CA need passthrough, which keeps traffic working without decrypted bodies.
+If you need HTTPS request/response bodies in your traces, or want to mock requests with `device.route()` or wait for them with `waitForRequest()`/`waitForResponse()`, set up [iOS physical device network capture](./ios-physical-device-network-tracing.md). It's a separate one-time step per device involving a mobileconfig profile and MITM CA trust. Clients that reject that CA need passthrough, which keeps traffic working without decrypted bodies.
 
 ## Want video recording?
 
@@ -146,14 +149,19 @@ Once both are in place, set `video: 'on'` (or any other mode — see [api-refere
 
 ## Known limitations
 
-Some simulator-only APIs don't work on physical devices and will return a clear `UNSUPPORTED_ON_PHYSICAL_DEVICE` error at test time:
+Some simulator-only APIs don't work on physical devices and return an `UNSUPPORTED_ON_PHYSICAL_DEVICE` error at test time:
 
-- `device.clearAppData(...)` — physical devices don't expose their app container filesystem to the host. Use `--force-install` to reinstall the bundle instead.
-- `device.setClipboard(...)` / `device.getClipboard(...)` — blocked by the iOS 16+ paste permission dialog. Seed/read the clipboard from within your app via a test-only debug hook.
-- `device.openDeepLink(...)` — no `devicectl` equivalent of `simctl openurl`. Add a test-only button that calls `UIApplication.shared.open(url)`.
-- `device.setColorScheme(...)` — simulator-only. Set light/dark mode manually.
-- `device.grantPermission(...)` / `device.revokePermission(...)` — simulator-only. Let the XCUITest UIInterruptionMonitor tap through the in-app dialogs.
-- `device.saveAppState(...)` / `device.restoreAppState(...)` — simulator-only. Use simulator-based setup projects for reusable auth state.
+- `device.setColorScheme(...)` — set light/dark mode on the device manually (Settings → Display & Brightness).
+- `device.grantPermission(...)` / `device.revokePermission(...)` — let the XCUITest UIInterruptionMonitor tap through the in-app dialogs.
+
+`device.webview()` also connects on simulators only (through the simulator's WebKit Inspector socket): on a physical device it times out, so test web content there with native locators.
+
+Others work differently on a physical device (see [api-reference.md](./api-reference.md) for each):
+
+- `device.clearAppData(...)` — physical devices don't expose the app's container to the host, so Tapsmith uninstalls and reinstalls the app bundle instead. This needs `app` in your config.
+- `device.saveAppState(...)` / `device.restoreAppState(...)` — copy the app's data container through `devicectl`. The keychain is not captured, so keychain-backed state (native auth SDK credentials, for example) does not round-trip. `restoreAppState` reinstalls the app, so it also needs `app` in your config.
+- `device.openDeepLink(...)` — delivered through XCUITest (`XCUIApplication.open(url:)`), always warm: `forceColdLaunch` has no effect.
+- `device.setClipboard(...)` / `device.getClipboard(...)` — go through the Tapsmith runner rather than `simctl`.
 
 Other caveats:
 

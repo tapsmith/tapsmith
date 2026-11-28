@@ -233,29 +233,17 @@ await device.route("**/api/data", async (route) => {
 
 ### `route.abort(errorCode?)`
 
-Abort the request, simulating a network failure. The app sees the request fail as if the network were unreachable.
-
-| Error Code | Effect |
-|---|---|
-| (none) | Generic abort |
-| `"connectionrefused"` | Connection refused |
-| `"connectionreset"` | Connection reset |
-| `"timedout"` | Request timed out |
+Abort the request, simulating a network failure: the app sees it fail with a network error, as if the connection broke before the response arrived. `errorCode` (such as Playwright's `"connectionrefused"`, `"connectionreset"` or `"timedout"`) is accepted for compatibility, but every abort fails the same way whatever it says, so an app cannot tell a "timed out" abort from a "connection refused" one. To make the app wait before failing, delay in the handler before aborting, for less than 30 seconds: a request whose handler has not resolved it by then goes on to the server.
 
 ```typescript
-// Simulate a network timeout
-await device.route("**/api/slow-endpoint", async (route) => {
-  await route.abort("timedout")
+// Fail a request
+await device.route("**/api/health", async (route) => {
+  await route.abort()
 })
 
 // Block all analytics requests
 await device.route("**/analytics/**", async (route) => {
   await route.abort()
-})
-
-// Simulate server unreachable
-await device.route("**/api/health", async (route) => {
-  await route.abort("connectionrefused")
 })
 ```
 
@@ -641,20 +629,11 @@ test("shows error screen on server failure", async ({ device }) => {
 
 test("shows offline banner on network failure", async ({ device }) => {
   await device.route("**/api/**", async (route) => {
-    await route.abort("connectionrefused")
+    await route.abort()
   })
 
   await device.openDeepLink("myapp://dashboard")
   await expect(device.getByText("No internet connection")).toBeVisible()
-})
-
-test("handles timeout gracefully", async ({ device }) => {
-  await device.route("**/api/slow", async (route) => {
-    await route.abort("timedout")
-  })
-
-  await device.getByRole("button", { name: "Load Data" }).tap()
-  await expect(device.getByText("Request timed out")).toBeVisible()
 })
 ```
 
@@ -856,7 +835,7 @@ For any other HTTP/2-capable host that rejects the certificate — including Fir
 
 A few HTTP/2 specifics to be aware of:
 
-- **Long-lived channels are opened once per app process.** gRPC clients (Firestore included) multiplex every call over a single h2 connection. If the app was already running when your test started, that connection already exists and nothing new crosses the proxy, so `waitForRequest`/`waitForResponse` never fire and `route()` handlers never match -- capture looks broken while working correctly. Relaunch the app inside the test (`device.launchApp(...)`) so the channel is opened during the window you are waiting on.
+- **Long-lived channels are opened once per app process.** gRPC clients (Firestore included) multiplex every call over a single h2 connection. If the app was already running when your test started, that connection already exists and nothing new crosses the proxy, so `waitForRequest`/`waitForResponse` never fire and `route()` handlers never match -- capture looks broken while working correctly. Relaunch the app inside the test (`device.restartApp()`) so the channel is opened during the window you are waiting on.
 - **Streaming / long-lived calls** (e.g. Firestore `Listen`) are forwarded incrementally and appear in the trace even while open, with a **Streaming** marker and a snapshot of their partial bodies. Assert on the *request* event, which fires when the stream opens; a `waitForResponse` on a stream that never ends will time out.
 - Captured HTTP/2 header names are lowercase (that's how HTTP/2 sends them on the wire).
 - Request/response **bodies in the trace are capped** (~1 MB), but the full stream is always forwarded to the app.

@@ -64,6 +64,8 @@ if (kDebugMode) {
 }
 ```
 
+**Capacitor apps** -- Debug builds are debuggable by default (`android.webContentsDebuggingEnabled` in `capacitor.config.ts` controls it). See [Capacitor / Ionic](#capacitor--ionic).
+
 This flag is typically enabled in debug builds and disabled in production. No other Android-side configuration is needed -- Tapsmith discovers debuggable WebViews automatically via ADB.
 
 ### iOS
@@ -103,7 +105,7 @@ if (kDebugMode && platform is WebKitWebViewController) {
 
 **Capacitor apps** -- Debug builds are inspectable by default (`ios.webContentsDebuggingEnabled` in `capacitor.config.ts` controls it).
 
-On iOS, Tapsmith connects via the simulator's WebKit Inspector protocol directly. No additional tooling or browser setup is required.
+On iOS, Tapsmith connects via the simulator's WebKit Inspector protocol directly. No additional tooling or browser setup is required. `device.webview()` works on iOS simulators only: on a physical iPhone or iPad it cannot connect, so test the page there with native locators.
 
 Tapsmith finds your app's WebView by its bundle identifier. A simulator build made with code signing turned off (`xcodebuild … CODE_SIGNING_ALLOWED=NO`, common in CI recipes) has none as far as the WebKit Inspector is concerned: it lists the app as `process-<executable name>`. Tapsmith then matches the app by the process ID it runs under on the simulator, so such builds work too. If the connect still times out, the error names the apps that had inspectable pages, and says when one of them had no bundle identifier.
 
@@ -117,11 +119,13 @@ const webview = await device.webview()
 
 This auto-waits for a WebView to appear on screen. If no debuggable WebView is found within the action timeout (the config's `timeout`, 30 s by default, or a `test.use({ timeout })` around the test), it throws an error.
 
-If your app has multiple WebViews or you need to target a specific one, pass the package name (Android) or bundle identifier (iOS):
+By default Tapsmith looks for a WebView of the app your config's `package` names. To connect to a WebView of another app, pass its package name (Android) or bundle identifier (iOS):
 
 ```typescript
 const webview = await device.webview("com.example.myapp")
 ```
+
+When the app has several pages open (several WebViews, say), Tapsmith connects to one of them (on Android, the first page the debugger lists), and there is no option yet to pick another.
 
 ## Switching Back to Native
 
@@ -131,7 +135,7 @@ When you are done interacting with the WebView and need to interact with native 
 await device.native()
 ```
 
-This closes the WebView connection. After calling `native()`, all subsequent `device.getByText()`, `device.getByRole()`, and other native locator calls work as usual.
+This leaves the WebView context; the connection stays open, and the next `device.webview()` reuses it. After calling `native()`, all subsequent `device.getByText()`, `device.getByRole()`, and other native locator calls work as usual.
 
 ## WebView Actions
 
@@ -413,6 +417,19 @@ test("in-app payment via WebView", async ({ device }) => {
 })
 ```
 
+## Capacitor / Ionic
+
+A Capacitor app (Ionic included) is a native shell around one WebView, so it is tested like any other hybrid app. Build the web app, copy it into the native project, then build the native app. On Android:
+
+```bash
+npm run build            # your framework's web build: ng build, ionic build, vite build, …
+npx cap sync android
+(cd android && ./gradlew assembleDebug)
+# writes android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+A debug build's WebView is debuggable without any change (see [Prerequisites](#prerequisites)), so `device.webview()` connects to it. On Android the page's accessibility tree is also part of the native hierarchy, so native locators (`device.getByText()`, `device.getByRole()`) find its text and controls too; use `device.webview()` when you want CSS selectors, DOM values or `webview.evaluate()`. Ionic closes the topmost overlay (an `ion-modal`, an action sheet) on the Android back button, so `device.pressBack()` dismisses it; in a Capacitor app Ionic needs `@capacitor/app` installed to receive the back button.
+
 ## Tips and Limitations
 
 **The WebView must be visible and loaded.** `device.webview()` auto-waits for a debuggable WebView to become available, but the WebView needs to be on screen and its content needs to have started loading. `device.webview()` takes no timeout option: it waits up to the action timeout. If your WebView takes a long time to appear (for example, behind a native loading screen), raise the timeout for the tests that need it:
@@ -432,13 +449,13 @@ describe("checkout", () => {
 
 **Debugging must be enabled in the app.** On Android, `WebView.setWebContentsDebuggingEnabled(true)` must be called before the WebView is created. On iOS (16.4+), the `WKWebView` must have `isInspectable = true`. Without these, Tapsmith cannot connect and `device.webview()` will time out. The timeout error lists the WebViews (Android) or apps with inspectable pages (iOS) it did find, so a WebView that is debuggable but belongs to another app shows up there.
 
-**One WebView connection at a time.** Calling `device.webview()` connects to a single WebView. If your app has multiple WebViews on screen, pass the package/bundle identifier to target the right one. Call `device.native()` before switching to a different WebView.
+**One WebView connection at a time.** Calling `device.webview()` connects to a single WebView, and later calls return that same connection while it is alive (in later tests of the file too, until the app is relaunched), whatever package they name.
 
 **Parallel workers get independent connections.** When running with multiple workers, each worker establishes its own CDP (Android) or WebKit Inspector (iOS) connection to its device's WebView. There are no shared-state concerns between workers.
 
 **CSS selectors and `getBy*` locators.** WebView interactions use standard CSS selectors (`webview.locator(css)`) or the Playwright-style `webview.getByText/getByRole/getByPlaceholder/getByTestId/getByLabel` methods. Use `webview.getByTestId(...)` (matching `data-testid`) as your escape hatch, just as you would in Playwright web tests.
 
-**`device.native()` closes the connection.** After calling `device.native()`, the WebView connection is torn down. If you need to interact with the WebView again, call `device.webview()` again to establish a new connection.
+**`device.native()` keeps the connection.** After calling `device.native()`, the WebView connection stays open. Call `device.webview()` again to get back to the WebView: it reuses that connection while it is alive, and connects again if the page has gone. `webview.close()` closes it; Tapsmith also closes it when it relaunches the app (`device.restartApp()`, or an app reset other than a warm one) and at the end of the test file.
 
 **Cross-platform selector consistency.** Because WebView content is rendered by a web engine (Chromium on Android, WebKit on iOS), the same CSS selectors work on both platforms. This makes WebView tests inherently cross-platform, unlike native locators which can differ between Android and iOS.
 

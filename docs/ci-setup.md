@@ -166,8 +166,9 @@ exist on the runner under the configured name (see
     project's Babel preset does not inline that variable: add a Babel plugin that does (such as
     `babel-plugin-transform-inline-environment-variables`), or set the provider's `enabled` prop from
     a flag your own build already passes.
-  - [WebView debugging](webview.md), which `device.webview()` needs: a
-    `webviewDebuggingEnabled={__DEV__}` prop must be enabled for the test build too.
+  - [WebView debugging](webview.md), which `device.webview()` needs. If your app turns it on only
+    in development (`webviewDebuggingEnabled={__DEV__}` on a `react-native-webview`, say), turn it
+    on in the test build too.
 
 ### Native Android project
 
@@ -547,11 +548,12 @@ Android emulators can take 1-3 minutes to boot in CI. Make sure your CI timeout 
 If you are managing the emulator yourself:
 
 ```bash
-# Create an AVD — use a google_apis image, NOT google_apis_playstore:
-# Google Play images don't support `adb root`, which Tapsmith needs to install
-# its CA cert and redirect traffic, so HTTPS traffic won't appear in traces.
-# (`npx tapsmith create-avd` wraps these two steps.)
-avdmanager create avd -n test -k "system-images;android-33;google_apis;x86_64" --force
+# Install a system image and create an AVD from it — use a google_apis image,
+# NOT google_apis_playstore: Google Play images don't support `adb root`, which
+# Tapsmith needs to install its CA cert and redirect traffic, so HTTPS traffic
+# won't appear in traces. (`npx tapsmith create-avd` wraps these two steps.)
+sdkmanager "system-images;android-36;google_apis;x86_64"
+avdmanager create avd -n test -k "system-images;android-36;google_apis;x86_64" --force
 
 # Start the emulator in the background
 emulator -avd test -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim &
@@ -695,7 +697,7 @@ Upload traces as CI artifacts alongside screenshots:
 After downloading the artifact, open the trace locally:
 
 ```bash
-npx tapsmith show-trace tapsmith-results/traces/trace-login_test.zip
+npx tapsmith show-trace tapsmith-results/traces/trace-login_test-1710345600000.zip
 ```
 
 Or drop the `.zip` file onto [trace.tapsmith.dev](https://trace.tapsmith.dev) to view it in the browser without installing anything.
@@ -704,17 +706,12 @@ Network capture works in CI as well -- HTTP/HTTPS requests made by the app are r
 
 ### Caching
 
-Cache the Android SDK and emulator system images to speed up CI runs:
-
-```yaml
-- name: Cache Android SDK
-  uses: actions/cache@v4
-  with:
-    path: |
-      ~/.android/avd
-      ~/android-sdk
-    key: android-sdk-${{ runner.os }}-api33
-```
+GitHub-hosted Ubuntu runners come with the Android SDK installed, so the slow part of an Android
+job is creating and booting the emulator. `android-emulator-runner` can cache a booted AVD snapshot
+between runs: see the caching example in its
+[README](https://github.com/ReactiveCircus/android-emulator-runner#usage--examples). Cache npm,
+Gradle and CocoaPods downloads as you would for any build (`cache: "npm"` in `setup-node`, as the
+workflows above do).
 
 ### Parallel Workers
 
@@ -781,6 +778,16 @@ merge-reports:
   if: always()
   steps:
     - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+        cache: "npm"
+
+    # The project's own tapsmith, so the merge runs the version that wrote the blobs.
+    - name: Install dependencies
+      run: npm ci
 
     - name: Download blob reports
       uses: actions/download-artifact@v4

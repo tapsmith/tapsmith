@@ -78,7 +78,7 @@ export default defineConfig({
 });
 ```
 
-Tapsmith creates clones of the specified simulator device type for each worker beyond the first. These clones are managed automatically -- they are created at the start of the run and cleaned up afterward.
+Tapsmith first uses booted simulators that match `simulator`, then boots matching ones that are shut down, and clones the simulator for each worker still without one. The clones (named `Tapsmith Worker N`) are managed automatically: they stay booted after the run so the next run can reuse them, and Tapsmith deletes a clone that is no longer healthy, and its clones when a run is interrupted (Ctrl-C) or crashes.
 
 Workers use only simulators that match `simulator` (by name or UDID) and Tapsmith's own clones of it. A booted simulator with any other name is left alone, even when it runs the same iOS version.
 
@@ -86,14 +86,14 @@ No additional setup is required beyond having Xcode installed with the target si
 
 ### Worker Output
 
-When running with multiple workers, console reporters prefix each line of output with the worker index so you can tell which worker produced which result:
+When running with multiple workers, console reporters tag each result with the index of the worker that ran it:
 
 ```
-  [worker 0] PASS  login flow > successful login (2104ms)
-  [worker 1] PASS  settings > can toggle notifications (1842ms)
-  [worker 0] PASS  login flow > invalid credentials (1531ms)
-  [worker 2] FAIL  profile > can update avatar (30012ms)
-  [worker 1] PASS  settings > can change language (2210ms)
+  ✓ [1] [worker 0] › login.tapsmith.ts › login flow > successful login (2.1s)
+  ✓ [2] [worker 1] › settings.tapsmith.ts › settings > can toggle notifications (1.8s)
+  ✓ [3] [worker 0] › login.tapsmith.ts › login flow > invalid credentials (1.5s)
+  ✗ [4] [worker 2] › profile.tapsmith.ts › profile > can update avatar (30.0s)
+  ✓ [5] [worker 1] › settings.tapsmith.ts › settings > can change language (2.2s)
 ```
 
 Each `TestResult` object includes a `workerIndex` field, which is available to custom reporters and in the JSON/JUnit output. This is useful for correlating failures with specific devices when debugging.
@@ -150,7 +150,7 @@ A single project must not mix Android fields (`avd`, `apk`) with iOS fields (`si
 
 ### Per-Project Workers
 
-Each project can set its own `workers` count. Per-project worker counts are **additive** -- they do not consume from a shared global budget:
+Each project can set its own `workers` count. When the global `workers` is not set, per-project worker counts are **additive** -- they do not consume from a shared global budget:
 
 ```typescript
 export default defineConfig({
@@ -180,9 +180,9 @@ export default defineConfig({
 
 This runs the Android project on 2 devices and the iOS project on 1 device, concurrently. Total parallelism is 3 workers.
 
-When per-project `workers` are not set, the global `workers` budget is split proportionally across projects based on their test file count, with at least 1 worker per project.
+When per-project `workers` are not set, the global `workers` budget is split proportionally across projects based on their test file count. When the global `workers` is set (in the config or with `--workers`), the total is fitted to it, per-project counts included.
 
-If the total worker count comes out to 1 (for example, `workers: 1` globally with no per-project overrides), Tapsmith runs projects sequentially, tearing down and re-provisioning the device between each. This is useful on machines that can only support one emulator or simulator at a time.
+Workers are allocated per device target rather than per project: projects with the same device settings share their workers and devices. Every device target with tests gets at least one worker, whatever the budget, so a config with an Android project and an iOS project runs on two workers, one per platform, even with the default `workers: 1`. When an explicit `workers` is lower than that, the run prints a note (`config asks for 1 worker; running 2 because 2 device targets need one each`). To run one platform at a time, select it with `--project`.
 
 ### Cross-Platform Testing
 
@@ -255,20 +255,20 @@ The `setup` project runs first. When it completes, the `tests` project starts wi
 When your test suite is too large for a single CI machine, use sharding to split it across multiple jobs. The `--shard=x/y` flag deterministically partitions test files:
 
 ```bash
-# Machine 1: runs roughly the first quarter of test files
+# Machine 1: the 1st, 5th, 9th, ... test file
 npx tapsmith test --shard=1/4
 
-# Machine 2: second quarter
+# Machine 2: the 2nd, 6th, 10th, ...
 npx tapsmith test --shard=2/4
 
-# Machine 3: third quarter
+# Machine 3: the 3rd, 7th, 11th, ...
 npx tapsmith test --shard=3/4
 
-# Machine 4: last quarter
+# Machine 4: the 4th, 8th, 12th, ...
 npx tapsmith test --shard=4/4
 ```
 
-Sharding is file-based and deterministic -- the same `--shard` value always selects the same set of files, regardless of worker count or execution order. This means re-running a failed shard reproduces the exact same file set.
+Sharding is file-based and deterministic -- files are dealt out in turn by their position in the sorted file list, so the same `--shard` value always selects the same set of files, regardless of worker count or execution order. This means re-running a failed shard reproduces the exact same file set. With projects, each project's files are split this way on their own. A setup project (one another project lists in `dependencies`) is not split: it runs whole on every shard that has files from a project that depends on it, and not at all on a shard that has none.
 
 ### GitHub Actions Matrix
 
@@ -549,7 +549,7 @@ When running in parallel or with sharding, keep these reporter behaviors in mind
 - **Worker index.** Every `TestResult` includes `workerIndex`, available in JSON, JUnit, and custom reporters. Use it to correlate failures with specific devices.
 - **Blob reporter.** Automatically added when `--shard` is used. Writes machine-readable results to `blob-report/` for later merging.
 - **HTML reporter.** Works well with both parallel and sharded runs. After merging, the HTML report shows all results in a single view.
-- **Console reporters.** In parallel mode, output is prefixed with `[worker N]` to distinguish which worker produced each result.
+- **Console reporters.** In parallel mode, each result is tagged `[worker N]` to show which worker produced it.
 
 For CI pipelines with sharding, a typical reporter setup is:
 

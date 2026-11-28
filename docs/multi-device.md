@@ -193,20 +193,17 @@ Device groups work in every run mode. Each mode holds one group per worker:
   *and* iOS in one body is not supported.
 - **One foreground app per device.** A member is a device, so `devices: 3`
   needs three emulators or simulators. A group holds at most 10 members.
-
-- **Boot time.** Emulators and simulators boot serially; a group project's
-  startup is roughly `groupSize` times a single device's.
+- **Boot time.** Each member is provisioned like a worker's device. Emulators
+  Tapsmith launches boot side by side, up to one per two CPU cores
+  ([Android parallel setup](parallel-and-sharding.md#android-parallel-setup));
+  simulators boot one after another, so an iOS group's startup is roughly
+  `groupSize` times a single device's.
 - **CI.** Give group tests their own job rather than a shard: the per-shard
-  matrix boots one device per runner. Tapsmith's own `Multi-device` jobs in
-  `e2e-android.yml` and `e2e-ios.yml` run a suite (`e2e/tests/multi-device/`)
-  in which two users chat through a server the test hosts. The Android job
-  boots the primary in the workflow and lets Tapsmith launch the second
-  member from `avd`, as a user's CI would. The iOS job boots both simulators
-  up front and pins the member with `device` (from an environment variable
-  the workflow exports); two booted simulators exceed what a standard hosted
-  macOS runner can drive at usable speed, so that job is currently
-  manual-only (`workflow_dispatch`) and needs a larger runner to run per-PR. Those jobs run the
-  `e2e/tapsmith.config.{android,ios}-multi-ci.mjs` configs, whose app paths
-  point at the artifacts the workflow stages under `e2e/fixtures/`; the
-  `*-multi.mjs` configs beside them are the local-development versions that
-  use the repo's own build output.
+  matrix boots one device per runner. On Android, boot the primary in the
+  workflow (as in [CI setup](ci-setup.md#github-actions-android)) and let
+  Tapsmith launch the other members from `avd`. On iOS, boot the simulators up
+  front and pin each member with `device`; two booted simulators can exceed
+  what a standard hosted macOS runner drives at usable speed, so plan for a
+  larger runner. Tapsmith's own `Multi-device` job in
+  [`e2e-android.yml`](https://github.com/tapsmith/tapsmith/blob/main/.github/workflows/e2e-android.yml)
+  is a working example.

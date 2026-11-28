@@ -4,24 +4,22 @@ When a Tapsmith test fails, the framework gives you several layers of diagnostic
 
 ## When a Test Fails
 
-A failed test prints four things: the error message, a code snippet pointing to the failing line, a partial stack trace, and paths to the screenshot and trace (when enabled).
+A failed test prints four things: the error message, a code snippet pointing to the failing line, the stack frames in your own code, and paths to the screenshot and trace (when enabled).
 
 ```
-  tests/checkout.test.ts
+Running tests from 1 file(s)
 
-  PASS  [1] app launches and shows products (1204ms)
-  ✗    [2] can complete checkout (30012ms)
-        Element {"text":"Place Order"} was not found after waiting 30000ms
+  ✓ [1] › tests/checkout.tapsmith.ts › app launches and shows products (1.2s)
+  ✗ [2] › tests/checkout.tapsmith.ts › can complete checkout (30.0s)
+        Element getByText("Place Order", { exact: true }) was not found after waiting 30000ms. …
 
           12 |   await device.getByText("Add to Cart", { exact: true }).tap()
         > 13 |   await device.getByText("Place Order", { exact: true }).tap()
           14 |   await expect(device.getByText("Order Confirmed")).toBeVisible()
 
-        at ElementHandle.tap (packages/tapsmith/src/element-handle.ts:654:15)
-        at tests/checkout.test.ts:13:55
-        at Runner._runTest (packages/tapsmith/src/runner.ts:828:9)
+        at tests/checkout.tapsmith.ts:13:55
         Screenshot: tapsmith-results/screenshots/can_complete_checkout-1710345600000.png
-        Trace:      npx tapsmith show-trace tapsmith-results/traces/trace-checkout_test-can_complete_checkout-attempt0.zip
+        Trace: npx tapsmith show-trace tapsmith-results/traces/trace-can_complete_checkout-1710345600000.zip
 ```
 
 The error message tells you _what_ went wrong. The code snippet tells you _where_. The screenshot shows you the actual state of the device at the moment of failure. And the trace lets you replay every step leading up to the failure.
@@ -35,7 +33,7 @@ The trace viewer is the most powerful debugging tool in Tapsmith. It records scr
 ### Opening a trace
 
 ```bash
-npx tapsmith show-trace tapsmith-results/traces/trace-checkout_test.zip
+npx tapsmith show-trace tapsmith-results/traces/trace-can_complete_checkout-1710345600000.zip
 ```
 
 This starts a local server and opens the trace viewer in your browser. You can also drag and drop a `.zip` file onto the trace viewer page.
@@ -161,10 +159,10 @@ describe("flaky network screen", () => {
 
 ### How retry attempts work
 
-When a test fails and retries are configured, Tapsmith re-runs the entire test from scratch -- including `beforeEach` hooks. Each attempt is independent:
+When a test fails and retries are configured, Tapsmith re-runs the entire test from scratch, on a freshly reset app with the enclosing `beforeAll` hooks run again (see [Retries start from a fresh app](writing-tests.md#retries-start-from-a-fresh-app)). Each attempt is independent:
 
 1. **Attempt 0** (the original run) -- if this passes, no retries happen.
-2. **Attempt 1** (first retry) -- `beforeEach` runs again, then the test body.
+2. **Attempt 1** (first retry) -- the app is reset, `beforeAll` and `beforeEach` run again, then the test body.
 3. **Attempt 2** (second retry, if `retries >= 2`) -- same as above.
 
 The final status is determined by the last attempt. If attempt 2 passes, the test is reported as "passed" (marked as "flaky" in reporters that support it). `afterEach` hooks run after every attempt, including failed ones.
@@ -240,13 +238,13 @@ Device logs appear in the trace viewer's Console tab alongside your test's `cons
 For low-level debugging of the Tapsmith daemon (gRPC, device communication, agent lifecycle), set `RUST_LOG`:
 
 ```bash
-RUST_LOG=tapsmith_core=debug npx tapsmith test
+RUST_LOG=tapsmith_core=debug TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test
 ```
 
-This prints verbose daemon output to stderr. For even more detail:
+The daemon's log does not go to the terminal: [`TAPSMITH_DAEMON_LOG`](#tapsmith_daemon_log) sends it to a file, and `trace: { mode: "on", daemonLogs: true }` records it into the trace, under the `daemon` source. For even more detail:
 
 ```bash
-RUST_LOG=tapsmith_core=trace npx tapsmith test
+RUST_LOG=tapsmith_core=trace TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test
 ```
 
 See [Environment Variables for Debugging](#environment-variables-for-debugging) for more options.
@@ -256,7 +254,7 @@ See [Environment Variables for Debugging](#environment-variables-for-debugging) 
 ### Timeout: element not found
 
 ```
-Element {"text":"Submit"} was not found after waiting 30000ms
+Element getByText("Submit", { exact: true }) was not found after waiting 30000ms. …
 ```
 
 The message goes on to list the locators that do match the same words on screen, if any, such as `Nothing matches it, but on screen now this locator matches: getByText("Submit") (1 element).` (see [Locators that match nothing](locators.md#locators-that-match-nothing)). For a tap (`tap()`, `doubleTap()`, `longPress()`, `setChecked()`), it then says `It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() …`, unless one of those locators finds an on-screen element showing exactly your words (in any case), since the element is then probably on screen under that locator (or a title or caption with the same words is, and the element may still need scrolling to). When an unnamed `getByRole()` misses a role that iOS shows only with a name, the message gives that more specific hint instead. It ends by pointing at UI mode's picker and the MCP tool `tapsmith_test_locator`, which find a locator that matches.
@@ -298,7 +296,7 @@ Element getByText("Item 1", { exact: true }) was still not hittable by the end o
 ### Timeout: assertion did not pass
 
 ```
-Expected element {"text":"Success"} to be visible, but it was not found after waiting 30000ms
+Expected element getByText("Success") to be visible, but it was not. …
 ```
 
 **What happened:** An `expect(...).toBeVisible()` (or similar assertion) polled until the timeout expired without the condition becoming true.
@@ -312,7 +310,7 @@ await expect(device.getByText("Success")).toBeVisible({ timeout: 60_000 })
 ### Element is disabled
 
 ```
-Element {"text":"Submit"} is disabled after waiting 30000ms
+Element getByText("Submit", { exact: true }) is disabled after waiting 30000ms
 ```
 
 **What happened:** Tapsmith found the element, but it was disabled (not interactive) for the entire timeout period. Tapsmith auto-waits for elements to become enabled before performing actions like `tap()`.
@@ -322,10 +320,10 @@ Element {"text":"Submit"} is disabled after waiting 30000ms
 ### Action failed
 
 ```
-Error: Tap failed: element {"role":"button","name":"Submit"} — element not interactable
+Error: Failed to tap element: …
 ```
 
-**What happened:** The element was found and appeared enabled, but the action could not be performed on it -- typically because another element is overlapping it, or the element has zero size.
+**What happened:** The element was found, enabled and on screen, but the device could not perform the action on it. The message after the colon is the device's reason. (An element that is covered or clipped fails earlier, with the "not hittable" message [above](#element-is-off-screen).)
 
 **Fixes:**
 
@@ -491,12 +489,16 @@ If you have a trace, open it and select the action that failed. The Hierarchy ta
 When working interactively (with `--ui` mode or an AI coding agent), the `tapsmith_snapshot` tool returns the accessibility tree with suggested locators for each interactive element:
 
 ```
-$ tapsmith_snapshot
+- [1] button "Settings"
+- [2] textfield "Email"
+- [3] text "Welcome back, Sam"
+- [4] switch "Dark Mode" [checked]
 
-button "Settings" - device.getByRole("button", { name: "Settings" })
-textfield "Email" - device.getByRole("textfield", { name: "Email" })
-text "Welcome back, Sam" - device.getByText("Welcome back, Sam")
-switch "Dark Mode" [checked] - device.getByRole("switch", { name: "Dark Mode" })
+## Suggested Locators
+[1] device.getByRole("button", { name: "Settings" })
+[2] device.getByRole("textfield", { name: "Email" })
+[3] device.getByText("Welcome back, Sam")
+[4] device.getByRole("switch", { name: "Dark Mode" })
 ```
 
 This shows you exactly which locators Tapsmith would use for each element on screen. See [MCP Server](mcp-server.md) for setup.
@@ -778,7 +780,7 @@ RUST_LOG=tapsmith_core=trace npx tapsmith test
 RUST_LOG=tapsmith_core=debug,tonic=info npx tapsmith test
 ```
 
-The `RUST_LOG` variable follows the standard [`env_logger`](https://docs.rs/env_logger/) syntax. It accepts comma-separated `target=level` pairs. Common levels: `error`, `warn`, `info`, `debug`, `trace`.
+The `RUST_LOG` variable uses the [`tracing-subscriber` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax, which accepts comma-separated `target=level` pairs (the same shape as `env_logger`'s). Unset, the daemon logs at `tapsmith_core=info,tonic=warn`. Like the examples above, pair it with `TAPSMITH_DAEMON_LOG` to read the output. Common levels: `error`, `warn`, `info`, `debug`, `trace`.
 
 ### `TAPSMITH_DEBUG`
 
@@ -788,7 +790,7 @@ Enable debug output from the TypeScript SDK:
 TAPSMITH_DEBUG=1 npx tapsmith test
 ```
 
-This prints additional diagnostic information from the SDK layer, including detailed assertion polling logs and gRPC call timings.
+This prints additional diagnostic information from the SDK layer: the full stack of an error that stops a run, each failed try of an `expect.poll()`, and the screen's hierarchy when an Android system dialog blocks the app.
 
 ### Combining environment variables
 

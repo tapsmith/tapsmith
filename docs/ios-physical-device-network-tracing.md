@@ -4,6 +4,8 @@ Decrypted HTTPS request/response bodies in your traces, on real iPhones/iPads. *
 
 This page covers the extra one-time setup: installing a mobileconfig profile on the device that routes Wi-Fi traffic through Tapsmith's MITM proxy, then trusting Tapsmith's CA so iOS will decrypt HTTPS.
 
+The same setup is what lets [`device.route()`, `waitForRequest()` and `waitForResponse()`](network.md) see a physical device's traffic: without the profile, starting capture fails with an error that says to run `tapsmith ios network configure <udid>`.
+
 ## Prerequisites
 
 - Everything in [iOS physical devices](./ios-physical-devices.md) already working — a test must run green before adding network capture
@@ -27,7 +29,7 @@ export default defineConfig({
 });
 ```
 
-With `trace.mode` off, Tapsmith starts the proxy only for a run whose tests call `device.route()`, `waitForRequest()` or `waitForResponse()`: as the session starts, or on demand at the first such call (see [Network prerequisites](network.md#prerequisites)). Turning `trace.mode` on starts it for every test, so the trace records each test's traffic.
+With `trace.mode` off, Tapsmith starts the proxy only for a run whose tests call `device.route()`, `waitForRequest()`, `waitForResponse()` or `device.on('request' | 'response')`: as the session starts, or on demand at the first such call (see [Network prerequisites](network.md#prerequisites)). Turning `trace.mode` on starts it for every test, so the trace records each test's traffic.
 
 ## One-time device setup
 

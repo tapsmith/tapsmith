@@ -6,7 +6,7 @@ Simulators go through a macOS Network Extension (no on-device configuration need
 
 ## How it works
 
-Tapsmith's daemon (`tapsmith-core`) runs a local MITM proxy for each worker. On Android the daemon uses `adb reverse` to forward the proxy port onto the device and configures the device's HTTP proxy setting. **On iOS**, it uses a different mechanism because simulators share the host's network stack:
+Tapsmith's daemon (`tapsmith-core`) runs a local MITM proxy for each worker. On Android the daemon redirects the device's traffic into it (see [How capture works](network.md#how-capture-works)). **On iOS**, it uses a different mechanism because simulators share the host's network stack:
 
 - The daemon spawns **`Mitmproxy Redirector.app`**, a small signed launcher that ships with [mitmproxy](https://mitmproxy.org) and manages a macOS **Network Extension** (NE). The NE intercepts TCP flows from specific processes on the host and redirects them over a per-worker Unix socket into Tapsmith's MITM proxy.
 - The daemon sends the NE an `InterceptConf` naming the simulator's processes: every app installed in it, matched by its executable's path inside that simulator's data directory (`…/<UDID>/data/…`), so an app is intercepted from its first connection after a launch; and the PIDs of the simulator's process tree (`launchd_sim` and descendants), re-read every two seconds, for the runtime's own processes such as a WebView's networking process. Each worker daemon only sees its own simulator's flows — **parallel iOS workers don't collide**, and the user's host browser traffic is never touched.
@@ -35,11 +35,11 @@ npx tapsmith ios network setup-simulator
 
 On a brand-new install it instead reports `○ Network Extension has not been registered yet`, explains what happens on the first run, and exits 0 — see below.
 
-From this point on, whenever `npx tapsmith test` starts network capture — with each test when tracing records network (the default when tracing is on), otherwise on a test's first `device.route()`, `waitForRequest()` or `waitForResponse()` — it silently spawns the redirector and routes traffic through Tapsmith's MITM proxy.
+From this point on, whenever `npx tapsmith test` starts network capture — with each test when tracing records network (the default when tracing is on), otherwise for a run whose tests mock or wait on the network (see [Network prerequisites](network.md#prerequisites)) — it silently spawns the redirector and routes traffic through Tapsmith's MITM proxy.
 
 ### If the Network Extension isn't registered yet
 
-On a truly fresh machine the Network Extension is registered the first time Tapsmith spawns the redirector (which happens automatically on your first `tapsmith test` run with tracing). If `tapsmith ios network setup-simulator` reports that the extension has not been registered yet, nothing is wrong (it exits 0); do the following:
+On a truly fresh machine the Network Extension is registered the first time Tapsmith spawns the redirector (which happens automatically on your first `tapsmith test` run that captures network: one with tracing on, or one whose tests use `device.route()`). If `tapsmith ios network setup-simulator` reports that the extension has not been registered yet, nothing is wrong (it exits 0); do the following:
 
 1. Run any iOS test once to trigger the registration prompt:
    ```sh
@@ -74,7 +74,7 @@ You should see a row ending in `[activated enabled]` for `org.mitmproxy.macos-re
 Network capture is on by default whenever tracing is enabled. Control it via the `network` field in `TraceConfig`:
 
 ```typescript
-// tapsmith.config.mjs
+// tapsmith.config.ts
 import { defineConfig } from "tapsmith";
 
 export default defineConfig({
@@ -87,7 +87,7 @@ export default defineConfig({
 });
 ```
 
-To opt out of iOS network capture entirely, set `network: false`. No mitmproxy install or SE approval is needed in that case.
+With `network: false`, traces record no network traffic, and a run whose tests never call `device.route()`, `waitForRequest()`, `waitForResponse()` or `device.on('request' | 'response')` starts no capture, so it needs no mitmproxy install or SE approval. Tests that do mock or wait on the network still start capture and need the extension.
 
 ### Overriding the redirector location
 
@@ -267,14 +267,15 @@ Physical iPhones/iPads have their own network stack — the macOS Network Extens
 ### How it works (physical)
 
 1. `tapsmith ios network configure <udid>` generates a `.mobileconfig` containing two payloads:
-   - `com.apple.wifi.managed` — targets your current Wi-Fi SSID with `ProxyType: Manual`, `ProxyServer: <host-ip>`, `ProxyServerPort: <deterministic-port>`. The port is `9000 + CRC32(udid) % 1000`, so it's stable per device and multiple devices can run in parallel without colliding.
+   - `com.apple.wifi.managed` — targets your current Wi-Fi SSID with an automatic (PAC) proxy, `http://<host-ip>:<deterministic-port>/tapsmith.pac`, that falls back to a direct connection when Tapsmith isn't running. The port is `9000 + CRC32(udid) % 1000`, so it's stable per device and multiple devices can run in parallel without colliding.
+   iOS does not apply a profile's proxy settings on a device that isn't supervised, so you also enter that PAC URL in the device's Wi-Fi settings once (step 4 below).
    - `com.apple.security.root` — the Tapsmith CA, for HTTPS trust.
-2. You install the profile on the device once (AirDrop / email / Messages) and trust the CA in **Settings → General → About → Certificate Trust Settings**.
+2. You install the profile on the device once (AirDrop / email / Messages), trust the CA in **Settings → General → About → Certificate Trust Settings**, and set the Wi-Fi proxy URL.
 3. When `tapsmith test` targets that device, the daemon binds its MITM proxy on `0.0.0.0:<deterministic-port>` so the device can reach it over Wi-Fi. Traffic flows through the same MITM engine as the simulator path, producing identical `NetworkEntry` records in the trace.
 
 ### First-run setup (physical)
 
-Prerequisites — `tapsmith ios setup-device` checks the host tools, device pairing and (in a Tapsmith checkout) the agent build for you; Developer Mode you check on the device:
+Prerequisites — `tapsmith ios setup-device` checks the host tools, device pairing and the agent build for you; Developer Mode you check on the device:
 
 - Xcode 15+ with command-line tools
 - `libimobiledevice` installed (`brew install libimobiledevice`)
@@ -296,8 +297,9 @@ Follow the on-screen walkthrough to install the profile on the device:
 1. AirDrop the generated `~/.tapsmith/devices/<UDID>.mobileconfig` to the iPhone (or email it).
 2. On the device, open **Settings → General → VPN & Device Management**, tap the "Tapsmith Network Capture" profile, then "Install" → enter passcode → "Install".
 3. Trust the CA: **Settings → General → About → Certificate Trust Settings → Tapsmith MITM CA → full trust**.
+4. Set the proxy: **Settings → Wi-Fi → (i)** next to your network → **Configure Proxy → Automatic** → enter the URL the command printed (`http://<host-ip>:<port>/tapsmith.pac`) → **Save**.
 
-From then on, `tapsmith test` against that UDID with tracing enabled will capture traffic.
+Then run `tapsmith ios network verify <UDID>` to check it end to end. From then on, `tapsmith test` against that UDID captures traffic whenever capture runs (see [iOS physical device network capture](ios-physical-device-network-tracing.md) for the full walkthrough).
 
 ### Scoping what gets captured (physical only)
 
@@ -359,7 +361,7 @@ Tapsmith also detects this at test time: if the daemon notices that the host's c
 ## Security and privacy
 
 - The Tapsmith CA is generated once per machine and stored under `~/.tapsmith/ca.pem`. It is installed into the simulator's trust store at the start of the first capture session and **persists** there across subsequent runs. Tapsmith does not currently remove the CA at session end — to wipe it, `xcrun simctl erase <udid>` (erases the simulator) or remove the cert manually from the simulator's keychain.
-- Only traffic from the simulator's process tree (as reported by `ps`) is routed through the proxy. Host browsers, IDEs, and other apps are unaffected.
+- Only traffic from the simulator's apps and process tree is routed through the proxy. Host browsers, IDEs, and other apps are unaffected.
 - The macOS system proxy (`networksetup -setwebproxy`) is only touched when the Network Extension is unavailable and Tapsmith falls back to it, which by default happens on CI only (see [When the Network Extension is unavailable](#when-the-network-extension-is-unavailable)). In that mode every process on the Mac is proxied, so the trace can contain host traffic (browser preconnects, `trustd` OCSP checks) alongside the simulator's — be careful sharing such a trace; its `metadata.json` records `"networkCaptureRoute": "ios-system-proxy"` and the viewer flags it. Tapsmith disables the proxy again when the daemon exits and restores your proxy bypass list; the server/port values it wrote stay visible in `networksetup -getwebproxy` with `Enabled: No`.
 - Request and response bodies are truncated to 1 MiB each in the captured trace to prevent runaway memory usage.
 
