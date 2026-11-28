@@ -759,7 +759,7 @@ Capture all daemon (Rust) output to a file for later analysis:
 TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test
 ```
 
-This redirects the daemon's stdout and stderr to the specified file. Useful when you need to share daemon logs with someone, or when the daemon output scrolls past too quickly in the terminal.
+This redirects the daemon's stdout and stderr to the specified file. The daemon's output does not go to the terminal, so this file (or a trace with `daemonLogs: true`) is where you read it, for example to share it with someone.
 
 You don't need it to find out why a daemon failed to start. Without it, Tapsmith keeps the daemon's stderr while it starts, and the start error quotes the daemon's last lines. With it, the error quotes what that daemon wrote to the file and gives the file's path.
 
@@ -771,16 +771,16 @@ Control the verbosity of the Rust daemon logs:
 
 ```bash
 # Debug-level logs for the Tapsmith daemon
-RUST_LOG=tapsmith_core=debug npx tapsmith test
+RUST_LOG=tapsmith_core=debug TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test
 
 # Trace-level (very verbose — includes gRPC message details)
-RUST_LOG=tapsmith_core=trace npx tapsmith test
+RUST_LOG=tapsmith_core=trace TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test
 
 # Combine with other Rust crate logs
-RUST_LOG=tapsmith_core=debug,tonic=info npx tapsmith test
+RUST_LOG=tapsmith_core=debug,tonic=info TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test
 ```
 
-The `RUST_LOG` variable uses the [`tracing-subscriber` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax, which accepts comma-separated `target=level` pairs (the same shape as `env_logger`'s). Unset, the daemon logs at `tapsmith_core=info,tonic=warn`. Like the examples above, pair it with `TAPSMITH_DAEMON_LOG` to read the output. Common levels: `error`, `warn`, `info`, `debug`, `trace`.
+The `RUST_LOG` variable uses the [`tracing-subscriber` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax, which accepts comma-separated `target=level` pairs (the same shape as `env_logger`'s). Unset, the daemon logs at `tapsmith_core=info,tonic=warn`. As in the examples above, pair it with `TAPSMITH_DAEMON_LOG` to read the output: the daemon's log does not reach the terminal. Common levels: `error`, `warn`, `info`, `debug`, `trace`.
 
 ### `TAPSMITH_DEBUG`
 

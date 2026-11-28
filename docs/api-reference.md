@@ -2435,7 +2435,7 @@ await device.tracing.start();
 | `sources` | `boolean` | `true` | Include test source files |
 | `title` | `string` | — | Custom title for the trace |
 
-These are the only options. Network capture, device logs and daemon logs are set for the runner's own traces by the config's [`trace`](configuration.md#traceconfig) option (`network`, `deviceLogs`, `daemonLogs`). `start()` throws when tracing has already started, which includes a test the runner is already tracing (its `trace` mode records this attempt): use one or the other.
+These are the only options. Network capture, device logs and daemon logs are set for the runner's own traces by the config's [`trace`](configuration.md#traceconfig) option (`network`, `deviceLogs`, `daemonLogs`). `start()` throws when tracing has already started, which includes a test the runner is already tracing (its `trace` mode records this attempt, and in UI mode, which traces every run, always): use one or the other.
 
 ### `device.tracing.stop(options?)`
 
@@ -2467,7 +2467,7 @@ device.tracing.groupEnd();
 
 ### `device.tracing.startChunk(options?)` / `device.tracing.stopChunk(options?)`
 
-Start a new trace chunk. Useful for splitting long test runs into multiple trace files. `startChunk()` takes the same options as `start()`. End each chunk with `stopChunk({ path })` before starting the next: called while a chunk, or the runner's own trace of the test, is still recording, `startChunk()` throws, and that recording is lost.
+Start a new trace chunk. Useful for splitting long test runs into multiple trace files. `startChunk()` takes the same options as `start()`. End each chunk with `stopChunk({ path })` before starting the next: called while a chunk, or the runner's own trace of the test (as in every UI-mode run), is still recording, `startChunk()` throws, and that recording is lost.
 
 ```typescript
 await device.tracing.startChunk();

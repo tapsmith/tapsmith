@@ -137,11 +137,11 @@ When the extension was installed and approved before the launch, `tapsmith docto
 
 3. **Reboot macOS.** The Network Extension's state can drift over long uptime or across macOS updates. A reboot resets both the extension and any lingering kernel state.
 
-Verify success on the next run by looking for `System Extension control channel connected` (or, after a late dial-back, `connected late; network capture recovered`) in the daemon debug logs (`RUST_LOG=tapsmith_core=debug`).
+Verify success on the next run by looking for `System Extension control channel connected` (or, after a late dial-back, `connected late; network capture recovered`) in the daemon debug logs (`RUST_LOG=tapsmith_core=debug TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test`, then read `daemon.log`).
 
 ### Network entries missing from the trace (`network.json` not in the archive)
 
-Check the daemon logs — run `tapsmith test` with `RUST_LOG=tapsmith_core=debug` and look for lines from `tapsmith_core::ios_redirect` (control channel connection, initial InterceptConf, intercepted flows) and `tapsmith_core::network_proxy` (MITM handshakes). Common causes:
+Check the daemon logs — run `RUST_LOG=tapsmith_core=debug TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test` and look in `daemon.log` for lines from `tapsmith_core::ios_redirect` (control channel connection, initial InterceptConf, intercepted flows) and `tapsmith_core::network_proxy` (MITM handshakes). Common causes:
 
 - **`failed reading TLS ClientHello`** — the app closed the connection before sending the handshake. Usually a transient issue; rerun the test.
 - **`upstream TLS handshake failed for <host>: UnknownIssuer`** — the upstream server uses a certificate chain not in Tapsmith's webpki roots. This affects some Apple-internal services; it does not affect standard public HTTPS endpoints.

@@ -98,7 +98,7 @@ Tapsmith handles this for you: on every `tapsmith test` run with tracing enabled
 
 Good news: iOS fetches the PAC script from the Tapsmith daemon very aggressively — empirically, on nearly every new host load, not just on Wi-Fi join. That means when you change `trace.networkHosts` in `tapsmith.config.ts`, the new filter takes effect on the next `tapsmith test` run with no manual intervention on the phone — no Wi-Fi toggle, no profile reinstall.
 
-If you ever need to confirm iOS picked up a change, run the daemon with `RUST_LOG=info` and watch for `Served /tapsmith.pac` log lines with the expected `host_count` field.
+If you ever need to confirm iOS picked up a change, run `RUST_LOG=info TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test` and look in `daemon.log` for `Served /tapsmith.pac` lines with the expected `host_count` field.
 
 You can also refresh manually:
 
