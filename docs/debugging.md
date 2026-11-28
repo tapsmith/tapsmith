@@ -323,11 +323,10 @@ Element getByText("Submit", { exact: true }) is disabled after waiting 30000ms
 Error: Failed to tap element: …
 ```
 
-**What happened:** The element was found, enabled and on screen, but the device could not perform the action on it. The message after the colon is the device's reason. (An element that is covered or clipped fails earlier, with the "not hittable" message [above](#element-is-off-screen).)
+**What happened:** The element was found, enabled and on screen, but the device could not perform the action on it. The message after the colon is the device's reason. An element that is clipped fails earlier, with the "not hittable" message [above](#element-is-off-screen). One that something stays drawn over for the whole action timeout fails with `Element is covered by …` instead, naming the cover (the keyboard, a control, a loading overlay or a bar laid over its list): dismiss it, wait for it to go, or scroll the element out from under it ([Covered elements](api-reference.md#elementhandletapoptions-promisevoid)).
 
 **Fixes:**
 
-- Dismiss any overlapping dialogs, toasts, or keyboard
 - Wait for animations to complete with `device.waitForIdle()`
 - Check the element's bounding box: `const box = await element.boundingBox()`
 
