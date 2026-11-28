@@ -4,7 +4,8 @@
  * read offline, and GitHub renders them the same way. Every relative link in
  * docs/*.md must name a page (or an image) in docs/ and, when it has an
  * anchor, a heading on that page; and once bundled (images become website
- * URLs), every relative link must name a page the package ships.
+ * URLs), every relative link must name a page the package ships. The
+ * repo-root README's relative links are checked the same way, against the repo.
  */
 
 import * as fs from 'node:fs';
@@ -111,7 +112,30 @@ describe('docs links work as relative file links', () => {
     }
     expect(broken).toEqual([]);
   });
+
+  it('every relative link in the README names a file in the repo, and an anchor into docs/ names a heading', () => {
+    const broken: string[] = [];
+    for (const link of linksIn(fs.readFileSync(path.join(REPO, 'README.md'), 'utf8'))) {
+      if (isExternal(link.href)) continue;
+      const reason = readmeLinkBrokenReason(link.href, (target) => fs.existsSync(path.join(REPO, target)));
+      if (reason) broken.push(`README.md: ${link.raw} — ${reason}`);
+    }
+    expect(broken).toEqual([]);
+  });
 });
+
+/** Why a relative link from the repo-root README is broken, or undefined when it works. */
+function readmeLinkBrokenReason(href: string, exists: (target: string) => boolean): string | undefined {
+  const [rawTarget, anchor] = href.split('#', 2) as [string, string | undefined];
+  const target = path.posix.normalize(decodeURIComponent(rawTarget) || '.').replace(/\/$/, '');
+  if (target.startsWith('../') || path.posix.isAbsolute(target)) return 'points outside the repo';
+  if (!exists(target)) return `there is no ${target}`;
+  if (anchor !== undefined && target.startsWith('docs/') && target.endsWith('.md')) {
+    const page = target.slice('docs/'.length);
+    if (!anchors.get(page)?.has(anchor)) return `${target} has no heading with the anchor #${anchor}`;
+  }
+  return undefined;
+}
 
 describe('the self-test', () => {
   it('reads inline, reference-style and image links but not code', () => {
@@ -149,5 +173,15 @@ describe('the self-test', () => {
     expect(brokenReason('a.md', 'locators.md#no-such-heading', exists)).toMatch(/no heading/);
     expect(brokenReason('locators.md', '#no-such-heading', exists)).toMatch(/no heading/);
     expect(brokenReason('a.md', 'locators.md', exists)).toBeUndefined();
+  });
+
+  it('flags a README link to a missing file or a missing docs anchor', () => {
+    const exists = (t: string): boolean => t === 'LICENSE' || t === 'docs' || PAGES.includes(t.replace(/^docs\//, ''));
+    expect(readmeLinkBrokenReason('LICENSE', exists)).toBeUndefined();
+    expect(readmeLinkBrokenReason('docs/', exists)).toBeUndefined();
+    expect(readmeLinkBrokenReason('docs/locators.md#finding-locators', exists)).toBeUndefined();
+    expect(readmeLinkBrokenReason('docs/nope.md', exists)).toMatch(/no docs\/nope\.md/);
+    expect(readmeLinkBrokenReason('docs/locators.md#no-such-heading', exists)).toMatch(/no heading/);
+    expect(readmeLinkBrokenReason('../elsewhere.md', exists)).toMatch(/outside the repo/);
   });
 });
