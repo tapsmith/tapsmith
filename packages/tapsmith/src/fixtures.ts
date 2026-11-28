@@ -11,7 +11,11 @@ import type { APIRequestContext } from './api-request.js';
 
 // ─── Types ───
 
-/** How long a fixture's value lives: one test (`'test'`) or the whole worker (`'worker'`). */
+/**
+ * How long a fixture's value lives: one test (`'test'`), or one test file
+ * (`'worker'`: set up once per file and shared by its hooks and tests;
+ * unlike Playwright, not kept for the rest of the worker process).
+ */
 export type FixtureScope = 'test' | 'worker'
 
 /** The `use` callback provided to fixture functions. */

@@ -759,7 +759,7 @@ Capture all daemon (Rust) output to a file for later analysis:
 TAPSMITH_DAEMON_LOG=daemon.log npx tapsmith test
 ```
 
-This redirects the daemon's stdout and stderr to the specified file. The daemon's output does not go to the terminal, so this file (or a trace with `daemonLogs: true`) is where you read it, for example to share it with someone.
+This redirects the daemon's stdout and stderr to the specified file. The daemon's output does not go to the terminal, so this file (or a trace with `daemonLogs: true`) is where you read it, for example to share it with someone. With several workers, each runs its own daemon: worker 0 writes to the file you name, and worker N to a file beside it named with `.worker-N` before the extension (`daemon.worker-1.log`).
 
 You don't need it to find out why a daemon failed to start. Without it, Tapsmith keeps the daemon's stderr while it starts, and the start error quotes the daemon's last lines. With it, the error quotes what that daemon wrote to the file and gives the file's path.
 

@@ -1853,7 +1853,7 @@ function hookErrorCopy(error: Error, message: string): Error {
  * fresh test-fixture scope on top of the suite/worker fixtures. This lets these
  * hooks destructure test-scoped fixtures (e.g. page objects) without forcing
  * them to worker scope, where a single instance would be shared across every
- * test in the worker.
+ * test in the file.
  */
 async function invokeHookWithTestScope(
   hook: HookEntry,

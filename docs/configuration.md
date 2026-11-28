@@ -659,7 +659,6 @@ export default defineConfig({
         platform: "ios",
         simulator: "iPhone 16",
         app: "./ios/MyApp.app",
-        iosXctestrun: "./ios-agent/TapsmithAgent.xctestrun",
       },
     },
   ],
@@ -670,7 +669,8 @@ Each project provisions its own device, daemon, and agent. There are two ways
 to control parallelism:
 
 **Global budget** (Playwright-style): the top-level `workers` field is split
-across projects proportionally to file count, with at least 1 per project.
+across projects proportionally to file count, with at least 1 per device target
+(projects with the same device settings share their workers).
 
 ```typescript
 export default defineConfig({
