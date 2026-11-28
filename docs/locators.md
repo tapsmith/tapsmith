@@ -520,7 +520,7 @@ module.exports = defineConfig([
 
 The same applies to any config that already uses typescript-eslint: leave out `tseslint.configs.base`. If two copies of typescript-eslint's plugin are installed, registering both fails with `Cannot redefine plugin "@typescript-eslint"`.
 
-`require("tapsmith")` needs Node.js 22.12 or later, because Tapsmith is an ES module and earlier Node 22 releases cannot `require()` one. On an older Node 22, keep the `eslint.config.mjs` form above, which uses `import`. The object has to be inside `defineConfig()`, because a plain exported array does not accept the `extends` key.
+`require("tapsmith")` needs Node.js 22.12 or later, because Tapsmith is an ES module and earlier Node 22 releases cannot `require()` one. On an older Node 22, convert the existing config instead of adding a second file (ESLint would ignore it): rename `eslint.config.js` to `eslint.config.mjs`, turn its `require` calls into `import`s, and use the `.mjs` form above. The object has to be inside `defineConfig()`, because a plain exported array does not accept the `extends` key.
 
 ### Rules
 
