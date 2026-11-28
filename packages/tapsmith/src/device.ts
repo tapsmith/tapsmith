@@ -1291,14 +1291,14 @@ export class Device {
     return this.pressKey('HOME');
   }
 
-  /** Open the notification shade. @platform android */
+  /** Open the notification shade. Does nothing on iOS. @platform android */
   async openNotifications(): Promise<void> {
     return this._tracedAction('openNotifications', 'device', undefined,
       () => this._client.openNotifications(),
       'Open notifications failed');
   }
 
-  /** Open the quick settings panel. @platform android */
+  /** Open the quick settings panel. Does nothing on iOS. @platform android */
   async openQuickSettings(): Promise<void> {
     return this._tracedAction('openQuickSettings', 'device', undefined,
       () => this._client.openQuickSettings(),
@@ -1310,7 +1310,7 @@ export class Device {
     return this.pressKey('APP_SWITCH');
   }
 
-  /** Set the device color scheme (dark/light). @platform android */
+  /** Set the device color scheme (dark/light). Android and iOS simulators; throws on a physical iPhone. */
   async setColorScheme(scheme: ColorScheme): Promise<void> {
     return this._tracedAction('setColorScheme', 'device', undefined,
       () => this._client.setColorScheme(scheme),

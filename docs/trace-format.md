@@ -42,6 +42,7 @@ Rules for readers:
   - action `category`
   - action `origin`
   - network `routeAction`
+  - device `networkCaptureRoute`
   - `appReset` and `appResetScope`
 - These are **closed sets**:
   - `testStatus`
@@ -118,6 +119,7 @@ A **device** has these fields:
   - `screenResolution`: `{ width, height }`
   - `packageName`
   - `devicePixelRatio`: element bounds are in logical points and screenshots are in pixels
+  - `networkCaptureRoute`: how the device's traffic reached the capture proxy, when network capture ran. Known values: `ios-network-extension`, `ios-system-proxy`, `ios-device-proxy`, `android-transparent`, `android-http-proxy`. `ios-system-proxy` is the host-wide macOS fallback, so captured entries may include other apps on the Mac and requests to `localhost` are missing
   - `networkHttpsPassthrough`: `true` when the device did not trust Tapsmith's CA, so its HTTPS passed through the network proxy uncaptured. Those connections appear in `network.json` only as `passthrough` entries, and routes and network waits could not see them
 
 ## `trace.json` events

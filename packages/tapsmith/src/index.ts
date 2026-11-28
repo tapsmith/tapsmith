@@ -79,6 +79,7 @@ export {
   type TapsmithReporter,
   type FullResult,
   type RunStartInfo,
+  type TestStartInfo,
   type ReporterConfig,
   type ReporterDescription,
 } from './reporter.js';

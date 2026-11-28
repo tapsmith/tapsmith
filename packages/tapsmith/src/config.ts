@@ -108,7 +108,7 @@ export interface TapsmithConfig {
   /** Address of the Tapsmith daemon. */
   daemonAddress: string;
 
-  /** Path to the tapsmith-core binary. Defaults to 'tapsmith-core' (must be on PATH). */
+  /** Path to the tapsmith-core binary. When unset, Tapsmith resolves the one installed with it, falling back to `tapsmith-core` on PATH. */
   daemonBin?: string;
 
   /**
@@ -298,7 +298,8 @@ export interface TapsmithConfig {
    *
    * Can be a reporter name ('list', 'dot', 'line', 'json', 'junit', 'html',
    * 'github', 'blob'), a tuple with options (['json', { outputFile: 'r.json' }]),
-   * an array of these, or undefined for auto-detection (list locally, dot in CI).
+   * an array of these, or undefined for `list` (with `github` added in GitHub Actions and `blob`
+   * with `--shard`).
    */
   reporter?: ReporterConfig;
 

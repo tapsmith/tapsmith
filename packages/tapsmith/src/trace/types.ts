@@ -375,11 +375,10 @@ export interface TraceConfig {
   /** Whether to include user-added attachments. */
   attachments: boolean
   /**
-   * Whether to capture network traffic via the MITM HTTP proxy.
-   * When enabled (the default), Tapsmith starts a proxy that intercepts
-   * app traffic, which is also required for `device.route()`,
-   * `device.waitForRequest()`, and `device.waitForResponse()` to function.
-   * Set to `false` to disable network capture and route interception.
+   * Whether a traced test records the app's network traffic in its trace
+   * (the default). It controls only what goes into the trace:
+   * `device.route()`, `device.waitForRequest()` and `device.waitForResponse()`
+   * start capture on demand and work whatever this says.
    */
   network: boolean
   /**

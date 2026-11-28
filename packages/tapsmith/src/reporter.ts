@@ -39,8 +39,11 @@ export interface RunStartInfo {
   merge?: boolean
 }
 
+/** The third argument of {@link TapsmithReporter.onTestStart}. */
 export interface TestStartInfo {
+  /** The index of the worker running the test, in a run with several workers. */
   workerIndex?: number
+  /** The test's project, when the config has projects. */
   project?: string
 }
 

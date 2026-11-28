@@ -18,8 +18,8 @@ Most users will never need to set any of these. They are primarily useful for de
 
 | Variable | Description |
 |---|---|
-| `TAPSMITH_DEBUG` | Enable debug logging in the TypeScript SDK (assertion polling, element resolution, etc.). Set to `1` or `true`. |
-| `RUST_LOG` | Control Rust daemon log verbosity. Examples: `RUST_LOG=info`, `RUST_LOG=tapsmith_core=debug`. Useful for diagnosing MITM proxy issues, agent startup failures, and device communication problems. |
+| `TAPSMITH_DEBUG` | Extra diagnostics from the TypeScript SDK. Set to `1`: the CLI then prints the full stack of an error that stops a run, `expect.poll()` logs each failed try, and a blocking Android system dialog is logged with the screen's hierarchy. `DEBUG` set to any value also turns on the stacks. |
+| `RUST_LOG` | Control Rust daemon log verbosity (default `tapsmith_core=info,tonic=warn`). Examples: `RUST_LOG=info`, `RUST_LOG=tapsmith_core=debug`. The daemon's log is not shown in the terminal: read it with `TAPSMITH_DAEMON_LOG`, or in a trace recorded with `daemonLogs: true`. Useful for diagnosing MITM proxy issues, agent startup failures, and device communication problems. |
 | `TAPSMITH_CLAIMS_DIR` | Where device claims are kept (default `~/.tapsmith/claims`). Sessions only see each other's claims when they use the same directory. |
 
 ## Telemetry
@@ -33,6 +33,13 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 | `TAPSMITH_TELEMETRY_ENDPOINT` | Send telemetry events to this URL instead of PostHog's EU capture endpoint — for organisations that want their own copy, must route through a proxy, or run a self-hosted PostHog. The payload is a standard PostHog capture envelope. Must be HTTPS (or plain HTTP only to a loopback host such as `localhost`); a cleartext remote endpoint is refused and telemetry is disabled for that process rather than sent in the clear, and redirects are never followed. |
 | `TAPSMITH_TELEMETRY_DEBUG` | Dry run: set to `1` to print every event that would be sent to stderr, prefixed `[telemetry]`, and send nothing. The way to see exactly what leaves your machine. |
 
+## iOS
+
+| Variable | Description |
+|---|---|
+| `TAPSMITH_IOS_XCTESTRUN` | Path to the iOS agent `.xctestrun` file, used when the config does not set [`iosXctestrun`](configuration.md#all-options). A path to nothing stops the run before the agent starts. |
+| `TAPSMITH_NO_KEYCHAIN_STATE` | Set to `1` to leave the iOS simulator's keychain alone: `clearAppData()` and app resets do not wipe it, and `saveAppState()`/`restoreAppState()` do not capture or swap it. Read by the daemon, so set it in the environment the CLI or UI mode starts from. |
+
 ## iOS Network Capture
 
 | Variable | Description |
@@ -44,8 +51,9 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 
 | Variable | Description |
 |---|---|
-| `CI` | When set (and not `"false"`), Tapsmith skips the Android device-health preflight and disables interactive progress output. It also lets the daemon use the host-wide iOS system-proxy capture fallback (for the daemon, `0` and any casing of `false` also count as unset; override with `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK`). Most CI providers set this automatically. Reporter selection is no longer affected — `list` is the default everywhere; set `reporter: 'dot'` explicitly for compact CI output. |
+| `CI` | When set (and not `"false"`), Tapsmith skips the Android device-health preflight and disables interactive progress output. It also lets the daemon use the host-wide iOS system-proxy capture fallback (for the daemon, `0` and any casing of `false` also count as unset; override with `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK`). It also makes Tapsmith launch emulators headless, wait up to 5 minutes (instead of 2) for an iOS simulator to boot, skip the warning about an app build older than its source, and keep the HTML reporter from opening a browser. Most CI providers set this automatically. Reporter selection is no longer affected — `list` is the default everywhere; set `reporter: 'dot'` explicitly for compact CI output. |
 | `GITHUB_ACTIONS` | When set (GitHub Actions sets it automatically), Tapsmith auto-adds the `github` reporter for inline annotations on test failures. |
+| `TAPSMITH_JSON_OUTPUT_FILE` | Where the `json` reporter writes its report. Takes precedence over the reporter's `outputFile` option. |
 | `GITHUB_STEP_SUMMARY` | Path to the GitHub Actions step summary file. The GitHub reporter writes a Markdown summary table when this is set. |
 
 ## Coding-agent plugin
@@ -61,6 +69,7 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 |---|---|
 | `ANDROID_HOME` | Path to the Android SDK. Used to find `adb`, `emulator`, and `avdmanager` binaries. Falls back to `ANDROID_SDK_ROOT`. |
 | `ANDROID_SDK_ROOT` | Alternate path to the Android SDK (deprecated by Google in favor of `ANDROID_HOME`, but still supported as a fallback). |
+| `JAVA_HOME` | The JDK `tapsmith create-avd` runs the SDK's `sdkmanager` and `avdmanager` with. When it is unset and `java` is not on `PATH`, Tapsmith uses Android Studio's bundled JDK. |
 
 ## Internal (Set by Tapsmith)
 
