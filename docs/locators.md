@@ -313,7 +313,7 @@ await expect(device.getByText(/^\d+ items?$/)).toBeVisible()
 
 Whitespace differences don't matter for a string: non-breaking spaces, line breaks and runs of spaces in the element's text (or in your query) are treated as a single space, and leading and trailing whitespace is ignored — the same normalization Playwright applies. `getByText("Welcome to Expo")` finds a heading rendered as `Welcome to&nbsp;Expo`.
 
-A `RegExp` (also accepted by `getByLabel` and `getByRole`'s `name`) is matched with JavaScript's semantics against the text as it is: `\s` covers non-breaking spaces, and `^`/`$` anchor the whole text unless you pass the `m` flag. See [Regular expressions](api-reference.md#regular-expressions) for the details.
+A `RegExp` (also accepted by `getByLabel` and `getByRole`'s `name`) is matched with JavaScript's semantics. `getByText` and `getByLabel` test it against the text as it is: `\s` covers line breaks and non-breaking spaces, and `^`/`$` anchor the whole text unless you pass the `m` flag. A `getByRole` name is whitespace-normalized first, as Playwright normalizes accessible names, so a line break in the name is a single space there: a button named `"Sign in\nto continue"` matches `{ name: /^Sign in to/ }`, and not `{ name: /in\nto/ }`. See [Regular expressions](api-reference.md#regular-expressions) for the details.
 
 A text field's typed value is not text, as an `<input>`'s value is not in Playwright: after typing `"Apollo 11"` into a search field, `getByText("Apollo 11", { exact: true })` waits for the result with that text and taps it, never the field, on Android and iOS alike. Find the field itself with `getByRole("textfield", { name })` (an iOS search field is `"searchfield"`), `getByPlaceholder()` or `getByTestId()`, and check its value with `toHaveValue()`. An empty field's placeholder is still its text on Android 8.0 and later (on iOS only where the field reports it as its value, which a React Native field does not), though `getByPlaceholder()` is the locator for it ([what `getByText` reads on iOS](api-reference.md#devicegetbytexttext-string--regexp-options--exact-boolean--elementhandle)).
 
@@ -520,7 +520,7 @@ module.exports = defineConfig([
 
 The same applies to any config that already uses typescript-eslint: leave out `tseslint.configs.base`. If two copies of typescript-eslint's plugin are installed, registering both fails with `Cannot redefine plugin "@typescript-eslint"`.
 
-`require("tapsmith")` needs Node.js 22.12 or later. The object has to be inside `defineConfig()`, because a plain exported array does not accept the `extends` key.
+`require("tapsmith")` needs Node.js 22.12 or later, because Tapsmith is an ES module and earlier Node 22 releases cannot `require()` one. On an older Node 22, keep the `eslint.config.mjs` form above, which uses `import`. The object has to be inside `defineConfig()`, because a plain exported array does not accept the `extends` key.
 
 ### Rules
 

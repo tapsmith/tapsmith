@@ -74,7 +74,7 @@ Changes to the config file (`tapsmith.config.ts`) are detected but not hot-reloa
 | Fast re-run | No (full setup each time) | Yes (persistent session) | Yes (persistent session) |
 | File watching | No | Yes | Yes (toggle per file) |
 | Interactive UI | No | No (terminal only) | Yes (browser) |
-| MCP server | No | No | Yes (SSE endpoint) |
+| MCP server | No | No | Yes (HTTP endpoint) |
 | Multi-worker | Yes | Yes | Yes |
 | Keyboard shortcuts | No | Yes (a/f/Enter/q) | N/A (browser UI) |
 | Trace viewer integration | Post-run only | Post-run only | Inline in results |

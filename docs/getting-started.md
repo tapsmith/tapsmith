@@ -10,6 +10,8 @@ This guide walks you through installing Tapsmith, writing your first test, and r
 
 ## Prerequisites
 
+Tapsmith runs on macOS and Linux. Android testing works on either; iOS testing needs a Mac. There is no Windows build.
+
 Before you begin, make sure you have the following installed:
 
 ### Android
@@ -654,25 +656,30 @@ For normal parallel runs, prefer `workers + launchEmulators + avd` in config.
 Tapsmith prints results to the terminal with pass/fail status and timing for each test:
 
 ```
-Found 2 test file(s)
+Running tests from 1 file(s)
 
-  tests/smoke.tapsmith.ts
+  ✓ [1] › tests/smoke.tapsmith.ts › app launches and shows welcome screen (3.4s, incl. 2.2s setup)
+  ✓ [2] › tests/smoke.tapsmith.ts › can navigate to settings (2.8s)
 
-Results:
-
-  PASS  app launches and shows welcome screen (1204ms)
-  PASS  can navigate to settings (2841ms)
-
-Summary: 2 passed | 4.05s
+Summary: 2 passed | 6.5s
 ```
 
-When a test fails, Tapsmith prints the error message, a partial stack trace, and the path to a screenshot captured at the moment of failure:
+The first test of a file counts the file's setup (the app reset and any `beforeAll` hooks) in its time, and says how much of it that was.
+
+When a test fails, Tapsmith prints the error message, the lines of your test around the failing call, a few stack frames, and the path to a screenshot captured at the moment of failure:
 
 ```
-  FAIL  can navigate to settings (30012ms)
-        Expected element {"text":"Settings"} to be visible, but it was not
-        Screenshot: tapsmith-results/screenshots/can_navigate_to_settings-1710345600000.png
+  ✗ [2] › tests/smoke.tapsmith.ts › can navigate to settings (30.4s)
+        Expected element getByText("Settings") to be visible, but it was not
+
+          …
+        > 13 |   await expect(device.getByText("Settings")).toBeVisible();
+          …
+
+        Screenshot: /path/to/project/tapsmith-results/screenshots/can_navigate_to_settings-1710345600000.png
 ```
+
+The failures are listed again under `Failures:` before the summary line.
 
 ## Organizing Tests
 

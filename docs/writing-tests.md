@@ -136,7 +136,7 @@ These options control it, at any level — config, `projects[].use`, or `test.us
 | `warm` | In-app reset through detected [`@tapsmith/react-native`](warm-reset.md) hooks (or the legacy `resetAppDeepLink`); no process restart | < 1 s |
 | `none` | No reset — only verify the session is healthy | ~0 |
 
-`'auto'` picks the fastest hermetic option the app supports: `warm` when in-app hooks are detected (or `resetAppDeepLink` is set), otherwise `clear`. A declared `warm` policy that cannot run warm (no hook, or the delivery fails) falls back to a **clear** — the policy's promise is state-clearing, and a restart would keep persisted data. Only the explicit [`device.resetApp()`](api-reference.md#deviceresetappoptions-promiseappresetresult) API keeps the gentler warm → restart → clear ladder. The scope is per-file — one reset at file entry (and at a nested `describe` that declares a different policy). Even a warm reset costs ~1-2 s, so resetting before every test roughly doubles a suite that navigates per test anyway; scopes that genuinely need it opt in with `appResetScope: "test"` (each of those resets is warm when the app mounts the hooks). With no configuration at all you get a clean app once per file, and nothing to write.
+`'auto'` picks the fastest hermetic option the app supports: `warm` when in-app hooks are detected (or `resetAppDeepLink` is set), otherwise `clear`. A declared `warm` policy that cannot run warm (no hook, or the delivery fails) falls back to a **clear** — the policy's promise is state-clearing, and a restart would keep persisted data. Only the explicit [`device.resetApp()`](api-reference.md#deviceresetappoptions-promiseappresetresult) API keeps the gentler warm → restart → clear ladder. The scope is per-file — one reset at file entry (and at a nested `describe` that declares a different policy). Even a warm reset costs up to about a second, so resetting before every test roughly doubles a suite that navigates per test anyway; scopes that genuinely need it opt in with `appResetScope: "test"` (each of those resets is warm when the app mounts the hooks). With no configuration at all you get a clean app once per file, and nothing to write.
 
 ```typescript
 // tapsmith.config.ts — restart between files instead of wiping data
@@ -439,7 +439,7 @@ Tapsmith auto-waits in most situations. Understanding when it waits and when it 
 Assertion methods like `toBeVisible()`, `toHaveText()`, and `toBeEnabled()` automatically poll until the condition is met or the timeout expires. You do not need to add explicit waits before assertions:
 
 ```typescript
-// Correct -- toBeVisible() polls automatically (default 5s assertion timeout)
+// Correct -- toBeVisible() polls automatically (up to the `timeout` from your config, 30 s by default)
 await expect(device.getByText("Welcome")).toBeVisible()
 
 // Unnecessary -- do not add manual waits before auto-waiting assertions
@@ -783,7 +783,7 @@ test("product appears in catalog", async ({ device, productId }) => {
 
 ### Test-scoped vs worker-scoped fixtures
 
-By default, fixtures are **test-scoped** -- they set up and tear down for each test. For expensive setup that should persist across all tests in a worker, use **worker scope**:
+By default, fixtures are **test-scoped** -- they set up and tear down for each test. For expensive setup that should persist across all the tests in a file, use **worker scope**:
 
 ```typescript
 const test = base.extend<{ dbConnection: DatabaseClient }>({
@@ -795,7 +795,7 @@ const test = base.extend<{ dbConnection: DatabaseClient }>({
 })
 ```
 
-Worker-scoped fixtures are created once per worker and shared across all tests that worker runs. They are torn down when the worker exits.
+Tapsmith sets up a worker-scoped fixture once per test file, not once per worker as Playwright does: the tests and hooks in that file share it, and it is torn down when the file finishes. The next file the worker runs sets it up again.
 
 ### The `use()` callback pattern
 

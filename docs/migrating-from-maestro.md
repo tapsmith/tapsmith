@@ -46,7 +46,7 @@ This guide is for teams with a Maestro suite who want to move it to Tapsmith. It
 | `setPermissions` | [`device.grantPermission()`](api-reference.md#devicegrantpermissionpackagename-string-permission-string-promisevoid) / `revokePermission()` (Android, and iOS simulators) |
 | Maestro Studio | [UI mode](ui-mode.md) (`npx tapsmith test --ui`): a live device mirror, a locator picker, and your tests in one window |
 | `maestro hierarchy` | The Hierarchy tab of the [trace viewer](trace-viewer.md) or UI mode, or the [`tapsmith_snapshot`](mcp-server.md#tapsmith_snapshot) MCP tool |
-| `maestro mcp` | [`npx tapsmith mcp-server`](mcp-server.md) |
+| `maestro mcp` | The [Tapsmith plugin](mcp-server.md#install-the-plugin) for Claude Code, Codex or Cursor, which runs Tapsmith's MCP server (`tapsmith mcp-server`) |
 
 ## Porting a flow
 

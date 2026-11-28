@@ -1,6 +1,6 @@
 # MCP Server
 
-Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI coding agents run tests, interact with devices, and inspect results through a standardized tool interface. Both modes expose the same **17 tools** for device interaction, test execution, result browsing, watch mode, and session info.
+Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI coding agents run tests, interact with devices, and inspect results through a standardized tool interface. Both modes expose the same **18 tools** for device interaction, test execution, result browsing, watch mode, and session info.
 
 ## Quick start: UI mode and the plugin
 
