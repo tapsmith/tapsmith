@@ -40,4 +40,4 @@ Between test files, Tapsmith resets the app by clearing its data and relaunching
 
 ## Monorepos
 
-Install Tapsmith in the package that holds your `tapsmith.config.ts`, and run `tapsmith` from there. [Package manager notes](getting-started.md#package-manager-notes) covers pnpm and Yarn workspaces.
+Install Tapsmith in the package that holds your `tapsmith.config.ts`, and run `tapsmith` from there. [Package manager notes](getting-started.md#package-manager-notes) covers pnpm workspaces and Yarn's Plug'n'Play linker.
